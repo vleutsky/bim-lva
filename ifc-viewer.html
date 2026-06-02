@@ -20,6 +20,8 @@
     --blue:#3aa0ff;
     --ok:#46d39a;
     --err:#ff5470;
+    --w-left: 260px;
+    --w-right: 320px;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%;overflow:hidden}
@@ -28,9 +30,9 @@
     color:var(--txt);
     font-family:'Archivo',sans-serif;
     display:grid;
-    grid-template-columns:260px 1fr 320px;
+    grid-template-columns:var(--w-left) 4px 1fr 4px var(--w-right);
     grid-template-rows:52px 1fr 26px;
-    grid-template-areas:"top top top" "tree stage side" "status status status";
+    grid-template-areas:"top top top top top" "tree resL stage resR side" "status status status status status";
     height:100vh;
   }
   /* ---- top bar ---- */
@@ -61,6 +63,7 @@
   button.btn:disabled{opacity:.35;cursor:not-allowed}
   .load-btn{color:var(--bg);background:var(--accent);border-color:var(--accent);font-weight:600}
   .load-btn:hover{filter:brightness(1.1);color:var(--bg)}
+  
   /* ---- generic panel ---- */
   .panel{background:var(--panel);display:flex;flex-direction:column;overflow:hidden;min-height:0}
   .panel-head{display:flex;align-items:center;justify-content:space-between;
@@ -73,6 +76,7 @@
   .panel-head .pop:hover{color:var(--accent);border-color:var(--accent-dim)}
   .tree-panel{grid-area:tree;border-right:1px solid var(--line)}
   .side{grid-area:side;border-left:1px solid var(--line)}
+  
   /* floating (откреплённая) панель */
   .panel.floating{
     position:fixed;z-index:60;width:300px;height:460px;
@@ -80,6 +84,18 @@
     resize:both;border-radius:6px;
   }
   .panel.floating .panel-head{cursor:move;background:var(--panel-2)}
+
+  /* ---- resizers ---- */
+  .resizer {
+    background: var(--line);
+    z-index: 20;
+    cursor: col-resize;
+    transition: background 0.2s;
+  }
+  .resizer:hover, .resizer.dragging { background: var(--accent); }
+  #dragLeft { grid-area: resL; }
+  #dragRight { grid-area: resR; }
+
   /* ---- stage ---- */
   .stage{grid-area:stage;position:relative;overflow:hidden}
   canvas{display:block}
@@ -103,6 +119,7 @@
     content:"";position:absolute;inset:12px;border:2px dashed var(--accent);
     pointer-events:none;background:rgba(255,107,53,.06);
   }
+  
   /* overlay loader */
   .loader{
     position:absolute;inset:0;display:none;flex-direction:column;
@@ -116,11 +133,12 @@
   @keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
   .loader b{font-family:'IBM Plex Mono';font-size:12px;color:var(--accent);letter-spacing:1px}
   .loader small{font-family:'IBM Plex Mono';font-size:11px;color:var(--txt-dim)}
+  
   /* ---- tree ---- */
-  .tree{flex:1;overflow:auto;padding:6px 6px 16px;font-family:'IBM Plex Mono';font-size:12px;min-height:0}
+  .tree{flex:1;overflow:auto;padding:6px 6px 16px;font-family:'IBM Plex Mono';font-size:11px;min-height:0}
   .tree .empty{color:var(--txt-dim);line-height:1.7;padding:8px}
   .tnode{user-select:none}
-  .trow{display:flex;align-items:center;gap:4px;padding:3px 4px;cursor:pointer;
+  .trow{display:flex;align-items:center;gap:4px;padding:1px 4px;min-height:20px;cursor:pointer;
     border-radius:3px;white-space:nowrap}
   .trow:hover{background:var(--panel-2)}
   .trow.sel{background:#231712;color:var(--accent)}
@@ -134,6 +152,7 @@
   .ttype{color:var(--txt-dim);font-size:9px;letter-spacing:.5px;flex:0 0 auto}
   .tree::-webkit-scrollbar{width:9px}
   .tree::-webkit-scrollbar-thumb{background:var(--line)}
+  
   /* ---- side: stats + props ---- */
   .scroll{flex:1;overflow-y:auto;min-height:0}
   .stats{padding:10px 16px 14px;border-bottom:1px solid var(--line)}
@@ -154,6 +173,7 @@
     border:1px solid var(--accent-dim);margin-bottom:10px;letter-spacing:.5px}
   .prop.small{padding:5px 0}
   .prop.small .v{font-size:12px;color:var(--txt-dim)}
+  
   /* collapsible groups in props */
   .pgroup{margin-top:14px}
   .pgroup-head{font-family:'IBM Plex Mono';font-size:10px;letter-spacing:1.5px;
@@ -171,6 +191,7 @@
   .pset.collapsed .ar{transform:rotate(-90deg)}
   .props::-webkit-scrollbar{width:9px}
   .props::-webkit-scrollbar-thumb{background:var(--line)}
+  
   /* ---- status bar ---- */
   .status{grid-area:status;background:var(--panel-2);border-top:1px solid var(--line);
     display:flex;align-items:center;gap:18px;padding:0 14px;
@@ -178,11 +199,13 @@
   .status .pip{width:7px;height:7px;border-radius:50%;background:var(--err);margin-right:5px;display:inline-block}
   .status .pip.ok{background:var(--ok)}
   .status .right{margin-left:auto;color:var(--txt-dim)}
+  
   @media(max-width:860px){
     body{grid-template-columns:1fr;grid-template-rows:52px 150px 1fr 200px 26px;
       grid-template-areas:"top" "tree" "stage" "side" "status"}
     .tree-panel{border-right:none;border-bottom:1px solid var(--line)}
     .side{border-left:none;border-top:1px solid var(--line)}
+    .resizer { display: none; }
   }
 </style>
 </head>
@@ -204,7 +227,6 @@
     </div>
   </header>
 
-  <!-- ЛЕВАЯ ПАНЕЛЬ: дерево структуры -->
   <aside class="panel tree-panel" id="treePanel">
     <div class="panel-head" id="treeHead">
       <h3>Структура модели</h3>
@@ -214,6 +236,8 @@
       <div class="empty">Дерево появится после загрузки модели: Проект → Площадка → Здание → Этаж → элементы.</div>
     </div>
   </aside>
+
+  <div class="resizer" id="dragLeft"></div>
 
   <main class="stage" id="stage">
     <div class="drop-hint" id="hint">
@@ -228,7 +252,8 @@
     </div>
   </main>
 
-  <!-- ПРАВАЯ ПАНЕЛЬ: статистика + свойства -->
+  <div class="resizer" id="dragRight"></div>
+
   <aside class="panel side" id="sidePanel">
     <div class="panel-head" id="sideHead">
       <h3>Информация</h3>
@@ -308,7 +333,6 @@ camera.position.set(20, -24, 16);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-// СТАНДАРТНАЯ навигация: колесо — зум, ЛКМ — вращение, СКМ/ПКМ — панорама
 controls.enableZoom = true;
 controls.zoomSpeed = 1.0;
 controls.zoomToCursor = true;
@@ -331,20 +355,22 @@ const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
 fill.position.set(-25, 20, 15);
 scene.add(fill);
 
-// grid (в плоскости XY — горизонт при Z-up)
+// grid
 let grid = makeGrid(120, 120);
 scene.add(grid);
-const axes = new THREE.AxesHelper(3);   // X-красный, Y-зелёный, Z(вверх)-синий
+const axes = new THREE.AxesHelper(3);   
 scene.add(axes);
 
 function makeGrid(size, div){
   const g = new THREE.GridHelper(size, div, 0x2a313d, 0x171c24);
-  g.rotation.x = Math.PI / 2;   // из плоскости XZ в плоскость XY
+  g.rotation.x = Math.PI / 2;   
   return g;
 }
 
-// model root — БЕЗ поворота: используем родные координаты IFC (Z вверх)
+// модель: web-ifc отдаёт геометрию в Y-up; ПОВОРОТ ИСПРАВЛЕН
+const MODEL_ROT_X = -Math.PI / 2;
 let modelGroup = new THREE.Group();
+modelGroup.rotation.x = MODEL_ROT_X;
 scene.add(modelGroup);
 
 function resize(){
@@ -388,13 +414,13 @@ let engineReady = false;
 
 // ---------- state ----------
 let modelID = null;
-let meshes = [];                 // все меши
-let meshesByID = new Map();      // expressID -> [mesh,...]
+let meshes = [];                 
+let meshesByID = new Map();      
 let wireMode = false;
-let psetIndex = new Map();       // expressID -> [pset id,...]
-let parentOf = new Map();        // expressID -> parent expressID (структура)
-let trowById = new Map();        // expressID -> .trow
-let tnodeById = new Map();       // expressID -> .tnode
+let psetIndex = new Map();       
+let parentOf = new Map();        
+let trowById = new Map();        
+let tnodeById = new Map();       
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -413,6 +439,7 @@ function clearModel(){
   scene.remove(modelGroup);
   modelGroup.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material) o.material.dispose(); });
   modelGroup = new THREE.Group();
+  modelGroup.rotation.x = MODEL_ROT_X;
   scene.add(modelGroup);
   meshes = [];
   meshesByID = new Map();
@@ -578,10 +605,10 @@ function fitView(){
   camera.updateProjectionMatrix();
   controls.target.copy(center);
   controls.update();
-  // туман подгоняем под размер
+  
   scene.fog.near = maxDim * 1.4;
   scene.fog.far  = maxDim * 7;
-  // пересобираем сетку под габариты, кладём на низ модели (по Z)
+  
   const gsize = Math.max(40, Math.ceil(maxDim*1.6/10)*10);
   scene.remove(grid);
   grid = makeGrid(gsize, gsize/(gsize>200?4:2));
@@ -646,7 +673,6 @@ function buildTree(){
     parentOf.set(c, p);
   };
 
-  // агрегация: Проект -> Площадка -> Здание -> Этаж
   try{
     const r = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELAGGREGATES);
     for(let i=0;i<r.size();i++){
@@ -658,7 +684,6 @@ function buildTree(){
     }
   }catch(e){ console.warn('IFCRELAGGREGATES:', e); }
 
-  // размещение элементов в пространственной структуре: Этаж -> стены/двери/...
   try{
     const r = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
     for(let i=0;i<r.size();i++){
@@ -670,7 +695,6 @@ function buildTree(){
     }
   }catch(e){ console.warn('IFCRELCONTAINEDINSPATIALSTRUCTURE:', e); }
 
-  // корни — IfcProject
   let roots = [];
   try{
     const pr = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCPROJECT);
@@ -696,6 +720,29 @@ function buildTree(){
     const info = { name, type };
     nameCache.set(id, info);
     return info;
+  }
+
+  function buildTypeGroup(typeName, ids, depth){
+    const node = document.createElement('div');
+    node.className = 'tnode group';
+    const row = document.createElement('div');
+    row.className = 'trow trow-group';
+    row.title = typeName + ' · ' + ids.length + ' шт.';
+    const caret = document.createElement('span');
+    caret.className = 'caret'; caret.textContent = '▾';
+    const label = document.createElement('span');
+    label.className = 'tlabel'; label.textContent = typeName;
+    const cnt = document.createElement('span');
+    cnt.className = 'tcount'; cnt.textContent = ids.length;
+    row.appendChild(caret); row.appendChild(label); row.appendChild(cnt);
+    node.appendChild(row);
+    const ch = document.createElement('div'); ch.className = 'children';
+    ids.forEach(k=>{ const c = build(k, depth+1); if(c) ch.appendChild(c); });
+    node.appendChild(ch);
+    node.classList.add('collapsed');
+    row.addEventListener('click', ()=> node.classList.toggle('collapsed'));
+    caret.addEventListener('click', e=>{ e.stopPropagation(); node.classList.toggle('collapsed'); });
+    return node;
   }
 
   function build(id, depth){
@@ -736,7 +783,22 @@ function buildTree(){
     if(kids.length){
       const ch = document.createElement('div');
       ch.className = 'children';
-      kids.forEach(k=>{ const c = build(k, depth+1); if(c) ch.appendChild(c); });
+      
+      const containers = [], leaves = [];
+      kids.forEach(k=>{ ((childrenOf.get(k)||[]).length ? containers : leaves).push(k); });
+      containers.forEach(k=>{ const c = build(k, depth+1); if(c) ch.appendChild(c); });
+      
+      if(leaves.length){
+        const byType = new Map();
+        leaves.forEach(k=>{
+          const t = nodeInfo(k).type || 'Прочее';
+          if(!byType.has(t)) byType.set(t, []);
+          byType.get(t).push(k);
+        });
+        const types = [...byType.keys()].sort((a,b)=>a.localeCompare(b,'ru'));
+        // СТРОГАЯ ГРУППИРОВКА: всегда группируем, независимо от количества элементов
+        types.forEach(t=> ch.appendChild(buildTypeGroup(t, byType.get(t), depth+1)) );
+      }
       node.appendChild(ch);
       if(depth >= 3) node.classList.add('collapsed');
     }
@@ -747,7 +809,6 @@ function buildTree(){
   const frag = document.createDocumentFragment();
   roots.forEach(id=>{ const n = build(id, 0); if(n) frag.appendChild(n); });
 
-  // элементы с геометрией, не попавшие в структуру
   const orphans = [...meshesByID.keys()].filter(id=>!visited.has(id));
   if(orphans.length){
     const node = document.createElement('div');
@@ -782,7 +843,7 @@ function highlightTreeNode(expressID, doScroll){
   if(doScroll) row.scrollIntoView({ block:'nearest' });
 }
 
-// ---------- properties (с раскрывающимися группами) ----------
+// ---------- properties ----------
 function showProps(expressID){
   let line = {};
   try{ line = ifcAPI.GetLine(modelID, expressID, true); }catch(e){}
@@ -869,7 +930,6 @@ function group(title, body, collapsed){
     `<div class="pgroup-body">${body}</div></div>`;
 }
 
-// клики по заголовкам групп/Pset — сворачивание (#5)
 propsBox.addEventListener('click', e=>{
   const gh = e.target.closest('.pgroup-head');
   if(gh){ gh.parentElement.classList.toggle('collapsed'); return; }
@@ -879,7 +939,7 @@ propsBox.addEventListener('click', e=>{
 
 function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
-// ---------- откреп/закреп панелей (#3) ----------
+// ---------- откреп/закреп панелей ----------
 function setupDockable(panel, head, popBtn){
   popBtn.addEventListener('click', e=>{
     e.stopPropagation();
@@ -923,15 +983,71 @@ function setupDockable(panel, head, popBtn){
 }
 
 function updateLayout(){
-  if(window.innerWidth <= 860){ document.body.style.gridTemplateColumns=''; resize(); return; }
-  const L = document.getElementById('treePanel').classList.contains('floating') ? 0 : 260;
-  const R = document.getElementById('sidePanel').classList.contains('floating') ? 0 : 320;
-  document.body.style.gridTemplateColumns = `${L}px 1fr ${R}px`;
+  if(window.innerWidth <= 860){ 
+    document.body.style.gridTemplateColumns = ''; 
+    document.getElementById('dragLeft').style.display = 'none'; 
+    document.getElementById('dragRight').style.display = 'none'; 
+    resize(); 
+    return; 
+  }
+  
+  document.getElementById('dragLeft').style.display = '';
+  document.getElementById('dragRight').style.display = '';
+
+  const L_floating = document.getElementById('treePanel').classList.contains('floating');
+  const R_floating = document.getElementById('sidePanel').classList.contains('floating');
+
+  const colL = L_floating ? '0px' : 'var(--w-left)';
+  const resL = L_floating ? '0px' : '4px';
+  const colR = R_floating ? '0px' : 'var(--w-right)';
+  const resR = R_floating ? '0px' : '4px';
+
+  document.body.style.gridTemplateColumns = `${colL} ${resL} 1fr ${resR} ${colR}`;
+  
+  document.getElementById('dragLeft').style.pointerEvents = L_floating ? 'none' : 'auto';
+  document.getElementById('dragRight').style.pointerEvents = R_floating ? 'none' : 'auto';
+
   resize();
 }
 
 setupDockable($('treePanel'), $('treeHead'), $('treePop'));
 setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
+
+// ---------- ИНТЕРАКТИВНОЕ ИЗМЕНЕНИЕ ШИРИНЫ ПАНЕЛЕЙ ----------
+function setupResizer(resizerId, cssVar, isLeft) {
+  const resizer = document.getElementById(resizerId);
+  let isDragging = false;
+
+  resizer.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    stage.style.pointerEvents = 'none'; 
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    if (window.innerWidth <= 860) return; 
+
+    let newWidth = isLeft ? e.clientX : window.innerWidth - e.clientX;
+    newWidth = Math.max(200, Math.min(newWidth, window.innerWidth * 0.5));
+    
+    document.documentElement.style.setProperty(cssVar, newWidth + 'px');
+    resize(); 
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      stage.style.pointerEvents = '';
+    }
+  });
+}
+
+setupResizer('dragLeft', '--w-left', true);
+setupResizer('dragRight', '--w-right', false);
 
 // ---------- UI events ----------
 $('open').addEventListener('click', ()=> $('file').click());
