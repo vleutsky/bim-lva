@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IFC VIEWER · веб-просмотрщик моделей</title>
+<title>IFC VIEWER · Сводные модели</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -20,14 +20,13 @@
     --blue:#3aa0ff;
     --ok:#46d39a;
     --err:#ff5470;
-    --w-left: 260px;
+    --w-left: 280px;
     --w-right: 320px;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%;overflow:hidden}
   body{
-    background:var(--bg);
-    color:var(--txt);
+    background:var(--bg); color:var(--txt);
     font-family:'Archivo',sans-serif;
     display:grid;
     grid-template-columns:var(--w-left) 4px 1fr 4px var(--w-right);
@@ -37,25 +36,20 @@
   }
   /* ---- top bar ---- */
   .top{
-    grid-area:top;display:flex;align-items:center;gap:18px;
+    grid-area:top;display:flex;align-items:center;gap:12px;
     padding:0 16px;background:var(--panel);
     border-bottom:1px solid var(--line);z-index:10;
   }
-  .brand{display:flex;align-items:center;gap:10px;letter-spacing:.5px}
+  .brand{display:flex;align-items:center;gap:10px;letter-spacing:.5px;margin-right:10px;}
   .brand .dot{width:11px;height:11px;background:var(--accent);
     box-shadow:0 0 12px var(--accent);transform:rotate(45deg)}
   .brand b{font-weight:800;font-size:15px}
-  .brand span{font-family:'IBM Plex Mono';font-size:11px;color:var(--txt-dim)}
-  a.back{font-family:'IBM Plex Mono';font-size:12px;color:var(--txt-dim);
-    text-decoration:none;display:flex;align-items:center;gap:6px;
-    padding:7px 12px;border:1px solid var(--line);background:var(--panel-2);
-    transition:.15s;letter-spacing:.4px}
-  a.back:hover{color:var(--accent);border-color:var(--accent-dim)}
+  
   .tools{display:flex;gap:6px;margin-left:auto}
   button.btn{
-    font-family:'IBM Plex Mono';font-size:12px;color:var(--txt-dim);
+    font-family:'IBM Plex Mono';font-size:11px;color:var(--txt-dim);
     background:var(--panel-2);border:1px solid var(--line);
-    padding:7px 12px;cursor:pointer;letter-spacing:.4px;
+    padding:6px 10px;cursor:pointer;letter-spacing:.4px;
     transition:.15s;display:flex;align-items:center;gap:6px;
   }
   button.btn:hover{color:var(--txt);border-color:var(--accent-dim)}
@@ -63,6 +57,9 @@
   button.btn:disabled{opacity:.35;cursor:not-allowed}
   .load-btn{color:var(--bg);background:var(--accent);border-color:var(--accent);font-weight:600}
   .load-btn:hover{filter:brightness(1.1);color:var(--bg)}
+  .btn-group { display: flex; gap: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .btn-group .btn { border: none; border-right: 1px solid var(--line); border-radius: 0; }
+  .btn-group .btn:last-child { border-right: none; }
   
   /* ---- generic panel ---- */
   .panel{background:var(--panel);display:flex;flex-direction:column;overflow:hidden;min-height:0}
@@ -77,7 +74,6 @@
   .tree-panel{grid-area:tree;border-right:1px solid var(--line)}
   .side{grid-area:side;border-left:1px solid var(--line)}
   
-  /* floating (откреплённая) панель */
   .panel.floating{
     position:fixed;z-index:60;width:300px;height:460px;
     border:1px solid var(--accent-dim);box-shadow:0 18px 55px rgba(0,0,0,.6);
@@ -86,12 +82,7 @@
   .panel.floating .panel-head{cursor:move;background:var(--panel-2)}
 
   /* ---- resizers ---- */
-  .resizer {
-    background: var(--line);
-    z-index: 20;
-    cursor: col-resize;
-    transition: background 0.2s;
-  }
+  .resizer { background: var(--line); z-index: 20; cursor: col-resize; transition: background 0.2s; }
   .resizer:hover, .resizer.dragging { background: var(--accent); }
   #dragLeft { grid-area: resL; }
   #dragRight { grid-area: resR; }
@@ -108,17 +99,11 @@
     width:64px;height:64px;border:2px solid var(--line);position:relative;
     transform:rotate(45deg);
   }
-  .drop-hint .grid-ico::before,.drop-hint .grid-ico::after{
-    content:"";position:absolute;background:var(--line);
-  }
+  .drop-hint .grid-ico::before,.drop-hint .grid-ico::after{ content:"";position:absolute;background:var(--line); }
   .drop-hint .grid-ico::before{left:50%;top:0;width:2px;height:100%;margin-left:-1px}
   .drop-hint .grid-ico::after{top:50%;left:0;height:2px;width:100%;margin-top:-1px}
   .drop-hint h2{font-weight:800;font-size:20px;letter-spacing:.5px}
   .drop-hint p{font-family:'IBM Plex Mono';font-size:12px;color:var(--txt-dim);max-width:340px;line-height:1.6}
-  .stage.dragover::after{
-    content:"";position:absolute;inset:12px;border:2px dashed var(--accent);
-    pointer-events:none;background:rgba(255,107,53,.06);
-  }
   
   /* overlay loader */
   .loader{
@@ -128,12 +113,25 @@
   }
   .loader.show{display:flex}
   .bar{width:240px;height:4px;background:var(--panel-2);overflow:hidden}
-  .bar i{display:block;height:100%;width:30%;background:var(--accent);
-    animation:slide 1.1s infinite ease-in-out}
+  .bar i{display:block;height:100%;width:30%;background:var(--accent); animation:slide 1.1s infinite ease-in-out}
   @keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
   .loader b{font-family:'IBM Plex Mono';font-size:12px;color:var(--accent);letter-spacing:1px}
   .loader small{font-family:'IBM Plex Mono';font-size:11px;color:var(--txt-dim)}
   
+  /* ---- search ---- */
+  .search-box {
+      padding: 8px 12px;
+      background: #11141a;
+      border-bottom: 1px solid var(--line);
+  }
+  .search-box input {
+      width: 100%; padding: 6px 10px;
+      background: var(--panel-2); border: 1px solid var(--line);
+      color: var(--txt); font-family: 'IBM Plex Mono'; font-size: 11px;
+      outline: none; transition: border 0.2s;
+  }
+  .search-box input:focus { border-color: var(--accent); }
+
   /* ---- tree ---- */
   .tree{flex:1;overflow:auto;padding:6px 6px 16px;font-family:'IBM Plex Mono';font-size:11px;min-height:0}
   .tree .empty{color:var(--txt-dim);line-height:1.7;padding:8px}
@@ -150,63 +148,37 @@
   .children{margin-left:13px;border-left:1px solid var(--line);padding-left:3px}
   .tlabel{overflow:hidden;text-overflow:ellipsis}
   .ttype{color:var(--txt-dim);font-size:9px;letter-spacing:.5px;flex:0 0 auto}
+  .file-root > .trow { background: #1a222d; border: 1px solid var(--line); margin-bottom: 4px;}
   .tree::-webkit-scrollbar{width:9px}
   .tree::-webkit-scrollbar-thumb{background:var(--line)}
   
   /* ---- side: stats + props ---- */
   .scroll{flex:1;overflow-y:auto;min-height:0}
   .stats{padding:10px 16px 14px;border-bottom:1px solid var(--line)}
-  .stat-row{display:flex;justify-content:space-between;font-family:'IBM Plex Mono';
-    font-size:12px;padding:5px 0;color:var(--txt-dim)}
+  .stat-row{display:flex;justify-content:space-between;font-family:'IBM Plex Mono'; font-size:12px;padding:5px 0;color:var(--txt-dim)}
   .stat-row b{color:var(--txt);font-weight:600}
-  .sub-head{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:1.5px;
-    color:var(--txt-dim);text-transform:uppercase;padding:14px 16px 8px}
+  .sub-head{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:1.5px; color:var(--txt-dim);text-transform:uppercase;padding:14px 16px 8px}
   .props{padding:0 16px 20px}
-  .props .empty{font-family:'IBM Plex Mono';font-size:12px;color:var(--txt-dim);
-    line-height:1.7;padding-top:8px}
+  .props .empty{font-family:'IBM Plex Mono';font-size:12px;color:var(--txt-dim); line-height:1.7;padding-top:8px}
   .prop{border-bottom:1px solid var(--line);padding:9px 0}
-  .prop .k{font-family:'IBM Plex Mono';font-size:10px;letter-spacing:.5px;
-    color:var(--txt-dim);text-transform:uppercase;margin-bottom:3px}
+  .prop .k{font-family:'IBM Plex Mono';font-size:10px;letter-spacing:.5px; color:var(--txt-dim);text-transform:uppercase;margin-bottom:3px}
   .prop .v{font-family:'IBM Plex Mono';font-size:13px;color:var(--txt);word-break:break-word}
-  .tag{display:inline-block;font-family:'IBM Plex Mono';font-size:10px;
-    padding:2px 8px;background:#231712;color:var(--accent);
-    border:1px solid var(--accent-dim);margin-bottom:10px;letter-spacing:.5px}
+  .tag{display:inline-block;font-family:'IBM Plex Mono';font-size:10px; padding:2px 8px;background:#231712;color:var(--accent); border:1px solid var(--accent-dim);margin-bottom:10px;letter-spacing:.5px}
   .prop.small{padding:5px 0}
   .prop.small .v{font-size:12px;color:var(--txt-dim)}
   
-  /* collapsible groups in props */
   .pgroup{margin-top:14px}
-  .pgroup-head{font-family:'IBM Plex Mono';font-size:10px;letter-spacing:1.5px;
-    color:var(--blue);text-transform:uppercase;border-bottom:1px solid var(--line);
-    padding:5px 0;cursor:pointer;display:flex;align-items:center;gap:7px;user-select:none}
+  .pgroup-head{font-family:'IBM Plex Mono';font-size:10px;letter-spacing:1.5px; color:var(--blue);text-transform:uppercase;border-bottom:1px solid var(--line); padding:5px 0;cursor:pointer;display:flex;align-items:center;gap:7px;user-select:none}
   .pgroup-head:hover{color:var(--txt)}
   .ar{display:inline-block;transition:transform .1s;font-size:9px;color:var(--txt-dim)}
   .pgroup.collapsed .pgroup-body{display:none}
   .pgroup.collapsed .ar{transform:rotate(-90deg)}
-  .pset{margin:8px 0 2px}
-  .pset-head{font-family:'IBM Plex Mono';font-size:11px;color:var(--accent);
-    letter-spacing:.5px;cursor:pointer;padding:5px 0;display:flex;gap:7px;
-    align-items:center;user-select:none}
-  .pset.collapsed .pset-body{display:none}
-  .pset.collapsed .ar{transform:rotate(-90deg)}
-  .props::-webkit-scrollbar{width:9px}
-  .props::-webkit-scrollbar-thumb{background:var(--line)}
   
   /* ---- status bar ---- */
-  .status{grid-area:status;background:var(--panel-2);border-top:1px solid var(--line);
-    display:flex;align-items:center;gap:18px;padding:0 14px;
-    font-family:'IBM Plex Mono';font-size:11px;color:var(--txt-dim)}
+  .status{grid-area:status;background:var(--panel-2);border-top:1px solid var(--line); display:flex;align-items:center;gap:18px;padding:0 14px; font-family:'IBM Plex Mono';font-size:11px;color:var(--txt-dim)}
   .status .pip{width:7px;height:7px;border-radius:50%;background:var(--err);margin-right:5px;display:inline-block}
   .status .pip.ok{background:var(--ok)}
   .status .right{margin-left:auto;color:var(--txt-dim)}
-  
-  @media(max-width:860px){
-    body{grid-template-columns:1fr;grid-template-rows:52px 150px 1fr 200px 26px;
-      grid-template-areas:"top" "tree" "stage" "side" "status"}
-    .tree-panel{border-right:none;border-bottom:1px solid var(--line)}
-    .side{border-left:none;border-top:1px solid var(--line)}
-    .resizer { display: none; }
-  }
 </style>
 </head>
 <body>
@@ -214,26 +186,34 @@
     <div class="brand">
       <div class="dot"></div>
       <b>IFC&nbsp;VIEWER</b>
-      <span>web · web-ifc + three.js</span>
     </div>
-    <a class="back" href="index.html" title="Вернуться на сайт">← BIM.LVA</a>
+    
+    <div class="btn-group">
+        <button class="btn" id="btnIsolate" disabled title="Скрыть всё, кроме выделенного">🎯 ИЗОЛИРОВАТЬ</button>
+        <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы">👁 СКРЫТЬ</button>
+        <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие">👁‍🗨 ПОКАЗАТЬ ВСЁ</button>
+    </div>
+
     <div class="tools">
-      <input type="file" id="file" accept=".ifc" hidden>
-      <button class="btn load-btn" id="open">⬆ ОТКРЫТЬ IFC</button>
-      <button class="btn" id="fit" disabled title="Вписать в кадр">⤢ КАДР</button>
-      <button class="btn" id="wire" disabled title="Каркас">▦ КАРКАС</button>
-      <button class="btn on" id="gridBtn" title="Сетка">▤ СЕТКА</button>
-      <button class="btn" id="clear" disabled title="Очистить">✕ СБРОС</button>
+      <input type="file" id="file" accept=".ifc" multiple hidden>
+      <button class="btn load-btn" id="open">⬆ ОТКРЫТЬ ФАЙЛЫ</button>
+      <button class="btn" id="fit" disabled>⤢ КАДР</button>
+      <button class="btn" id="wire" disabled>▦ КАРКАС</button>
+      <button class="btn on" id="gridBtn">▤ СЕТКА</button>
+      <button class="btn" id="clear" disabled>✕ ОЧИСТИТЬ ВСЁ</button>
     </div>
   </header>
 
   <aside class="panel tree-panel" id="treePanel">
     <div class="panel-head" id="treeHead">
-      <h3>Структура модели</h3>
-      <button class="pop" id="treePop" title="Открепить / закрепить панель">⧉</button>
+      <h3>Структура</h3>
+      <button class="pop" id="treePop">⧉</button>
+    </div>
+    <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Поиск (Enter)...">
     </div>
     <div class="tree" id="tree">
-      <div class="empty">Дерево появится после загрузки модели: Проект → Площадка → Здание → Этаж → элементы.</div>
+      <div class="empty">Добавьте один или несколько файлов .ifc</div>
     </div>
   </aside>
 
@@ -242,13 +222,13 @@
   <main class="stage" id="stage">
     <div class="drop-hint" id="hint">
       <div class="grid-ico"></div>
-      <h2>Перетащите .ifc файл сюда</h2>
-      <p>или нажмите «ОТКРЫТЬ IFC». Модель загружается и обрабатывается прямо в браузере — ничего не отправляется на сервер.</p>
+      <h2>Мультизагрузка .ifc</h2>
+      <p>Перетащите один или несколько файлов сюда. Модели будут загружены в общую координатную среду.</p>
     </div>
     <div class="loader" id="loader">
-      <b id="loadTitle">ОБРАБОТКА МОДЕЛИ</b>
+      <b id="loadTitle">ОБРАБОТКА</b>
       <div class="bar"><i></i></div>
-      <small id="loadSub">инициализация web-ifc…</small>
+      <small id="loadSub">инициализация...</small>
     </div>
   </main>
 
@@ -256,26 +236,24 @@
 
   <aside class="panel side" id="sidePanel">
     <div class="panel-head" id="sideHead">
-      <h3>Информация</h3>
-      <button class="pop" id="sidePop" title="Открепить / закрепить панель">⧉</button>
+      <h3>Свойства</h3>
+      <button class="pop" id="sidePop">⧉</button>
     </div>
     <div class="scroll">
       <div class="stats">
-        <div class="stat-row">Файл <b id="sFile">—</b></div>
-        <div class="stat-row">Схема <b id="sSchema">—</b></div>
-        <div class="stat-row">Элементов <b id="sElems">—</b></div>
-        <div class="stat-row">Геометрий <b id="sMesh">—</b></div>
+        <div class="stat-row">Всего файлов <b id="sFile">0</b></div>
+        <div class="stat-row">Всего элементов <b id="sElems">0</b></div>
+        <div class="stat-row">Выделено <b id="sSelected" style="color:var(--accent)">0</b></div>
       </div>
-      <div class="sub-head">Свойства элемента</div>
       <div class="props" id="props">
-        <div class="empty">Кликните по элементу в модели или в дереве слева, чтобы увидеть его свойства.</div>
+        <div class="empty">Выделите элемент для просмотра атрибутов.</div>
       </div>
     </div>
   </aside>
 
   <footer class="status">
     <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
-    <span id="hintControls">ЛКМ — вращение · СКМ/ПКМ — панорама · Колесо — зум</span>
+    <span id="hintControls">ЛКМ: вращение | ПКМ: панорама | Двойной клик в дереве: зум к элементу</span>
     <span class="right" id="fps">—</span>
   </footer>
 
@@ -295,276 +273,159 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import * as WebIFC from 'web-ifc';
 
 const WASM_PATH = "https://unpkg.com/web-ifc@0.0.57/";
-
-// обратная карта: числовой код типа IFC -> имя сущности (IFCWALL, IFCDOOR, ...)
 const TYPE_NAMES = {};
-for(const k in WebIFC){
-  if(typeof WebIFC[k] === 'number' && k.startsWith('IFC')) TYPE_NAMES[WebIFC[k]] = k;
-}
+for(const k in WebIFC){ if(typeof WebIFC[k] === 'number' && k.startsWith('IFC')) TYPE_NAMES[WebIFC[k]] = k; }
 
-// ---------- DOM ----------
 const stage = document.getElementById('stage');
-const hint = document.getElementById('hint');
 const loader = document.getElementById('loader');
-const loadTitle = document.getElementById('loadTitle');
-const loadSub = document.getElementById('loadSub');
-const propsBox = document.getElementById('props');
 const treeBox = document.getElementById('tree');
-const pip = document.getElementById('pip');
-const engineStatus = document.getElementById('engineStatus');
-const fpsEl = document.getElementById('fps');
+const propsBox = document.getElementById('props');
 const $ = id => document.getElementById(id);
 
-// ---------- three.js scene (Z-up) ----------
+// --- Three.js Setup (Z-up) ---
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setClearColor(0x0a0c0f, 1);
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x0a0c0f, 200, 800);
-
-// Z вверх: ось Z смотрит вверх, плоскость XY лежит на горизонте
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
-camera.up.set(0, 0, 1);
-camera.position.set(20, -24, 16);
+camera.up.set(0, 0, 1); camera.position.set(20, -24, 16);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.enableZoom = true;
-controls.zoomSpeed = 1.0;
-controls.zoomToCursor = true;
-controls.enablePan = true;
-controls.panSpeed = 0.9;
-controls.screenSpacePanning = true;
-controls.mouseButtons = {
-  LEFT:   THREE.MOUSE.ROTATE,
-  MIDDLE: THREE.MOUSE.PAN,
-  RIGHT:  THREE.MOUSE.PAN
-};
-controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+controls.enableDamping = true; controls.dampingFactor = 0.08;
 
-// lights
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const key = new THREE.DirectionalLight(0xffffff, 1.6);
-key.position.set(25, -20, 50);   // сверху (по Z)
-scene.add(key);
-const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
-fill.position.set(-25, 20, 15);
-scene.add(fill);
+const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(25, -20, 50); scene.add(key);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.5); fill.position.set(-25, 20, 15); scene.add(fill);
 
-// grid
-let grid = makeGrid(120, 120);
-scene.add(grid);
-const axes = new THREE.AxesHelper(3);   
-scene.add(axes);
+let grid = new THREE.GridHelper(120, 120, 0x2a313d, 0x171c24);
+grid.rotation.x = Math.PI / 2; scene.add(grid);
 
-function makeGrid(size, div){
-  const g = new THREE.GridHelper(size, div, 0x2a313d, 0x171c24);
-  g.rotation.x = Math.PI / 2;   
-  return g;
-}
-
-// модель: web-ifc отдаёт геометрию в Y-up; ПОВОРОТ ИСПРАВЛЕН
 const MODEL_ROT_X = -Math.PI / 2;
-let modelGroup = new THREE.Group();
-modelGroup.rotation.x = MODEL_ROT_X;
-scene.add(modelGroup);
+let globalGroup = new THREE.Group();
+globalGroup.rotation.x = MODEL_ROT_X;
+scene.add(globalGroup);
 
 function resize(){
   const w = stage.clientWidth, h = stage.clientHeight;
-  if(w === 0 || h === 0) return;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
+  if(w===0||h===0) return;
+  renderer.setSize(w, h, false); camera.aspect = w/h; camera.updateProjectionMatrix();
 }
-window.addEventListener('resize', resize);
-resize();
+window.addEventListener('resize', resize); resize();
 
-// render loop with fps
 let last = performance.now(), frames = 0, acc = 0;
 function tick(now){
   requestAnimationFrame(tick);
-  controls.update();
-  renderer.render(scene, camera);
+  controls.update(); renderer.render(scene, camera);
   frames++; acc += now - last; last = now;
-  if(acc >= 500){ fpsEl.textContent = Math.round(frames*1000/acc)+' FPS'; frames=0; acc=0; }
+  if(acc >= 500){ $('fps').textContent = Math.round(frames*1000/acc)+' FPS'; frames=0; acc=0; }
 }
 requestAnimationFrame(tick);
 
-// ---------- web-ifc ----------
-const ifcAPI = new WebIFC.IfcAPI();
-ifcAPI.SetWasmPath(WASM_PATH);
+// --- State Management (Federated Models) ---
+class IFCModelData {
+    constructor(modelID, filename) {
+        this.modelID = modelID;
+        this.filename = filename;
+        this.meshesByID = new Map(); // expressID -> [mesh, mesh]
+        this.parentOf = new Map();
+        this.childrenOf = new Map();
+        this.psetIndex = new Map();
+        this.searchCache = new Map(); // expressID -> "String for fast search"
+        
+        this.group = new THREE.Group();
+        globalGroup.add(this.group);
+    }
+}
+
+const loadedModels = new Map(); // modelID -> IFCModelData
+let allMeshes = []; // For Raycaster
+let selectedItems = []; // Array of { modelID, expressID }
+let totalElements = 0;
 let engineReady = false;
 
-(async () => {
-  try{
-    await ifcAPI.Init();
-    engineReady = true;
-    pip.classList.add('ok');
-    engineStatus.textContent = 'движок готов · web-ifc';
-  }catch(e){
-    engineStatus.textContent = 'ошибка загрузки движка (см. примечание)';
-    console.error(e);
-    loadSub.textContent = 'Не удалось загрузить WASM. Если файл открыт напрямую (file://) — запустите через локальный сервер.';
-  }
-})();
+const ifcAPI = new WebIFC.IfcAPI();
+ifcAPI.SetWasmPath(WASM_PATH);
+ifcAPI.Init().then(()=>{
+    engineReady = true; $('pip').classList.add('ok'); $('engineStatus').textContent = 'движок готов';
+}).catch(e=>console.error(e));
 
-// ---------- state ----------
-let modelID = null;
-let meshes = [];                 
-let meshesByID = new Map();      
-let wireMode = false;
-let psetIndex = new Map();       
-let parentOf = new Map();        
-let trowById = new Map();        
-let tnodeById = new Map();       
+// --- Core Loading ---
+async function handleFiles(files) {
+    if(!engineReady) return alert('Движок еще грузится...');
+    $('hint').style.display = 'none';
+    if(loadedModels.size === 0) treeBox.innerHTML = ''; // Очистка заглушки
 
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
-let selectedMeshes = [];
-
-function showLoader(title, sub){
-  loadTitle.textContent = title || 'ОБРАБОТКА МОДЕЛИ';
-  loadSub.textContent = sub || '';
-  loader.classList.add('show');
-}
-function hideLoader(){ loader.classList.remove('show'); }
-
-function clearModel(){
-  if(modelID !== null && engineReady){ try{ ifcAPI.CloseModel(modelID); }catch(e){} }
-  modelID = null;
-  scene.remove(modelGroup);
-  modelGroup.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material) o.material.dispose(); });
-  modelGroup = new THREE.Group();
-  modelGroup.rotation.x = MODEL_ROT_X;
-  scene.add(modelGroup);
-  meshes = [];
-  meshesByID = new Map();
-  selectedMeshes = [];
-  psetIndex = new Map();
-  parentOf = new Map();
-  trowById = new Map();
-  tnodeById = new Map();
-  resetProps();
-  treeBox.innerHTML = '<div class="empty">Дерево появится после загрузки модели.</div>';
-  ['sFile','sSchema','sElems','sMesh'].forEach(id=>$(id).textContent='—');
-  ['fit','wire','clear'].forEach(id=>$(id).disabled=true);
-}
-
-// связываем элементы с их наборами свойств через IfcRelDefinesByProperties
-function buildPsetIndex(){
-  psetIndex = new Map();
-  try{
-    const relIDs = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELDEFINESBYPROPERTIES);
-    for(let i=0;i<relIDs.size();i++){
-      const rel = ifcAPI.GetLine(modelID, relIDs.get(i));
-      let related = rel.RelatedObjects;
-      if(!related) continue;
-      if(!Array.isArray(related)) related = [related];
-      const defId = rel.RelatingPropertyDefinition && rel.RelatingPropertyDefinition.value;
-      if(defId == null) continue;
-      for(const o of related){
-        const id = o && o.value;
-        if(id == null) continue;
-        if(!psetIndex.has(id)) psetIndex.set(id, []);
-        psetIndex.get(id).push(defId);
-      }
+    for(let i=0; i<files.length; i++) {
+        await loadSingleIFC(files[i]);
     }
-  }catch(e){ console.warn('Не удалось построить индекс свойств:', e); }
+    
+    $('sFile').textContent = loadedModels.size;
+    $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+    ['fit','wire','clear','btnIsolate','btnHide','btnShowAll'].forEach(id=>$(id).disabled=false);
+    fitView();
 }
 
-// разворачивает IFC-значение в строку
-function readVal(v){
-  if(v == null) return '';
-  if(typeof v !== 'object') return String(v);
-  if(Array.isArray(v)) return v.map(readVal).filter(x=>x!=='').join(', ');
-  if('value' in v) return readVal(v.value);
-  return '';
-}
-function val(a){ return (a && typeof a === 'object' && 'value' in a) ? a.value : a; }
-
-async function loadIFC(file){
-  if(!engineReady){ alert('Движок web-ifc ещё не загрузился. Подождите пару секунд или см. примечание о локальном сервере.'); return; }
-  clearModel();
-  hint.style.display = 'none';
-  showLoader('ЧТЕНИЕ ФАЙЛА', file.name);
-  await new Promise(r=>setTimeout(r,30));
-
-  try{
-    const buffer = await file.arrayBuffer();
-    const data = new Uint8Array(buffer);
-    showLoader('ПАРСИНГ IFC', 'разбор структуры модели…');
+async function loadSingleIFC(file) {
+    showLoader('ЧТЕНИЕ ФАЙЛА', file.name);
     await new Promise(r=>setTimeout(r,30));
-    modelID = ifcAPI.OpenModel(data, { COORDINATE_TO_ORIGIN:true });
+    
+    try {
+        const data = new Uint8Array(await file.arrayBuffer());
+        const modelID = ifcAPI.OpenModel(data, { COORDINATE_TO_ORIGIN:true });
+        const modData = new IFCModelData(modelID, file.name);
+        loadedModels.set(modelID, modData);
 
-    let schema = '—';
-    try{ schema = ifcAPI.GetModelSchema(modelID) || '—'; }catch(e){}
-    $('sSchema').textContent = schema;
-    $('sFile').textContent = file.name.length>18 ? file.name.slice(0,16)+'…' : file.name;
+        // Индексация свойств
+        showLoader('ИНДЕКСАЦИЯ СВОЙСТВ', 'Поиск атрибутов...');
+        await new Promise(r=>setTimeout(r,10));
+        buildPsetIndex(modData);
 
-    showLoader('ИНДЕКСАЦИЯ СВОЙСТВ', 'связывание наборов свойств…');
-    await new Promise(r=>setTimeout(r,20));
-    buildPsetIndex();
-
-    showLoader('ПОСТРОЕНИЕ ГЕОМЕТРИИ', 'извлечение мешей…');
-    await new Promise(r=>setTimeout(r,30));
-
-    let meshCount = 0;
-    const elemSet = new Set();
-
-    ifcAPI.StreamAllMeshes(modelID, (flatMesh) => {
-      const expressID = flatMesh.expressID;
-      elemSet.add(expressID);
-      const placed = flatMesh.geometries;
-      for(let i=0;i<placed.size();i++){
-        const pg = placed.get(i);
-        const geom = getBufferGeometry(modelID, pg);
-        const col = pg.color;
-        const mat = new THREE.MeshLambertMaterial({
-          color: new THREE.Color(col.x, col.y, col.z),
-          side: THREE.DoubleSide,
-          transparent: col.w !== 1,
-          opacity: col.w,
+        // Геометрия
+        showLoader('ГЕОМЕТРИЯ', 'Извлечение мешей...');
+        await new Promise(r=>setTimeout(r,10));
+        
+        let meshCount = 0;
+        ifcAPI.StreamAllMeshes(modelID, (flatMesh) => {
+            const expressID = flatMesh.expressID;
+            const placed = flatMesh.geometries;
+            for(let i=0;i<placed.size();i++){
+                const pg = placed.get(i);
+                const geom = getBufferGeometry(modelID, pg);
+                const col = pg.color;
+                const mat = new THREE.MeshLambertMaterial({
+                    color: new THREE.Color(col.x, col.y, col.z), side: THREE.DoubleSide,
+                    transparent: col.w !== 1, opacity: col.w,
+                });
+                const mesh = new THREE.Mesh(geom, mat);
+                const m = new THREE.Matrix4().fromArray(pg.flatTransformation);
+                mesh.matrix = m; mesh.matrixAutoUpdate = false;
+                
+                // Важно: составной ключ для клика!
+                mesh.userData = { modelID, expressID, baseEmissive: 0x000000 };
+                
+                modData.group.add(mesh);
+                allMeshes.push(mesh);
+                if(!modData.meshesByID.has(expressID)) modData.meshesByID.set(expressID, []);
+                modData.meshesByID.get(expressID).push(mesh);
+                meshCount++;
+            }
         });
-        const mesh = new THREE.Mesh(geom, mat);
-        const m = new THREE.Matrix4();
-        m.fromArray(pg.flatTransformation);
-        mesh.matrix = m;
-        mesh.matrixAutoUpdate = false;
-        mesh.userData.expressID = expressID;
-        mesh.userData.baseEmissive = 0x000000;
-        modelGroup.add(mesh);
-        meshes.push(mesh);
-        if(!meshesByID.has(expressID)) meshesByID.set(expressID, []);
-        meshesByID.get(expressID).push(mesh);
-        meshCount++;
-      }
-    });
+        totalElements += modData.meshesByID.size;
 
-    $('sElems').textContent = elemSet.size.toLocaleString('ru-RU');
-    $('sMesh').textContent = meshCount.toLocaleString('ru-RU');
-    ['fit','wire','clear'].forEach(id=>$(id).disabled=false);
+        // Дерево и Кэш поиска
+        showLoader('СТРУКТУРА', 'Построение связей...');
+        await new Promise(r=>setTimeout(r,10));
+        buildTreeForModel(modData);
 
-    showLoader('ДЕРЕВО СТРУКТУРЫ', 'построение пространственной иерархии…');
-    await new Promise(r=>setTimeout(r,20));
-    buildTree();
-
-    if(meshCount === 0){
-      showLoader('ГОТОВО', 'геометрия не найдена в файле');
-      setTimeout(hideLoader, 1200);
-    }else{
-      fitView();
-      hideLoader();
+        hideLoader();
+    } catch(e) {
+        console.error(e);
+        showLoader('ОШИБКА', file.name + ': ' + e.message);
+        setTimeout(hideLoader, 3000);
     }
-    engineStatus.textContent = `загружено · ${meshCount.toLocaleString('ru-RU')} геом.`;
-  }catch(e){
-    console.error(e);
-    showLoader('ОШИБКА', 'не удалось обработать файл: '+(e.message||e));
-    setTimeout(hideLoader, 2600);
-  }
 }
 
 function getBufferGeometry(modelID, placedGeometry){
@@ -573,506 +434,427 @@ function getBufferGeometry(modelID, placedGeometry){
   const indices = ifcAPI.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
   const buf = new THREE.BufferGeometry();
   const n = verts.length / 6;
-  const positions = new Float32Array(n*3);
-  const normals = new Float32Array(n*3);
+  const pos = new Float32Array(n*3), norm = new Float32Array(n*3);
   for(let i=0;i<n;i++){
-    positions[i*3]   = verts[i*6];
-    positions[i*3+1] = verts[i*6+1];
-    positions[i*3+2] = verts[i*6+2];
-    normals[i*3]     = verts[i*6+3];
-    normals[i*3+1]   = verts[i*6+4];
-    normals[i*3+2]   = verts[i*6+5];
+    pos[i*3]=verts[i*6]; pos[i*3+1]=verts[i*6+1]; pos[i*3+2]=verts[i*6+2];
+    norm[i*3]=verts[i*6+3]; norm[i*3+1]=verts[i*6+4]; norm[i*3+2]=verts[i*6+5];
   }
-  buf.setAttribute('position', new THREE.BufferAttribute(positions,3));
-  buf.setAttribute('normal',   new THREE.BufferAttribute(normals,3));
+  buf.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  buf.setAttribute('normal', new THREE.BufferAttribute(norm,3));
   buf.setIndex(new THREE.BufferAttribute(new Uint32Array(indices),1));
-  geometry.delete();
-  return buf;
+  geometry.delete(); return buf;
 }
 
-// ---------- fit camera (Z-up) ----------
+// --- High-Performance Search Cache ---
+function readVal(v){
+  if(v==null) return '';
+  if(typeof v!=='object') return String(v);
+  if(Array.isArray(v)) return v.map(readVal).join(' ');
+  if('value' in v) return readVal(v.value);
+  return '';
+}
+
+function buildPsetIndex(modData) {
+    try{
+        const relIDs = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCRELDEFINESBYPROPERTIES);
+        for(let i=0;i<relIDs.size();i++){
+            const rel = ifcAPI.GetLine(modData.modelID, relIDs.get(i));
+            let related = rel.RelatedObjects; if(!related) continue;
+            if(!Array.isArray(related)) related = [related];
+            const defId = rel.RelatingPropertyDefinition && rel.RelatingPropertyDefinition.value;
+            if(defId == null) continue;
+            for(const o of related){
+                const id = o && o.value; if(id == null) continue;
+                if(!modData.psetIndex.has(id)) modData.psetIndex.set(id, []);
+                modData.psetIndex.get(id).push(defId);
+            }
+        }
+    }catch(e){}
+}
+
+// --- Tree & Relationships ---
+function buildTreeForModel(modData) {
+    const add = (p, c)=>{
+        if(p==null || c==null || p===c) return;
+        if(!modData.childrenOf.has(p)) modData.childrenOf.set(p, []);
+        modData.childrenOf.get(p).push(c);
+        modData.parentOf.set(c, p);
+    };
+
+    try{
+        const r1 = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCRELAGGREGATES);
+        for(let i=0;i<r1.size();i++){
+            const rel = ifcAPI.GetLine(modData.modelID, r1.get(i));
+            const p = rel.RelatingObject && rel.RelatingObject.value;
+            let kids = rel.RelatedObjects; if(!kids) continue;
+            if(!Array.isArray(kids)) kids=[kids];
+            kids.forEach(k=> add(p, k && k.value));
+        }
+    }catch(e){}
+
+    try{
+        const r2 = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
+        for(let i=0;i<r2.size();i++){
+            const rel = ifcAPI.GetLine(modData.modelID, r2.get(i));
+            const p = rel.RelatingStructure && rel.RelatingStructure.value;
+            let kids = rel.RelatedElements; if(!kids) continue;
+            if(!Array.isArray(kids)) kids=[kids];
+            kids.forEach(k=> add(p, k && k.value));
+        }
+    }catch(e){}
+
+    let roots = [];
+    try{
+        const pr = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCPROJECT);
+        for(let i=0;i<pr.size();i++) roots.push(pr.get(i));
+    }catch(e){}
+
+    const nameCache = new Map();
+    function nodeInfo(id){
+        if(nameCache.has(id)) return nameCache.get(id);
+        let name='', type='';
+        try{
+            const ln = ifcAPI.GetLine(modData.modelID, id, false);
+            name = readVal(ln.Name) || readVal(ln.LongName) || '';
+            const tc = ifcAPI.GetLineType(modData.modelID, id);
+            type = (tc!=null && TYPE_NAMES[tc]) ? TYPE_NAMES[tc].replace(/^IFC/,'') : '';
+            
+            // Build search cache string (Name + Type + ObjectType)
+            let searchStr = `${name} ${type} ${readVal(ln.ObjectType)}`.toLowerCase();
+            modData.searchCache.set(id, searchStr);
+            
+        }catch(e){}
+        const info = { name, type }; nameCache.set(id, info); return info;
+    }
+
+    // Рекурсивный сбор всех ID внутри ветки (для группового выделения)
+    function getAllChildGeom(id) {
+        let res = [];
+        if(modData.meshesByID.has(id)) res.push({modelID: modData.modelID, expressID: id});
+        const kids = modData.childrenOf.get(id) || [];
+        for(let k of kids) res = res.concat(getAllChildGeom(k));
+        return res;
+    }
+
+    const visited = new Set();
+    function build(id, depth){
+        if(visited.has(id)) return null; visited.add(id);
+        const info = nodeInfo(id);
+        const kids = (modData.childrenOf.get(id) || []).slice();
+        const hasGeom = modData.meshesByID.has(id);
+
+        const node = document.createElement('div'); node.className = 'tnode';
+        const row = document.createElement('div'); row.className = 'trow';
+        row.dataset.mid = modData.modelID; row.dataset.eid = id; // Store keys
+        
+        row.innerHTML = `<span class="caret ${kids.length?'':'empty'}">▾</span><span class="tlabel">${info.name||'#'+id}</span><span class="ttype">${info.type||''}</span>`;
+        node.appendChild(row);
+
+        row.addEventListener('click', (e)=>{
+            if(e.target.classList.contains('caret')) {
+                node.classList.toggle('collapsed'); return;
+            }
+            // ГРУППОВОЕ ВЫДЕЛЕНИЕ: берем все элементы внутри ветки
+            const itemsToSelect = getAllChildGeom(id);
+            if(itemsToSelect.length > 0) {
+                selectMultiple(itemsToSelect);
+            } else if(kids.length) {
+                node.classList.toggle('collapsed');
+            }
+        });
+        
+        row.addEventListener('dblclick', ()=>{ if(hasGeom) focusOn(modData.modelID, id); });
+
+        if(kids.length){
+            const ch = document.createElement('div'); ch.className = 'children';
+            const containers = [], leaves = [];
+            kids.forEach(k=>{ ((modData.childrenOf.get(k)||[]).length ? containers : leaves).push(k); });
+            containers.forEach(k=>{ const c = build(k, depth+1); if(c) ch.appendChild(c); });
+            
+            if(leaves.length){
+                const byType = new Map();
+                leaves.forEach(k=>{ const t = nodeInfo(k).type || 'Прочее'; if(!byType.has(t)) byType.set(t, []); byType.get(t).push(k); });
+                [...byType.keys()].sort().forEach(t=> {
+                    const gNode = document.createElement('div'); gNode.className = 'tnode group collapsed';
+                    const gRow = document.createElement('div'); gRow.className = 'trow trow-group';
+                    gRow.innerHTML = `<span class="caret">▾</span><span class="tlabel">${t}</span><span class="ttype">${byType.get(t).length}</span>`;
+                    gNode.appendChild(gRow);
+                    
+                    gRow.addEventListener('click', (e)=>{
+                         if(e.target.classList.contains('caret')) { gNode.classList.toggle('collapsed'); return; }
+                         let groupItems = [];
+                         byType.get(t).forEach(k => groupItems = groupItems.concat(getAllChildGeom(k)));
+                         selectMultiple(groupItems);
+                    });
+
+                    const gCh = document.createElement('div'); gCh.className = 'children';
+                    byType.get(t).forEach(k=>{ const c = build(k, depth+2); if(c) gCh.appendChild(c); });
+                    gNode.appendChild(gCh); ch.appendChild(gNode);
+                });
+            }
+            node.appendChild(ch); if(depth >= 2) node.classList.add('collapsed');
+        }
+        return node;
+    }
+
+    const fileRoot = document.createElement('div'); fileRoot.className = 'tnode file-root';
+    const fRow = document.createElement('div'); fRow.className = 'trow';
+    fRow.innerHTML = `<span class="caret">▾</span><span class="tlabel" style="font-weight:600;color:var(--blue)">${modData.filename}</span>`;
+    fileRoot.appendChild(fRow);
+    fRow.addEventListener('click', (e)=>{
+        if(e.target.classList.contains('caret')) { fileRoot.classList.toggle('collapsed'); return; }
+        // Выделить весь файл
+        let allItems = [];
+        roots.forEach(r => allItems = allItems.concat(getAllChildGeom(r)));
+        selectMultiple(allItems);
+    });
+
+    const ch = document.createElement('div'); ch.className = 'children';
+    roots.forEach(id=>{ const n = build(id, 0); if(n) ch.appendChild(n); });
+    fileRoot.appendChild(ch);
+    treeBox.appendChild(fileRoot);
+}
+
+// --- Selection & Isolation ---
+const highlightColor = 0xff6b35;
+
+function selectMultiple(items) {
+    // 1. Снимаем старое выделение
+    selectedItems.forEach(i => {
+        const mod = loadedModels.get(i.modelID);
+        if(mod && mod.meshesByID.has(i.expressID)) {
+            mod.meshesByID.get(i.expressID).forEach(m => {
+                if(m.material && m.material.emissive) m.material.emissive.setHex(0x000000);
+            });
+        }
+    });
+    
+    // Снимаем класс .sel в дереве
+    document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
+
+    selectedItems = items;
+    $('sSelected').textContent = selectedItems.length;
+
+    if(items.length === 0) {
+        propsBox.innerHTML = '<div class="empty">Ничего не выбрано.</div>';
+        return;
+    }
+
+    // 2. Красим новые
+    items.forEach(i => {
+        const mod = loadedModels.get(i.modelID);
+        if(mod && mod.meshesByID.has(i.expressID)) {
+            mod.meshesByID.get(i.expressID).forEach(m => {
+                if(m.material && m.material.emissive) m.material.emissive.setHex(highlightColor);
+            });
+        }
+        // Подсветка в дереве (может быть медленно при тысячах, поэтому подсветим только первый)
+    });
+
+    // 3. Свойства (показываем свойства первого элемента, если их много)
+    showProps(items[0].modelID, items[0].expressID, items.length);
+    
+    // Скролл в дереве к первому
+    const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`);
+    if(firstRow) {
+        firstRow.classList.add('sel');
+        firstRow.scrollIntoView({block: 'nearest'});
+    }
+}
+
+// Raycaster
+renderer.domElement.addEventListener('click', (ev)=>{
+  if(allMeshes.length === 0) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const pointer = new THREE.Vector2(((ev.clientX-rect.left)/rect.width)*2-1, -((ev.clientY-rect.top)/rect.height)*2+1);
+  
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(pointer, camera);
+  
+  // Игнорируем скрытые меши!
+  const visibleMeshes = allMeshes.filter(m => m.visible);
+  const hits = raycaster.intersectObjects(visibleMeshes, false);
+  
+  if(hits.length === 0) { selectMultiple([]); return; }
+  
+  const ud = hits[0].object.userData;
+  selectMultiple([{modelID: ud.modelID, expressID: ud.expressID}]);
+});
+
+// Hide / Isolate Logic
+function setVisibility(items, isVisible) {
+    items.forEach(i => {
+        const mod = loadedModels.get(i.modelID);
+        if(mod && mod.meshesByID.has(i.expressID)) {
+            mod.meshesByID.get(i.expressID).forEach(m => m.visible = isVisible);
+        }
+    });
+}
+
+$('btnHide').addEventListener('click', () => {
+    setVisibility(selectedItems, false);
+    selectMultiple([]); // Сброс выделения после скрытия
+});
+
+$('btnIsolate').addEventListener('click', () => {
+    if(selectedItems.length === 0) return;
+    allMeshes.forEach(m => m.visible = false); // Скрыть всё
+    setVisibility(selectedItems, true); // Показать только нужные
+});
+
+$('btnShowAll').addEventListener('click', () => {
+    allMeshes.forEach(m => m.visible = true);
+});
+
+// --- Search (BIM Checker Lite) ---
+$('searchInput').addEventListener('keyup', (e) => {
+    if(e.key !== 'Enter') return;
+    const query = e.target.value.toLowerCase().trim();
+    if(query.length < 2) {
+        selectMultiple([]); return;
+    }
+    
+    let found = [];
+    for(const [modID, modData] of loadedModels) {
+        for(const [expressID, searchStr] of modData.searchCache) {
+            if(searchStr.includes(query) && modData.meshesByID.has(expressID)) {
+                found.push({modelID: modID, expressID: expressID});
+            }
+        }
+    }
+    selectMultiple(found);
+});
+
+// --- Properties View ---
+function showProps(modelID, expressID, countTotal){
+  const modData = loadedModels.get(modelID);
+  let line = {}; try{ line = ifcAPI.GetLine(modelID, expressID, true); }catch(e){}
+  const esc = s => String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const propRow = (k,v)=>`<div class="prop"><div class="k">${esc(k)}</div><div class="v">${esc(v||'—')}</div></div>`;
+
+  let html = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
+  if(countTotal > 1) html += `<div class="empty" style="padding-top:0">Ниже свойства первого элемента:</div>`;
+  
+  html += propRow('Имя', line.Name ? readVal(line.Name) : '');
+  html += propRow('ExpressID', expressID);
+  
+  const psetIds = modData.psetIndex.get(expressID) || [];
+  let psetHtml = '';
+  for(const pid of psetIds){
+    let pset; try{ pset = ifcAPI.GetLine(modelID, pid, true); }catch(e){ continue; }
+    const pname = readVal(pset.Name) || 'PropertySet';
+    let items = '';
+    if(pset.HasProperties){
+      let arr = pset.HasProperties; if(!Array.isArray(arr)) arr=[arr];
+      for(const p of arr){
+        if(!p || !p.Name) continue;
+        let v=''; for(const key of ['NominalValue','EnumerationValues','ListValues']) { if(p[key]!=null){v=readVal(p[key]);break;} }
+        items += propRow(readVal(p.Name), v);
+      }
+    }
+    if(items) psetHtml += `<div class="pgroup"><div class="pgroup-head"><span class="ar">▾</span>${esc(pname)}</div><div class="pgroup-body">${items}</div></div>`;
+  }
+  
+  propsBox.innerHTML = html + (psetHtml || `<div class="empty">Доп. свойства не найдены.</div>`);
+}
+
+propsBox.addEventListener('click', e=>{
+  const gh = e.target.closest('.pgroup-head');
+  if(gh) gh.parentElement.classList.toggle('collapsed');
+});
+
+// --- Camera Tools ---
+function focusOn(modelID, expressID){
+  const mod = loadedModels.get(modelID); if(!mod) return;
+  const ms = mod.meshesByID.get(expressID); if(!ms || !ms.length) return;
+  const box = new THREE.Box3();
+  ms.forEach(m=>{ m.updateWorldMatrix(true,false); box.expandByObject(m); });
+  if(box.isEmpty()) return;
+  controls.target.copy(box.getCenter(new THREE.Vector3())); controls.update();
+}
+
 function fitView(){
-  if(meshes.length === 0) return;
-  const box = new THREE.Box3().setFromObject(modelGroup);
+  if(allMeshes.length === 0) return;
+  const box = new THREE.Box3().setFromObject(globalGroup);
   if(box.isEmpty()) return;
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 10;
   const dist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov)/2)) * 1.6;
-  const dir = new THREE.Vector3(1, -1, 0.8).normalize();   // смотрим сбоку-сверху
-  camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
-  camera.near = Math.max(0.01, maxDim/200); camera.far = maxDim*40;
-  camera.updateProjectionMatrix();
-  controls.target.copy(center);
-  controls.update();
+  camera.position.copy(center.clone().add(new THREE.Vector3(1, -1, 0.8).normalize().multiplyScalar(dist)));
+  camera.near = Math.max(0.01, maxDim/200); camera.far = maxDim*40; camera.updateProjectionMatrix();
+  controls.target.copy(center); controls.update();
   
-  scene.fog.near = maxDim * 1.4;
-  scene.fog.far  = maxDim * 7;
-  
-  const gsize = Math.max(40, Math.ceil(maxDim*1.6/10)*10);
   scene.remove(grid);
-  grid = makeGrid(gsize, gsize/(gsize>200?4:2));
-  grid.position.set(center.x, center.y, box.min.z);
-  grid.visible = $('gridBtn').classList.contains('on');
-  scene.add(grid);
+  const gsize = Math.max(40, Math.ceil(maxDim*1.6/10)*10);
+  grid = new THREE.GridHelper(gsize, gsize/4, 0x2a313d, 0x171c24);
+  grid.rotation.x = Math.PI / 2; grid.position.set(center.x, center.y, box.min.z);
+  grid.visible = $('gridBtn').classList.contains('on'); scene.add(grid);
 }
 
-function focusOn(expressID){
-  const ms = meshesByID.get(expressID);
-  if(!ms || !ms.length) return;
-  const box = new THREE.Box3();
-  ms.forEach(m=>{ m.updateWorldMatrix(true,false); box.expandByObject(m); });
-  if(box.isEmpty()) return;
-  const center = box.getCenter(new THREE.Vector3());
-  controls.target.copy(center);
-  controls.update();
-}
-
-// ---------- selection / highlight ----------
-function resetProps(){
-  propsBox.innerHTML = '<div class="empty">Кликните по элементу в модели или в дереве слева, чтобы увидеть его свойства.</div>';
-}
-function clearSelection(){
-  selectedMeshes.forEach(m=>{
-    if(m.material && m.material.emissive) m.material.emissive.setHex(m.userData.baseEmissive ?? 0x000000);
-  });
-  selectedMeshes = [];
-  if(curRow){ curRow.classList.remove('sel'); curRow = null; }
-}
-let curRow = null;
-function selectByID(expressID, fromTree){
-  clearSelection();
-  const ms = meshesByID.get(expressID) || [];
-  ms.forEach(m=>{ if(m.material && m.material.emissive) m.material.emissive.setHex(0xff6b35); });
-  selectedMeshes = ms;
-  showProps(expressID);
-  highlightTreeNode(expressID, !fromTree);
-}
-
-renderer.domElement.addEventListener('click', (ev)=>{
-  if(meshes.length === 0) return;
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((ev.clientX-rect.left)/rect.width)*2 - 1;
-  pointer.y = -((ev.clientY-rect.top)/rect.height)*2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(meshes, false);
-  if(hits.length === 0){ clearSelection(); resetProps(); return; }
-  selectByID(hits[0].object.userData.expressID, false);
+// --- Base UI Bindings ---
+$('open').addEventListener('click', ()=> $('file').click());
+$('file').addEventListener('change', e => handleFiles(e.target.files));
+$('fit').addEventListener('click', fitView);
+$('wire').addEventListener('click', e => {
+    const on = e.currentTarget.classList.toggle('on');
+    allMeshes.forEach(m => m.material.wireframe = on);
+});
+$('gridBtn').addEventListener('click', e => {
+    grid.visible = e.currentTarget.classList.toggle('on');
+});
+$('clear').addEventListener('click', () => {
+    for(const [id, m] of loadedModels) ifcAPI.CloseModel(id);
+    loadedModels.clear(); allMeshes = []; totalElements = 0; selectMultiple([]);
+    scene.remove(globalGroup); globalGroup = new THREE.Group(); globalGroup.rotation.x = MODEL_ROT_X; scene.add(globalGroup);
+    treeBox.innerHTML = '<div class="empty">Добавьте один или несколько файлов .ifc</div>';
+    ['sFile','sElems','sSelected'].forEach(id=>$(id).textContent='0');
+    ['fit','wire','clear','btnIsolate','btnHide','btnShowAll'].forEach(id=>$(id).disabled=true);
 });
 
-// ---------- spatial tree ----------
-function buildTree(){
-  parentOf = new Map();
-  trowById = new Map();
-  tnodeById = new Map();
-  const childrenOf = new Map();
-  const add = (p, c)=>{
-    if(p==null || c==null || p===c) return;
-    if(!childrenOf.has(p)) childrenOf.set(p, []);
-    childrenOf.get(p).push(c);
-    parentOf.set(c, p);
-  };
-
-  try{
-    const r = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELAGGREGATES);
-    for(let i=0;i<r.size();i++){
-      const rel = ifcAPI.GetLine(modelID, r.get(i));
-      const p = rel.RelatingObject && rel.RelatingObject.value;
-      let kids = rel.RelatedObjects; if(!kids) continue;
-      if(!Array.isArray(kids)) kids=[kids];
-      kids.forEach(k=> add(p, k && k.value));
-    }
-  }catch(e){ console.warn('IFCRELAGGREGATES:', e); }
-
-  try{
-    const r = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
-    for(let i=0;i<r.size();i++){
-      const rel = ifcAPI.GetLine(modelID, r.get(i));
-      const p = rel.RelatingStructure && rel.RelatingStructure.value;
-      let kids = rel.RelatedElements; if(!kids) continue;
-      if(!Array.isArray(kids)) kids=[kids];
-      kids.forEach(k=> add(p, k && k.value));
-    }
-  }catch(e){ console.warn('IFCRELCONTAINEDINSPATIALSTRUCTURE:', e); }
-
-  let roots = [];
-  try{
-    const pr = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCPROJECT);
-    for(let i=0;i<pr.size();i++) roots.push(pr.get(i));
-  }catch(e){}
-  if(roots.length === 0){
-    const all = new Set([...childrenOf.keys()]);
-    childrenOf.forEach(arr=>arr.forEach(c=>all.add(c)));
-    roots = [...all].filter(id=>!parentOf.has(id));
-  }
-
-  const visited = new Set();
-  const nameCache = new Map();
-  function nodeInfo(id){
-    if(nameCache.has(id)) return nameCache.get(id);
-    let name='', type='';
-    try{
-      const ln = ifcAPI.GetLine(modelID, id, false);
-      name = readVal(ln.Name) || readVal(ln.LongName) || '';
-      const tc = ifcAPI.GetLineType(modelID, id);
-      type = (tc!=null && TYPE_NAMES[tc]) ? TYPE_NAMES[tc].replace(/^IFC/,'') : '';
-    }catch(e){}
-    const info = { name, type };
-    nameCache.set(id, info);
-    return info;
-  }
-
-  function buildTypeGroup(typeName, ids, depth){
-    const node = document.createElement('div');
-    node.className = 'tnode group';
-    const row = document.createElement('div');
-    row.className = 'trow trow-group';
-    row.title = typeName + ' · ' + ids.length + ' шт.';
-    const caret = document.createElement('span');
-    caret.className = 'caret'; caret.textContent = '▾';
-    const label = document.createElement('span');
-    label.className = 'tlabel'; label.textContent = typeName;
-    const cnt = document.createElement('span');
-    cnt.className = 'tcount'; cnt.textContent = ids.length;
-    row.appendChild(caret); row.appendChild(label); row.appendChild(cnt);
-    node.appendChild(row);
-    const ch = document.createElement('div'); ch.className = 'children';
-    ids.forEach(k=>{ const c = build(k, depth+1); if(c) ch.appendChild(c); });
-    node.appendChild(ch);
-    node.classList.add('collapsed');
-    row.addEventListener('click', ()=> node.classList.toggle('collapsed'));
-    caret.addEventListener('click', e=>{ e.stopPropagation(); node.classList.toggle('collapsed'); });
-    return node;
-  }
-
-  function build(id, depth){
-    if(visited.has(id)) return null;
-    visited.add(id);
-    const info = nodeInfo(id);
-    const kids = (childrenOf.get(id) || []).slice();
-    const hasGeom = meshesByID.has(id);
-
-    const node = document.createElement('div');
-    node.className = 'tnode';
-    tnodeById.set(id, node);
-
-    const row = document.createElement('div');
-    row.className = 'trow';
-    row.title = (info.name||'') + (info.type?(' · '+info.type):'');
-    const caret = document.createElement('span');
-    caret.className = 'caret' + (kids.length ? '' : ' empty');
-    caret.textContent = '▾';
-    const label = document.createElement('span');
-    label.className = 'tlabel';
-    label.textContent = info.name || ('#'+id);
-    const tt = document.createElement('span');
-    tt.className = 'ttype';
-    tt.textContent = info.type || '';
-    row.appendChild(caret); row.appendChild(label);
-    if(info.type) row.appendChild(tt);
-    node.appendChild(row);
-    trowById.set(id, row);
-
-    caret.addEventListener('click', e=>{ e.stopPropagation(); node.classList.toggle('collapsed'); });
-    row.addEventListener('click', ()=>{
-      if(hasGeom) selectByID(id, true);
-      else if(kids.length) node.classList.toggle('collapsed');
-    });
-    row.addEventListener('dblclick', ()=>{ if(hasGeom) focusOn(id); });
-
-    if(kids.length){
-      const ch = document.createElement('div');
-      ch.className = 'children';
-      
-      const containers = [], leaves = [];
-      kids.forEach(k=>{ ((childrenOf.get(k)||[]).length ? containers : leaves).push(k); });
-      containers.forEach(k=>{ const c = build(k, depth+1); if(c) ch.appendChild(c); });
-      
-      if(leaves.length){
-        const byType = new Map();
-        leaves.forEach(k=>{
-          const t = nodeInfo(k).type || 'Прочее';
-          if(!byType.has(t)) byType.set(t, []);
-          byType.get(t).push(k);
-        });
-        const types = [...byType.keys()].sort((a,b)=>a.localeCompare(b,'ru'));
-        // СТРОГАЯ ГРУППИРОВКА: всегда группируем, независимо от количества элементов
-        types.forEach(t=> ch.appendChild(buildTypeGroup(t, byType.get(t), depth+1)) );
-      }
-      node.appendChild(ch);
-      if(depth >= 3) node.classList.add('collapsed');
-    }
-    return node;
-  }
-
-  treeBox.innerHTML = '';
-  const frag = document.createDocumentFragment();
-  roots.forEach(id=>{ const n = build(id, 0); if(n) frag.appendChild(n); });
-
-  const orphans = [...meshesByID.keys()].filter(id=>!visited.has(id));
-  if(orphans.length){
-    const node = document.createElement('div');
-    node.className = 'tnode collapsed';
-    const row = document.createElement('div');
-    row.className = 'trow';
-    row.innerHTML = '<span class="caret">▾</span><span class="tlabel">Вне структуры</span><span class="ttype">'+orphans.length+'</span>';
-    node.appendChild(row);
-    row.addEventListener('click', ()=> node.classList.toggle('collapsed'));
-    const ch = document.createElement('div'); ch.className='children';
-    orphans.forEach(id=>{ const c = build(id, 4); if(c) ch.appendChild(c); });
-    node.appendChild(ch);
-    frag.appendChild(node);
-  }
-  treeBox.appendChild(frag);
-}
-
-function highlightTreeNode(expressID, doScroll){
-  if(curRow){ curRow.classList.remove('sel'); }
-  const row = trowById.get(expressID);
-  if(!row){ curRow = null; return; }
-  let p = parentOf.get(expressID);
-  const guard = new Set();
-  while(p != null && !guard.has(p)){
-    guard.add(p);
-    const pn = tnodeById.get(p);
-    if(pn) pn.classList.remove('collapsed');
-    p = parentOf.get(p);
-  }
-  row.classList.add('sel');
-  curRow = row;
-  if(doScroll) row.scrollIntoView({ block:'nearest' });
-}
-
-// ---------- properties ----------
-function showProps(expressID){
-  let line = {};
-  try{ line = ifcAPI.GetLine(modelID, expressID, true); }catch(e){}
-  let typeCode = null;
-  try{ typeCode = ifcAPI.GetLineType(modelID, expressID); }catch(e){}
-  const typeName = (typeCode!=null && TYPE_NAMES[typeCode]) ? TYPE_NAMES[typeCode]
-                   : (typeCode!=null ? '#'+typeCode : '');
-  const esc = escapeHtml;
-  const propRow = (k,v,small)=>`<div class="prop${small?' small':''}"><div class="k">${esc(k)}</div><div class="v">${esc(v||'—')}</div></div>`;
-
-  const main = [];
-  const add = (k,v)=>{ const s = readVal(v); if(s!=='') main.push(propRow(k, s)); };
-  add('Имя', line.Name);
-  main.push(propRow('Тип IFC', typeName));
-  add('GlobalId', line.GlobalId);
-  add('Описание', line.Description);
-  add('ObjectType', line.ObjectType);
-  add('Tag', line.Tag);
-  add('PredefinedType', line.PredefinedType);
-  main.push(propRow('ExpressID', String(expressID)));
-
-  const skip = new Set(['expressID','type','Name','Description','ObjectType','Tag',
-    'PredefinedType','GlobalId','OwnerHistory','ObjectPlacement','Representation']);
-  const other = [];
-  for(const key in line){
-    if(skip.has(key)) continue;
-    const s = readVal(line[key]);
-    if(s !== '' && s.length < 120) other.push(propRow(key, s, true));
-  }
-
-  const psetIds = psetIndex.get(expressID) || [];
-  const psetBlocks = [];
-  for(const pid of psetIds){
-    let pset; try{ pset = ifcAPI.GetLine(modelID, pid, true); }catch(e){ continue; }
-    const pname = readVal(pset.Name) || 'PropertySet';
-    const items = [];
-    if(pset.HasProperties){
-      let arr = pset.HasProperties; if(!Array.isArray(arr)) arr=[arr];
-      for(const p of arr){
-        if(!p) continue;
-        const k = readVal(p.Name); if(!k) continue;
-        let v = '';
-        for(const key of ['NominalValue','EnumerationValues','ListValues','UpperBoundValue','LowerBoundValue']){
-          if(key in p && p[key]!=null){ v = readVal(p[key]); if(v!=='') break; }
-        }
-        if(p.Unit){ const u = readVal(p.Unit); if(u) v += ' '+u; }
-        items.push([k, v]);
-      }
-    }
-    if(pset.Quantities){
-      let arr = pset.Quantities; if(!Array.isArray(arr)) arr=[arr];
-      for(const q of arr){
-        if(!q) continue;
-        const k = readVal(q.Name); if(!k) continue;
-        let v = '';
-        for(const key in q){ if(/Value$/.test(key) && q[key]!=null){ v = readVal(q[key]); break; } }
-        items.push([k, v]);
-      }
-    }
-    if(items.length){
-      psetBlocks.push(
-        `<div class="pset"><div class="pset-head"><span class="ar">▾</span>${esc(pname)}</div>`+
-        `<div class="pset-body">`+ items.map(([k,v])=>propRow(k, v, true)).join('') +`</div></div>`
-      );
-    }
-  }
-
-  let html = `<span class="tag">ВЫБРАН ЭЛЕМЕНТ</span>`;
-  html += main.join('');
-  if(other.length){
-    html += group('Прочие атрибуты', other.join(''), true);
-  }
-  if(psetBlocks.length){
-    html += group('Наборы свойств', psetBlocks.join(''), false);
-  } else {
-    html += `<div class="empty">Наборы свойств (Psets) для этого элемента не найдены.</div>`;
-  }
-  propsBox.innerHTML = html;
-}
-
-function group(title, body, collapsed){
-  return `<div class="pgroup${collapsed?' collapsed':''}">`+
-    `<div class="pgroup-head"><span class="ar">▾</span>${escapeHtml(title)}</div>`+
-    `<div class="pgroup-body">${body}</div></div>`;
-}
-
-propsBox.addEventListener('click', e=>{
-  const gh = e.target.closest('.pgroup-head');
-  if(gh){ gh.parentElement.classList.toggle('collapsed'); return; }
-  const ph = e.target.closest('.pset-head');
-  if(ph){ ph.parentElement.classList.toggle('collapsed'); }
+// Drag & Drop
+['dragenter','dragover'].forEach(ev=>stage.addEventListener(ev, e=>{e.preventDefault(); stage.classList.add('dragover');}));
+['dragleave','drop'].forEach(ev=>stage.addEventListener(ev, e=>{e.preventDefault(); stage.classList.remove('dragover');}));
+stage.addEventListener('drop', e => {
+  const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.ifc'));
+  if(files.length) handleFiles(files); else alert('Нужны файлы .ifc');
 });
 
-function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-
-// ---------- откреп/закреп панелей ----------
-function setupDockable(panel, head, popBtn){
-  popBtn.addEventListener('click', e=>{
-    e.stopPropagation();
-    const floating = panel.classList.toggle('floating');
-    if(floating){
-      const r = panel.getBoundingClientRect();
-      panel.style.left = Math.max(8, r.left) + 'px';
-      panel.style.top  = Math.max(60, r.top) + 'px';
-      popBtn.textContent = '⤓';
-      popBtn.title = 'Закрепить панель';
-    }else{
-      panel.style.left = panel.style.top = panel.style.width = panel.style.height = '';
-      popBtn.textContent = '⧉';
-      popBtn.title = 'Открепить панель';
-    }
-    updateLayout();
-  });
-
-  let drag=false, sx=0, sy=0, ox=0, oy=0;
-  head.addEventListener('pointerdown', e=>{
-    if(!panel.classList.contains('floating')) return;
-    if(e.target.closest('.pop')) return;
-    drag = true;
-    head.setPointerCapture(e.pointerId);
-    const r = panel.getBoundingClientRect();
-    ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
-    e.preventDefault();
-  });
-  head.addEventListener('pointermove', e=>{
-    if(!drag) return;
-    let nx = ox + (e.clientX - sx);
-    let ny = oy + (e.clientY - sy);
-    nx = Math.min(Math.max(0, nx), window.innerWidth  - 80);
-    ny = Math.min(Math.max(52, ny), window.innerHeight - 40);
-    panel.style.left = nx + 'px';
-    panel.style.top  = ny + 'px';
-  });
-  const stop = e=>{ if(drag){ drag=false; try{ head.releasePointerCapture(e.pointerId); }catch(_){} } };
-  head.addEventListener('pointerup', stop);
-  head.addEventListener('pointercancel', stop);
-}
-
-function updateLayout(){
-  if(window.innerWidth <= 860){ 
-    document.body.style.gridTemplateColumns = ''; 
-    document.getElementById('dragLeft').style.display = 'none'; 
-    document.getElementById('dragRight').style.display = 'none'; 
-    resize(); 
-    return; 
-  }
-  
-  document.getElementById('dragLeft').style.display = '';
-  document.getElementById('dragRight').style.display = '';
-
-  const L_floating = document.getElementById('treePanel').classList.contains('floating');
-  const R_floating = document.getElementById('sidePanel').classList.contains('floating');
-
-  const colL = L_floating ? '0px' : 'var(--w-left)';
-  const resL = L_floating ? '0px' : '4px';
-  const colR = R_floating ? '0px' : 'var(--w-right)';
-  const resR = R_floating ? '0px' : '4px';
-
-  document.body.style.gridTemplateColumns = `${colL} ${resL} 1fr ${resR} ${colR}`;
-  
-  document.getElementById('dragLeft').style.pointerEvents = L_floating ? 'none' : 'auto';
-  document.getElementById('dragRight').style.pointerEvents = R_floating ? 'none' : 'auto';
-
-  resize();
-}
-
-setupDockable($('treePanel'), $('treeHead'), $('treePop'));
-setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
-
-// ---------- ИНТЕРАКТИВНОЕ ИЗМЕНЕНИЕ ШИРИНЫ ПАНЕЛЕЙ ----------
+// --- Resizers & Panels ---
 function setupResizer(resizerId, cssVar, isLeft) {
   const resizer = document.getElementById(resizerId);
   let isDragging = false;
-
-  resizer.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    resizer.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-    stage.style.pointerEvents = 'none'; 
-  });
-
-  window.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    if (window.innerWidth <= 860) return; 
-
+  resizer.addEventListener('mousedown', () => { isDragging=true; resizer.classList.add('dragging'); document.body.style.cursor='col-resize'; stage.style.pointerEvents='none'; });
+  window.addEventListener('mousemove', e => {
+    if (!isDragging || window.innerWidth <= 860) return; 
     let newWidth = isLeft ? e.clientX : window.innerWidth - e.clientX;
-    newWidth = Math.max(200, Math.min(newWidth, window.innerWidth * 0.5));
-    
-    document.documentElement.style.setProperty(cssVar, newWidth + 'px');
-    resize(); 
+    document.documentElement.style.setProperty(cssVar, Math.max(200, Math.min(newWidth, window.innerWidth * 0.5)) + 'px'); resize(); 
   });
-
-  window.addEventListener('mouseup', () => {
-    if (isDragging) {
-      isDragging = false;
-      resizer.classList.remove('dragging');
-      document.body.style.cursor = '';
-      stage.style.pointerEvents = '';
-    }
-  });
+  window.addEventListener('mouseup', () => { if(isDragging){ isDragging=false; resizer.classList.remove('dragging'); document.body.style.cursor=''; stage.style.pointerEvents=''; } });
 }
+setupResizer('dragLeft', '--w-left', true); setupResizer('dragRight', '--w-right', false);
 
-setupResizer('dragLeft', '--w-left', true);
-setupResizer('dragRight', '--w-right', false);
+function setupDockable(panel, head, popBtn){
+  popBtn.addEventListener('click', e=>{
+    e.stopPropagation(); const f = panel.classList.toggle('floating');
+    if(f){ const r=panel.getBoundingClientRect(); panel.style.left=Math.max(8,r.left)+'px'; panel.style.top=Math.max(60,r.top)+'px'; popBtn.textContent='⤓'; }
+    else{ panel.style.left=panel.style.top=panel.style.width=panel.style.height=''; popBtn.textContent='⧉'; }
+    if(window.innerWidth > 860){
+        document.getElementById('dragLeft').style.pointerEvents = document.getElementById('treePanel').classList.contains('floating') ? 'none' : 'auto';
+        document.getElementById('dragRight').style.pointerEvents = document.getElementById('sidePanel').classList.contains('floating') ? 'none' : 'auto';
+        const colL = document.getElementById('treePanel').classList.contains('floating') ? '0px' : 'var(--w-left)';
+        const colR = document.getElementById('sidePanel').classList.contains('floating') ? '0px' : 'var(--w-right)';
+        document.body.style.gridTemplateColumns = `${colL} ${colL==='0px'?'0px':'4px'} 1fr ${colR==='0px'?'0px':'4px'} ${colR}`;
+    }
+    resize();
+  });
+  let drag=false, sx=0, sy=0, ox=0, oy=0;
+  head.addEventListener('pointerdown', e=>{ if(!panel.classList.contains('floating')||e.target.closest('.pop'))return; drag=true; head.setPointerCapture(e.pointerId); const r=panel.getBoundingClientRect(); ox=r.left; oy=r.top; sx=e.clientX; sy=e.clientY; e.preventDefault(); });
+  head.addEventListener('pointermove', e=>{ if(!drag)return; panel.style.left=Math.min(Math.max(0, ox+(e.clientX-sx)), window.innerWidth-80)+'px'; panel.style.top=Math.min(Math.max(52, oy+(e.clientY-sy)), window.innerHeight-40)+'px'; });
+  const stop=e=>{if(drag){drag=false;try{head.releasePointerCapture(e.pointerId);}catch(_){}}}; head.addEventListener('pointerup', stop); head.addEventListener('pointercancel', stop);
+}
+setupDockable($('treePanel'), $('treeHead'), $('treePop')); setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
 
-// ---------- UI events ----------
-$('open').addEventListener('click', ()=> $('file').click());
-$('file').addEventListener('change', e=>{ if(e.target.files[0]) loadIFC(e.target.files[0]); });
-$('fit').addEventListener('click', fitView);
-$('clear').addEventListener('click', ()=>{ clearModel(); hint.style.display='flex'; engineStatus.textContent='движок готов · web-ifc'; });
-$('wire').addEventListener('click', e=>{
-  wireMode = !wireMode;
-  e.currentTarget.classList.toggle('on', wireMode);
-  meshes.forEach(m=> m.material.wireframe = wireMode);
-});
-$('gridBtn').addEventListener('click', e=>{
-  grid.visible = !grid.visible; axes.visible = grid.visible;
-  e.currentTarget.classList.toggle('on', grid.visible);
-});
-
-['dragenter','dragover'].forEach(ev=>stage.addEventListener(ev, e=>{e.preventDefault(); stage.classList.add('dragover');}));
-['dragleave','drop'].forEach(ev=>stage.addEventListener(ev, e=>{e.preventDefault(); stage.classList.remove('dragover');}));
-stage.addEventListener('drop', e=>{
-  const f = e.dataTransfer.files[0];
-  if(f && f.name.toLowerCase().endsWith('.ifc')) loadIFC(f);
-  else if(f) alert('Нужен файл с расширением .ifc');
-});
-
-window.addEventListener('resize', updateLayout);
 </script>
 </body>
 </html>
