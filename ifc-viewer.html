@@ -870,7 +870,7 @@
         renderer.setClearColor(0x0a0c0f, 1);
         
         // ВАЖНО: Включаем поддержку плоскостей сечения
-        renderer.localClippingEnabled = true;
+        renderer.localClippingEnabled = false;
         stage.appendChild(renderer.domElement);
 
         const scene = new THREE.Scene();
@@ -928,22 +928,46 @@
         transformControl.showY = false;
         scene.add(transformControl);
 
-        let isClipping = false;
+let isClipping = false;
         $('btnClip').addEventListener('click', () => {
+            // Защита: если ничего не выделено, не даем включить разрез
+            if (!isClipping && selectedItems.length === 0) {
+                alert('Сначала выделите элемент(ы) на сцене или в дереве для установки плоскости разреза.');
+                return;
+            }
+
             isClipping = !isClipping;
             $('btnClip').classList.toggle('on', isClipping);
             clipProxy.visible = isClipping;
             transformControl.visible = isClipping;
             transformControl.enabled = isClipping;
             
+            // Аппаратно включаем/выключаем отсечение в видеокарте
+            renderer.localClippingEnabled = isClipping;
+            
             if(isClipping) {
-                const box = new THREE.Box3().setFromObject(globalGroup);
+                // Вычисляем BoundingBox ТОЛЬКО для выделенных элементов
+                const box = new THREE.Box3();
+                selectedItems.forEach(i => {
+                    const mod = loadedModels.get(i.modelID);
+                    if (mod && mod.meshesByID.has(i.expressID)) {
+                        mod.meshesByID.get(i.expressID).forEach(m => {
+                            m.updateWorldMatrix(true, false);
+                            box.expandByObject(m);
+                        });
+                    }
+                });
+
                 if (!box.isEmpty()) {
-                    clipProxy.position.z = box.max.z; // Ставим ползунок на самый верх модели
+                    const center = box.getCenter(new THREE.Vector3());
+                    // Ставим плоскость ровно по верхней грани выделенного элемента
+                    clipProxy.position.z = box.max.z; 
+                    // Смещаем саму ручку (кубик) в центр элемента по X и Y, чтобы ее было удобно тянуть
+                    clipProxy.position.x = center.x;
+                    clipProxy.position.y = center.y;
+                    
                     globalClipPlane.constant = clipProxy.position.z;
                 }
-            } else {
-                globalClipPlane.constant = 999999999; // Убираем разрез
             }
         });
 
@@ -1670,6 +1694,7 @@
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => $(id).disabled = true);
             
             isClipping = false; 
+            renderer.localClippingEnabled = false;
             transformControl.visible = false; 
             transformControl.enabled = false; 
             clipProxy.visible = false; 
