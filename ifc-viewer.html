@@ -84,8 +84,42 @@
 
         .tools {
             display: flex;
+            align-items: center;
             gap: 6px;
             margin-left: auto;
+        }
+
+        /* Поле ввода для Яндекс.Диска */
+        .cloud-input {
+            width: 220px;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            color: var(--txt);
+            font-family: 'IBM Plex Mono';
+            font-size: 11px;
+            padding: 6px 10px;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        .cloud-input:focus {
+            border-color: var(--blue);
+        }
+
+        .btn-cloud {
+            color: var(--bg);
+            background: var(--blue);
+            border-color: var(--blue);
+            font-weight: 600;
+        }
+        
+        .btn-cloud:hover { filter: brightness(1.1); color: var(--bg); }
+
+        .divider {
+            width: 1px;
+            height: 20px;
+            background: var(--line);
+            margin: 0 4px;
         }
 
         button.btn {
@@ -639,12 +673,17 @@
         </div>
 
         <div class="tools">
+            <input type="text" id="yaLink" class="cloud-input" placeholder="Публичная ссылка Яндекс.Диск">
+            <button class="btn btn-cloud" id="btnYaLoad">☁ ИЗ ОБЛАКА</button>
+            
+            <div class="divider"></div>
+
             <input type="file" id="file" accept=".ifc" multiple hidden>
-            <button class="btn load-btn" id="open">⬆ ОТКРЫТЬ ФАЙЛЫ</button>
+            <button class="btn load-btn" id="open">⬆ ЛОКАЛЬНО</button>
             <button class="btn" id="fit" disabled>⤢ КАДР</button>
             <button class="btn" id="wire" disabled>▦ КАРКАС</button>
             <button class="btn on" id="gridBtn">▤ СЕТКА</button>
-            <button class="btn" id="clear" disabled>✕ ОЧИСТИТЬ ВСЁ</button>
+            <button class="btn" id="clear" disabled>✕ ОЧИСТИТЬ</button>
         </div>
     </header>
 
@@ -666,8 +705,8 @@
     <main class="stage" id="stage">
         <div class="drop-hint" id="hint">
             <div class="grid-ico"></div>
-            <h2>Мультизагрузка .ifc</h2>
-            <p>Перетащите один или несколько файлов сюда. Модели будут загружены в общую координатную среду.</p>
+            <h2>Сводные модели .ifc</h2>
+            <p>Перетащите локальные файлы сюда или вставьте ссылку на Яндекс.Диск в панель сверху.</p>
         </div>
         <div class="loader" id="loader">
             <b id="loadTitle">ОБРАБОТКА</b>
@@ -731,16 +770,16 @@
         const propsBox = document.getElementById('props');
         const $ = id => document.getElementById(id);
         
-        // --- ДОБАВЛЕННЫЙ КОД ---
-function showLoader(title, sub) {
-    $('loadTitle').textContent = title;
-    $('loadSub').textContent = sub;
-    loader.classList.add('show');
-}
+        // --- Управление Лоадером ---
+        function showLoader(title, sub) {
+            $('loadTitle').textContent = title;
+            $('loadSub').textContent = sub;
+            loader.classList.add('show');
+        }
 
-function hideLoader() {
-    loader.classList.remove('show');
-}
+        function hideLoader() {
+            loader.classList.remove('show');
+        }
 
         // --- Three.js Setup (Z-up) ---
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -828,9 +867,9 @@ function hideLoader() {
             }
         }
 
-        const loadedModels = new Map(); // modelID -> IFCModelData
-        let allMeshes = []; // For Raycaster
-        let selectedItems = []; // Array of { modelID, expressID }
+        const loadedModels = new Map();
+        let allMeshes = [];
+        let selectedItems = [];
         let totalElements = 0;
         let engineReady = false;
 
@@ -843,7 +882,7 @@ function hideLoader() {
             $('engineStatus').textContent = 'движок готов';
         }).catch(e => console.error(e));
 
-        // --- Core Loading ---
+        // --- Загрузка файлов (Локальных или Виртуальных) ---
         async function handleFiles(files) {
             if (!engineReady) {
                 return alert('Движок еще грузится...');
@@ -851,7 +890,7 @@ function hideLoader() {
             
             $('hint').style.display = 'none';
             if (loadedModels.size === 0) {
-                treeBox.innerHTML = ''; // Очистка заглушки
+                treeBox.innerHTML = '';
             }
 
             for (let i = 0; i < files.length; i++) {
@@ -879,12 +918,10 @@ function hideLoader() {
                 
                 loadedModels.set(modelID, modData);
 
-                // Индексация свойств
                 showLoader('ИНДЕКСАЦИЯ СВОЙСТВ', 'Поиск атрибутов...');
                 await new Promise(r => setTimeout(r, 10));
                 buildPsetIndex(modData);
 
-                // Геометрия
                 showLoader('ГЕОМЕТРИЯ', 'Извлечение мешей...');
                 await new Promise(r => setTimeout(r, 10));
                 
@@ -911,7 +948,6 @@ function hideLoader() {
                         mesh.matrix = m; 
                         mesh.matrixAutoUpdate = false;
                         
-                        // Важно: составной ключ для клика!
                         mesh.userData = { 
                             modelID: modelID, 
                             expressID: expressID, 
@@ -932,7 +968,6 @@ function hideLoader() {
                 
                 totalElements += modData.meshesByID.size;
 
-                // Дерево и Кэш поиска
                 showLoader('СТРУКТУРА', 'Построение связей...');
                 await new Promise(r => setTimeout(r, 10));
                 buildTreeForModel(modData);
@@ -1023,7 +1058,6 @@ function hideLoader() {
                 modData.parentOf.set(c, p);
             };
 
-            // Связи агрегации
             try {
                 const r1 = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCRELAGGREGATES);
                 for (let i = 0; i < r1.size(); i++) {
@@ -1038,7 +1072,6 @@ function hideLoader() {
                 }
             } catch(e) {}
 
-            // Пространственные связи
             try {
                 const r2 = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
                 for (let i = 0; i < r2.size(); i++) {
@@ -1075,7 +1108,6 @@ function hideLoader() {
                     const tc = ifcAPI.GetLineType(modData.modelID, id);
                     type = (tc != null && TYPE_NAMES[tc]) ? TYPE_NAMES[tc].replace(/^IFC/, '') : '';
                     
-                    // Build search cache string (Name + Type + ObjectType)
                     let searchStr = `${name} ${type} ${readVal(ln.ObjectType)}`.toLowerCase();
                     modData.searchCache.set(id, searchStr);
                     
@@ -1086,7 +1118,6 @@ function hideLoader() {
                 return info;
             }
 
-            // Рекурсивный сбор всех ID внутри ветки (для группового выделения)
             function getAllChildGeom(id) {
                 let res = [];
                 if (modData.meshesByID.has(id)) {
@@ -1131,7 +1162,6 @@ function hideLoader() {
                         return;
                     }
                     
-                    // ГРУППОВОЕ ВЫДЕЛЕНИЕ: берем все элементы внутри ветки
                     const itemsToSelect = getAllChildGeom(id);
                     if (itemsToSelect.length > 0) {
                         selectMultiple(itemsToSelect);
@@ -1233,7 +1263,6 @@ function hideLoader() {
                     fileRoot.classList.toggle('collapsed'); 
                     return; 
                 }
-                // Выделить весь файл
                 let allItems = [];
                 roots.forEach(r => {
                     allItems = allItems.concat(getAllChildGeom(r));
@@ -1257,7 +1286,6 @@ function hideLoader() {
         const highlightColor = 0xff6b35;
 
         function selectMultiple(items) {
-            // 1. Снимаем старое выделение
             selectedItems.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
                 if (mod && mod.meshesByID.has(i.expressID)) {
@@ -1269,7 +1297,6 @@ function hideLoader() {
                 }
             });
             
-            // Снимаем класс .sel в дереве
             document.querySelectorAll('.trow.sel').forEach(el => {
                 el.classList.remove('sel');
             });
@@ -1282,7 +1309,6 @@ function hideLoader() {
                 return;
             }
 
-            // 2. Красим новые
             items.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
                 if (mod && mod.meshesByID.has(i.expressID)) {
@@ -1294,10 +1320,8 @@ function hideLoader() {
                 }
             });
 
-            // 3. Свойства (показываем свойства первого элемента, если их много)
             showProps(items[0].modelID, items[0].expressID, items.length);
             
-            // Скролл в дереве к первому
             const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`);
             if (firstRow) {
                 firstRow.classList.add('sel');
@@ -1318,7 +1342,6 @@ function hideLoader() {
             const raycaster = new THREE.Raycaster();
             raycaster.setFromCamera(pointer, camera);
             
-            // Игнорируем скрытые меши!
             const visibleMeshes = allMeshes.filter(m => m.visible);
             const hits = raycaster.intersectObjects(visibleMeshes, false);
             
@@ -1345,20 +1368,20 @@ function hideLoader() {
 
         $('btnHide').addEventListener('click', () => {
             setVisibility(selectedItems, false);
-            selectMultiple([]); // Сброс выделения после скрытия
+            selectMultiple([]); 
         });
 
         $('btnIsolate').addEventListener('click', () => {
             if (selectedItems.length === 0) return;
-            allMeshes.forEach(m => m.visible = false); // Скрыть всё
-            setVisibility(selectedItems, true); // Показать только нужные
+            allMeshes.forEach(m => m.visible = false); 
+            setVisibility(selectedItems, true); 
         });
 
         $('btnShowAll').addEventListener('click', () => {
             allMeshes.forEach(m => m.visible = true);
         });
 
-        // --- Search (BIM Checker Lite) ---
+        // --- Search ---
         $('searchInput').addEventListener('keyup', (e) => {
             if (e.key !== 'Enter') return;
             
@@ -1533,6 +1556,55 @@ function hideLoader() {
             ['fit', 'wire', 'clear', 'btnIsolate', 'btnHide', 'btnShowAll'].forEach(id => {
                 $(id).disabled = true;
             });
+        });
+
+        // --- Логика загрузки с Яндекс.Диска ---
+        $('btnYaLoad').addEventListener('click', async () => {
+            const link = $('yaLink').value.trim();
+            if (!link) return alert('Пожалуйста, вставьте ссылку на Яндекс.Диск');
+            
+            showLoader('ОБЛАКО', 'Получение метаданных...');
+            
+            try {
+                // Шаг 1: Получаем прямую ссылку на файл через API Яндекса
+                const api = `https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=${encodeURIComponent(link)}`;
+                const res = await fetch(api);
+                
+                if (!res.ok) {
+                    throw new Error('Не удалось получить файл. Убедитесь, что ссылка правильная и файл публичный.');
+                }
+                
+                const data = await res.json();
+                
+                // Шаг 2: Скачиваем бинарник
+                showLoader('СКАЧИВАНИЕ', 'Загрузка файла с серверов Яндекса...');
+                const fileRes = await fetch(data.href);
+                
+                if (!fileRes.ok) {
+                    throw new Error('Ошибка при скачивании файла.');
+                }
+                
+                const buffer = await fileRes.arrayBuffer();
+                
+                // Шаг 3: Обертываем буфер в виртуальный File и отдаем движку
+                // Имя файла вытягиваем из URL, если не получается - даем дефолтное
+                let fileName = "Cloud_Model.ifc";
+                try {
+                    const urlObj = new URL(data.href);
+                    const params = new URLSearchParams(urlObj.search);
+                    if (params.has('filename')) fileName = params.get('filename');
+                } catch(e) {}
+
+                const fileObj = new File([buffer], fileName, { type: "application/octet-stream" });
+                
+                await handleFiles([fileObj]);
+                $('yaLink').value = ''; // Очищаем поле после успеха
+                
+            } catch (err) {
+                console.error(err);
+                alert('Ошибка: ' + err.message + '\n\nЕсли ссылка точно верная, возможно браузер блокирует CORS-запрос к файлу.');
+                hideLoader();
+            }
         });
 
         // Drag & Drop
