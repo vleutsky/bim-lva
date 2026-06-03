@@ -1135,8 +1135,6 @@ let isClipping = false;
                         mesh.userData = { 
                             modelID: modelID, 
                             expressID: expressID, 
-                            origOpacity: col.w, 
-                            origTransparent: col.w !== 1
                         };
                         
                         modData.group.add(mesh);
@@ -1404,45 +1402,44 @@ let isClipping = false;
         }
 
         // --- 2. GHOSTING (Затенение вместо изоляции) ---
+// --- SELECTION (Только подсветка, без прозрачности) ---
         const highlightColor = 0xff6b35;
 
         function selectMultiple(items) {
+            // 1. Снимаем свечение ТОЛЬКО со старых выделенных элементов (O(K) вместо O(N))
+            selectedItems.forEach(i => {
+                const mod = loadedModels.get(i.modelID);
+                if (mod && mod.meshesByID.has(i.expressID)) {
+                    mod.meshesByID.get(i.expressID).forEach(m => {
+                        m.material.emissive.setHex(0x000000);
+                    });
+                }
+            });
+
+            // Убираем выделение в дереве
             document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
+            
             selectedItems = items;
             $('sSelected').textContent = selectedItems.length;
 
             if (items.length === 0) {
-                // Если ничего не выбрано — возвращаем всем нормальный вид
-                allMeshes.forEach(m => {
-                    m.material.emissive.setHex(0x000000);
-                    m.material.transparent = m.userData.origTransparent;
-                    m.material.opacity = m.userData.origOpacity;
-                    m.material.needsUpdate = true;
-                });
                 propsBox.innerHTML = '<div class="empty">Ничего не выбрано.</div>';
                 return;
             }
 
-            // Создаем быстрый сет выбранных ID
-            const selectedSet = new Set(items.map(i => `${i.modelID}_${i.expressID}`));
-
-            allMeshes.forEach(m => {
-                if (selectedSet.has(`${m.userData.modelID}_${m.userData.expressID}`)) {
-                    // Это ВЫБРАННЫЙ элемент: светится, возвращаем исходную прозрачность
-                    m.material.emissive.setHex(highlightColor);
-                    m.material.transparent = m.userData.origTransparent;
-                    m.material.opacity = m.userData.origOpacity;
-                } else {
-                    // Это ОСТАЛЬНЫЕ: затеняем (ghosting)
-                    m.material.emissive.setHex(0x000000);
-                    m.material.transparent = true;
-                    m.material.opacity = 0.15; // Степень прозрачности фона
+            // 2. Включаем свечение для новых выделенных элементов
+            items.forEach(i => {
+                const mod = loadedModels.get(i.modelID);
+                if (mod && mod.meshesByID.has(i.expressID)) {
+                    mod.meshesByID.get(i.expressID).forEach(m => {
+                        m.material.emissive.setHex(highlightColor);
+                    });
                 }
-                m.material.needsUpdate = true;
             });
 
             showProps(items[0].modelID, items[0].expressID, items.length);
             
+            // Скроллим дерево к первому выделенному
             const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`);
             if (firstRow) {
                 firstRow.classList.add('sel');
