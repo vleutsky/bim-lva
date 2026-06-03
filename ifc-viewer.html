@@ -8,47 +8,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* ---- context menus ---- */
-        .ctx-menu {
-            position: fixed;
-            background: #1b212b;
-            border: 1px solid var(--accent-dim);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.8);
-            border-radius: 4px;
-            padding: 4px 0;
-            z-index: 9999;
-            display: none;
-            flex-direction: column;
-            min-width: 180px;
-        }
-
-        .ctx-menu.show {
-            display: flex;
-        }
-
-        .ctx-item {
-            background: none;
-            border: none;
-            color: var(--txt);
-            padding: 8px 16px;
-            text-align: left;
-            font-family: 'IBM Plex Mono';
-            font-size: 11px;
-            cursor: pointer;
-            transition: background 0.1s;
-        }
-
-        .ctx-item:hover {
-            background: var(--accent);
-            color: var(--bg);
-            font-weight: 600;
-        }
-
-        .ctx-divider {
-            height: 1px;
-            background: var(--line);
-            margin: 4px 0;
-        }
         :root {
             --bg: #0a0c0f;
             --panel: #14181f;
@@ -278,7 +237,7 @@
             border-left: 1px solid var(--line);
         }
 
-        /* floating (откреплённая) панель */
+        /* floating panel */
         .panel.floating {
             position: fixed;
             z-index: 60;
@@ -698,6 +657,48 @@
             margin-left: auto;
             color: var(--txt-dim);
         }
+
+        /* ---- context menus ---- */
+        .ctx-menu {
+            position: fixed;
+            background: #1b212b;
+            border: 1px solid var(--accent-dim);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.8);
+            border-radius: 4px;
+            padding: 4px 0;
+            z-index: 9999;
+            display: none;
+            flex-direction: column;
+            min-width: 180px;
+        }
+
+        .ctx-menu.show {
+            display: flex;
+        }
+
+        .ctx-item {
+            background: none;
+            border: none;
+            color: var(--txt);
+            padding: 8px 16px;
+            text-align: left;
+            font-family: 'IBM Plex Mono';
+            font-size: 11px;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+
+        .ctx-item:hover {
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: 600;
+        }
+
+        .ctx-divider {
+            height: 1px;
+            background: var(--line);
+            margin: 4px 0;
+        }
     </style>
 </head>
 <body>
@@ -774,7 +775,8 @@
             </div>
         </div>
     </aside>
-<div class="ctx-menu" id="treeCtx">
+
+    <div class="ctx-menu" id="treeCtx">
         <button class="ctx-item" id="ctxIsolate">🎯 Изолировать ветку</button>
         <button class="ctx-item" id="ctxHide">👁 Скрыть ветку</button>
         <div class="ctx-divider"></div>
@@ -788,6 +790,7 @@
         <button class="ctx-item" id="ctxShowAll">👁‍🗨 Показать скрытое</button>
         <button class="ctx-item" id="ctxFit">⤢ Вписать всё в кадр</button>
     </div>
+
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
         <span id="hintControls">ЛКМ: вращение | ПКМ: панорама | Двойной клик в дереве: зум к элементу</span>
@@ -802,87 +805,6 @@
             "web-ifc": "https://unpkg.com/web-ifc@0.0.57/web-ifc-api.js"
         }
     }
-        // --- CONTEXT MENUS & BACKGROUND LOGIC ---
-        
-        const treeCtx = $('treeCtx');
-        const stageCtx = $('stageCtx');
-        
-        // Закрытие меню при любом клике левой кнопкой
-        window.addEventListener('click', () => {
-            treeCtx.classList.remove('show');
-            stageCtx.classList.remove('show');
-        });
-
-        // 1. Вызов меню в Дереве
-        $('treePanel').addEventListener('contextmenu', e => {
-            const trow = e.target.closest('.trow');
-            if (!trow) return; // Если кликнули в пустоту дерева - ничего не делаем
-            
-            e.preventDefault(); // Отключаем стандартное меню браузера
-            
-            // Хитрость: эмулируем ЛКМ, чтобы сработала ваша готовая логика выделения ветки!
-            if (!trow.classList.contains('sel')) {
-                trow.click(); 
-            }
-
-            // Позиционируем и показываем меню
-            treeCtx.style.left = e.clientX + 'px';
-            treeCtx.style.top = e.clientY + 'px';
-            treeCtx.classList.add('show');
-            stageCtx.classList.remove('show');
-        });
-
-        // 2. Вызов меню на 3D Сцене
-        stage.addEventListener('contextmenu', e => {
-            e.preventDefault();
-            
-            stageCtx.style.left = e.clientX + 'px';
-            stageCtx.style.top = e.clientY + 'px';
-            stageCtx.classList.add('show');
-            treeCtx.classList.remove('show');
-        });
-
-        // 3. Привязка действий Дерева
-        $('ctxIsolate').addEventListener('click', () => $('btnIsolate').click());
-        $('ctxHide').addEventListener('click', () => $('btnHide').click());
-        $('ctxFocus').addEventListener('click', () => {
-            if (selectedItems.length > 0) {
-                // Фокусируемся на первом элементе из выбранных
-                focusOn(selectedItems[0].modelID, selectedItems[0].expressID);
-            }
-        });
-
-        // 4. Привязка действий Сцены
-        $('ctxShowAll').addEventListener('click', () => $('btnShowAll').click());
-        $('ctxFit').addEventListener('click', () => $('fit').click());
-        $('ctxGrid').addEventListener('click', () => $('gridBtn').click());
-
-        // 5. Логика переключения фона (Темный -> Белый -> CAD Синий)
-        const bgThemes = [
-            { hex: 0x0a0c0f, grid: 0x2a313d, text: 'темный' },
-            { hex: 0xffffff, grid: 0xdddddd, text: 'светлый' },
-            { hex: 0x1e2836, grid: 0x3a4556, text: 'CAD синий' }
-        ];
-        let currentBgIndex = 0;
-
-        $('ctxBg').addEventListener('click', () => {
-            currentBgIndex = (currentBgIndex + 1) % bgThemes.length;
-            const theme = bgThemes[currentBgIndex];
-            
-            // Меняем фон Three.js
-            renderer.setClearColor(theme.hex, 1);
-            
-            // Перекрашиваем сетку, чтобы её было видно на белом фоне
-            scene.remove(grid);
-            const gridVisible = $('gridBtn').classList.contains('on');
-            
-            grid = new THREE.GridHelper(120, 120, theme.grid, theme.grid);
-            grid.rotation.x = Math.PI / 2;
-            grid.visible = gridVisible;
-            scene.add(grid);
-            
-            console.log(`Фон изменен на: ${theme.text}`);
-        });
     </script>
 
     <script type="module">
@@ -991,11 +913,11 @@
             constructor(modelID, filename) {
                 this.modelID = modelID;
                 this.filename = filename;
-                this.meshesByID = new Map(); // expressID -> [mesh, mesh]
+                this.meshesByID = new Map();
                 this.parentOf = new Map();
                 this.childrenOf = new Map();
                 this.psetIndex = new Map();
-                this.searchCache = new Map(); // expressID -> "String for fast search"
+                this.searchCache = new Map(); 
                 
                 this.group = new THREE.Group();
                 globalGroup.add(this.group);
@@ -1145,7 +1067,7 @@
             return buf;
         }
 
-        // --- High-Performance Search Cache ---
+        // --- Search Cache ---
         function readVal(v) {
             if (v == null) return '';
             if (typeof v !== 'object') return String(v);
@@ -1701,7 +1623,6 @@
             showLoader('ОБЛАКО', 'Получение метаданных...');
             
             try {
-                // Шаг 1: Получаем прямую ссылку на файл через API Яндекса
                 const api = `https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=${encodeURIComponent(link)}`;
                 const res = await fetch(api);
                 
@@ -1711,7 +1632,6 @@
                 
                 const data = await res.json();
                 
-                // Шаг 2: Скачиваем бинарник
                 showLoader('СКАЧИВАНИЕ', 'Загрузка файла с серверов Яндекса...');
                 const fileRes = await fetch(data.href);
                 
@@ -1721,8 +1641,6 @@
                 
                 const buffer = await fileRes.arrayBuffer();
                 
-                // Шаг 3: Обертываем буфер в виртуальный File и отдаем движку
-                // Имя файла вытягиваем из URL, если не получается - даем дефолтное
                 let fileName = "Cloud_Model.ifc";
                 try {
                     const urlObj = new URL(data.href);
@@ -1733,7 +1651,7 @@
                 const fileObj = new File([buffer], fileName, { type: "application/octet-stream" });
                 
                 await handleFiles([fileObj]);
-                $('yaLink').value = ''; // Очищаем поле после успеха
+                $('yaLink').value = '';
                 
             } catch (err) {
                 console.error(err);
@@ -1800,6 +1718,75 @@
         setupResizer('dragLeft', '--w-left', true); 
         setupResizer('dragRight', '--w-right', false);
 
+        // --- Context Menus & Background Logic ---
+        const treeCtx = $('treeCtx');
+        const stageCtx = $('stageCtx');
+        
+        window.addEventListener('click', () => {
+            treeCtx.classList.remove('show');
+            stageCtx.classList.remove('show');
+        });
+
+        $('treePanel').addEventListener('contextmenu', e => {
+            const trow = e.target.closest('.trow');
+            if (!trow) return; 
+            
+            e.preventDefault(); 
+            
+            if (!trow.classList.contains('sel')) {
+                trow.click(); 
+            }
+
+            treeCtx.style.left = e.clientX + 'px';
+            treeCtx.style.top = e.clientY + 'px';
+            treeCtx.classList.add('show');
+            stageCtx.classList.remove('show');
+        });
+
+        stage.addEventListener('contextmenu', e => {
+            e.preventDefault();
+            
+            stageCtx.style.left = e.clientX + 'px';
+            stageCtx.style.top = e.clientY + 'px';
+            stageCtx.classList.add('show');
+            treeCtx.classList.remove('show');
+        });
+
+        $('ctxIsolate').addEventListener('click', () => $('btnIsolate').click());
+        $('ctxHide').addEventListener('click', () => $('btnHide').click());
+        $('ctxFocus').addEventListener('click', () => {
+            if (selectedItems.length > 0) {
+                focusOn(selectedItems[0].modelID, selectedItems[0].expressID);
+            }
+        });
+
+        $('ctxShowAll').addEventListener('click', () => $('btnShowAll').click());
+        $('ctxFit').addEventListener('click', () => $('fit').click());
+        $('ctxGrid').addEventListener('click', () => $('gridBtn').click());
+
+        const bgThemes = [
+            { hex: 0x0a0c0f, grid: 0x2a313d, text: 'темный' },
+            { hex: 0xffffff, grid: 0xdddddd, text: 'светлый' },
+            { hex: 0x1e2836, grid: 0x3a4556, text: 'CAD синий' }
+        ];
+        let currentBgIndex = 0;
+
+        $('ctxBg').addEventListener('click', () => {
+            currentBgIndex = (currentBgIndex + 1) % bgThemes.length;
+            const theme = bgThemes[currentBgIndex];
+            
+            renderer.setClearColor(theme.hex, 1);
+            
+            scene.remove(grid);
+            const gridVisible = $('gridBtn').classList.contains('on');
+            
+            grid = new THREE.GridHelper(120, 120, theme.grid, theme.grid);
+            grid.rotation.x = Math.PI / 2;
+            grid.visible = gridVisible;
+            scene.add(grid);
+        });
+
+        // --- Dockable Panels ---
         function setupDockable(panel, head, popBtn) {
             popBtn.addEventListener('click', e => {
                 e.stopPropagation(); 
