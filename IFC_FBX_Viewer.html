@@ -2550,9 +2550,48 @@ let isClipping = false;
             treeCtx.classList.add('show'); 
             stageCtx.classList.remove('show');
         });
-        
+
+        const RIGHT_DRAG_THRESHOLD = 6;
+        let stageRightPointer = null;
+
+        stage.addEventListener('pointerdown', e => {
+            if (e.button !== 2) return;
+            stageRightPointer = {
+                pointerId: e.pointerId,
+                x: e.clientX,
+                y: e.clientY,
+                dragged: false
+            };
+        }, true);
+
+        stage.addEventListener('pointermove', e => {
+            if (!stageRightPointer || stageRightPointer.pointerId !== e.pointerId) return;
+            if (Math.hypot(e.clientX - stageRightPointer.x, e.clientY - stageRightPointer.y) >= RIGHT_DRAG_THRESHOLD) {
+                stageRightPointer.dragged = true;
+            }
+        }, true);
+
+        stage.addEventListener('pointerup', e => {
+            if (!stageRightPointer || stageRightPointer.pointerId !== e.pointerId) return;
+            const completedGesture = stageRightPointer;
+            // contextmenu срабатывает в той же задаче сразу после pointerup.
+            setTimeout(() => {
+                if (stageRightPointer === completedGesture) stageRightPointer = null;
+            }, 0);
+        }, true);
+
+        stage.addEventListener('pointercancel', () => {
+            stageRightPointer = null;
+        }, true);
+
         stage.addEventListener('contextmenu', e => {
-            e.preventDefault(); 
+            e.preventDefault();
+            const wasCameraDrag = !!(stageRightPointer && stageRightPointer.dragged);
+            stageRightPointer = null;
+            if (wasCameraDrag) {
+                stageCtx.classList.remove('show');
+                return;
+            }
             stageCtx.style.left = e.clientX + 'px'; 
             stageCtx.style.top = e.clientY + 'px'; 
             stageCtx.classList.add('show'); 
