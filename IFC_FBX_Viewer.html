@@ -611,6 +611,32 @@
             color: var(--txt-dim);
         }
 
+        .editInput {
+            width: 100%;
+            padding: 7px 9px;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            color: var(--txt);
+            font-family: 'IBM Plex Mono';
+            font-size: 11px;
+            outline: none;
+        }
+
+        .editInput:focus {
+            border-color: var(--accent);
+        }
+
+        .bulk-note {
+            margin-top: 10px;
+            padding: 8px 10px;
+            border-left: 2px solid var(--blue);
+            background: #111820;
+            color: var(--txt-dim);
+            font-family: 'IBM Plex Mono';
+            font-size: 10px;
+            line-height: 1.5;
+        }
+
         .pgroup {
             margin-top: 14px;
         }
@@ -752,6 +778,7 @@
             <input type="file" id="file" accept=".ifc,.fbx" multiple hidden>
             <button class="btn load-btn" id="open">⬆ ЛОКАЛЬНО</button>
             <button class="btn" id="fit" disabled>⤢ КАДР</button>
+            <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
             <button class="btn on" id="gridBtn">▤ СЕТКА</button>
             <button class="btn" id="clear" disabled>✕ ОЧИСТИТЬ</button>
         </div>
@@ -1042,6 +1069,278 @@ let isClipping = false;
         let nextFbxModelID = 1;
         const allocFbxModelID = () => 'fbx_' + (nextFbxModelID++);
 
+        // Классы с совместимой формой атрибутов IfcElement в IFC4.
+        const IFC_EDITABLE_CLASSES = [
+            'IFCWALL', 'IFCWALLSTANDARDCASE', 'IFCCURTAINWALL', 'IFCSLAB',
+            'IFCSLABSTANDARDCASE', 'IFCROOF', 'IFCBEAM', 'IFCCOLUMN', 'IFCMEMBER',
+            'IFCPLATE', 'IFCDOOR', 'IFCWINDOW', 'IFCSTAIR', 'IFCSTAIRFLIGHT',
+            'IFCRAMP', 'IFCRAMPFLIGHT', 'IFCRAILING', 'IFCCOVERING', 'IFCFOOTING',
+            'IFCPILE', 'IFCBUILDINGELEMENTPROXY', 'IFCBUILDINGELEMENTPART',
+            'IFCSHADINGDEVICE', 'IFCCHIMNEY', 'IFCFURNITURE', 'IFCTRANSPORTELEMENT',
+            'IFCREINFORCINGBAR', 'IFCREINFORCINGMESH', 'IFCTENDON', 'IFCFASTENER',
+            'IFCMECHANICALFASTENER', 'IFCDISCRETEACCESSORY', 'IFCPIPESEGMENT',
+            'IFCPIPEFITTING', 'IFCDUCTSEGMENT', 'IFCDUCTFITTING', 'IFCDUCTSILENCER',
+            'IFCCABLECARRIERSEGMENT', 'IFCCABLECARRIERFITTING', 'IFCCABLESEGMENT',
+            'IFCCABLEFITTING', 'IFCJUNCTIONBOX', 'IFCPUMP', 'IFCVALVE', 'IFCDAMPER',
+            'IFCFAN', 'IFCCOMPRESSOR', 'IFCFILTER', 'IFCFLOWMETER', 'IFCBOILER',
+            'IFCCHILLER', 'IFCCOIL', 'IFCCONDENSER', 'IFCCOOLINGTOWER',
+            'IFCEVAPORATOR', 'IFCHEATEXCHANGER', 'IFCHUMIDIFIER', 'IFCUNITARYEQUIPMENT',
+            'IFCAIRTERMINAL', 'IFCAIRTERMINALBOX', 'IFCAIRTOAIRHEATRECOVERY',
+            'IFCSPACEHEATER', 'IFCTANK', 'IFCSANITARYTERMINAL', 'IFCWASTETERMINAL',
+            'IFCFIRESUPPRESSIONTERMINAL', 'IFCPROTECTIVEDEVICE', 'IFCELECTRICAPPLIANCE',
+            'IFCELECTRICDISTRIBUTIONBOARD', 'IFCELECTRICGENERATOR', 'IFCELECTRICMOTOR',
+            'IFCTRANSFORMER', 'IFCSWITCHINGDEVICE', 'IFCOUTLET', 'IFCLAMP', 'IFCSENSOR',
+            'IFCACTUATOR', 'IFCALARM', 'IFCCONTROLLER', 'IFCCOMMUNICATIONSAPPLIANCE',
+            'IFCAUDIOVISUALAPPLIANCE', 'IFCSOLARDEVICE', 'IFCMEDICALDEVICE'
+        ];
+        const IFC_CLASS_SHAPES = {
+            IFCDOOR: {
+                argCount: 13, predefinedIndex: 10,
+                defaults: ['$','$','.NOTDEFINED.','.NOTDEFINED.','$']
+            },
+            IFCWINDOW: {
+                argCount: 13, predefinedIndex: 10,
+                defaults: ['$','$','.NOTDEFINED.','.NOTDEFINED.','$']
+            },
+            IFCSTAIRFLIGHT: {
+                argCount: 13, predefinedIndex: 12,
+                defaults: ['$','$','$','$','.NOTDEFINED.']
+            },
+            IFCREINFORCINGBAR: {
+                argCount: 13, predefinedIndex: 11,
+                defaults: ['$','$','$','.NOTDEFINED.','$']
+            },
+            IFCREINFORCINGMESH: {
+                argCount: 17, predefinedIndex: 16,
+                defaults: ['$','$','$','$','$','$','$','$','.NOTDEFINED.']
+            },
+            IFCTENDON: {
+                argCount: 16, predefinedIndex: 8,
+                defaults: ['.NOTDEFINED.','$','$','$','$','$','$','$']
+            },
+            IFCMECHANICALFASTENER: {
+                argCount: 11, predefinedIndex: 10,
+                defaults: ['$','$','.NOTDEFINED.']
+            },
+            IFCTRANSPORTELEMENT: {
+                argCount: 12, predefinedIndex: 8,
+                defaults: ['.NOTDEFINED.','$','$','$']
+            }
+        };
+        const getIfcClassShape = className => IFC_CLASS_SHAPES[className] || {
+            argCount: 9, predefinedIndex: 8, defaults: ['.NOTDEFINED.']
+        };
+
+        function decodeStepString(s) {
+            return String(s)
+                .replace(/\\X2\\([0-9A-F]+)\\X0\\/gi, (_, hex) => {
+                    let out = '';
+                    for (let i = 0; i + 3 < hex.length; i += 4) {
+                        out += String.fromCharCode(parseInt(hex.slice(i, i + 4), 16));
+                    }
+                    return out;
+                })
+                .replace(/\\X4\\([0-9A-F]+)\\X0\\/gi, (_, hex) => {
+                    let out = '';
+                    for (let i = 0; i + 7 < hex.length; i += 8) {
+                        out += String.fromCodePoint(parseInt(hex.slice(i, i + 8), 16));
+                    }
+                    return out;
+                })
+                .replace(/\\X\\([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+        }
+
+        function encodeStepString(value) {
+            const s = String(value);
+            let out = '';
+            for (let i = 0; i < s.length;) {
+                const code = s.charCodeAt(i);
+                if (code > 126) {
+                    let hex = '';
+                    while (i < s.length && s.charCodeAt(i) > 126) {
+                        hex += s.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0');
+                        i++;
+                    }
+                    out += '\\X2\\' + hex + '\\X0\\';
+                } else {
+                    out += s[i] === "'" ? "''" : s[i];
+                    i++;
+                }
+            }
+            return out;
+        }
+
+        function splitStepArgs(text) {
+            const result = [];
+            let current = '', depth = 0, inString = false;
+            for (let i = 0; i < text.length; i++) {
+                const c = text[i];
+                if (inString) {
+                    current += c;
+                    if (c === "'") {
+                        if (text[i + 1] === "'") current += text[++i];
+                        else inString = false;
+                    }
+                } else if (c === "'") {
+                    inString = true; current += c;
+                } else if (c === '(') {
+                    depth++; current += c;
+                } else if (c === ')') {
+                    depth--; current += c;
+                } else if (c === ',' && depth === 0) {
+                    result.push(current.trim()); current = '';
+                } else current += c;
+            }
+            if (current.length) result.push(current.trim());
+            return result;
+        }
+
+        function indexIfcText(rawText) {
+            const lines = rawText.split(/\r\n|\n|\r/);
+            const index = new Map();
+            let dataEndLine = -1, inData = false;
+            for (let i = 0; i < lines.length; i++) {
+                if (/^\s*DATA\s*;\s*$/i.test(lines[i])) { inData = true; continue; }
+                if (inData && /^\s*ENDSEC\s*;\s*$/i.test(lines[i])) { dataEndLine = i; break; }
+                if (!inData) continue;
+                const match = lines[i].match(/^\s*#(\d+)\s*=/);
+                if (!match) continue;
+                let end = i;
+                while (end < lines.length - 1 && !/;\s*$/.test(lines[end])) end++;
+                index.set(parseInt(match[1], 10), { start: i, end });
+                i = end;
+            }
+            return { lines, index, dataEndLine };
+        }
+
+        function getEntityParts(modData, expressID) {
+            const span = modData.ifcIndex && modData.ifcIndex.index.get(expressID);
+            if (!span) return null;
+            const full = modData.ifcIndex.lines.slice(span.start, span.end + 1).join(' ');
+            const eq = full.indexOf('=');
+            const start = full.indexOf('(', eq);
+            const end = full.lastIndexOf(')');
+            if (start < 0 || end < start) return null;
+            const classMatch = full.slice(eq + 1, start).trim().match(/^([A-Z0-9_]+)$/i);
+            if (!classMatch) return null;
+            return {
+                className: classMatch[1].toUpperCase(),
+                args: splitStepArgs(full.slice(start + 1, end)),
+                span
+            };
+        }
+
+        function createIfcEditBatch(modData) {
+            const changed = new Map();
+            const appended = [];
+            function entity(id) {
+                if (!changed.has(id)) {
+                    const parts = getEntityParts(modData, id);
+                    if (!parts) return null;
+                    changed.set(id, { className: parts.className, args: parts.args.slice(), span: parts.span });
+                }
+                return changed.get(id);
+            }
+            return {
+                entity,
+                setAttr(id, attrIndex, value) {
+                    const item = entity(id);
+                    if (!item) return false;
+                    while (item.args.length <= attrIndex) item.args.push('$');
+                    item.args[attrIndex] = value;
+                    return true;
+                },
+                setClass(id, className) {
+                    const item = entity(id);
+                    if (!item) return false;
+                    item.className = className;
+                    return true;
+                },
+                append(line) { appended.push(line); },
+                commit() {
+                    [...changed.entries()]
+                        .sort((a, b) => b[1].span.start - a[1].span.start)
+                        .forEach(([id, item]) => {
+                            const line = `#${id}=${item.className}(${item.args.join(',')});`;
+                            modData.ifcIndex.lines.splice(
+                                item.span.start,
+                                item.span.end - item.span.start + 1,
+                                line
+                            );
+                        });
+                    if (changed.size) {
+                        modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
+                    }
+                    if (appended.length) {
+                        const at = modData.ifcIndex.dataEndLine;
+                        modData.ifcIndex.lines.splice(at < 0 ? modData.ifcIndex.lines.length : at, 0, ...appended);
+                        modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
+                    }
+                    if (changed.size || appended.length) modData.edited = true;
+                }
+            };
+        }
+
+        function getMaxExpressId(modData) {
+            let max = 0;
+            for (const id of modData.ifcIndex.index.keys()) if (id > max) max = id;
+            return max;
+        }
+
+        function unquoteStepString(raw) {
+            const value = String(raw || '').trim();
+            if (value === '$' || value === '*') return '';
+            if (value.startsWith("'") && value.endsWith("'")) {
+                return decodeStepString(value.slice(1, -1).replace(/''/g, "'"));
+            }
+            return value;
+        }
+
+        function unwrapIfcValue(raw) {
+            const match = String(raw || '').trim().match(/^([A-Z0-9_]+)\(([\s\S]*)\)$/i);
+            if (!match) return { type: 'IFCLABEL', value: unquoteStepString(raw) };
+            return { type: match[1].toUpperCase(), value: unquoteStepString(match[2]) };
+        }
+
+        function formatIfcReal(value) {
+            let out = String(Number(value) || 0);
+            if (!/[.eE]/.test(out)) out += '.';
+            return out;
+        }
+
+        function wrapIfcValue(type, value) {
+            if (type === 'IFCREAL') return `IFCREAL(${formatIfcReal(value)})`;
+            if (type === 'IFCINTEGER') return `IFCINTEGER(${parseInt(value, 10) || 0})`;
+            if (type === 'IFCBOOLEAN') {
+                const truthy = /^(1|true|yes|да|\.t\.)$/i.test(String(value).trim());
+                return `IFCBOOLEAN(${truthy ? '.T.' : '.F.'})`;
+            }
+            if (type === 'IFCTEXT') return `IFCTEXT('${encodeStepString(value)}')`;
+            return `IFCLABEL('${encodeStepString(value)}')`;
+        }
+
+        function wrapIfcValueLike(type, value) {
+            const normalized = String(type || '').toUpperCase();
+            if (normalized === 'IFCINTEGER' || normalized.endsWith('COUNTMEASURE')) {
+                return `${normalized}(${parseInt(value, 10) || 0})`;
+            }
+            if (normalized === 'IFCREAL' || normalized.endsWith('MEASURE')) {
+                return `${normalized}(${formatIfcReal(value)})`;
+            }
+            if (normalized === 'IFCBOOLEAN' || normalized === 'IFCLOGICAL') {
+                const truthy = /^(1|true|yes|да|\.t\.)$/i.test(String(value).trim());
+                return `${normalized}(${truthy ? '.T.' : '.F.'})`;
+            }
+            return wrapIfcValue(normalized, value);
+        }
+
+        const IFC_GUID_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$';
+        function ifcGuid() {
+            let result = '';
+            for (let i = 0; i < 22; i++) result += IFC_GUID_CHARS[Math.floor(Math.random() * 64)];
+            return result;
+        }
+
         class IFCModelData {
             constructor(modelID, filename) {
                 this.modelID = modelID;
@@ -1051,6 +1350,8 @@ let isClipping = false;
                 this.childrenOf = new Map();
                 this.psetIndex = new Map();
                 this.searchCache = new Map(); 
+                this.ifcIndex = null;
+                this.edited = false;
                 
                 this.group = new THREE.Group();
                 globalGroup.add(this.group);
@@ -1107,6 +1408,7 @@ let isClipping = false;
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => {
                 $(id).disabled = false;
             });
+            $('btnExportIFC').disabled = ![...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
             
             fitView();
         }
@@ -1121,6 +1423,7 @@ let isClipping = false;
                 // ВАЖНО: COORDINATE_TO_ORIGIN: false для сохранения абсолютных координат!
                 const modelID = ifcAPI.OpenModel(data, { COORDINATE_TO_ORIGIN: false });
                 const modData = new IFCModelData(modelID, file.name);
+                modData.ifcIndex = indexIfcText(new TextDecoder('utf-8').decode(data));
                 
                 loadedModels.set(modelID, modData);
 
@@ -1718,6 +2021,98 @@ let isClipping = false;
         const propRow = (k, v) => `<div class="prop"><div class="k">${esc(k)}</div><div class="v">${esc(v || '—')}</div></div>`;
 
         // --- Properties View ---
+        function getPsetPropertyIds(modData, psetId, batch) {
+            const item = batch ? batch.entity(psetId) : getEntityParts(modData, psetId);
+            if (!item) return [];
+            const raw = item.args[4] || '()';
+            return [...raw.matchAll(/#(\d+)/g)].map(match => parseInt(match[1], 10));
+        }
+
+        function findPsetByName(modData, expressID, wantedName) {
+            const normalized = wantedName.trim().toLowerCase();
+            return (modData.psetIndex.get(expressID) || []).find(psetId => {
+                const parts = getEntityParts(modData, psetId);
+                return parts && unquoteStepString(parts.args[2]).trim().toLowerCase() === normalized;
+            });
+        }
+
+        function findPropertyByName(modData, psetId, wantedName, batch) {
+            const normalized = wantedName.trim().toLowerCase();
+            return getPsetPropertyIds(modData, psetId, batch).find(propId => {
+                const parts = getEntityParts(modData, propId);
+                return parts && unquoteStepString(parts.args[0]).trim().toLowerCase() === normalized;
+            });
+        }
+
+        function getEditableSelection() {
+            return selectedItems.filter(item => {
+                const modData = loadedModels.get(item.modelID);
+                return modData && !modData.isFBX && modData.ifcIndex;
+            });
+        }
+
+        function renderBulkEditor() {
+            const editable = getEditableSelection();
+            if (!editable.length) return '';
+            const ignored = selectedItems.length - editable.length;
+            const classOptions = IFC_EDITABLE_CLASSES.map(className =>
+                `<option value="${className}">${className.replace(/^IFC/, 'Ifc')}</option>`
+            ).join('');
+            return `
+                <div class="pgroup">
+                    <div class="pgroup-head"><span class="ar">▾</span>Массовое изменение IFC</div>
+                    <div class="pgroup-body">
+                        <div class="bulk-note">
+                            Будет обработано IFC-элементов: ${editable.length}.
+                            ${ignored ? `Пропущено FBX/недоступных: ${ignored}.` : ''}
+                            Изменения записываются в копии файлов по кнопке «Экспорт IFC».
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Новый IFC-класс</div>
+                            <select class="editInput" id="bulkClassSelect">${classOptions}</select>
+                        </div>
+                        <div class="prop small">
+                            <div class="k">PredefinedType (необязательно)</div>
+                            <input class="editInput" id="bulkPredefinedType" placeholder=".NOTDEFINED.">
+                        </div>
+                        <button class="btn" style="width:100%;margin-top:8px" data-act="bulkChangeClass">
+                            Применить класс к ${editable.length} элементам
+                        </button>
+
+                        <div class="sub-head" style="padding-left:0">Параметр PropertySet</div>
+                        <div class="prop small">
+                            <div class="k">Имя набора (Pset)</div>
+                            <input class="editInput" id="bulkPsetName" value="Pset_Custom">
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Имя параметра</div>
+                            <input class="editInput" id="bulkPropertyName" placeholder="Например: Код">
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Новое значение</div>
+                            <input class="editInput" id="bulkPropertyValue">
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Тип для новых параметров</div>
+                            <select class="editInput" id="bulkPropertyType">
+                                <option value="IFCLABEL">Текст (IfcLabel)</option>
+                                <option value="IFCTEXT">Длинный текст (IfcText)</option>
+                                <option value="IFCREAL">Число (IfcReal)</option>
+                                <option value="IFCINTEGER">Целое (IfcInteger)</option>
+                                <option value="IFCBOOLEAN">Да/Нет (IfcBoolean)</option>
+                            </select>
+                        </div>
+                        <label class="bulk-note" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+                            <input type="checkbox" id="bulkCreateMissing" checked>
+                            Создавать отсутствующие Pset и параметры. Тип существующего значения сохраняется.
+                        </label>
+                        <button class="btn" style="width:100%;margin-top:8px" data-act="bulkSetProperty">
+                            Записать параметр в ${editable.length} элементов
+                        </button>
+                    </div>
+                </div>`;
+        }
+
         function showProps(modelID, expressID, countTotal) {
             const modData = loadedModels.get(modelID); 
             let line = {}; 
@@ -1727,6 +2122,7 @@ let isClipping = false;
             } catch(e) {}
             
             let html = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
+            html += renderBulkEditor();
             if (countTotal > 1) {
                 html += `<div class="empty" style="padding-top:0">Свойства первого элемента:</div>`;
             }
@@ -1772,9 +2168,138 @@ let isClipping = false;
             propsBox.innerHTML = html + (psetHtml || `<div class="empty">Доп. свойства не найдены.</div>`);
         }
 
+        function applyBulkClassChange() {
+            const items = getEditableSelection();
+            const className = propsBox.querySelector('#bulkClassSelect').value;
+            const predefinedType = propsBox.querySelector('#bulkPredefinedType').value.trim();
+            if (!items.length) return;
+            if (predefinedType && !/^\.[A-Z0-9_]+\.$/i.test(predefinedType)) {
+                alert('PredefinedType должен быть IFC-перечислением, например .NOTDEFINED.');
+                return;
+            }
+            if (!confirm(`Изменить IFC-класс у ${items.length} элементов на ${className}?`)) return;
+
+            const batches = new Map();
+            const targetShape = getIfcClassShape(className);
+            let changed = 0, skipped = 0;
+            items.forEach(item => {
+                const modData = loadedModels.get(item.modelID);
+                if (!batches.has(item.modelID)) batches.set(item.modelID, createIfcEditBatch(modData));
+                const batch = batches.get(item.modelID);
+                const entity = batch.entity(item.expressID);
+                if (!entity || entity.args.length < 8) { skipped++; return; }
+                if (entity.className !== className) {
+                    entity.args = entity.args.slice(0, 8).concat(targetShape.defaults);
+                } else {
+                    entity.args = entity.args.slice(0, targetShape.argCount);
+                    while (entity.args.length < targetShape.argCount) {
+                        entity.args.push(targetShape.defaults[entity.args.length - 8] || '$');
+                    }
+                }
+                batch.setClass(item.expressID, className);
+                if (predefinedType) {
+                    batch.setAttr(item.expressID, targetShape.predefinedIndex, predefinedType.toUpperCase());
+                }
+                changed++;
+            });
+            batches.forEach(batch => batch.commit());
+
+            items.forEach(item => {
+                const typeCell = document.querySelector(
+                    `.trow[data-mid="${item.modelID}"][data-eid="${item.expressID}"] .ttype`
+                );
+                if (typeCell) typeCell.textContent = className.replace(/^IFC/, '');
+                const modData = loadedModels.get(item.modelID);
+                const search = modData.searchCache.get(item.expressID) || '';
+                modData.searchCache.set(item.expressID, `${search} ${className}`.toLowerCase());
+            });
+            alert(`Класс изменён: ${changed}.${skipped ? ` Пропущено несовместимых сущностей: ${skipped}.` : ''}`);
+        }
+
+        function applyBulkPropertyChange() {
+            const items = getEditableSelection();
+            const psetName = propsBox.querySelector('#bulkPsetName').value.trim();
+            const propertyName = propsBox.querySelector('#bulkPropertyName').value.trim();
+            const value = propsBox.querySelector('#bulkPropertyValue').value;
+            const newType = propsBox.querySelector('#bulkPropertyType').value;
+            const createMissing = propsBox.querySelector('#bulkCreateMissing').checked;
+            if (!psetName || !propertyName) {
+                alert('Укажите имя Pset и имя параметра.');
+                return;
+            }
+            if (!confirm(`Записать «${propertyName}» в ${items.length} IFC-элементов?`)) return;
+
+            const byModel = new Map();
+            items.forEach(item => {
+                if (!byModel.has(item.modelID)) byModel.set(item.modelID, []);
+                byModel.get(item.modelID).push(item);
+            });
+
+            let changed = 0, skipped = 0;
+            byModel.forEach((modelItems, modelID) => {
+                const modData = loadedModels.get(modelID);
+                const batch = createIfcEditBatch(modData);
+                let nextId = getMaxExpressId(modData);
+                const changedPropertyIds = new Set();
+                const createdPropertyByPset = new Map();
+
+                modelItems.forEach(item => {
+                    let psetId = findPsetByName(modData, item.expressID, psetName);
+                    let propId = psetId ? findPropertyByName(modData, psetId, propertyName, batch) : null;
+
+                    if (propId) {
+                        if (!changedPropertyIds.has(propId)) {
+                            const prop = batch.entity(propId);
+                            const oldValue = prop && unwrapIfcValue(prop.args[2]);
+                            batch.setAttr(propId, 2, wrapIfcValueLike(oldValue ? oldValue.type : newType, value));
+                            changedPropertyIds.add(propId);
+                        }
+                        changed++;
+                        return;
+                    }
+                    if (!createMissing) { skipped++; return; }
+
+                    if (psetId && createdPropertyByPset.has(psetId)) {
+                        changed++;
+                        return;
+                    }
+
+                    propId = ++nextId;
+                    batch.append(
+                        `#${propId}=IFCPROPERTYSINGLEVALUE('${encodeStepString(propertyName)}',$,${wrapIfcValue(newType, value)},$);`
+                    );
+
+                    if (psetId) {
+                        const pset = batch.entity(psetId);
+                        const refs = getPsetPropertyIds(modData, psetId, batch);
+                        batch.setAttr(psetId, 4, `(${refs.map(id => '#' + id).concat('#' + propId).join(',')})`);
+                        createdPropertyByPset.set(psetId, propId);
+                    } else {
+                        psetId = ++nextId;
+                        const relationId = ++nextId;
+                        batch.append(
+                            `#${psetId}=IFCPROPERTYSET('${ifcGuid()}',$,'${encodeStepString(psetName)}',$,(#${propId}));`
+                        );
+                        batch.append(
+                            `#${relationId}=IFCRELDEFINESBYPROPERTIES('${ifcGuid()}',$,$,$,(#${item.expressID}),#${psetId});`
+                        );
+                        if (!modData.psetIndex.has(item.expressID)) modData.psetIndex.set(item.expressID, []);
+                        modData.psetIndex.get(item.expressID).push(psetId);
+                    }
+                    changed++;
+                });
+                batch.commit();
+            });
+            alert(`Параметр записан: ${changed}.${skipped ? ` Пропущено без параметра: ${skipped}.` : ''}`);
+        }
+
         propsBox.addEventListener('click', e => {
             const gh = e.target.closest('.pgroup-head');
-            if (gh) gh.parentElement.classList.toggle('collapsed');
+            if (gh) { gh.parentElement.classList.toggle('collapsed'); return; }
+            const action = e.target.closest('[data-act]');
+            if (!action) return;
+            if (action.dataset.act === 'bulkChangeClass') applyBulkClassChange();
+            if (action.dataset.act === 'bulkSetProperty') applyBulkPropertyChange();
         });
 
         function showFBXProps(modelID, expressID, countTotal) {
@@ -1795,6 +2320,34 @@ let isClipping = false;
             html += `<div class="empty" style="padding-top:10px">Файл FBX: свойств/Pset, как в IFC, здесь нет — только геометрия и трансформации.</div>`;
             propsBox.innerHTML = html;
         }
+
+        function downloadEditedIfcModels() {
+            const editedModels = [...loadedModels.values()].filter(
+                modData => !modData.isFBX && modData.edited && modData.ifcIndex
+            );
+            if (!editedModels.length) {
+                alert('Нет изменённых IFC-файлов для сохранения.');
+                return;
+            }
+            editedModels.forEach((modData, index) => {
+                setTimeout(() => {
+                    const blob = new Blob(
+                        [modData.ifcIndex.lines.join('\n')],
+                        { type: 'application/x-step' }
+                    );
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    const baseName = (modData.filename || 'model').replace(/\.ifc$/i, '');
+                    link.href = url;
+                    link.download = `${baseName}_edited.ifc`;
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    URL.revokeObjectURL(url);
+                }, index * 200);
+            });
+        }
+        $('btnExportIFC').addEventListener('click', downloadEditedIfcModels);
 
         // --- Camera Tools ---
         function focusOnList(items) {
@@ -1882,6 +2435,7 @@ let isClipping = false;
             treeBox.innerHTML = '<div class="empty">Добавьте файлы .ifc / .fbx</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => $(id).disabled = true);
+            $('btnExportIFC').disabled = true;
             
             isClipping = false; 
             renderer.localClippingEnabled = false;
