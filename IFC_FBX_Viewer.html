@@ -2018,6 +2018,7 @@ let isClipping = false;
         });
 
         const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+        const escAttr = s => esc(s).replace(/"/g, '&quot;');
         const propRow = (k, v) => `<div class="prop"><div class="k">${esc(k)}</div><div class="v">${esc(v || '—')}</div></div>`;
 
         // --- Properties View ---
@@ -2077,6 +2078,19 @@ let isClipping = false;
                         </div>
                         <button class="btn" style="width:100%;margin-top:8px" data-act="bulkChangeClass">
                             Применить класс к ${editable.length} элементам
+                        </button>
+
+                        <div class="sub-head" style="padding-left:0">Переименование PropertySet</div>
+                        <div class="prop small">
+                            <div class="k">Текущее имя Pset</div>
+                            <input class="editInput" id="bulkPsetOldName" placeholder="Например: Pset_Custom">
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Новое имя Pset</div>
+                            <input class="editInput" id="bulkPsetNewName" placeholder="Например: Pset_Project">
+                        </div>
+                        <button class="btn" style="width:100%;margin-top:8px" data-act="bulkRenamePset">
+                            Переименовать Pset у выбранных элементов
                         </button>
 
                         <div class="sub-head" style="padding-left:0">Параметр PropertySet</div>
@@ -2141,7 +2155,8 @@ let isClipping = false;
                     continue; 
                 }
                 
-                const pname = readVal(pset.Name) || 'PropertySet'; 
+                const rawPset = getEntityParts(modData, pid);
+                const pname = rawPset ? (unquoteStepString(rawPset.args[2]) || 'PropertySet') : (readVal(pset.Name) || 'PropertySet');
                 let items = '';
                 
                 if (pset.HasProperties) {
@@ -2161,8 +2176,17 @@ let isClipping = false;
                     }
                 }
                 
-                if (items) {
-                    psetHtml += `<div class="pgroup"><div class="pgroup-head"><span class="ar">▾</span>${esc(pname)}</div><div class="pgroup-body">${items}</div></div>`;
+                if (items || modData.ifcIndex) {
+                    const renameControl = countTotal === 1 && modData.ifcIndex
+                        ? `<div class="prop small">
+                            <div class="k">Имя Pset</div>
+                            <div style="display:flex;gap:6px;align-items:center">
+                                <input class="editInput" data-pset-name="${pid}" value="${escAttr(pname)}">
+                                <button class="btn" style="padding:6px 8px" data-act="renamePset" data-model="${modelID}" data-pset="${pid}">💾</button>
+                            </div>
+                        </div>`
+                        : '';
+                    psetHtml += `<div class="pgroup"><div class="pgroup-head"><span class="ar">▾</span>${esc(pname)}</div><div class="pgroup-body">${renameControl}${items || '<div class="empty">В наборе нет отображаемых свойств.</div>'}</div></div>`;
                 }
             }
             propsBox.innerHTML = html + (psetHtml || `<div class="empty">Доп. свойства не найдены.</div>`);
@@ -2214,6 +2238,74 @@ let isClipping = false;
                 modData.searchCache.set(item.expressID, `${search} ${className}`.toLowerCase());
             });
             alert(`Класс изменён: ${changed}.${skipped ? ` Пропущено несовместимых сущностей: ${skipped}.` : ''}`);
+        }
+
+        function applyBulkPsetRename() {
+            const items = getEditableSelection();
+            const oldName = propsBox.querySelector('#bulkPsetOldName').value.trim();
+            const newName = propsBox.querySelector('#bulkPsetNewName').value.trim();
+            if (!oldName || !newName) {
+                alert('Укажите текущее и новое имя Pset.');
+                return;
+            }
+            if (oldName === newName) {
+                alert('Новое имя совпадает с текущим.');
+                return;
+            }
+            if (!confirm(`Переименовать Pset «${oldName}» в «${newName}» у выбранных элементов?`)) return;
+
+            const batches = new Map();
+            const renamedByModel = new Map();
+            let matchingElements = 0;
+
+            items.forEach(item => {
+                const modData = loadedModels.get(item.modelID);
+                const psetId = findPsetByName(modData, item.expressID, oldName);
+                if (!psetId) return;
+                matchingElements++;
+
+                if (!batches.has(item.modelID)) {
+                    batches.set(item.modelID, createIfcEditBatch(modData));
+                    renamedByModel.set(item.modelID, new Set());
+                }
+                const renamed = renamedByModel.get(item.modelID);
+                if (renamed.has(psetId)) return;
+                batches.get(item.modelID).setAttr(psetId, 2, `'${encodeStepString(newName)}'`);
+                renamed.add(psetId);
+            });
+
+            batches.forEach(batch => batch.commit());
+            const renamedPsets = [...renamedByModel.values()].reduce((sum, ids) => sum + ids.size, 0);
+            if (!renamedPsets) {
+                alert(`Pset «${oldName}» у выбранных элементов не найден.`);
+                return;
+            }
+            const first = selectedItems[0];
+            if (first && !loadedModels.get(first.modelID).isFBX) {
+                showProps(first.modelID, first.expressID, selectedItems.length);
+            }
+            alert(`Переименовано Pset: ${renamedPsets}. Связанных выбранных элементов: ${matchingElements}.`);
+        }
+
+        function renameSinglePset(button) {
+            const rawModelID = button.dataset.model;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const psetId = parseInt(button.dataset.pset, 10);
+            const modData = loadedModels.get(modelID);
+            const input = propsBox.querySelector(`[data-pset-name="${psetId}"]`);
+            const newName = input ? input.value.trim() : '';
+            if (!modData || !newName) {
+                alert('Имя Pset не может быть пустым.');
+                return;
+            }
+            const batch = createIfcEditBatch(modData);
+            if (!batch.setAttr(psetId, 2, `'${encodeStepString(newName)}'`)) {
+                alert('Не удалось найти Pset в исходном IFC-файле.');
+                return;
+            }
+            batch.commit();
+            const first = selectedItems[0];
+            if (first) showProps(first.modelID, first.expressID, selectedItems.length);
         }
 
         function applyBulkPropertyChange() {
@@ -2299,7 +2391,9 @@ let isClipping = false;
             const action = e.target.closest('[data-act]');
             if (!action) return;
             if (action.dataset.act === 'bulkChangeClass') applyBulkClassChange();
+            if (action.dataset.act === 'bulkRenamePset') applyBulkPsetRename();
             if (action.dataset.act === 'bulkSetProperty') applyBulkPropertyChange();
+            if (action.dataset.act === 'renamePset') renameSinglePset(action);
         });
 
         function showFBXProps(modelID, expressID, countTotal) {
