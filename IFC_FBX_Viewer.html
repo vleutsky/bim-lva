@@ -2280,13 +2280,25 @@ let isClipping = false;
                     }
                 }
                 const groupIDs = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCGROUP);
+                const knownGroupIDs = new Set();
+                for (let i = 0; i < groupIDs.size(); i++) knownGroupIDs.add(groupIDs.get(i));
                 for (let i = 0; i < groupIDs.size(); i++) {
                     const groupID = groupIDs.get(i);
                     const assignment = assignmentByGroup.get(groupID) || { relationID: null, memberIDs: [] };
+                    let parentToken = getGroupParentToken(modData, groupID);
+                    if (parentToken === 'ROOT') {
+                        for (const [possibleParentID, possibleAssignment] of assignmentByGroup) {
+                            if (possibleParentID !== groupID && knownGroupIDs.has(possibleParentID) &&
+                                possibleAssignment.memberIDs.includes(groupID)) {
+                                parentToken = `ID:${possibleParentID}`;
+                                break;
+                            }
+                        }
+                    }
                     appendCustomGroupTreeNode(modData, groupID, {
                         memberIDs: [...new Set(assignment.memberIDs)].filter(id => id !== groupID),
                         relationID: assignment.relationID,
-                        parentToken: getGroupParentToken(modData, groupID)
+                        parentToken
                     });
                 }
                 for (let i = 0; i < groupIDs.size(); i++) {
