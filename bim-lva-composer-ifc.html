@@ -707,6 +707,71 @@
             line-height: 1.5;
         }
 
+        .aci-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 4px;
+            margin: 8px 0 10px;
+        }
+
+        .aci-swatch {
+            aspect-ratio: 1;
+            border: 1px solid var(--line);
+            border-radius: 3px;
+            cursor: pointer;
+            padding: 0;
+            min-height: 22px;
+            transition: transform .1s, box-shadow .1s;
+        }
+
+        .aci-swatch:hover {
+            transform: scale(1.08);
+            box-shadow: 0 0 0 2px var(--accent);
+        }
+
+        .aci-swatch.on {
+            box-shadow: 0 0 0 2px var(--accent);
+            outline: 1px solid #fff;
+        }
+
+        .aci-swatch.reset {
+            background: repeating-linear-gradient(45deg, #eef1f4, #eef1f4 4px, #fff 4px, #fff 8px);
+            font-family: 'IBM Plex Mono';
+            font-size: 8px;
+            color: var(--txt-dim);
+        }
+
+        .mat-preview {
+            width: 100%;
+            height: 52px;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            margin: 8px 0;
+            background: #eef1f4;
+        }
+
+        .range-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'IBM Plex Mono';
+            font-size: 10px;
+            color: var(--txt-dim);
+            margin: 6px 0;
+        }
+
+        .range-row input[type="range"] {
+            flex: 1;
+            accent-color: var(--accent);
+        }
+
+        .appearance-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 10px;
+        }
+
         .modal-backdrop {
             position: fixed;
             inset: 0;
@@ -1130,6 +1195,11 @@
             bulkRenameProperty: 'Переименовать параметр в указанном Pset у выбранных элементов',
             bulkReplacePsets: 'Найти и заменить текст во всех Pset выбранных IFC-элементов',
             bulkSetProperty: 'Изменить значение параметра и при необходимости создать отсутствующий параметр',
+            applyAppearance: 'Применить цвет, материал и текстуру к выделенным элементам',
+            resetAppearance: 'Вернуть исходный цвет и материал модели',
+            pickTexture: 'Загрузить JPG/PNG и натянуть на поверхность',
+            clearTextureDraft: 'Убрать текстуру с выбранных элементов',
+            aciReset: 'Исходный цвет модели (как при загрузке)',
             renameEntity: 'Сохранить новое имя IFC-объекта',
             renamePset: 'Сохранить новое имя набора свойств',
             renameProperty: 'Сохранить новое имя параметра',
@@ -1839,6 +1909,7 @@ let isClipping = false;
                 this.customGroups = new Map();
                 this.ifcIndex = null;
                 this.edited = false;
+                this.appearanceByID = new Map();
                 
                 this.group = new THREE.Group();
                 globalGroup.add(this.group);
@@ -1854,6 +1925,7 @@ let isClipping = false;
                 this.format = format.toUpperCase();
                 this.meshesByID = new Map();
                 this.searchCache = new Map();
+                this.appearanceByID = new Map();
                 this.group = new THREE.Group();
                 externalGroup.add(this.group);
             }
@@ -1966,7 +2038,12 @@ let isClipping = false;
                         // Сохраняем исходную прозрачность для логики Затенения (Ghosting)
                         mesh.userData = { 
                             modelID: modelID, 
-                            expressID: expressID, 
+                            expressID: expressID,
+                            _origAppearance: {
+                                color: new THREE.Color(col.x, col.y, col.z).getHex(),
+                                transparent: col.w !== 1,
+                                opacity: col.w
+                            }
                         };
                         
                         modData.group.add(mesh);
@@ -2027,6 +2104,14 @@ let isClipping = false;
                     return normalized;
                 });
                 obj.material = Array.isArray(obj.material) ? materials : materials[0];
+                const snapMat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+                if (snapMat && snapMat.color) {
+                    obj.userData._origAppearance = {
+                        color: snapMat.color.getHex(),
+                        transparent: !!snapMat.transparent,
+                        opacity: snapMat.opacity ?? 1
+                    };
+                }
 
                 modData.meshesByID.set(expressID, [obj]);
                 modData.searchCache.set(expressID, `${obj.name || ''} ${typeLabelFBX(obj)} ${modData.format}`.toLowerCase());
@@ -3008,8 +3093,412 @@ let isClipping = false;
             cleanupEmptyTypeGroups();
         }
 
-        // --- 2. GHOSTING (Затенение вместо изоляции) ---
-// --- SELECTION (Только подсветка, без прозрачности) ---
+        // --- ЦВЕТ, МАТЕРИАЛ И ТЕКСТУРА (AutoCAD-style) ---
+        const textureLoader = new THREE.TextureLoader();
+        let appearanceDraftTexture = null;
+        let appearanceDraftTextureName = '';
+
+        const ACI_SWATCHES = [
+            null, 0xff0000, 0xffff00, 0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xffffff,
+            0x808080, 0xc0c0c0, 0x804040, 0xff8080, 0x804000, 0xffa040, 0x408040, 0x80ff80,
+            0x404080, 0x8080ff, 0x408080, 0x40a0a0, 0x804080, 0xc080c0, 0x8b4513, 0xcd853f,
+            0x696969, 0x778899, 0xb8860b, 0xd2691e, 0x2f4f4f, 0x4682b4, 0x556b2f, 0xbc8f8f
+        ];
+
+        const MATERIAL_PRESETS = {
+            custom: { label: 'Свой материал', roughness: 0.55, metalness: 0.05, color: null, opacity: 1 },
+            paint: { label: 'Краска', roughness: 0.65, metalness: 0, color: 0xe8e8e8, opacity: 1 },
+            concrete: { label: 'Бетон', roughness: 0.92, metalness: 0, color: 0x9a9a9a, opacity: 1 },
+            steel: { label: 'Сталь', roughness: 0.35, metalness: 0.85, color: 0x8a9baa, opacity: 1 },
+            glass: { label: 'Стекло', roughness: 0.05, metalness: 0.1, color: 0x88ccff, opacity: 0.45 },
+            wood: { label: 'Дерево', roughness: 0.78, metalness: 0, color: 0x8b6914, opacity: 1 },
+            brick: { label: 'Кирпич', roughness: 0.88, metalness: 0, color: 0xa04030, opacity: 1 },
+            plastic: { label: 'Пластик', roughness: 0.42, metalness: 0.05, color: 0xc8c8c8, opacity: 1 }
+        };
+
+        function isMeshSurface(obj) {
+            return !!(obj && obj.isMesh);
+        }
+
+        function getRenderableMeshesForItem(modelID, expressID) {
+            const mod = loadedModels.get(modelID);
+            if (!mod || !mod.meshesByID.has(expressID)) return [];
+            return mod.meshesByID.get(expressID).filter(isMeshSurface);
+        }
+
+        function getSelectedGeometryItems() {
+            return selectedItems.filter(item => getRenderableMeshesForItem(item.modelID, item.expressID).length > 0);
+        }
+
+        function ensureMeshStandardMaterial(mesh) {
+            if (!mesh.isMesh) return mesh.material;
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            const upgraded = materials.map(mat => {
+                if (!mat) return mat;
+                if (mat.isMeshStandardMaterial) return mat;
+                const std = new THREE.MeshStandardMaterial({
+                    color: mat.color ? mat.color.clone() : new THREE.Color(0xaaaaaa),
+                    side: mat.side ?? THREE.DoubleSide,
+                    transparent: mat.transparent,
+                    opacity: mat.opacity ?? 1,
+                    clippingPlanes: mat.clippingPlanes || [globalClipPlane]
+                });
+                if (mat.map) std.map = mat.map;
+                mat.dispose();
+                return std;
+            });
+            mesh.material = Array.isArray(mesh.material) ? upgraded : upgraded[0];
+            return mesh.material;
+        }
+
+        function ensurePlanarUV(geometry) {
+            if (!geometry || geometry.attributes.uv) return;
+            geometry.computeBoundingBox();
+            const box = geometry.boundingBox;
+            const size = new THREE.Vector3();
+            box.getSize(size);
+            const positions = geometry.attributes.position;
+            const uvs = new Float32Array(positions.count * 2);
+            const sx = size.x || 1, sy = size.y || 1, sz = size.z || 1;
+            for (let i = 0; i < positions.count; i++) {
+                const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
+                if (sz <= sx && sz <= sy) {
+                    uvs[i * 2] = (x - box.min.x) / sx;
+                    uvs[i * 2 + 1] = (y - box.min.y) / sy;
+                } else if (sy <= sx && sy <= sz) {
+                    uvs[i * 2] = (x - box.min.x) / sx;
+                    uvs[i * 2 + 1] = (z - box.min.z) / sz;
+                } else {
+                    uvs[i * 2] = (y - box.min.y) / sy;
+                    uvs[i * 2 + 1] = (z - box.min.z) / sz;
+                }
+            }
+            geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        }
+
+        function disposeAppearanceTexture(texture) {
+            if (texture && texture.dispose) texture.dispose();
+        }
+
+        function cloneAppearanceTexture(texture) {
+            if (!texture) return null;
+            const cloned = texture.clone();
+            cloned.needsUpdate = true;
+            return cloned;
+        }
+
+        function restoreMeshOriginalAppearance(mesh) {
+            const orig = mesh.userData._origAppearance;
+            if (!orig) return;
+            if (mesh.isLine || mesh.isLineSegments || mesh.isPoints) {
+                const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+                if (mat && mat.color) mat.color.setHex(orig.color);
+                return;
+            }
+            if (!mesh.isMesh) return;
+            ensureMeshStandardMaterial(mesh);
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            mats.forEach(mat => {
+                if (!mat) return;
+                if (mat.map) { mat.map.dispose(); mat.map = null; }
+                mat.color.setHex(orig.color);
+                mat.transparent = orig.transparent;
+                mat.opacity = orig.opacity;
+                mat.roughness = 0.55;
+                mat.metalness = 0.05;
+                if (mat.emissive) {
+                    mat.emissive.setHex(0x000000);
+                    mat.emissiveIntensity = 0;
+                }
+                mat.needsUpdate = true;
+            });
+        }
+
+        function applyAppearanceToMesh(mesh, appearance) {
+            if (!appearance) {
+                restoreMeshOriginalAppearance(mesh);
+                return;
+            }
+            if (mesh.isLine || mesh.isLineSegments) {
+                const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+                if (mat && mat.color && appearance.color != null) mat.color.setHex(appearance.color);
+                return;
+            }
+            if (!mesh.isMesh) return;
+
+            ensureMeshStandardMaterial(mesh);
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            mats.forEach(mat => {
+                if (!mat) return;
+                if (appearance.color != null) mat.color.setHex(appearance.color);
+                if (appearance.roughness != null) mat.roughness = appearance.roughness;
+                if (appearance.metalness != null) mat.metalness = appearance.metalness;
+                if (appearance.opacity != null) {
+                    mat.transparent = appearance.opacity < 0.999;
+                    mat.opacity = appearance.opacity;
+                }
+                if (appearance.texture) {
+                    ensurePlanarUV(mesh.geometry);
+                    if (mat.map && mat.map !== appearance.texture) mat.map.dispose();
+                    mat.map = cloneAppearanceTexture(appearance.texture);
+                    mat.map.wrapS = mat.map.wrapT = THREE.RepeatWrapping;
+                    mat.map.repeat.set(appearance.repeatU ?? 1, appearance.repeatV ?? 1);
+                    mat.map.needsUpdate = true;
+                } else if (appearance.clearTexture && mat.map) {
+                    mat.map.dispose();
+                    mat.map = null;
+                }
+                mat.needsUpdate = true;
+            });
+        }
+
+        function reapplyAppearanceForItem(modelID, expressID) {
+            const mod = loadedModels.get(modelID);
+            if (!mod || !mod.meshesByID.has(expressID)) return;
+            const appearance = mod.appearanceByID.get(expressID) || null;
+            mod.meshesByID.get(expressID).forEach(mesh => applyAppearanceToMesh(mesh, appearance));
+        }
+
+        function getAppearanceForPanel(modelID, expressID) {
+            const mod = loadedModels.get(modelID);
+            if (!mod) return null;
+            const stored = mod.appearanceByID.get(expressID);
+            if (stored) return { ...stored };
+            const mesh = getRenderableMeshesForItem(modelID, expressID)[0];
+            if (!mesh) return null;
+            ensureMeshStandardMaterial(mesh);
+            const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+            return {
+                color: mat && mat.color ? mat.color.getHex() : 0xaaaaaa,
+                preset: 'custom',
+                materialName: '',
+                roughness: mat && mat.roughness != null ? mat.roughness : 0.55,
+                metalness: mat && mat.metalness != null ? mat.metalness : 0.05,
+                opacity: mat ? mat.opacity : 1,
+                textureName: mat && mat.map ? 'текстура на меше' : '',
+                repeatU: mat && mat.map ? mat.map.repeat.x : 1,
+                repeatV: mat && mat.map ? mat.map.repeat.y : 1
+            };
+        }
+
+        function renderAppearancePanel(countTotal, modelID, expressID) {
+            const geoCount = getSelectedGeometryItems().length;
+            if (!geoCount) return '';
+            const state = getAppearanceForPanel(modelID, expressID) || {
+                color: 0xaaaaaa, preset: 'custom', materialName: '', roughness: 0.55,
+                metalness: 0.05, opacity: 1, textureName: '', repeatU: 1, repeatV: 1
+            };
+            const colorHex = '#' + (state.color >>> 0).toString(16).padStart(6, '0');
+            const swatches = ACI_SWATCHES.map((hex, idx) => {
+                if (hex == null) {
+                    return `<button type="button" class="aci-swatch reset" data-act="aciReset" title="Исходный цвет модели">ACI</button>`;
+                }
+                const h = '#' + hex.toString(16).padStart(6, '0');
+                const on = state.color === hex ? ' on' : '';
+                return `<button type="button" class="aci-swatch${on}" data-hex="${hex}" style="background:${h}" title="ACI ${idx}"></button>`;
+            }).join('');
+            const presetOptions = Object.entries(MATERIAL_PRESETS).map(([key, preset]) =>
+                `<option value="${key}"${state.preset === key ? ' selected' : ''}>${preset.label}</option>`
+            ).join('');
+            const texLabel = appearanceDraftTextureName || state.textureName || 'не назначена';
+            return `
+                <div class="pgroup">
+                    <div class="pgroup-head"><span class="ar">▾</span>Цвет и материал · AutoCAD</div>
+                    <div class="pgroup-body">
+                        <div class="bulk-note">Палитра ACI и материалы применяются к геометрии на сцене. Для ${geoCount} выбранных элементов с мешами${countTotal > geoCount ? ` (из ${countTotal} выделенных)` : ''}.</div>
+                        <div class="prop small">
+                            <div class="k">Палитра ACI (стандарт AutoCAD)</div>
+                            <div class="aci-grid">${swatches}</div>
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Точный цвет</div>
+                            <input type="color" class="editInput" id="matColorPicker" value="${colorHex}" title="Выбор произвольного цвета элемента">
+                        </div>
+                        <div class="mat-preview" id="matPreview" style="background:${colorHex}"></div>
+                        <div class="prop small">
+                            <div class="k">Материал / шаблон</div>
+                            <select class="editInput" id="materialPreset">${presetOptions}</select>
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Имя материала</div>
+                            <input class="editInput" id="materialName" value="${escAttr(state.materialName || '')}" placeholder="Например: Бетон B25">
+                        </div>
+                        <div class="range-row">
+                            <span>Шерох.</span>
+                            <input type="range" id="matRoughness" min="0" max="1" step="0.01" value="${state.roughness}">
+                            <span id="matRoughnessVal">${Number(state.roughness).toFixed(2)}</span>
+                        </div>
+                        <div class="range-row">
+                            <span>Металл</span>
+                            <input type="range" id="matMetalness" min="0" max="1" step="0.01" value="${state.metalness}">
+                            <span id="matMetalnessVal">${Number(state.metalness).toFixed(2)}</span>
+                        </div>
+                        <div class="range-row">
+                            <span>Непрозр.</span>
+                            <input type="range" id="matOpacity" min="0.05" max="1" step="0.01" value="${state.opacity}">
+                            <span id="matOpacityVal">${Number(state.opacity).toFixed(2)}</span>
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Растровая текстура</div>
+                            <div class="v" style="margin-bottom:6px">${esc(texLabel)}</div>
+                            <input type="file" id="matTextureFile" accept="image/*" hidden>
+                            <div class="appearance-actions">
+                                <button type="button" class="btn" data-act="pickTexture" title="Загрузить JPG/PNG и натянуть на поверхность">🖼 Загрузить растр…</button>
+                                <button type="button" class="btn" data-act="clearTextureDraft" title="Убрать текстуру с выбранных элементов">✕ Убрать текстуру</button>
+                            </div>
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Масштаб текстуры (U × V)</div>
+                            <div style="display:flex;gap:6px">
+                                <input class="editInput" id="texRepeatU" type="number" min="0.1" step="0.1" value="${state.repeatU ?? 1}" title="Повтор по U">
+                                <input class="editInput" id="texRepeatV" type="number" min="0.1" step="0.1" value="${state.repeatV ?? 1}" title="Повтор по V">
+                            </div>
+                        </div>
+                        <div class="appearance-actions">
+                            <button type="button" class="btn load-btn" data-act="applyAppearance" title="Применить цвет, материал и текстуру к выделенным элементам">Применить оформление</button>
+                            <button type="button" class="btn" data-act="resetAppearance" title="Вернуть исходный цвет и материал модели">↺ Сбросить к исходному</button>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        function readAppearanceFromPanel() {
+            const presetKey = propsBox.querySelector('#materialPreset')?.value || 'custom';
+            const preset = MATERIAL_PRESETS[presetKey] || MATERIAL_PRESETS.custom;
+            const picker = propsBox.querySelector('#matColorPicker');
+            const color = picker ? parseInt(picker.value.slice(1), 16) : preset.color;
+            return {
+                color: color ?? preset.color ?? 0xaaaaaa,
+                preset: presetKey,
+                materialName: propsBox.querySelector('#materialName')?.value.trim() || preset.label,
+                roughness: parseFloat(propsBox.querySelector('#matRoughness')?.value ?? preset.roughness),
+                metalness: parseFloat(propsBox.querySelector('#matMetalness')?.value ?? preset.metalness),
+                opacity: parseFloat(propsBox.querySelector('#matOpacity')?.value ?? preset.opacity),
+                repeatU: parseFloat(propsBox.querySelector('#texRepeatU')?.value ?? 1) || 1,
+                repeatV: parseFloat(propsBox.querySelector('#texRepeatV')?.value ?? 1) || 1,
+                texture: appearanceDraftTexture,
+                textureName: appearanceDraftTextureName,
+                clearTexture: false
+            };
+        }
+
+        function applyAppearanceToSelection(appearance, items = getSelectedGeometryItems()) {
+            if (!items.length) {
+                alert('Нет элементов с поверхностной геометрией для оформления.');
+                return 0;
+            }
+            items.forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod) return;
+                const prev = mod.appearanceByID.get(item.expressID);
+                if (prev && prev.texture && prev.texture !== appearance.texture) {
+                    disposeAppearanceTexture(prev.texture);
+                }
+                const entry = {
+                    color: appearance.color,
+                    preset: appearance.preset,
+                    materialName: appearance.materialName,
+                    roughness: appearance.roughness,
+                    metalness: appearance.metalness,
+                    opacity: appearance.opacity,
+                    repeatU: appearance.repeatU,
+                    repeatV: appearance.repeatV,
+                    texture: appearance.texture ? cloneAppearanceTexture(appearance.texture) : (prev?.texture && !appearance.clearTexture ? prev.texture : null),
+                    textureName: appearance.textureName || prev?.textureName || ''
+                };
+                if (appearance.clearTexture) {
+                    if (entry.texture) disposeAppearanceTexture(entry.texture);
+                    entry.texture = null;
+                    entry.textureName = '';
+                }
+                mod.appearanceByID.set(item.expressID, entry);
+                reapplyAppearanceForItem(item.modelID, item.expressID);
+            });
+            return items.length;
+        }
+
+        function applyPresetToPanel(presetKey) {
+            const preset = MATERIAL_PRESETS[presetKey];
+            if (!preset) return;
+            const rough = propsBox.querySelector('#matRoughness');
+            const metal = propsBox.querySelector('#matMetalness');
+            const opac = propsBox.querySelector('#matOpacity');
+            const picker = propsBox.querySelector('#matColorPicker');
+            const preview = propsBox.querySelector('#matPreview');
+            if (rough) rough.value = preset.roughness;
+            if (metal) metal.value = preset.metalness;
+            if (opac) opac.value = preset.opacity;
+            if (preset.color != null && picker) {
+                picker.value = '#' + preset.color.toString(16).padStart(6, '0');
+                if (preview) preview.style.background = picker.value;
+            }
+            propsBox.querySelector('#matRoughnessVal').textContent = Number(preset.roughness).toFixed(2);
+            propsBox.querySelector('#matMetalnessVal').textContent = Number(preset.metalness).toFixed(2);
+            propsBox.querySelector('#matOpacityVal').textContent = Number(preset.opacity).toFixed(2);
+        }
+
+        function updateMatPreviewColor() {
+            const picker = propsBox.querySelector('#matColorPicker');
+            const preview = propsBox.querySelector('#matPreview');
+            if (picker && preview) preview.style.background = picker.value;
+        }
+
+        function applyAppearanceFromPanel() {
+            const count = applyAppearanceToSelection(readAppearanceFromPanel());
+            if (count) {
+                appearanceDraftTexture = null;
+                appearanceDraftTextureName = '';
+                alert(`Оформление применено к ${count} элементам.`);
+                const first = selectedItems[0];
+                if (first) {
+                    const mod0 = loadedModels.get(first.modelID);
+                    if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
+                    else showProps(first.modelID, first.expressID, selectedItems.length);
+                }
+            }
+        }
+
+        function resetAppearanceSelection() {
+            const items = getSelectedGeometryItems();
+            if (!items.length) return;
+            items.forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod) return;
+                const prev = mod.appearanceByID.get(item.expressID);
+                if (prev && prev.texture) disposeAppearanceTexture(prev.texture);
+                mod.appearanceByID.delete(item.expressID);
+                reapplyAppearanceForItem(item.modelID, item.expressID);
+            });
+            appearanceDraftTexture = null;
+            appearanceDraftTextureName = '';
+            alert(`Исходное оформление восстановлено для ${items.length} элементов.`);
+            const first = selectedItems[0];
+            if (first) {
+                const mod0 = loadedModels.get(first.modelID);
+                if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
+                else showProps(first.modelID, first.expressID, selectedItems.length);
+            }
+        }
+
+        function loadAppearanceTextureFile(file) {
+            if (!file) return;
+            const url = URL.createObjectURL(file);
+            textureLoader.load(url, texture => {
+                URL.revokeObjectURL(url);
+                texture.colorSpace = THREE.SRGBColorSpace;
+                appearanceDraftTexture = texture;
+                appearanceDraftTextureName = file.name;
+                alert(`Текстура «${file.name}» загружена. Нажмите «Применить оформление».`);
+                const first = selectedItems[0];
+                if (first) {
+                    const mod0 = loadedModels.get(first.modelID);
+                    if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
+                    else showProps(first.modelID, first.expressID, selectedItems.length);
+                }
+            }, undefined, err => alert('Не удалось загрузить изображение: ' + err.message));
+        }
+
+        // --- SELECTION (Только подсветка, без прозрачности) ---
         const highlightColor = 0xff6b35;
         let treeSelectionAnchor = null;
 
@@ -3055,21 +3544,26 @@ let isClipping = false;
         }
 
         function setEmissive(mesh, hex) {
+            if (hex !== highlightColor) {
+                delete mesh.userData._highlightBase;
+                reapplyAppearanceForItem(mesh.userData.modelID, mesh.userData.expressID);
+                return;
+            }
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
             mats.forEach((material, index) => {
                 if (!material) return;
+                mesh.userData._highlightBase ||= {};
+                if (mesh.userData._highlightBase[index] !== undefined) return;
                 if (material.emissive) {
-                    material.emissive.setHex(hex);
+                    mesh.userData._highlightBase[index] = {
+                        emissive: material.emissive.getHex(),
+                        emissiveIntensity: material.emissiveIntensity ?? 0
+                    };
+                    material.emissive.setHex(highlightColor);
+                    material.emissiveIntensity = 0.45;
                 } else if (material.color) {
-                    mesh.userData._originalColors ||= {};
-                    if (hex === highlightColor) {
-                        if (mesh.userData._originalColors[index] === undefined) {
-                            mesh.userData._originalColors[index] = material.color.getHex();
-                        }
-                        material.color.setHex(highlightColor);
-                    } else if (mesh.userData._originalColors[index] !== undefined) {
-                        material.color.setHex(mesh.userData._originalColors[index]);
-                    }
+                    mesh.userData._highlightBase[index] = { color: material.color.getHex() };
+                    material.color.setHex(highlightColor);
                 }
             });
         }
@@ -3781,6 +4275,7 @@ let isClipping = false;
             } catch(e) {}
             
             let html = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
+            html += renderAppearancePanel(countTotal, modelID, expressID);
             if (modData && modData.ifcIndex) {
                 html += `<div class="edit-legend">Оранжевые поля можно редактировать; серые строки доступны только для чтения. После изменения нажмите 💾 или кнопку применения.</div>`;
             }
@@ -4332,8 +4827,44 @@ let isClipping = false;
         propsBox.addEventListener('click', e => {
             const gh = e.target.closest('.pgroup-head');
             if (gh) { gh.parentElement.classList.toggle('collapsed'); return; }
+
+            const swatch = e.target.closest('.aci-swatch');
+            if (swatch) {
+                if (swatch.dataset.act === 'aciReset') {
+                    resetAppearanceSelection();
+                    return;
+                }
+                const hex = parseInt(swatch.dataset.hex, 10);
+                if (Number.isFinite(hex)) {
+                    const picker = propsBox.querySelector('#matColorPicker');
+                    if (picker) picker.value = '#' + hex.toString(16).padStart(6, '0');
+                    updateMatPreviewColor();
+                    const app = readAppearanceFromPanel();
+                    app.color = hex;
+                    applyAppearanceToSelection(app);
+                    document.querySelectorAll('.aci-swatch').forEach(el => el.classList.remove('on'));
+                    swatch.classList.add('on');
+                }
+                return;
+            }
+
             const action = e.target.closest('[data-act]');
             if (!action) return;
+            if (action.dataset.act === 'applyAppearance') applyAppearanceFromPanel();
+            if (action.dataset.act === 'resetAppearance') resetAppearanceSelection();
+            if (action.dataset.act === 'pickTexture') propsBox.querySelector('#matTextureFile')?.click();
+            if (action.dataset.act === 'clearTextureDraft') {
+                appearanceDraftTexture = null;
+                appearanceDraftTextureName = '';
+                applyAppearanceToSelection({ ...readAppearanceFromPanel(), texture: null, clearTexture: true });
+                alert('Текстура снята с выбранных элементов.');
+                const first = selectedItems[0];
+                if (first) {
+                    const mod0 = loadedModels.get(first.modelID);
+                    if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
+                    else showProps(first.modelID, first.expressID, selectedItems.length);
+                }
+            }
             if (action.dataset.act === 'bulkChangeClass') applyBulkClassChange();
             if (action.dataset.act === 'bulkRenamePset') applyBulkPsetRename();
             if (action.dataset.act === 'bulkRenameProperty') applyBulkPropertyRename();
@@ -4345,12 +4876,35 @@ let isClipping = false;
             if (action.dataset.act === 'savePropertyValue') saveSinglePropertyValue(action);
         });
 
+        propsBox.addEventListener('change', e => {
+            if (e.target.id === 'materialPreset') applyPresetToPanel(e.target.value);
+            if (e.target.id === 'matTextureFile') loadAppearanceTextureFile(e.target.files[0]);
+            if (e.target.id === 'matColorPicker') updateMatPreviewColor();
+        });
+
+        propsBox.addEventListener('input', e => {
+            if (e.target.id === 'matRoughness') {
+                const el = propsBox.querySelector('#matRoughnessVal');
+                if (el) el.textContent = Number(e.target.value).toFixed(2);
+            }
+            if (e.target.id === 'matMetalness') {
+                const el = propsBox.querySelector('#matMetalnessVal');
+                if (el) el.textContent = Number(e.target.value).toFixed(2);
+            }
+            if (e.target.id === 'matOpacity') {
+                const el = propsBox.querySelector('#matOpacityVal');
+                if (el) el.textContent = Number(e.target.value).toFixed(2);
+            }
+            if (e.target.id === 'matColorPicker') updateMatPreviewColor();
+        });
+
         function showFBXProps(modelID, expressID, countTotal) {
             const modData = loadedModels.get(modelID);
             const meshes = modData ? modData.meshesByID.get(expressID) : null;
             const obj = meshes && meshes[0];
 
             let html = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
+            html += renderAppearancePanel(countTotal, modelID, expressID);
             html += propRow('Формат', modData ? modData.format : '');
             if (obj) {
                 html += propRow('Имя', obj.name || '');
@@ -4383,6 +4937,12 @@ let isClipping = false;
         function removeLoadedModel(modelID) {
             const modData = loadedModels.get(modelID);
             if (!modData) return;
+
+            if (modData.appearanceByID) {
+                for (const appearance of modData.appearanceByID.values()) {
+                    if (appearance.texture) disposeAppearanceTexture(appearance.texture);
+                }
+            }
 
             const removedCount = modData.meshesByID.size;
             disposeModelObject(modData.group);
