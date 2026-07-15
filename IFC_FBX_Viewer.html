@@ -232,6 +232,17 @@
             border-color: var(--accent-dim);
         }
 
+        .head-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: auto;
+        }
+
+        input[type="checkbox"] {
+            accent-color: var(--accent);
+        }
+
         .tree-panel {
             grid-area: tree;
             border-right: 1px solid var(--line);
@@ -821,7 +832,11 @@
     <aside class="panel tree-panel" id="treePanel">
         <div class="panel-head" id="treeHead">
             <h3>Структура</h3>
-            <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
+            <div class="head-actions">
+                <button class="pop" id="treeSelectAll" title="Выделить все элементы всех загруженных моделей">ВСЕ</button>
+                <button class="pop" id="treeClearSelection" title="Снять выделение со всех элементов">∅</button>
+                <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
+            </div>
         </div>
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="Поиск (Enter)..." title="Введите часть имени или IFC-класса и нажмите Enter">
@@ -921,6 +936,7 @@
             bulkChangeClass: 'Применить выбранный IFC-класс ко всем выбранным IFC-элементам',
             bulkRenamePset: 'Найти Pset по текущему имени и переименовать у выбранных элементов',
             bulkRenameProperty: 'Переименовать параметр в указанном Pset у выбранных элементов',
+            bulkReplacePsets: 'Найти и заменить текст во всех Pset выбранных IFC-элементов',
             bulkSetProperty: 'Изменить значение параметра и при необходимости создать отсутствующий параметр',
             renameEntity: 'Сохранить новое имя IFC-объекта',
             renamePset: 'Сохранить новое имя набора свойств',
@@ -2096,6 +2112,18 @@ let isClipping = false;
             selectMultiple(found);
         });
 
+        $('treeSelectAll').addEventListener('click', () => {
+            const allItems = [];
+            for (const [modelID, modData] of loadedModels) {
+                for (const expressID of modData.meshesByID.keys()) {
+                    allItems.push({ modelID, expressID });
+                }
+            }
+            selectMultiple(allItems);
+        });
+
+        $('treeClearSelection').addEventListener('click', () => selectMultiple([]));
+
         const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
         const escAttr = s => esc(s).replace(/"/g, '&quot;');
         const propRow = (k, v) => `<div class="prop"><div class="k">${esc(k)}</div><div class="v">${esc(v || '—')}</div></div>`;
@@ -2187,6 +2215,42 @@ let isClipping = false;
                         </div>
                         <button class="btn" style="width:100%;margin-top:8px" data-act="bulkRenameProperty">
                             Переименовать параметр у выбранных элементов
+                        </button>
+
+                        <div class="sub-head" style="padding-left:0">Найти и заменить во всех Pset</div>
+                        <div class="bulk-note">
+                            Обрабатываются все наборы и параметры выбранных IFC-элементов. Режим «все целиком» заменяет каждое выбранное поле одним новым значением.
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Режим замены</div>
+                            <select class="editInput" id="bulkReplaceMode">
+                                <option value="contains">Заменить часть текста</option>
+                                <option value="exact">Только полное совпадение</option>
+                                <option value="all">Все выбранные поля целиком</option>
+                            </select>
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Найти</div>
+                            <input class="editInput" id="bulkReplaceFind" placeholder="Не используется в режиме «все целиком»">
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Заменить на</div>
+                            <input class="editInput" id="bulkReplaceWith">
+                        </div>
+                        <label class="bulk-note" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+                            <input type="checkbox" id="bulkReplacePsetNames" checked>
+                            Названия Pset
+                        </label>
+                        <label class="bulk-note" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+                            <input type="checkbox" id="bulkReplacePropertyNames" checked>
+                            Названия параметров
+                        </label>
+                        <label class="bulk-note" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+                            <input type="checkbox" id="bulkReplaceValues">
+                            Значения параметров
+                        </label>
+                        <button class="btn" style="width:100%;margin-top:8px" data-act="bulkReplacePsets">
+                            Найти и заменить во всех Pset
                         </button>
 
                         <div class="sub-head" style="padding-left:0">Параметр PropertySet</div>
@@ -2475,6 +2539,140 @@ let isClipping = false;
             alert(`Переименовано параметров: ${renamedProperties}. Связанных выбранных элементов: ${matchingElements}.`);
         }
 
+        function replaceBulkText(current, find, replacement, mode) {
+            const value = String(current);
+            if (mode === 'all') return replacement;
+            if (!find) return null;
+            if (mode === 'exact') {
+                return value.toLocaleLowerCase('ru-RU') === find.toLocaleLowerCase('ru-RU')
+                    ? replacement
+                    : null;
+            }
+            const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = new RegExp(escaped, 'gi');
+            return pattern.test(value) ? value.replace(pattern, replacement) : null;
+        }
+
+        function isValidReplacementForIfcType(type, value) {
+            const normalized = String(type || '').toUpperCase();
+            const text = String(value).trim();
+            if (normalized === 'IFCINTEGER' || normalized.endsWith('COUNTMEASURE')) {
+                return /^[-+]?\d+$/.test(text);
+            }
+            if (normalized === 'IFCREAL' || normalized.endsWith('MEASURE')) {
+                return text !== '' && Number.isFinite(Number(text));
+            }
+            if (normalized === 'IFCBOOLEAN' || normalized === 'IFCLOGICAL') {
+                return /^(1|0|true|false|yes|no|да|нет|\.t\.|\.f\.)$/i.test(text);
+            }
+            return true;
+        }
+
+        function applyBulkPsetReplacement() {
+            const items = getEditableSelection();
+            const mode = propsBox.querySelector('#bulkReplaceMode').value;
+            const find = propsBox.querySelector('#bulkReplaceFind').value;
+            const replacement = propsBox.querySelector('#bulkReplaceWith').value;
+            const replacePsetNames = propsBox.querySelector('#bulkReplacePsetNames').checked;
+            const replacePropertyNames = propsBox.querySelector('#bulkReplacePropertyNames').checked;
+            const replaceValues = propsBox.querySelector('#bulkReplaceValues').checked;
+
+            if (!replacePsetNames && !replacePropertyNames && !replaceValues) {
+                alert('Выберите хотя бы одну область замены.');
+                return;
+            }
+            if (mode !== 'all' && !find) {
+                alert('Введите искомый текст или выберите режим «Все выбранные поля целиком».');
+                return;
+            }
+            if ((replacePsetNames || replacePropertyNames) && mode === 'all' && !replacement.trim()) {
+                alert('Имена Pset и параметров не могут быть пустыми.');
+                return;
+            }
+
+            const targetLabels = [
+                replacePsetNames && 'названия Pset',
+                replacePropertyNames && 'названия параметров',
+                replaceValues && 'значения'
+            ].filter(Boolean).join(', ');
+            if (!confirm(`Применить замену ко всем выбранным IFC-элементам (${targetLabels})?`)) return;
+
+            const byModel = new Map();
+            items.forEach(item => {
+                if (!byModel.has(item.modelID)) byModel.set(item.modelID, []);
+                byModel.get(item.modelID).push(item);
+            });
+
+            let changedPsets = 0, changedNames = 0, changedValues = 0, skipped = 0;
+            byModel.forEach((modelItems, modelID) => {
+                const modData = loadedModels.get(modelID);
+                const batch = createIfcEditBatch(modData);
+                const psetIds = new Set();
+                modelItems.forEach(item => {
+                    (modData.psetIndex.get(item.expressID) || []).forEach(id => psetIds.add(id));
+                });
+                const propertyIds = new Set();
+
+                psetIds.forEach(psetId => {
+                    const pset = getEntityParts(modData, psetId);
+                    if (!pset) return;
+                    if (replacePsetNames && pset.args.length > 2) {
+                        const currentName = unquoteStepString(pset.args[2]);
+                        const newName = replaceBulkText(currentName, find, replacement, mode);
+                        if (newName !== null && newName !== currentName) {
+                            if (!newName.trim()) skipped++;
+                            else {
+                                batch.setAttr(psetId, 2, `'${encodeStepString(newName)}'`);
+                                changedPsets++;
+                            }
+                        }
+                    }
+                    if (pset.className === 'IFCPROPERTYSET') {
+                        getPsetPropertyIds(modData, psetId).forEach(id => propertyIds.add(id));
+                    }
+                });
+
+                propertyIds.forEach(propId => {
+                    const property = getEntityParts(modData, propId);
+                    if (!property) return;
+                    if (replacePropertyNames && property.args.length) {
+                        const currentName = unquoteStepString(property.args[0]);
+                        const newName = replaceBulkText(currentName, find, replacement, mode);
+                        if (newName !== null && newName !== currentName) {
+                            if (!newName.trim()) skipped++;
+                            else {
+                                batch.setAttr(propId, 0, `'${encodeStepString(newName)}'`);
+                                changedNames++;
+                            }
+                        }
+                    }
+                    if (replaceValues && property.className === 'IFCPROPERTYSINGLEVALUE') {
+                        const currentValue = unwrapIfcValue(property.args[2]);
+                        const newValue = replaceBulkText(currentValue.value, find, replacement, mode);
+                        if (newValue !== null && newValue !== currentValue.value) {
+                            if (!isValidReplacementForIfcType(currentValue.type, newValue)) skipped++;
+                            else {
+                                batch.setAttr(propId, 2, wrapIfcValueLike(currentValue.type, newValue));
+                                changedValues++;
+                            }
+                        }
+                    }
+                });
+                batch.commit();
+            });
+
+            const totalChanged = changedPsets + changedNames + changedValues;
+            if (!totalChanged) {
+                alert(`Совпадений не найдено.${skipped ? ` Пропущено несовместимых значений: ${skipped}.` : ''}`);
+                return;
+            }
+            const first = selectedItems[0];
+            if (first && !loadedModels.get(first.modelID).isFBX) {
+                showProps(first.modelID, first.expressID, selectedItems.length);
+            }
+            alert(`Изменено: Pset — ${changedPsets}, имён параметров — ${changedNames}, значений — ${changedValues}.${skipped ? ` Пропущено: ${skipped}.` : ''}`);
+        }
+
         function renameSinglePset(button) {
             const rawModelID = button.dataset.model;
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
@@ -2645,6 +2843,7 @@ let isClipping = false;
             if (action.dataset.act === 'bulkChangeClass') applyBulkClassChange();
             if (action.dataset.act === 'bulkRenamePset') applyBulkPsetRename();
             if (action.dataset.act === 'bulkRenameProperty') applyBulkPropertyRename();
+            if (action.dataset.act === 'bulkReplacePsets') applyBulkPsetReplacement();
             if (action.dataset.act === 'bulkSetProperty') applyBulkPropertyChange();
             if (action.dataset.act === 'renameEntity') renameSingleEntity(action);
             if (action.dataset.act === 'renamePset') renameSinglePset(action);
