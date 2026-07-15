@@ -895,7 +895,7 @@
 
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
-        <span id="hintControls" title="Подсказка по управлению сценой и обозначениям полей">ЛКМ: выбор · ПКМ с движением: камера · ПКМ без движения: меню · Оранжевое: редактируется · Серое: только чтение</span>
+        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">Дерево: Ctrl — добавить/убрать · Shift — диапазон · ПКМ с движением: камера · Оранжевое: редактируется · Серое: только чтение</span>
         <span class="right" id="fps">—</span>
     </footer>
 
@@ -963,7 +963,7 @@
                 } else if (element.classList.contains('pgroup-head')) {
                     element.title = 'Нажмите, чтобы свернуть или раскрыть раздел';
                 } else if (element.classList.contains('trow')) {
-                    element.title = 'ЛКМ — выбрать, двойной клик — приблизить, ПКМ — действия с веткой';
+                    element.title = 'ЛКМ — выбрать; Ctrl/Cmd — добавить или убрать; Shift — выбрать диапазон; ПКМ — действия с веткой';
                 } else if (element.tagName === 'BUTTON') {
                     element.title = ACTION_TOOLTIPS[element.dataset.act] || `Выполнить: ${element.textContent.trim()}`;
                 } else if (element.tagName === 'INPUT' || element.tagName === 'SELECT') {
@@ -1667,6 +1667,9 @@ let isClipping = false;
                 row.className = 'trow';
                 row.dataset.mid = modData.modelID;
                 row.dataset.eid = hasGeom ? obj.userData.expressID : '';
+                row._selectionItems = hasGeom
+                    ? [{ modelID: modData.modelID, expressID: obj.userData.expressID }]
+                    : [];
                 const label = obj.name || typeLabelFBX(obj) || 'узел';
                 row.innerHTML = `<span class="caret ${kids.length ? '' : 'empty'}">▾</span><span class="tlabel">${esc(label)}</span><span class="ttype">${typeLabelFBX(obj)}</span>`;
                 node.appendChild(row);
@@ -1677,7 +1680,7 @@ let isClipping = false;
                         return;
                     }
                     const items = getAllChildGeomFBX(modData.modelID, obj);
-                    if (items.length > 0) selectMultiple(items);
+                    if (items.length > 0) handleTreeSelection(row, items, e);
                     else if (kids.length) node.classList.toggle('collapsed');
                 });
 
@@ -1709,7 +1712,7 @@ let isClipping = false;
                     fileRoot.classList.toggle('collapsed');
                     return;
                 }
-                selectMultiple(getAllChildGeomFBX(modData.modelID, root));
+                handleTreeSelection(fRow, getAllChildGeomFBX(modData.modelID, root), e);
             });
 
             const ch = document.createElement('div');
@@ -1849,6 +1852,7 @@ let isClipping = false;
                 row.className = 'trow';
                 row.dataset.mid = modData.modelID; 
                 row.dataset.eid = id; 
+                row._selectionItems = hasGeom ? [{ modelID: modData.modelID, expressID: id }] : [];
                 row.innerHTML = `<span class="caret ${kids.length ? '' : 'empty'}">▾</span><span class="tlabel">${info.name || '#' + id}</span><span class="ttype">${info.type || ''}</span>`;
                 node.appendChild(row);
 
@@ -1858,7 +1862,7 @@ let isClipping = false;
                         return; 
                     }
                     const itemsToSelect = getAllChildGeom(id);
-                    if (itemsToSelect.length > 0) selectMultiple(itemsToSelect);
+                    if (itemsToSelect.length > 0) handleTreeSelection(row, itemsToSelect, e);
                     else if (kids.length) node.classList.toggle('collapsed');
                 });
                 
@@ -1908,7 +1912,7 @@ let isClipping = false;
                                  byType.get(t).forEach(k => { 
                                      groupItems = groupItems.concat(getAllChildGeom(k)); 
                                  });
-                                 selectMultiple(groupItems);
+                                 handleTreeSelection(gRow, groupItems, e);
                             });
                             
                             const gCh = document.createElement('div'); 
@@ -1945,7 +1949,7 @@ let isClipping = false;
                 roots.forEach(r => { 
                     allItems = allItems.concat(getAllChildGeom(r)); 
                 });
-                selectMultiple(allItems);
+                handleTreeSelection(fRow, allItems, e);
             });
 
             const ch = document.createElement('div'); 
@@ -1961,6 +1965,48 @@ let isClipping = false;
         // --- 2. GHOSTING (Затенение вместо изоляции) ---
 // --- SELECTION (Только подсветка, без прозрачности) ---
         const highlightColor = 0xff6b35;
+        let treeSelectionAnchor = null;
+
+        const selectionKey = item => `${String(item.modelID)}::${String(item.expressID)}`;
+
+        function uniqueSelectionItems(items) {
+            const unique = new Map();
+            items.forEach(item => unique.set(selectionKey(item), item));
+            return [...unique.values()];
+        }
+
+        function handleTreeSelection(row, rowItems, event) {
+            row._selectionItems = uniqueSelectionItems(rowItems);
+            let items = row._selectionItems;
+
+            if (event.shiftKey && treeSelectionAnchor) {
+                const visibleRows = [...treeBox.querySelectorAll('.trow')]
+                    .filter(item => item.getClientRects().length > 0);
+                const start = visibleRows.indexOf(treeSelectionAnchor);
+                const end = visibleRows.indexOf(row);
+                if (start >= 0 && end >= 0) {
+                    items = uniqueSelectionItems(
+                        visibleRows
+                            .slice(Math.min(start, end), Math.max(start, end) + 1)
+                            .flatMap(item => item._selectionItems || [])
+                    );
+                }
+            }
+
+            if (event.ctrlKey || event.metaKey) {
+                const current = new Map(selectedItems.map(item => [selectionKey(item), item]));
+                const removeGroup = items.length > 0 && items.every(item => current.has(selectionKey(item)));
+                items.forEach(item => {
+                    const key = selectionKey(item);
+                    if (removeGroup) current.delete(key);
+                    else current.set(key, item);
+                });
+                items = [...current.values()];
+            }
+
+            selectMultiple(items);
+            if (!event.shiftKey) treeSelectionAnchor = row;
+        }
 
         function setEmissive(mesh, hex) {
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -1968,6 +2014,7 @@ let isClipping = false;
         }
 
         function selectMultiple(items) {
+            items = uniqueSelectionItems(items);
             // 1. Снимаем свечение ТОЛЬКО со старых выделенных элементов (O(K) вместо O(N))
             selectedItems.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
@@ -2000,9 +2047,12 @@ let isClipping = false;
             else showProps(items[0].modelID, items[0].expressID, items.length);
             
             // Скроллим дерево к первому выделенному
+            const selectedKeys = new Set(items.map(selectionKey));
+            document.querySelectorAll('.trow[data-mid][data-eid]').forEach(row => {
+                if (selectedKeys.has(`${row.dataset.mid}::${row.dataset.eid}`)) row.classList.add('sel');
+            });
             const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`);
             if (firstRow) {
-                firstRow.classList.add('sel');
                 firstRow.scrollIntoView({ block: 'nearest' });
             }
         }
@@ -2113,6 +2163,7 @@ let isClipping = false;
         });
 
         $('treeSelectAll').addEventListener('click', () => {
+            treeSelectionAnchor = null;
             const allItems = [];
             for (const [modelID, modData] of loadedModels) {
                 const ids = new Set(modData.meshesByID.keys());
@@ -2126,7 +2177,10 @@ let isClipping = false;
             selectMultiple(allItems);
         });
 
-        $('treeClearSelection').addEventListener('click', () => selectMultiple([]));
+        $('treeClearSelection').addEventListener('click', () => {
+            treeSelectionAnchor = null;
+            selectMultiple([]);
+        });
 
         const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
         const escAttr = s => esc(s).replace(/"/g, '&quot;');
