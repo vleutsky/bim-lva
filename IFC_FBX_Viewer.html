@@ -884,6 +884,7 @@
             <button class="btn load-btn" id="open" title="Выбрать один или несколько IFC/FBX-файлов на компьютере">⬆ ЛОКАЛЬНО</button>
             <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ КАДР</button>
             <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
+            <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ СТРУКТУРА IFC</button>
             <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ СЕТКА</button>
             <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕ ОЧИСТИТЬ</button>
         </div>
@@ -990,6 +991,41 @@
             <div class="modal-actions">
                 <button class="btn" id="cancelBranch">Отмена</button>
                 <button class="btn load-btn" id="createBranch">Создать ветку</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="normalizeModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="normalizeModalTitle">
+            <h3 id="normalizeModalTitle">Нормализация пространственной структуры IFC</h3>
+            <div class="bulk-note">Для каждого загруженного IFC будет создана цепочка Project → Site → Building → BuildingStorey. Исходная геометрия и Pset сохраняются.</div>
+            <div class="prop small">
+                <div class="k">Имя проекта</div>
+                <input class="editInput" id="normalizeProjectName" value="DefaultProject">
+            </div>
+            <div class="prop small">
+                <div class="k">Имя площадки</div>
+                <input class="editInput" id="normalizeSiteName" value="DefaultSite">
+            </div>
+            <div class="prop small">
+                <div class="k">Имя здания</div>
+                <input class="editInput" id="normalizeBuildingName" value="DefaultBuilding">
+            </div>
+            <div class="prop small">
+                <div class="k">Имя этажа</div>
+                <input class="editInput" id="normalizeStoreyName" value="Этаж 01">
+            </div>
+            <label class="bulk-note" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+                <input type="checkbox" id="normalizeToProxy" checked>
+                Преобразовать общие IfcBuiltElement в IfcBuildingElementProxy.
+            </label>
+            <label class="bulk-note" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+                <input type="checkbox" id="normalizePlacements" checked>
+                Привязать размещения перенесённых элементов к этажу без изменения мировых координат.
+            </label>
+            <div class="modal-actions">
+                <button class="btn" id="cancelNormalize">Отмена</button>
+                <button class="btn load-btn" id="applyNormalize">Привести в соответствие</button>
             </div>
         </div>
     </div>
@@ -1501,6 +1537,179 @@ let isClipping = false;
             return max;
         }
 
+        function getIfcIdsByClass(modData, className) {
+            const result = [];
+            for (const expressID of modData.ifcIndex.index.keys()) {
+                const entity = getEntityParts(modData, expressID);
+                if (entity && entity.className === className) result.push(expressID);
+            }
+            return result;
+        }
+
+        function stepRefId(raw) {
+            const match = String(raw || '').trim().match(/^#(\d+)$/);
+            return match ? parseInt(match[1], 10) : null;
+        }
+
+        function stepRefList(raw) {
+            return [...String(raw || '').matchAll(/#(\d+)/g)].map(match => parseInt(match[1], 10));
+        }
+
+        function normalizeIfcSpatialStructure(modData, options) {
+            const schemaLine = modData.ifcIndex.lines.find(line => /FILE_SCHEMA/i.test(line)) || '';
+            if (!/IFC4/i.test(schemaLine)) {
+                throw new Error(`${modData.filename}: автоматическая нормализация поддерживает IFC4/IFC4X3.`);
+            }
+
+            const projectID = getIfcIdsByClass(modData, 'IFCPROJECT')[0];
+            if (projectID == null) throw new Error(`${modData.filename}: не найден IfcProject.`);
+
+            const batch = createIfcEditBatch(modData);
+            const idState = { next: getMaxExpressId(modData) };
+            const nextID = () => ++idState.next;
+            const project = batch.entity(projectID);
+            const ownerHistory = project.args[1] || '$';
+            batch.setAttr(projectID, 2, `'${encodeStepString(options.projectName)}'`);
+
+            let zeroAxisID = null;
+            function ensureZeroAxis() {
+                if (zeroAxisID != null) return zeroAxisID;
+                const pointID = nextID();
+                zeroAxisID = nextID();
+                batch.append(`#${pointID}=IFCCARTESIANPOINT((0.,0.,0.));`);
+                batch.append(`#${zeroAxisID}=IFCAXIS2PLACEMENT3D(#${pointID},$,$);`);
+                return zeroAxisID;
+            }
+            function newLocalPlacement(parentPlacementID) {
+                const placementID = nextID();
+                batch.append(`#${placementID}=IFCLOCALPLACEMENT(${parentPlacementID == null ? '$' : '#' + parentPlacementID},#${ensureZeroAxis()});`);
+                return placementID;
+            }
+
+            let siteID = getIfcIdsByClass(modData, 'IFCSITE')[0];
+            let sitePlacementID;
+            if (siteID == null) {
+                sitePlacementID = newLocalPlacement(null);
+                siteID = nextID();
+                batch.append(`#${siteID}=IFCSITE('${ifcGuid()}',${ownerHistory},'${encodeStepString(options.siteName)}',$,$,#${sitePlacementID},$,$,.ELEMENT.,$,$,$,$,$);`);
+            } else {
+                const site = batch.entity(siteID);
+                batch.setAttr(siteID, 2, `'${encodeStepString(options.siteName)}'`);
+                batch.setAttr(siteID, 8, '.ELEMENT.');
+                sitePlacementID = stepRefId(site.args[5]);
+                if (sitePlacementID == null) {
+                    sitePlacementID = newLocalPlacement(null);
+                    batch.setAttr(siteID, 5, `#${sitePlacementID}`);
+                }
+            }
+
+            const aggregateIDs = getIfcIdsByClass(modData, 'IFCRELAGGREGATES');
+            const hasAggregate = (parentID, childID) => aggregateIDs.some(relationID => {
+                const relation = getEntityParts(modData, relationID);
+                return relation && stepRefId(relation.args[4]) === parentID &&
+                    stepRefList(relation.args[5]).includes(childID);
+            });
+            function appendAggregate(parentID, childID) {
+                batch.append(`#${nextID()}=IFCRELAGGREGATES('${ifcGuid()}',${ownerHistory},$,$,#${parentID},(#${childID}));`);
+            }
+            if (!hasAggregate(projectID, siteID)) appendAggregate(projectID, siteID);
+
+            let buildingID = getIfcIdsByClass(modData, 'IFCBUILDING')[0];
+            let buildingPlacementID;
+            let createdBuilding = false;
+            if (buildingID == null) {
+                createdBuilding = true;
+                buildingPlacementID = newLocalPlacement(sitePlacementID);
+                buildingID = nextID();
+                batch.append(`#${buildingID}=IFCBUILDING('${ifcGuid()}',${ownerHistory},'${encodeStepString(options.buildingName)}',$,$,#${buildingPlacementID},$,$,.ELEMENT.,$,$,$);`);
+            } else {
+                const building = batch.entity(buildingID);
+                batch.setAttr(buildingID, 2, `'${encodeStepString(options.buildingName)}'`);
+                batch.setAttr(buildingID, 8, '.ELEMENT.');
+                buildingPlacementID = stepRefId(building.args[5]);
+                if (buildingPlacementID == null) {
+                    buildingPlacementID = newLocalPlacement(sitePlacementID);
+                    batch.setAttr(buildingID, 5, `#${buildingPlacementID}`);
+                }
+            }
+            if (!hasAggregate(siteID, buildingID)) appendAggregate(siteID, buildingID);
+
+            let storeyID = getIfcIdsByClass(modData, 'IFCBUILDINGSTOREY')[0];
+            let storeyPlacementID;
+            let createdStorey = false;
+            if (storeyID == null) {
+                createdStorey = true;
+                storeyPlacementID = newLocalPlacement(buildingPlacementID);
+                storeyID = nextID();
+                batch.append(`#${storeyID}=IFCBUILDINGSTOREY('${ifcGuid()}',${ownerHistory},'${encodeStepString(options.storeyName)}',$,$,#${storeyPlacementID},$,$,.ELEMENT.,0.);`);
+            } else {
+                const storey = batch.entity(storeyID);
+                batch.setAttr(storeyID, 2, `'${encodeStepString(options.storeyName)}'`);
+                batch.setAttr(storeyID, 8, '.ELEMENT.');
+                storeyPlacementID = stepRefId(storey.args[5]);
+                if (storeyPlacementID == null) {
+                    storeyPlacementID = newLocalPlacement(buildingPlacementID);
+                    batch.setAttr(storeyID, 5, `#${storeyPlacementID}`);
+                }
+            }
+            if (!hasAggregate(buildingID, storeyID)) appendAggregate(buildingID, storeyID);
+
+            const containedElementIDs = new Set();
+            const containmentIDs = getIfcIdsByClass(modData, 'IFCRELCONTAINEDINSPATIALSTRUCTURE');
+            const firstContainmentMembers = [];
+            containmentIDs.forEach(relationID => {
+                const relation = getEntityParts(modData, relationID);
+                const relationMembers = stepRefList(relation.args[4]);
+                relationMembers.forEach(id => containedElementIDs.add(id));
+                if (relationID === containmentIDs[0]) firstContainmentMembers.push(...relationMembers);
+                batch.setAttr(relationID, 5, `#${storeyID}`);
+            });
+            const missingGeometryIDs = [];
+            for (const expressID of modData.meshesByID.keys()) {
+                if (!containedElementIDs.has(expressID)) missingGeometryIDs.push(expressID);
+                containedElementIDs.add(expressID);
+            }
+            if (containmentIDs.length && missingGeometryIDs.length) {
+                const combined = [...new Set(firstContainmentMembers.concat(missingGeometryIDs))];
+                batch.setAttr(containmentIDs[0], 4, `(${combined.map(id => '#' + id).join(',')})`);
+            }
+            if (!containmentIDs.length && containedElementIDs.size) {
+                batch.append(`#${nextID()}=IFCRELCONTAINEDINSPATIALSTRUCTURE('${ifcGuid()}',${ownerHistory},$,$,(${[...containedElementIDs].map(id => '#' + id).join(',')}),#${storeyID});`);
+            }
+
+            const safeIdentityChain = createdBuilding && createdStorey;
+            if (options.normalizePlacements && safeIdentityChain) {
+                containedElementIDs.forEach(expressID => {
+                    const product = getEntityParts(modData, expressID);
+                    const placementID = product && stepRefId(product.args[5]);
+                    const placement = placementID != null && getEntityParts(modData, placementID);
+                    if (placement && placement.className === 'IFCLOCALPLACEMENT') {
+                        batch.setAttr(placementID, 0, `#${storeyPlacementID}`);
+                    }
+                });
+            }
+
+            let convertedCount = 0;
+            if (options.convertToProxy) {
+                getIfcIdsByClass(modData, 'IFCBUILTELEMENT').forEach(expressID => {
+                    const entity = batch.entity(expressID);
+                    entity.className = 'IFCBUILDINGELEMENTPROXY';
+                    while (entity.args.length < 9) entity.args.push('$');
+                    entity.args[8] = '.NOTDEFINED.';
+                    convertedCount++;
+                });
+            }
+
+            batch.commit();
+            return {
+                createdBuilding,
+                createdStorey,
+                convertedCount,
+                elementCount: containedElementIDs.size,
+                placementsReparented: options.normalizePlacements && safeIdentityChain
+            };
+        }
+
         function unquoteStepString(raw) {
             const value = String(raw || '').trim();
             if (value === '$' || value === '*') return '';
@@ -1623,7 +1832,9 @@ let isClipping = false;
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => {
                 $(id).disabled = false;
             });
-            $('btnExportIFC').disabled = ![...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
+            const hasEditableIfc = [...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
+            $('btnExportIFC').disabled = !hasEditableIfc;
+            $('btnNormalizeIFC').disabled = !hasEditableIfc;
             
             fitView();
         }
@@ -2746,6 +2957,62 @@ let isClipping = false;
             alert(`Ветка «${branchName}» создана. Перемещено элементов: ${memberIDs.length}.`);
         });
 
+        function closeNormalizeModal() {
+            $('normalizeModal').classList.remove('show');
+        }
+
+        $('btnNormalizeIFC').addEventListener('click', () => {
+            $('normalizeModal').classList.add('show');
+            $('normalizeProjectName').focus();
+            $('normalizeProjectName').select();
+        });
+        $('cancelNormalize').addEventListener('click', closeNormalizeModal);
+        $('normalizeModal').addEventListener('click', event => {
+            if (event.target === $('normalizeModal')) closeNormalizeModal();
+        });
+        window.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && $('normalizeModal').classList.contains('show')) closeNormalizeModal();
+        });
+
+        $('applyNormalize').addEventListener('click', async () => {
+            const options = {
+                projectName: $('normalizeProjectName').value.trim(),
+                siteName: $('normalizeSiteName').value.trim(),
+                buildingName: $('normalizeBuildingName').value.trim(),
+                storeyName: $('normalizeStoreyName').value.trim(),
+                convertToProxy: $('normalizeToProxy').checked,
+                normalizePlacements: $('normalizePlacements').checked
+            };
+            if (!options.projectName || !options.siteName || !options.buildingName || !options.storeyName) {
+                alert('Все четыре названия пространственной структуры обязательны.');
+                return;
+            }
+            const models = [...loadedModels.values()].filter(model => !model.isFBX && model.ifcIndex);
+            if (!models.length) return;
+            if (!confirm(`Нормализовать пространственную структуру в ${models.length} IFC-файлах?`)) return;
+
+            closeNormalizeModal();
+            showLoader('СТРУКТУРА IFC', 'Создание Building и BuildingStorey...');
+            await new Promise(resolve => setTimeout(resolve, 20));
+            const summaries = [];
+            const errors = [];
+            models.forEach(modData => {
+                try {
+                    summaries.push({ filename: modData.filename, ...normalizeIfcSpatialStructure(modData, options) });
+                } catch (error) {
+                    errors.push(error.message);
+                }
+            });
+            hideLoader();
+
+            const changed = summaries.reduce((sum, item) => sum + item.elementCount, 0);
+            const converted = summaries.reduce((sum, item) => sum + item.convertedCount, 0);
+            let message = `Обработано IFC-файлов: ${summaries.length}. Элементов перенесено на этаж: ${changed}. Преобразовано в BuildingElementProxy: ${converted}.`;
+            if (errors.length) message += `\n\nОшибки:\n${errors.join('\n')}`;
+            message += '\n\nНажмите «Экспорт IFC», затем повторно откройте файл для отображения новой структуры.';
+            alert(message);
+        });
+
         $('treeSelectAll').addEventListener('click', () => {
             treeSelectionAnchor = null;
             const allItems = [];
@@ -3563,7 +3830,9 @@ let isClipping = false;
             selectMultiple(selectedItems.filter(item => String(item.modelID) !== String(modelID)));
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
-            $('btnExportIFC').disabled = ![...loadedModels.values()].some(model => !model.isFBX && model.ifcIndex);
+            const hasEditableIfc = [...loadedModels.values()].some(model => !model.isFBX && model.ifcIndex);
+            $('btnExportIFC').disabled = !hasEditableIfc;
+            $('btnNormalizeIFC').disabled = !hasEditableIfc;
 
             if (loadedModels.size === 0) {
                 if (isClipping) $('btnClip').click();
@@ -3693,6 +3962,7 @@ let isClipping = false;
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => $(id).disabled = true);
             $('btnExportIFC').disabled = true;
+            $('btnNormalizeIFC').disabled = true;
             
             isClipping = false; 
             renderer.localClippingEnabled = false;
