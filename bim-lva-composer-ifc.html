@@ -170,6 +170,23 @@
             color: #ffffff;
         }
 
+        .file-input-sr {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+            opacity: 0;
+        }
+
+        label.btn.load-btn {
+            user-select: none;
+        }
+
         .btn-group {
             display: flex;
             gap: 0;
@@ -293,6 +310,23 @@
 
         canvas {
             display: block;
+            position: relative;
+            z-index: 1;
+        }
+
+        .drop-hint {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            pointer-events: auto;
+            cursor: pointer;
+            z-index: 2;
+            text-align: center;
+            padding: 30px;
         }
 
         #labels-container {
@@ -326,19 +360,6 @@
             font-weight: 600;
             transform: translate(-50%, -50%);
             backdrop-filter: blur(2px);
-        }
-
-        .drop-hint {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 14px;
-            pointer-events: none;
-            text-align: center;
-            padding: 30px;
         }
 
         .drop-hint .grid-ico {
@@ -960,8 +981,8 @@
             
             <div class="divider"></div>
 
-            <input type="file" id="file" accept=".ifc,.fbx,.dxf,.dwg,.glb,.gltf,.obj,.stl,.ply,.dae,.3ds" multiple hidden>
-            <button class="btn load-btn" id="open" title="Поддерживаются IFC, FBX, DXF, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS">⬆ ЛОКАЛЬНО</button>
+            <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.dwg,.glb,.gltf,.obj,.stl,.ply,.dae,.3ds" multiple>
+            <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="Поддерживаются IFC, FBX, DXF, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS">⬆ ЛОКАЛЬНО</label>
             <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ КАДР</button>
             <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
             <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ СТРУКТУРА IFC</button>
@@ -993,10 +1014,10 @@
     <div class="resizer" id="dragLeft"></div>
 
     <main class="stage" id="stage">
-        <div class="drop-hint" id="hint">
+        <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
             <h2>BIM.LVA Composer IFC</h2>
-            <p>IFC, FBX, ASCII DXF, GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG необходимо предварительно преобразовать в DXF.</p>
+            <p>IFC, FBX, ASCII DXF, GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG необходимо предварительно преобразовать в DXF.<br><span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
         </div>
         <div id="labels-container"></div> <div id="boxSelectRect"></div> <div class="loader" id="loader">
             <b id="loadTitle">ОБРАБОТКА</b>
@@ -1218,7 +1239,6 @@
         import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
         import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
         import * as WebIFC from 'web-ifc';
-        import { fromArrayBuffer as geotiffFromArrayBuffer } from 'geotiff';
 
         const WASM_PATH = "https://unpkg.com/web-ifc@0.0.57/";
         const TYPE_NAMES = {};
@@ -1458,7 +1478,8 @@
         }
 
         async function geotiffBufferToTexture(buffer) {
-            const tiff = await geotiffFromArrayBuffer(buffer);
+            const { fromArrayBuffer } = await import('geotiff');
+            const tiff = await fromArrayBuffer(buffer);
             const image = await tiff.getImage();
             const bbox = image.getBoundingBox();
             const width = image.getWidth();
@@ -2324,6 +2345,7 @@ let isClipping = false;
         let selectedItems = [];
         let totalElements = 0;
         let engineReady = false;
+        let pendingLocalFiles = null;
 
         const ifcAPI = new WebIFC.IfcAPI();
         ifcAPI.SetWasmPath(WASM_PATH);
@@ -2332,11 +2354,25 @@ let isClipping = false;
             engineReady = true; 
             $('pip').classList.add('ok'); 
             $('engineStatus').textContent = 'движок готов';
-        }).catch(e => console.error(e));
+            if (pendingLocalFiles) {
+                const queued = pendingLocalFiles;
+                pendingLocalFiles = null;
+                handleFiles(queued);
+            }
+        }).catch(e => {
+            console.error(e);
+            $('engineStatus').textContent = 'ошибка движка';
+            alert('Не удалось инициализировать IFC-движок (WebAssembly). Проверьте интернет и обновите страницу.');
+        });
 
         // --- Загрузка ---
         async function handleFiles(files) {
-            if (!engineReady) return alert('Движок еще грузится...');
+            if (!files || !files.length) return;
+            if (!engineReady) {
+                pendingLocalFiles = files;
+                showLoader('ЗАГРУЗКА', 'Ожидание инициализации IFC-движка…');
+                return;
+            }
             
             $('hint').style.display = 'none';
             if (loadedModels.size === 0) treeBox.innerHTML = '';
@@ -2371,6 +2407,30 @@ let isClipping = false;
             
             fitView();
         }
+
+        function onLocalFileInputChange(event) {
+            const input = event.target;
+            const files = input.files;
+            if (files?.length) handleFiles(files);
+            input.value = '';
+        }
+
+        $('localFileInput').addEventListener('change', onLocalFileInputChange);
+        $('hint').addEventListener('click', () => {
+            const input = $('localFileInput');
+            if (!input) return;
+            input.value = '';
+            if (typeof input.showPicker === 'function') {
+                try { input.showPicker(); return; } catch (_) {}
+            }
+            input.click();
+        });
+        $('hint').addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                $('hint').click();
+            }
+        });
 
         function updateIfcToolButtons() {
             const ifcModels = [...loadedModels.values()].filter(m => !m.isFBX && m.ifcIndex);
@@ -5561,8 +5621,6 @@ let isClipping = false;
             scene.add(grid);
         }
 
-        $('open').addEventListener('click', () => $('file').click());
-        $('file').addEventListener('change', e => handleFiles(e.target.files));
         $('fit').addEventListener('click', fitView);
         $('gridBtn').addEventListener('click', e => {
             grid.visible = e.currentTarget.classList.toggle('on');
