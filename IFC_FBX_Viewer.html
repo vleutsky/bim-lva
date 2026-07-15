@@ -834,6 +834,7 @@
     <div class="ctx-menu" id="treeCtx">
         <button class="ctx-item" id="ctxFocus">🔍 Приблизить камеру</button>
         <div class="ctx-divider"></div>
+        <button class="ctx-item" id="ctxRenameBranch">✎ Переименовать ветку</button>
         <button class="ctx-item" id="ctxHide">👁 Скрыть ветку</button>
     </div>
 
@@ -2158,8 +2159,22 @@ let isClipping = false;
                 html += `<div class="empty" style="padding-top:0">Свойства первого элемента:</div>`;
             }
             
-            html += propRow('Имя', line.Name ? readVal(line.Name) : ''); 
-            html += propRow('ExpressID', expressID);
+            const rawEntity = getEntityParts(modData, expressID);
+            const entityName = rawEntity
+                ? unquoteStepString(rawEntity.args[2])
+                : (line.Name ? readVal(line.Name) : '');
+            if (countTotal === 1 && modData.ifcIndex && rawEntity && rawEntity.args.length > 2) {
+                html += `<div class="prop">
+                    <div class="k">Имя</div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                        <input class="editInput" data-entity-name="${expressID}" value="${escAttr(entityName)}">
+                        <button class="btn" style="padding:6px 8px" data-act="renameEntity" data-model="${modelID}" data-id="${expressID}">💾</button>
+                    </div>
+                </div>`;
+            } else {
+                html += propRow('Имя', entityName);
+            }
+            html += `<div class="prop"><div class="k">ExpressID · только чтение</div><div class="v">${expressID}</div></div>`;
             
             const psetIds = modData.psetIndex.get(expressID) || []; 
             let psetHtml = '';
@@ -2196,6 +2211,8 @@ let isClipping = false;
                                 break; 
                             } 
                         }
+                        const canEditValue = rawProperty && rawProperty.className === 'IFCPROPERTYSINGLEVALUE';
+                        const rawValue = canEditValue ? unwrapIfcValue(rawProperty.args[2]) : null;
                         if (countTotal === 1 && modData.ifcIndex && propId != null) {
                             items += `<div class="prop">
                                 <div class="k">Имя параметра</div>
@@ -2204,7 +2221,12 @@ let isClipping = false;
                                     <button class="btn" style="padding:6px 8px" data-act="renameProperty" data-model="${modelID}" data-prop="${propId}">💾</button>
                                 </div>
                                 <div class="k" style="margin-top:7px">Значение</div>
-                                <div class="v">${esc(v || '—')}</div>
+                                ${canEditValue
+                                    ? `<div style="display:flex;gap:6px;align-items:center">
+                                        <input class="editInput" data-property-value="${propId}" value="${escAttr(rawValue.value)}">
+                                        <button class="btn" style="padding:6px 8px" data-act="savePropertyValue" data-model="${modelID}" data-prop="${propId}">💾</button>
+                                    </div>`
+                                    : `<div class="v">${esc(v || '—')}</div>`}
                             </div>`;
                         } else {
                             items += propRow(propertyName, v);
@@ -2393,6 +2415,30 @@ let isClipping = false;
             if (first) showProps(first.modelID, first.expressID, selectedItems.length);
         }
 
+        function renameSingleEntity(button) {
+            const rawModelID = button.dataset.model;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const expressID = parseInt(button.dataset.id, 10);
+            const modData = loadedModels.get(modelID);
+            const input = propsBox.querySelector(`[data-entity-name="${expressID}"]`);
+            const newName = input ? input.value.trim() : '';
+            if (!modData || !newName) {
+                alert('Имя IFC-объекта не может быть пустым.');
+                return;
+            }
+            const batch = createIfcEditBatch(modData);
+            if (!batch.setAttr(expressID, 2, `'${encodeStepString(newName)}'`)) {
+                alert('Не удалось найти IFC-объект в исходном файле.');
+                return;
+            }
+            batch.commit();
+            document.querySelectorAll(`.trow[data-mid="${modelID}"][data-eid="${expressID}"] .tlabel`)
+                .forEach(label => { label.textContent = newName; });
+            const search = modData.searchCache.get(expressID) || '';
+            modData.searchCache.set(expressID, `${search} ${newName}`.toLowerCase());
+            showProps(modelID, expressID, selectedItems.length);
+        }
+
         function renameSingleProperty(button) {
             const rawModelID = button.dataset.model;
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
@@ -2409,6 +2455,25 @@ let isClipping = false;
                 alert('Не удалось найти параметр в исходном IFC-файле.');
                 return;
             }
+            batch.commit();
+            const first = selectedItems[0];
+            if (first) showProps(first.modelID, first.expressID, selectedItems.length);
+        }
+
+        function saveSinglePropertyValue(button) {
+            const rawModelID = button.dataset.model;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const propId = parseInt(button.dataset.prop, 10);
+            const modData = loadedModels.get(modelID);
+            const input = propsBox.querySelector(`[data-property-value="${propId}"]`);
+            const property = modData && getEntityParts(modData, propId);
+            if (!property || property.className !== 'IFCPROPERTYSINGLEVALUE' || !input) {
+                alert('Это значение параметра нельзя изменить в текущем формате.');
+                return;
+            }
+            const currentValue = unwrapIfcValue(property.args[2]);
+            const batch = createIfcEditBatch(modData);
+            batch.setAttr(propId, 2, wrapIfcValueLike(currentValue.type, input.value));
             batch.commit();
             const first = selectedItems[0];
             if (first) showProps(first.modelID, first.expressID, selectedItems.length);
@@ -2500,8 +2565,10 @@ let isClipping = false;
             if (action.dataset.act === 'bulkRenamePset') applyBulkPsetRename();
             if (action.dataset.act === 'bulkRenameProperty') applyBulkPropertyRename();
             if (action.dataset.act === 'bulkSetProperty') applyBulkPropertyChange();
+            if (action.dataset.act === 'renameEntity') renameSingleEntity(action);
             if (action.dataset.act === 'renamePset') renameSinglePset(action);
             if (action.dataset.act === 'renameProperty') renameSingleProperty(action);
+            if (action.dataset.act === 'savePropertyValue') saveSinglePropertyValue(action);
         });
 
         function showFBXProps(modelID, expressID, countTotal) {
@@ -2734,6 +2801,7 @@ let isClipping = false;
 
         // --- Context Menus & Background ---
         const treeCtx = $('treeCtx'), stageCtx = $('stageCtx');
+        let treeContextRow = null;
         
         window.addEventListener('click', () => { 
             treeCtx.classList.remove('show'); 
@@ -2745,6 +2813,7 @@ let isClipping = false;
             if (!trow) return; 
             
             e.preventDefault(); 
+            treeContextRow = trow;
             if (!trow.classList.contains('sel')) trow.click(); 
             
             treeCtx.style.left = e.clientX + 'px'; 
@@ -2801,6 +2870,36 @@ let isClipping = false;
         });
 
         $('ctxHide').addEventListener('click', () => $('btnHide').click());
+
+        $('ctxRenameBranch').addEventListener('click', () => {
+            if (!treeContextRow || !treeContextRow.dataset.eid) {
+                alert('Эта ветка является служебной группировкой по IFC-классу. Для её изменения измените класс входящих в неё элементов.');
+                return;
+            }
+            const rawModelID = treeContextRow.dataset.mid;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const expressID = parseInt(treeContextRow.dataset.eid, 10);
+            const modData = loadedModels.get(modelID);
+            if (!modData || modData.isFBX || !modData.ifcIndex) {
+                alert('Переименование веток доступно только для IFC.');
+                return;
+            }
+            const label = treeContextRow.querySelector('.tlabel');
+            const currentName = label ? label.textContent.trim() : '';
+            const newName = prompt('Новое имя ветки IFC:', currentName);
+            if (newName == null || !newName.trim() || newName.trim() === currentName) return;
+
+            const batch = createIfcEditBatch(modData);
+            if (!batch.setAttr(expressID, 2, `'${encodeStepString(newName.trim())}'`)) {
+                alert('Не удалось найти эту ветку в исходном IFC-файле.');
+                return;
+            }
+            batch.commit();
+            document.querySelectorAll(`.trow[data-mid="${modelID}"][data-eid="${expressID}"] .tlabel`)
+                .forEach(item => { item.textContent = newName.trim(); });
+            const search = modData.searchCache.get(expressID) || '';
+            modData.searchCache.set(expressID, `${search} ${newName.trim()}`.toLowerCase());
+        });
         
         $('ctxFocus').addEventListener('click', () => { 
             if (selectedItems.length > 0) focusOn(selectedItems[0].modelID, selectedItems[0].expressID); 
