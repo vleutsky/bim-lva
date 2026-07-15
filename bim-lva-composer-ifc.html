@@ -968,6 +968,7 @@
             <button class="btn" id="btnBoxSelect" disabled title="Выделение рамкой: перетащите мышью по сцене, чтобы выбрать все элементы в прямоугольнике">▭ РАМКА</button>
             <button class="btn on" id="btnZoomCursor" title="Зум к точке под курсором (как в Navisworks / BIMvision). Выкл — зум к центру орбиты">🎯 ЗУМ К КУРСОРУ</button>
             <button class="btn" id="btnPivotLock" disabled title="Фиксировать центр вращения/зума на выделенных элементах. Вкл после выделения — орбита крутится вокруг них">📌 НА ВЫДЕЛЕНИИ</button>
+            <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ БЫСТРО</button>
         </div>
 
         <div class="divider"></div>
@@ -1214,7 +1215,7 @@
 
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
-        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">Колесо: зум к курсору · F: кадр на выделение · 📌: фиксация пивота · Ctrl/Shift в дереве · ПКМ+движение: камера</span>
+        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">Колесо: зум к курсору · F: кадр · 📌 пивот · ⚡ быстро на больших моделях · Ctrl/Shift в дереве</span>
         <span class="right" id="fps">—</span>
     </footer>
 
@@ -1240,6 +1241,7 @@
         import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
         import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
         import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
+        import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
         import * as WebIFC from 'web-ifc';
 
         const WASM_PATH = "https://unpkg.com/web-ifc@0.0.57/";
@@ -1320,8 +1322,16 @@
         }
 
         // --- Three.js Setup ---
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        const renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            powerPreference: 'high-performance',
+            stencil: false
+        });
+        let basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        let perfMode = false;
+        let sceneNeedsRender = true;
+        const markNeedsRender = () => { sceneNeedsRender = true; };
+        renderer.setPixelRatio(basePixelRatio);
         renderer.setClearColor(0xf3f5f7, 1);
         
         // ВАЖНО: Включаем поддержку плоскостей сечения
@@ -1338,14 +1348,28 @@
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.08;
-        controls.zoomToCursor = false; // свой зум к курсору ниже (совместимость со всеми версиями)
+        controls.zoomToCursor = false;
         controls.enableZoom = false;
+        controls.addEventListener('change', markNeedsRender);
+        controls.addEventListener('start', () => {
+            if (perfMode || allMeshes.length > 8000) {
+                renderer.setPixelRatio(1);
+            }
+            markNeedsRender();
+        });
+        controls.addEventListener('end', () => {
+            applyRenderQuality();
+            markNeedsRender();
+        });
 
         let zoomToCursorEnabled = true;
         let pivotLockToSelection = false;
         const zoomRaycaster = new THREE.Raycaster();
         const zoomMouse = new THREE.Vector2();
         const ZOOM_FACTOR = 0.12;
+        let lastZoomHitPoint = null;
+        let lastZoomRaycastAt = 0;
+        const IFC_BATCH_THRESHOLD = 2000;
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const key = new THREE.DirectionalLight(0xffffff, 1.6); 
@@ -1365,8 +1389,19 @@
         let globalGroup = new THREE.Group();
         globalGroup.rotation.x = MODEL_ROT_X; 
         scene.add(globalGroup);
+        const highlightOverlayGroup = new THREE.Group();
+        highlightOverlayGroup.name = 'SelectionOverlay';
+        globalGroup.add(highlightOverlayGroup);
         let externalGroup = new THREE.Group();
         scene.add(externalGroup);
+        function applyRenderQuality() {
+            const meshCount = typeof allMeshes !== 'undefined' ? allMeshes.length : 0;
+            const heavy = perfMode || meshCount > 12000;
+            const ratio = heavy ? 1 : (meshCount > 6000 ? Math.min(basePixelRatio, 1.25) : basePixelRatio);
+            renderer.setPixelRatio(ratio);
+            markNeedsRender();
+        }
+
         let geoRasterGroup = new THREE.Group();
         geoRasterGroup.name = 'GeoRasters';
         scene.add(geoRasterGroup);
@@ -1741,6 +1776,7 @@
         transformControl.addEventListener('dragging-changed', e => controls.enabled = !e.value);
         transformControl.addEventListener('change', () => {
             globalClipPlane.constant = clipProxy.position.z;
+            markNeedsRender();
         });
         
         transformControl.attach(clipProxy);
@@ -1766,19 +1802,19 @@ let isClipping = false;
             
             // Аппаратно включаем/выключаем отсечение в видеокарте
             renderer.localClippingEnabled = isClipping;
+            allMeshes.forEach(mesh => {
+                const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                mats.forEach(mat => {
+                    if (!mat) return;
+                    mat.clippingPlanes = isClipping ? [globalClipPlane] : [];
+                    mat.needsUpdate = true;
+                });
+            });
+            markNeedsRender();
             
             if(isClipping) {
                 // Вычисляем BoundingBox ТОЛЬКО для выделенных элементов
-                const box = new THREE.Box3();
-                selectedItems.forEach(i => {
-                    const mod = loadedModels.get(i.modelID);
-                    if (mod && mod.meshesByID.has(i.expressID)) {
-                        mod.meshesByID.get(i.expressID).forEach(m => {
-                            m.updateWorldMatrix(true, false);
-                            box.expandByObject(m);
-                        });
-                    }
-                });
+                const box = getSelectionBounds(selectedItems);
 
                 if (!box.isEmpty()) {
                     const center = box.getCenter(new THREE.Vector3());
@@ -1824,6 +1860,7 @@ let isClipping = false;
             renderer.setSize(w, h, false); 
             camera.aspect = w / h; 
             camera.updateProjectionMatrix();
+            markNeedsRender();
         }
         window.addEventListener('resize', resize); 
         resize();
@@ -1834,17 +1871,21 @@ let isClipping = false;
         
         function tick(now) {
             requestAnimationFrame(tick);
-            controls.update(); 
-            renderer.render(scene, camera);
+            controls.update();
+            if (sceneNeedsRender) {
+                renderer.render(scene, camera);
+                sceneNeedsRender = false;
+            }
             
-            // Обновляем позицию бирок с размерами
-            labelsList.forEach(lbl => {
-                const pos = lbl.pos.clone();
-                pos.project(camera);
-                const x = (pos.x * .5 + .5) * stage.clientWidth;
-                const y = (pos.y * -.5 + .5) * stage.clientHeight;
-                lbl.div.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
-            });
+            if (labelsList.length) {
+                labelsList.forEach(lbl => {
+                    const pos = lbl.pos.clone();
+                    pos.project(camera);
+                    const x = (pos.x * .5 + .5) * stage.clientWidth;
+                    const y = (pos.y * -.5 + .5) * stage.clientHeight;
+                    lbl.div.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+                });
+            }
 
             frames++; 
             acc += now - last; 
@@ -2336,6 +2377,10 @@ let isClipping = false;
                 this.modelID = modelID;
                 this.filename = filename;
                 this.meshesByID = new Map();
+                this.fragmentGeoms = new Map();
+                this.batchMeshes = [];
+                this.hiddenIds = new Set();
+                this.batched = false;
                 this.parentOf = new Map();
                 this.childrenOf = new Map();
                 this.psetIndex = new Map();
@@ -2464,6 +2509,165 @@ let isClipping = false;
             $('btnMergeIFC').disabled = ifcModels.length < 2;
         }
 
+        let activeSelectionOverlays = [];
+
+        function createIfcMaterial(hex, opacity) {
+            const transparent = opacity < 0.999;
+            return new THREE.MeshLambertMaterial({
+                color: hex,
+                side: transparent ? THREE.DoubleSide : THREE.FrontSide,
+                transparent,
+                opacity,
+                depthWrite: !transparent
+            });
+        }
+
+        function bakeFragmentGeometry(geom, matrix, expressID) {
+            const g = geom.clone();
+            g.applyMatrix4(matrix);
+            const nVerts = g.attributes.position.count;
+            const ids = new Float32Array(nVerts);
+            ids.fill(expressID);
+            g.setAttribute('expressId', new THREE.BufferAttribute(ids, 1));
+            g.computeBoundingSphere();
+            return g;
+        }
+
+        function showSelectionOverlays(items) {
+            clearSelectionOverlays();
+            const mat = new THREE.MeshBasicMaterial({
+                color: highlightColor,
+                transparent: true,
+                opacity: 0.4,
+                depthTest: true,
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: -2,
+                polygonOffsetUnits: -2
+            });
+            mat.userData.overlayShared = true;
+            let used = false;
+            items.forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod?.batched || !mod.fragmentGeoms?.has(item.expressID)) return;
+                if (mod.hiddenIds?.has(item.expressID)) return;
+                mod.fragmentGeoms.get(item.expressID).forEach(frag => {
+                    const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
+                    const mesh = new THREE.Mesh(geom, mat);
+                    mesh.userData.isOverlay = true;
+                    mesh.userData.ownsGeometry = true;
+                    mod.group.add(mesh);
+                    activeSelectionOverlays.push(mesh);
+                    used = true;
+                });
+            });
+            if (!used) mat.dispose();
+            markNeedsRender();
+        }
+
+        function clearSelectionOverlays() {
+            activeSelectionOverlays.forEach(mesh => {
+                mesh.parent?.remove(mesh);
+                if (mesh.userData.ownsGeometry) mesh.geometry?.dispose();
+                if (mesh.material && mesh.material.userData?.overlayShared !== true) {
+                    mesh.material.dispose();
+                } else if (mesh.material?.userData?.overlayShared) {
+                    // shared material disposed once below if last
+                }
+            });
+            const shared = activeSelectionOverlays[0]?.material;
+            activeSelectionOverlays = [];
+            if (shared) shared.dispose();
+            markNeedsRender();
+        }
+
+        function disposeModelBatches(modData) {
+            (modData.batchMeshes || []).forEach(mesh => {
+                modData.group.remove(mesh);
+                allMeshes = allMeshes.filter(m => m !== mesh);
+                mesh.geometry?.dispose();
+                mesh.material?.dispose();
+            });
+            modData.batchMeshes = [];
+        }
+
+        function buildIfcBatches(modData, fragments) {
+            disposeModelBatches(modData);
+            modData.fragmentGeoms = new Map();
+            modData.meshesByID = new Map();
+            modData.batched = true;
+
+            const byKey = new Map();
+            fragments.forEach(frag => {
+                if (modData.hiddenIds.has(frag.expressID)) return;
+                const appearance = modData.appearanceByID.get(frag.expressID);
+                const hex = appearance?.color ?? frag.hex;
+                const opacity = appearance?.opacity ?? frag.opacity;
+                const key = `${hex}_${opacity.toFixed(3)}`;
+                if (!byKey.has(key)) byKey.set(key, []);
+                byKey.get(key).push({ ...frag, hex, opacity });
+                if (!modData.fragmentGeoms.has(frag.expressID)) modData.fragmentGeoms.set(frag.expressID, []);
+                modData.fragmentGeoms.get(frag.expressID).push({ geom: frag.geom, matrix: frag.matrix });
+                if (!modData.meshesByID.has(frag.expressID)) modData.meshesByID.set(frag.expressID, []);
+            });
+
+            for (const list of byKey.values()) {
+                const geoms = [];
+                for (const frag of list) {
+                    geoms.push(bakeFragmentGeometry(frag.geom, frag.matrix, frag.expressID));
+                }
+                if (!geoms.length) continue;
+                const merged = mergeGeometries(geoms, false);
+                geoms.forEach(g => g.dispose());
+                if (!merged) continue;
+                merged.computeBoundingSphere();
+                const mat = createIfcMaterial(list[0].hex, list[0].opacity);
+                if (isClipping) mat.clippingPlanes = [globalClipPlane];
+                const mesh = new THREE.Mesh(merged, mat);
+                mesh.matrixAutoUpdate = false;
+                mesh.userData = {
+                    modelID: modData.modelID,
+                    isBatch: true,
+                    _origAppearance: {
+                        color: list[0].hex,
+                        transparent: list[0].opacity < 0.999,
+                        opacity: list[0].opacity
+                    }
+                };
+                modData.group.add(mesh);
+                modData.batchMeshes.push(mesh);
+                allMeshes.push(mesh);
+                list.forEach(frag => modData.meshesByID.get(frag.expressID).push(mesh));
+            }
+            markNeedsRender();
+        }
+
+        function addIndividualIfcMeshes(modData, fragments) {
+            modData.batched = false;
+            fragments.forEach(frag => {
+                const mat = createIfcMaterial(frag.hex, frag.opacity);
+                if (isClipping) mat.clippingPlanes = [globalClipPlane];
+                const mesh = new THREE.Mesh(frag.geom, mat);
+                mesh.matrix.copy(frag.matrix);
+                mesh.matrixAutoUpdate = false;
+                mesh.userData = {
+                    modelID: modData.modelID,
+                    expressID: frag.expressID,
+                    _origAppearance: {
+                        color: frag.hex,
+                        transparent: frag.opacity < 0.999,
+                        opacity: frag.opacity
+                    }
+                };
+                mesh.geometry.computeBoundingSphere();
+                modData.group.add(mesh);
+                allMeshes.push(mesh);
+                if (!modData.meshesByID.has(frag.expressID)) modData.meshesByID.set(frag.expressID, []);
+                modData.meshesByID.get(frag.expressID).push(mesh);
+            });
+            markNeedsRender();
+        }
+
         async function loadSingleIFC(file) {
             showLoader('ЧТЕНИЕ ФАЙЛА', file.name);
             await new Promise(r => setTimeout(r, 30));
@@ -2484,7 +2688,8 @@ let isClipping = false;
 
                 showLoader('ГЕОМЕТРИЯ', 'Извлечение мешей...');
                 await new Promise(r => setTimeout(r, 10));
-                
+
+                const fragments = [];
                 ifcAPI.StreamAllMeshes(modelID, (flatMesh) => {
                     const expressID = flatMesh.expressID;
                     const placed = flatMesh.geometries;
@@ -2493,47 +2698,34 @@ let isClipping = false;
                         const pg = placed.get(i);
                         const geom = getBufferGeometry(modelID, pg);
                         const col = pg.color;
-                        
-                        // Добавляем поддержку clippingPlanes
-                        const mat = new THREE.MeshLambertMaterial({
-                            color: new THREE.Color(col.x, col.y, col.z), 
-                            side: THREE.DoubleSide,
-                            transparent: col.w !== 1, 
-                            opacity: col.w,
-                            clippingPlanes: [globalClipPlane]
-                        });
-                        
-                        const mesh = new THREE.Mesh(geom, mat);
-                        const m = new THREE.Matrix4().fromArray(pg.flatTransformation);
-                        mesh.matrix = m; 
-                        mesh.matrixAutoUpdate = false;
-                        
-                        // Сохраняем исходную прозрачность для логики Затенения (Ghosting)
-                        mesh.userData = { 
-                            modelID: modelID, 
-                            expressID: expressID,
-                            _origAppearance: {
-                                color: new THREE.Color(col.x, col.y, col.z).getHex(),
-                                transparent: col.w !== 1,
-                                opacity: col.w
-                            }
-                        };
-                        
-                        modData.group.add(mesh);
-                        allMeshes.push(mesh);
-                        
-                        if (!modData.meshesByID.has(expressID)) {
-                            modData.meshesByID.set(expressID, []);
-                        }
-                        modData.meshesByID.get(expressID).push(mesh);
+                        const hex = new THREE.Color(col.x, col.y, col.z).getHex();
+                        const opacity = col.w;
+                        const matrix = new THREE.Matrix4().fromArray(pg.flatTransformation);
+                        fragments.push({ expressID, geom, matrix, hex, opacity });
                     }
                 });
+
+                showLoader('ОПТИМИЗАЦИЯ', `${fragments.length.toLocaleString('ru-RU')} фрагментов…`);
+                await new Promise(r => setTimeout(r, 10));
+
+                if (fragments.length >= IFC_BATCH_THRESHOLD) {
+                    buildIfcBatches(modData, fragments);
+                    if (!perfMode && fragments.length >= IFC_BATCH_THRESHOLD) {
+                        // авто-подсказка качества
+                        applyRenderQuality();
+                    }
+                } else {
+                    addIndividualIfcMeshes(modData, fragments);
+                }
+                modData._fragments = fragments;
                 
                 totalElements += modData.meshesByID.size;
                 
                 showLoader('СТРУКТУРА', 'Построение связей...');
                 await new Promise(r => setTimeout(r, 10));
                 buildTreeForModel(modData);
+                applyRenderQuality();
+                markNeedsRender();
                 
                 hideLoader();
                 
@@ -3728,8 +3920,20 @@ let isClipping = false;
         function reapplyAppearanceForItem(modelID, expressID) {
             const mod = loadedModels.get(modelID);
             if (!mod || !mod.meshesByID.has(expressID)) return;
+            if (mod.batched && mod._fragments) {
+                buildIfcBatches(mod, mod._fragments);
+                if (selectedItems.length) {
+                    showSelectionOverlays(selectedItems.filter(item => {
+                        const m = loadedModels.get(item.modelID);
+                        return m && m.batched;
+                    }));
+                }
+                markNeedsRender();
+                return;
+            }
             const appearance = mod.appearanceByID.get(expressID) || null;
             mod.meshesByID.get(expressID).forEach(mesh => applyAppearanceToMesh(mesh, appearance));
+            markNeedsRender();
         }
 
         function getAppearanceForPanel(modelID, expressID) {
@@ -3737,6 +3941,22 @@ let isClipping = false;
             if (!mod) return null;
             const stored = mod.appearanceByID.get(expressID);
             if (stored) return { ...stored };
+            if (mod.batched) {
+                const frag = mod._fragments?.find(f => f.expressID === expressID);
+                if (frag) {
+                    return {
+                        color: frag.hex,
+                        preset: 'custom',
+                        materialName: '',
+                        roughness: 0.55,
+                        metalness: 0.05,
+                        opacity: frag.opacity,
+                        textureName: '',
+                        repeatU: 1,
+                        repeatV: 1
+                    };
+                }
+            }
             const mesh = getRenderableMeshesForItem(modelID, expressID)[0];
             if (!mesh) return null;
             ensureMeshStandardMaterial(mesh);
@@ -4047,10 +4267,12 @@ let isClipping = false;
             // 1. Снимаем свечение ТОЛЬКО со старых выделенных элементов (O(K) вместо O(N))
             selectedItems.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
-                if (mod && mod.meshesByID.has(i.expressID)) {
+                if (!mod || mod.batched) return;
+                if (mod.meshesByID.has(i.expressID)) {
                     mod.meshesByID.get(i.expressID).forEach(m => setEmissive(m, 0x000000));
                 }
             });
+            clearSelectionOverlays();
 
             // Убираем выделение в дереве
             document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
@@ -4060,16 +4282,24 @@ let isClipping = false;
 
             if (items.length === 0) {
                 propsBox.innerHTML = '<div class="empty">Ничего не выбрано.</div>';
+                markNeedsRender();
                 return;
             }
 
-            // 2. Включаем свечение для новых выделенных элементов
+            // 2. Подсветка: батчи — overlay, иначе emissive
+            const batchedItems = [];
             items.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
-                if (mod && mod.meshesByID.has(i.expressID)) {
+                if (!mod) return;
+                if (mod.batched) {
+                    batchedItems.push(i);
+                    return;
+                }
+                if (mod.meshesByID.has(i.expressID)) {
                     mod.meshesByID.get(i.expressID).forEach(m => setEmissive(m, highlightColor));
                 }
             });
+            if (batchedItems.length) showSelectionOverlays(batchedItems);
 
             const mod0 = loadedModels.get(items[0].modelID);
             if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
@@ -4088,6 +4318,7 @@ let isClipping = false;
             if (pivotLockToSelection && items.length) {
                 setOrbitPivotToSelection(false);
             }
+            markNeedsRender();
         }
 
         // Raycaster (Клик по геометрии)
@@ -4157,8 +4388,16 @@ let isClipping = false;
             }
             
             // ОБЫЧНОЕ ВЫДЕЛЕНИЕ
-            const ud = validHits[0].object.userData;
-            selectMultiple([{ modelID: ud.modelID, expressID: ud.expressID }]);
+            const hitObj = validHits[0].object;
+            const ud = hitObj.userData;
+            let expressID = ud.expressID;
+            if (ud.isBatch) {
+                const attr = hitObj.geometry?.getAttribute('expressId');
+                const face = validHits[0].face;
+                if (attr && face) expressID = Math.round(attr.getX(face.a));
+            }
+            if (expressID == null || ud.modelID == null) return;
+            selectMultiple([{ modelID: ud.modelID, expressID }]);
         });
 
         // --- BOX SELECT (Выделение рамкой на сцене) ---
@@ -4216,30 +4455,55 @@ let isClipping = false;
 
             const stageW = stage.clientWidth, stageH = stage.clientHeight;
             const found = [];
+            const v = new THREE.Vector3();
+            const seen = new Set();
             allMeshes.forEach(mesh => {
-                if (!mesh.visible) return;
-                const box = new THREE.Box3().setFromObject(mesh);
-                if (box.isEmpty()) return;
-                const corners = [
-                    [box.min.x, box.min.y, box.min.z], [box.max.x, box.min.y, box.min.z],
-                    [box.min.x, box.max.y, box.min.z], [box.min.x, box.min.y, box.max.z],
-                    [box.max.x, box.max.y, box.min.z], [box.max.x, box.min.y, box.max.z],
-                    [box.min.x, box.max.y, box.max.z], [box.max.x, box.max.y, box.max.z]
-                ];
-                let minSx = Infinity, minSy = Infinity, maxSx = -Infinity, maxSy = -Infinity, anyInFront = false;
-                const v = new THREE.Vector3();
-                corners.forEach(([cx, cy, cz]) => {
-                    v.set(cx, cy, cz).project(camera);
-                    if (v.z < 1) anyInFront = true;
-                    const sx = (v.x * .5 + .5) * stageW;
-                    const sy = (v.y * -.5 + .5) * stageH;
-                    if (sx < minSx) minSx = sx; if (sx > maxSx) maxSx = sx;
-                    if (sy < minSy) minSy = sy; if (sy > maxSy) maxSy = sy;
-                });
-                if (!anyInFront) return;
-                const intersects = maxSx >= drag.rectPx.left && minSx <= drag.rectPx.right &&
-                    maxSy >= drag.rectPx.top && minSy <= drag.rectPx.bottom;
-                if (intersects) found.push({ modelID: mesh.userData.modelID, expressID: mesh.userData.expressID });
+                if (!mesh.visible || mesh.userData.isGeoRaster) return;
+                if (mesh.userData.isBatch) {
+                    const mod = loadedModels.get(mesh.userData.modelID);
+                    if (!mod?.fragmentGeoms) return;
+                    mod.group.updateWorldMatrix(true, false);
+                    for (const [expressID, geoms] of mod.fragmentGeoms) {
+                        if (mod.hiddenIds?.has(expressID)) continue;
+                        const key = `${mod.modelID}::${expressID}`;
+                        if (seen.has(key)) continue;
+                        let inside = false;
+                        for (const frag of geoms) {
+                            const center = new THREE.Vector3();
+                            if (!frag.geom.boundingSphere) frag.geom.computeBoundingSphere();
+                            if (frag.geom.boundingSphere) center.copy(frag.geom.boundingSphere.center);
+                            else continue;
+                            center.applyMatrix4(frag.matrix).applyMatrix4(mod.group.matrixWorld).project(camera);
+                            if (center.z >= 1) continue;
+                            const fx = (center.x * .5 + .5) * stageW;
+                            const fy = (center.y * -.5 + .5) * stageH;
+                            if (fx >= drag.rectPx.left && fx <= drag.rectPx.right && fy >= drag.rectPx.top && fy <= drag.rectPx.bottom) {
+                                inside = true;
+                                break;
+                            }
+                        }
+                        if (inside) {
+                            seen.add(key);
+                            found.push({ modelID: mod.modelID, expressID });
+                        }
+                    }
+                    return;
+                }
+                if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+                const sphere = mesh.geometry.boundingSphere;
+                if (!sphere) return;
+                mesh.updateWorldMatrix(true, false);
+                v.copy(sphere.center).applyMatrix4(mesh.matrixWorld).project(camera);
+                if (v.z >= 1) return;
+                const sx = (v.x * .5 + .5) * stageW;
+                const sy = (v.y * -.5 + .5) * stageH;
+                if (sx < drag.rectPx.left || sx > drag.rectPx.right || sy < drag.rectPx.top || sy > drag.rectPx.bottom) return;
+                const ud = mesh.userData;
+                if (ud.modelID == null || ud.expressID == null) return;
+                const key = `${ud.modelID}::${ud.expressID}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                found.push({ modelID: ud.modelID, expressID: ud.expressID });
             });
 
             let items = uniqueSelectionItems(found);
@@ -4267,17 +4531,31 @@ let isClipping = false;
 
         // Hide / Show All Logic
         $('btnHide').addEventListener('click', () => {
+            const batchedToRebuild = new Set();
             selectedItems.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
-                if (mod && mod.meshesByID.has(i.expressID)) {
-                    mod.meshesByID.get(i.expressID).forEach(m => m.visible = false);
+                if (!mod) return;
+                if (mod.batched && mod._fragments) {
+                    mod.hiddenIds.add(i.expressID);
+                    batchedToRebuild.add(mod);
+                } else if (mod.meshesByID.has(i.expressID)) {
+                    mod.meshesByID.get(i.expressID).forEach(m => { m.visible = false; });
                 }
             });
-            selectMultiple([]); 
+            batchedToRebuild.forEach(mod => buildIfcBatches(mod, mod._fragments));
+            selectMultiple([]);
+            markNeedsRender();
         });
 
         $('btnShowAll').addEventListener('click', () => {
-            allMeshes.forEach(m => m.visible = true);
+            for (const mod of loadedModels.values()) {
+                if (mod.batched && mod._fragments && mod.hiddenIds?.size) {
+                    mod.hiddenIds.clear();
+                    buildIfcBatches(mod, mod._fragments);
+                }
+            }
+            allMeshes.forEach(m => { m.visible = true; });
+            markNeedsRender();
         });
 
         // --- Search ---
@@ -5605,7 +5883,18 @@ let isClipping = false;
             const box = new THREE.Box3();
             (items || []).forEach(i => {
                 const mod = loadedModels.get(i.modelID);
-                if (mod && mod.meshesByID.has(i.expressID)) {
+                if (!mod) return;
+                if (mod.batched && mod.fragmentGeoms?.has(i.expressID)) {
+                    mod.group.updateWorldMatrix(true, false);
+                    mod.fragmentGeoms.get(i.expressID).forEach(frag => {
+                        if (!frag.geom.boundingBox) frag.geom.computeBoundingBox();
+                        if (!frag.geom.boundingBox || frag.geom.boundingBox.isEmpty()) return;
+                        const b = frag.geom.boundingBox.clone().applyMatrix4(frag.matrix).applyMatrix4(mod.group.matrixWorld);
+                        box.union(b);
+                    });
+                    return;
+                }
+                if (mod.meshesByID.has(i.expressID)) {
                     mod.meshesByID.get(i.expressID).forEach(m => {
                         if (!m.visible) return;
                         m.updateWorldMatrix(true, false);
@@ -5665,8 +5954,8 @@ let isClipping = false;
                 if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
             }
 
-            if (!zoomToCursorEnabled) {
-                return controls.target.clone();
+            if (!zoomToCursorEnabled || perfMode || allMeshes.length > 15000) {
+                return lastZoomHitPoint ? lastZoomHitPoint.clone() : controls.target.clone();
             }
 
             const rect = renderer.domElement.getBoundingClientRect();
@@ -5676,12 +5965,20 @@ let isClipping = false;
             zoomMouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
             zoomRaycaster.setFromCamera(zoomMouse, camera);
 
-            if (allMeshes.length) {
+            const now = performance.now();
+            const canRaycast = allMeshes.length < 4000 || (now - lastZoomRaycastAt) > 40;
+            if (canRaycast && allMeshes.length) {
+                lastZoomRaycastAt = now;
                 const hits = zoomRaycaster.intersectObjects(
                     allMeshes.filter(m => m.visible && !m.userData.isGeoRaster),
                     false
                 );
-                if (hits.length) return hits[0].point.clone();
+                if (hits.length) {
+                    lastZoomHitPoint = hits[0].point.clone();
+                    return lastZoomHitPoint.clone();
+                }
+            } else if (lastZoomHitPoint) {
+                return lastZoomHitPoint.clone();
             }
 
             const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
@@ -5689,7 +5986,10 @@ let isClipping = false;
                 controls.target
             );
             const hit = new THREE.Vector3();
-            if (zoomRaycaster.ray.intersectPlane(plane, hit)) return hit;
+            if (zoomRaycaster.ray.intersectPlane(plane, hit)) {
+                lastZoomHitPoint = hit.clone();
+                return hit;
+            }
             return controls.target.clone();
         }
 
@@ -5706,6 +6006,7 @@ let isClipping = false;
                 camera.position.copy(controls.target).add(dir.multiplyScalar(0.05));
             }
             controls.update();
+            markNeedsRender();
         }
 
         renderer.domElement.addEventListener('wheel', event => {
@@ -5725,6 +6026,21 @@ let isClipping = false;
             if (pivotLockToSelection && selectedItems.length) {
                 setOrbitPivotToSelection(false);
             }
+        });
+
+        $('btnPerfMode').addEventListener('click', () => {
+            perfMode = $('btnPerfMode').classList.toggle('on');
+            controls.enableDamping = !perfMode;
+            controls.dampingFactor = perfMode ? 0 : 0.08;
+            if (perfMode) {
+                zoomToCursorEnabled = false;
+                $('btnZoomCursor').classList.remove('on');
+            } else {
+                zoomToCursorEnabled = true;
+                $('btnZoomCursor').classList.add('on');
+            }
+            applyRenderQuality();
+            markNeedsRender();
         });
 
         window.addEventListener('keydown', event => {
