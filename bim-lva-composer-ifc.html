@@ -966,6 +966,8 @@
             <button class="btn" id="btnMeasure" disabled title="Измерить расстояние">📏 ИЗМЕРИТЬ</button>
             <button class="btn" id="btnClip" disabled title="Секущая плоскость (Z)">✂ РАЗРЕЗ</button>
             <button class="btn" id="btnBoxSelect" disabled title="Выделение рамкой: перетащите мышью по сцене, чтобы выбрать все элементы в прямоугольнике">▭ РАМКА</button>
+            <button class="btn on" id="btnZoomCursor" title="Зум к точке под курсором (как в Navisworks / BIMvision). Выкл — зум к центру орбиты">🎯 ЗУМ К КУРСОРУ</button>
+            <button class="btn" id="btnPivotLock" disabled title="Фиксировать центр вращения/зума на выделенных элементах. Вкл после выделения — орбита крутится вокруг них">📌 НА ВЫДЕЛЕНИИ</button>
         </div>
 
         <div class="divider"></div>
@@ -1046,7 +1048,7 @@
     </aside>
 
     <div class="ctx-menu" id="treeCtx">
-        <button class="ctx-item" id="ctxFocus" title="Переместить центр камеры к выбранному объекту">🔍 Приблизить камеру</button>
+                        <button class="ctx-item" id="ctxFocus" title="Кадрировать камеру на выделенные элементы (клавиша F)">🔍 Приблизить к выделению</button>
         <div class="ctx-divider"></div>
         <button class="ctx-item" id="ctxRenameBranch" title="Изменить атрибут Name реального IFC-узла">✎ Переименовать ветку</button>
         <button class="ctx-item" id="ctxAddBranch" title="Создать дочернюю пользовательскую ветку под выбранным разделом">＋ Добавить дочернюю ветку</button>
@@ -1212,7 +1214,7 @@
 
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
-        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">Дерево: Ctrl — добавить/убрать · Shift — диапазон · ПКМ с движением: камера · Оранжевое: редактируется · Серое: только чтение</span>
+        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">Колесо: зум к курсору · F: кадр на выделение · 📌: фиксация пивота · Ctrl/Shift в дереве · ПКМ+движение: камера</span>
         <span class="right" id="fps">—</span>
     </footer>
 
@@ -1336,6 +1338,14 @@
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.08;
+        controls.zoomToCursor = false; // свой зум к курсору ниже (совместимость со всеми версиями)
+        controls.enableZoom = false;
+
+        let zoomToCursorEnabled = true;
+        let pivotLockToSelection = false;
+        const zoomRaycaster = new THREE.Raycaster();
+        const zoomMouse = new THREE.Vector2();
+        const ZOOM_FACTOR = 0.12;
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const key = new THREE.DirectionalLight(0xffffff, 1.6); 
@@ -2415,7 +2425,7 @@ let isClipping = false;
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
             
-            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = false;
             });
             updateIfcToolButtons();
@@ -4074,6 +4084,10 @@ let isClipping = false;
             if (firstRow) {
                 firstRow.scrollIntoView({ block: 'nearest' });
             }
+
+            if (pivotLockToSelection && items.length) {
+                setOrbitPivotToSelection(false);
+            }
         }
 
         // Raycaster (Клик по геометрии)
@@ -5435,9 +5449,11 @@ let isClipping = false;
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
+                pivotLockToSelection = false;
+                $('btnPivotLock').classList.remove('on');
             } else {
                 fitView();
             }
@@ -5584,25 +5600,141 @@ let isClipping = false;
             alert(`Готово: ${models.length} файлов объединены в один IFC (загружен в просмотрщик и провалидирован движком). Нажмите «Экспорт IFC», чтобы скачать результат.`);
         });
 
-        // --- Camera Tools ---
-        function focusOnList(items) {
+        // --- Camera Tools (зум к курсору / фиксация на выделении) ---
+        function getSelectionBounds(items) {
             const box = new THREE.Box3();
-            items.forEach(i => {
+            (items || []).forEach(i => {
                 const mod = loadedModels.get(i.modelID);
                 if (mod && mod.meshesByID.has(i.expressID)) {
                     mod.meshesByID.get(i.expressID).forEach(m => {
+                        if (!m.visible) return;
                         m.updateWorldMatrix(true, false);
                         box.expandByObject(m);
                     });
                 }
             });
+            return box;
+        }
+
+        function setOrbitPivotToSelection(frameCamera) {
+            if (!selectedItems.length) return;
+            const box = getSelectionBounds(selectedItems);
             if (box.isEmpty()) return;
-            controls.target.copy(box.getCenter(new THREE.Vector3()));
+            const center = box.getCenter(new THREE.Vector3());
+            if (frameCamera) {
+                frameBox(box);
+            } else {
+                const offset = camera.position.clone().sub(controls.target);
+                controls.target.copy(center);
+                camera.position.copy(center).add(offset);
+                controls.update();
+            }
+        }
+
+        function frameBox(box) {
+            if (!box || box.isEmpty()) return;
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z, 0.01);
+            const fov = THREE.MathUtils.degToRad(camera.fov);
+            const dist = (maxDim / (2 * Math.tan(fov / 2))) * 1.45;
+            const dir = camera.position.clone().sub(controls.target);
+            if (dir.lengthSq() < 1e-8) dir.set(1, -1, 0.8);
+            dir.normalize();
+            controls.target.copy(center);
+            camera.position.copy(center).add(dir.multiplyScalar(dist));
+            camera.near = Math.max(0.01, maxDim / 200);
+            camera.far = Math.max(maxDim * 40, camera.far, 1000);
+            camera.updateProjectionMatrix();
             controls.update();
         }
+
+        function focusOnList(items) {
+            const box = getSelectionBounds(items);
+            if (box.isEmpty()) return;
+            frameBox(box);
+        }
+
         function focusOn(modelID, expressID) {
             focusOnList([{ modelID, expressID }]);
         }
+
+        function getZoomAnchorPoint(clientX, clientY) {
+            if (pivotLockToSelection && selectedItems.length) {
+                const box = getSelectionBounds(selectedItems);
+                if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
+            }
+
+            if (!zoomToCursorEnabled) {
+                return controls.target.clone();
+            }
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return controls.target.clone();
+
+            zoomMouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+            zoomMouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+            zoomRaycaster.setFromCamera(zoomMouse, camera);
+
+            if (allMeshes.length) {
+                const hits = zoomRaycaster.intersectObjects(
+                    allMeshes.filter(m => m.visible && !m.userData.isGeoRaster),
+                    false
+                );
+                if (hits.length) return hits[0].point.clone();
+            }
+
+            const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+                camera.getWorldDirection(new THREE.Vector3()),
+                controls.target
+            );
+            const hit = new THREE.Vector3();
+            if (zoomRaycaster.ray.intersectPlane(plane, hit)) return hit;
+            return controls.target.clone();
+        }
+
+        function zoomCameraTowardPoint(point, deltaY) {
+            const factor = Math.exp(-Math.sign(deltaY || 1) * ZOOM_FACTOR * Math.min(Math.abs(deltaY || 100) / 100, 3));
+            const camOffset = camera.position.clone().sub(point);
+            const targetOffset = controls.target.clone().sub(point);
+            camera.position.copy(point).add(camOffset.multiplyScalar(factor));
+            controls.target.copy(point).add(targetOffset.multiplyScalar(factor));
+
+            const dist = camera.position.distanceTo(controls.target);
+            if (dist < 0.05) {
+                const dir = camOffset.lengthSq() > 0 ? camOffset.normalize() : new THREE.Vector3(0, -1, 0);
+                camera.position.copy(controls.target).add(dir.multiplyScalar(0.05));
+            }
+            controls.update();
+        }
+
+        renderer.domElement.addEventListener('wheel', event => {
+            if (!controls.enabled) return;
+            event.preventDefault();
+            const point = getZoomAnchorPoint(event.clientX, event.clientY);
+            zoomCameraTowardPoint(point, event.deltaY);
+        }, { passive: false });
+
+        $('btnZoomCursor').addEventListener('click', () => {
+            zoomToCursorEnabled = $('btnZoomCursor').classList.toggle('on');
+        });
+
+        $('btnPivotLock').addEventListener('click', () => {
+            if ($('btnPivotLock').disabled) return;
+            pivotLockToSelection = $('btnPivotLock').classList.toggle('on');
+            if (pivotLockToSelection && selectedItems.length) {
+                setOrbitPivotToSelection(false);
+            }
+        });
+
+        window.addEventListener('keydown', event => {
+            if (event.target.closest('input, textarea, select, .editInput')) return;
+            if (event.key === 'f' || event.key === 'F' || event.key === 'а' || event.key === 'А') {
+                if (!selectedItems.length) return;
+                event.preventDefault();
+                focusOnList(selectedItems);
+            }
+        });
 
         function fitView() {
             const box = new THREE.Box3();
@@ -5683,7 +5815,7 @@ let isClipping = false;
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
             updateIfcToolButtons();
             
             isClipping = false; 
@@ -5701,6 +5833,9 @@ let isClipping = false;
             $('btnBoxSelect').classList.remove('on');
             boxSelectDrag = null;
             boxSelectRectEl.style.display = 'none';
+
+            pivotLockToSelection = false;
+            $('btnPivotLock').classList.remove('on');
 
             document.body.style.cursor = '';
         });
@@ -5949,7 +6084,7 @@ let isClipping = false;
         });
         
         $('ctxFocus').addEventListener('click', () => { 
-            if (selectedItems.length > 0) focusOn(selectedItems[0].modelID, selectedItems[0].expressID); 
+            if (selectedItems.length > 0) focusOnList(selectedItems); 
         });
         
         $('ctxShowAll').addEventListener('click', () => $('btnShowAll').click());
