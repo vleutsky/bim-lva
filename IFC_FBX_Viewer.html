@@ -859,7 +859,7 @@
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
-            <b>IFC&nbsp;/&nbsp;FBX&nbsp;VIEWER</b>
+            <b>IFC&nbsp;/&nbsp;CAD&nbsp;/&nbsp;3D VIEWER</b>
         </div>
         
         <div class="btn-group">
@@ -875,13 +875,13 @@
         </div>
 
         <div class="tools">
-            <input type="text" id="yaLink" class="cloud-input" placeholder="Ссылка Яндекс.Диск" title="Вставьте публичную ссылку на IFC- или FBX-файл в Яндекс.Диске">
+            <input type="text" id="yaLink" class="cloud-input" placeholder="Ссылка Яндекс.Диск" title="Вставьте публичную ссылку на поддерживаемый файл в Яндекс.Диске">
             <button class="btn btn-cloud" id="btnYaLoad" title="Скачать и открыть модель по публичной ссылке Яндекс.Диска">☁ ИЗ ОБЛАКА</button>
             
             <div class="divider"></div>
 
-            <input type="file" id="file" accept=".ifc,.fbx" multiple hidden>
-            <button class="btn load-btn" id="open" title="Выбрать один или несколько IFC/FBX-файлов на компьютере">⬆ ЛОКАЛЬНО</button>
+            <input type="file" id="file" accept=".ifc,.fbx,.dxf,.dwg,.glb,.gltf,.obj,.stl,.ply,.dae,.3ds" multiple hidden>
+            <button class="btn load-btn" id="open" title="Поддерживаются IFC, FBX, DXF, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS">⬆ ЛОКАЛЬНО</button>
             <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ КАДР</button>
             <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
             <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ СТРУКТУРА IFC</button>
@@ -903,7 +903,7 @@
             <input type="text" id="searchInput" placeholder="Поиск (Enter)..." title="Введите часть имени или IFC-класса и нажмите Enter">
         </div>
         <div class="tree" id="tree">
-            <div class="empty">Добавьте файлы .ifc / .fbx</div>
+            <div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>
         </div>
     </aside>
 
@@ -912,8 +912,8 @@
     <main class="stage" id="stage">
         <div class="drop-hint" id="hint">
             <div class="grid-ico"></div>
-            <h2>Сводные модели .ifc / .fbx</h2>
-            <p>Перетащите файлы сюда (можно сразу несколько). Модели будут загружены в общую абсолютную систему координат.</p>
+            <h2>Сводные IFC · CAD · 3D модели</h2>
+            <p>IFC, FBX, ASCII DXF, GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG необходимо предварительно преобразовать в DXF.</p>
         </div>
         <div id="labels-container"></div> <div class="loader" id="loader">
             <b id="loadTitle">ОБРАБОТКА</b>
@@ -1051,6 +1051,12 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { TransformControls } from 'three/addons/controls/TransformControls.js';
         import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+        import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+        import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+        import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
+        import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
         import * as WebIFC from 'web-ifc';
 
         const WASM_PATH = "https://unpkg.com/web-ifc@0.0.57/";
@@ -1163,6 +1169,8 @@
         let globalGroup = new THREE.Group();
         globalGroup.rotation.x = MODEL_ROT_X; 
         scene.add(globalGroup);
+        let externalGroup = new THREE.Group();
+        scene.add(externalGroup);
 
         // --- CLIPPING PLANES (Разрез) ---
         // Создаем глобальную плоскость, изначально отодвинута далеко
@@ -1299,8 +1307,14 @@ let isClipping = false;
 
         // --- State Management ---
         const fbxLoader = new FBXLoader();
-        let nextFbxModelID = 1;
-        const allocFbxModelID = () => 'fbx_' + (nextFbxModelID++);
+        const gltfLoader = new GLTFLoader();
+        const objLoader = new OBJLoader();
+        const stlLoader = new STLLoader();
+        const plyLoader = new PLYLoader();
+        const colladaLoader = new ColladaLoader();
+        const tdsLoader = new TDSLoader();
+        let nextExternalModelID = 1;
+        const allocExternalModelID = format => `${format.toLowerCase()}_${nextExternalModelID++}`;
 
         // Классы с совместимой формой атрибутов IfcElement в IFC4.
         const IFC_EDITABLE_CLASSES = [
@@ -1783,14 +1797,16 @@ let isClipping = false;
         }
 
         class FBXModelData {
-            constructor(modelID, filename) {
+            constructor(modelID, filename, format = 'FBX') {
                 this.modelID = modelID;
                 this.filename = filename;
                 this.isFBX = true;
+                this.isExternal = true;
+                this.format = format.toUpperCase();
                 this.meshesByID = new Map();
                 this.searchCache = new Map();
                 this.group = new THREE.Group();
-                globalGroup.add(this.group);
+                externalGroup.add(this.group);
             }
         }
 
@@ -1822,6 +1838,16 @@ let isClipping = false;
                 const ext = file.name.split('.').pop().toLowerCase();
                 if (ext === 'ifc') await loadSingleIFC(file);
                 else if (ext === 'fbx') await loadSingleFBX(file);
+                else if (ext === 'dxf') await loadSingleDXF(file);
+                else if (ext === 'glb' || ext === 'gltf') await loadSingleGLTF(file, ext);
+                else if (ext === 'obj') await loadSingleOBJ(file);
+                else if (ext === 'stl') await loadSingleSTL(file);
+                else if (ext === 'ply') await loadSinglePLY(file);
+                else if (ext === 'dae') await loadSingleDAE(file);
+                else if (ext === '3ds') await loadSingle3DS(file);
+                else if (ext === 'dwg') {
+                    alert(`${file.name}: DWG нельзя надёжно прочитать в браузере. Сохраните его как ASCII DXF и загрузите полученный файл.`);
+                }
                 else skipped.push(file.name);
             }
             if (skipped.length) alert('Пропущено (формат не поддержан): ' + skipped.join(', '));
@@ -1916,11 +1942,53 @@ let isClipping = false;
 
         function typeLabelFBX(obj) {
             if (obj.isMesh) return 'Mesh';
+            if (obj.isLine || obj.isLineSegments) return 'Lines';
+            if (obj.isPoints) return 'Points';
             if (obj.isBone) return 'Bone';
             if (obj.isGroup) return 'Group';
             if (obj.isLight) return 'Light';
             if (obj.isCamera) return 'Camera';
             return obj.type || '';
+        }
+
+        const isExternalRenderable = obj => !!(obj && (obj.isMesh || obj.isLine || obj.isLineSegments || obj.isPoints));
+
+        function registerExternalRoot(modData, root) {
+            modData.group.add(root);
+            let exprCounter = 1;
+            root.traverse(obj => {
+                if (!isExternalRenderable(obj)) return;
+                const expressID = exprCounter++;
+                obj.userData = { ...obj.userData, modelID: modData.modelID, expressID };
+
+                const srcMaterials = Array.isArray(obj.material) ? obj.material : [obj.material];
+                const materials = srcMaterials.map(material => {
+                    let normalized;
+                    if (material && material.clone) normalized = material.clone();
+                    else if (obj.isPoints) normalized = new THREE.PointsMaterial({ size: 0.08, color: 0x68727d });
+                    else if (obj.isLine || obj.isLineSegments) normalized = new THREE.LineBasicMaterial({ color: 0x465d70 });
+                    else normalized = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+                    if (obj.isMesh) normalized.side = THREE.DoubleSide;
+                    normalized.clippingPlanes = [globalClipPlane];
+                    return normalized;
+                });
+                obj.material = Array.isArray(obj.material) ? materials : materials[0];
+
+                modData.meshesByID.set(expressID, [obj]);
+                modData.searchCache.set(expressID, `${obj.name || ''} ${typeLabelFBX(obj)} ${modData.format}`.toLowerCase());
+                allMeshes.push(obj);
+            });
+            totalElements += modData.meshesByID.size;
+            buildTreeForFBXModel(modData, root);
+        }
+
+        async function addExternalModel(file, format, root) {
+            const modelID = allocExternalModelID(format);
+            const modData = new FBXModelData(modelID, file.name, format);
+            loadedModels.set(modelID, modData);
+            showLoader(`ГЕОМЕТРИЯ ${format}`, 'Построение объектов...');
+            await new Promise(resolve => setTimeout(resolve, 10));
+            registerExternalRoot(modData, root);
         }
 
         async function loadSingleFBX(file) {
@@ -1929,48 +1997,8 @@ let isClipping = false;
 
             try {
                 const buf = await file.arrayBuffer();
-                const modelID = allocFbxModelID();
-                const modData = new FBXModelData(modelID, file.name);
-                loadedModels.set(modelID, modData);
-
-                showLoader('ГЕОМЕТРИЯ FBX', 'Разбор и построение мешей...');
-                await new Promise(r => setTimeout(r, 10));
-
                 const root = fbxLoader.parse(buf, '');
-                modData.group.add(root);
-
-                let exprCounter = 1;
-                root.traverse(obj => {
-                    if (!obj.isMesh) return;
-                    const expressID = exprCounter++;
-                    obj.userData = { modelID, expressID };
-
-                    // Нормализуем материал(ы): нужен emissive (для подсветки выделения) и clippingPlanes (для разреза)
-                    const srcMats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                    const newMats = srcMats.map(m => {
-                        const nm = new THREE.MeshStandardMaterial({
-                            color: (m && m.color) ? m.color.clone() : new THREE.Color(0xaaaaaa),
-                            map: m && m.map ? m.map : null,
-                            transparent: m ? !!m.transparent : false,
-                            opacity: m && m.opacity != null ? m.opacity : 1,
-                            side: THREE.DoubleSide,
-                        });
-                        nm.clippingPlanes = [globalClipPlane];
-                        return nm;
-                    });
-                    obj.material = Array.isArray(obj.material) ? newMats : newMats[0];
-
-                    modData.meshesByID.set(expressID, [obj]);
-                    modData.searchCache.set(expressID, `${obj.name || ''} ${typeLabelFBX(obj)}`.toLowerCase());
-                    allMeshes.push(obj);
-                });
-
-                totalElements += modData.meshesByID.size;
-
-                showLoader('СТРУКТУРА', 'Построение дерева...');
-                await new Promise(r => setTimeout(r, 10));
-                buildTreeForFBXModel(modData, root);
-
+                await addExternalModel(file, 'FBX', root);
                 hideLoader();
 
             } catch (e) {
@@ -1980,16 +2008,294 @@ let isClipping = false;
             }
         }
 
+        async function loadSingleGLTF(file, extension) {
+            showLoader('ЧТЕНИЕ ФАЙЛА', file.name);
+            try {
+                const source = extension === 'gltf' ? await file.text() : await file.arrayBuffer();
+                const gltf = await new Promise((resolve, reject) => {
+                    gltfLoader.parse(source, '', resolve, reject);
+                });
+                const root = gltf.scene || gltf.scenes[0];
+                root.name = root.name || file.name;
+                await addExternalModel(file, extension.toUpperCase(), root);
+                hideLoader();
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                alert(`Ошибка ${extension.toUpperCase()}: ${error.message}. Для GLTF внешние .bin/текстуры не поддерживаются — используйте GLB.`);
+            }
+        }
+
+        async function loadSingleOBJ(file) {
+            showLoader('ЧТЕНИЕ OBJ', file.name);
+            try {
+                const root = objLoader.parse(await file.text());
+                root.name = root.name || file.name;
+                await addExternalModel(file, 'OBJ', root);
+                hideLoader();
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                alert('Ошибка OBJ: ' + error.message);
+            }
+        }
+
+        async function loadSingleSTL(file) {
+            showLoader('ЧТЕНИЕ STL', file.name);
+            try {
+                const geometry = stlLoader.parse(await file.arrayBuffer());
+                if (!geometry.attributes.normal) geometry.computeVertexNormals();
+                const mesh = new THREE.Mesh(
+                    geometry,
+                    new THREE.MeshStandardMaterial({ color: 0xb8c2cc, metalness: 0.05, roughness: 0.8 })
+                );
+                mesh.name = file.name;
+                const root = new THREE.Group();
+                root.name = file.name;
+                root.add(mesh);
+                await addExternalModel(file, 'STL', root);
+                hideLoader();
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                alert('Ошибка STL: ' + error.message);
+            }
+        }
+
+        async function loadSinglePLY(file) {
+            showLoader('ЧТЕНИЕ PLY', file.name);
+            try {
+                const geometry = plyLoader.parse(await file.arrayBuffer());
+                let object;
+                if (geometry.index || geometry.attributes.normal) {
+                    if (!geometry.attributes.normal) geometry.computeVertexNormals();
+                    object = new THREE.Mesh(
+                        geometry,
+                        new THREE.MeshStandardMaterial({
+                            color: geometry.attributes.color ? 0xffffff : 0xb8c2cc,
+                            vertexColors: !!geometry.attributes.color,
+                            side: THREE.DoubleSide
+                        })
+                    );
+                } else {
+                    object = new THREE.Points(
+                        geometry,
+                        new THREE.PointsMaterial({
+                            size: 0.08,
+                            color: geometry.attributes.color ? 0xffffff : 0x68727d,
+                            vertexColors: !!geometry.attributes.color
+                        })
+                    );
+                }
+                object.name = file.name;
+                const root = new THREE.Group();
+                root.name = file.name;
+                root.add(object);
+                await addExternalModel(file, 'PLY', root);
+                hideLoader();
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                alert('Ошибка PLY: ' + error.message);
+            }
+        }
+
+        async function loadSingleDAE(file) {
+            showLoader('ЧТЕНИЕ DAE', file.name);
+            try {
+                const collada = colladaLoader.parse(await file.text(), '');
+                const root = collada.scene;
+                root.name = root.name || file.name;
+                await addExternalModel(file, 'DAE', root);
+                hideLoader();
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                alert('Ошибка DAE: ' + error.message);
+            }
+        }
+
+        async function loadSingle3DS(file) {
+            showLoader('ЧТЕНИЕ 3DS', file.name);
+            try {
+                const root = tdsLoader.parse(await file.arrayBuffer(), '');
+                root.name = root.name || file.name;
+                await addExternalModel(file, '3DS', root);
+                hideLoader();
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                alert('Ошибка 3DS: ' + error.message);
+            }
+        }
+
+        function parseAsciiDXF(text) {
+            if (text.slice(0, 22).includes('AutoCAD Binary DXF')) {
+                throw new Error('Бинарный DXF не поддерживается. Сохраните файл как ASCII DXF.');
+            }
+            const lines = text.split(/\r\n|\n|\r/);
+            const pairs = [];
+            for (let i = 0; i + 1 < lines.length; i += 2) {
+                const code = parseInt(lines[i].trim(), 10);
+                if (Number.isFinite(code)) pairs.push({ code, value: lines[i + 1].trim() });
+            }
+            const entities = [];
+            let inEntities = false;
+            for (let i = 0; i < pairs.length;) {
+                const pair = pairs[i++];
+                if (!inEntities) {
+                    if (pair.code === 0 && pair.value === 'SECTION' &&
+                        pairs[i] && pairs[i].code === 2 && pairs[i].value === 'ENTITIES') {
+                        inEntities = true;
+                        i++;
+                    }
+                    continue;
+                }
+                if (pair.code === 0 && pair.value === 'ENDSEC') break;
+                if (pair.code !== 0) continue;
+
+                const type = pair.value;
+                const data = [];
+                while (i < pairs.length && pairs[i].code !== 0) data.push(pairs[i++]);
+                const firstNumber = code => {
+                    const found = data.find(item => item.code === code);
+                    return found ? parseFloat(found.value) : undefined;
+                };
+                const layerEntry = data.find(item => item.code === 8);
+                const layer = layerEntry ? layerEntry.value : '0';
+
+                if (type === 'POLYLINE') {
+                    const points = [];
+                    const flags = firstNumber(70) || 0;
+                    while (i < pairs.length && pairs[i].code === 0 && pairs[i].value === 'VERTEX') {
+                        i++;
+                        const vertex = [];
+                        while (i < pairs.length && pairs[i].code !== 0) vertex.push(pairs[i++]);
+                        const value = code => {
+                            const found = vertex.find(item => item.code === code);
+                            return found ? parseFloat(found.value) : undefined;
+                        };
+                        const point = [value(10), value(20), value(30) || 0];
+                        if (point.every(Number.isFinite)) points.push(point);
+                    }
+                    if (i < pairs.length && pairs[i].code === 0 && pairs[i].value === 'SEQEND') {
+                        i++;
+                        while (i < pairs.length && pairs[i].code !== 0) i++;
+                    }
+                    if (points.length > 1) entities.push({ type: 'polyline', layer, points, closed: !!(flags & 1) });
+                } else if (type === 'LINE') {
+                    const values = [firstNumber(10), firstNumber(20), firstNumber(30) || 0,
+                        firstNumber(11), firstNumber(21), firstNumber(31) || 0];
+                    if (values.every(Number.isFinite)) entities.push({ type: 'line', layer, values });
+                } else if (type === 'CIRCLE' || type === 'ARC') {
+                    const cx = firstNumber(10), cy = firstNumber(20), cz = firstNumber(30) || 0;
+                    const radius = firstNumber(40);
+                    if ([cx, cy, cz, radius].every(Number.isFinite)) {
+                        let start = type === 'ARC' ? (firstNumber(50) || 0) : 0;
+                        let end = type === 'ARC' ? (firstNumber(51) ?? 360) : 360;
+                        if (end < start) end += 360;
+                        entities.push({ type: 'arc', layer, cx, cy, cz, radius, start, end });
+                    }
+                } else if (type === 'LWPOLYLINE') {
+                    const points = [];
+                    let x = null;
+                    data.forEach(item => {
+                        if (item.code === 10) x = parseFloat(item.value);
+                        if (item.code === 20 && x != null) {
+                            points.push([x, parseFloat(item.value), firstNumber(38) || 0]);
+                            x = null;
+                        }
+                    });
+                    const flags = firstNumber(70) || 0;
+                    if (points.length > 1) entities.push({ type: 'polyline', layer, points, closed: !!(flags & 1) });
+                } else if (type === 'POINT') {
+                    const point = [firstNumber(10), firstNumber(20), firstNumber(30) || 0];
+                    if (point.every(Number.isFinite)) entities.push({ type: 'point', layer, point });
+                }
+            }
+            return entities;
+        }
+
+        function dxfLayerColor(layerName) {
+            let hash = 0;
+            for (const char of layerName) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+            return new THREE.Color().setHSL((hash % 360) / 360, 0.55, 0.45);
+        }
+
+        function buildDXFRoot(entities, filename) {
+            const root = new THREE.Group();
+            root.name = filename;
+            const segmentsByLayer = new Map();
+            const pointsByLayer = new Map();
+            const addSegment = (layer, a, b) => {
+                if (!segmentsByLayer.has(layer)) segmentsByLayer.set(layer, []);
+                segmentsByLayer.get(layer).push(...a, ...b);
+            };
+            entities.forEach(entity => {
+                if (entity.type === 'line') {
+                    addSegment(entity.layer, entity.values.slice(0, 3), entity.values.slice(3, 6));
+                } else if (entity.type === 'polyline') {
+                    for (let i = 0; i < entity.points.length - 1; i++) {
+                        addSegment(entity.layer, entity.points[i], entity.points[i + 1]);
+                    }
+                    if (entity.closed) addSegment(entity.layer, entity.points.at(-1), entity.points[0]);
+                } else if (entity.type === 'arc') {
+                    const segments = Math.max(12, Math.ceil(Math.abs(entity.end - entity.start) / 7.5));
+                    for (let i = 0; i < segments; i++) {
+                        const a1 = THREE.MathUtils.degToRad(entity.start + (entity.end - entity.start) * i / segments);
+                        const a2 = THREE.MathUtils.degToRad(entity.start + (entity.end - entity.start) * (i + 1) / segments);
+                        addSegment(entity.layer,
+                            [entity.cx + Math.cos(a1) * entity.radius, entity.cy + Math.sin(a1) * entity.radius, entity.cz],
+                            [entity.cx + Math.cos(a2) * entity.radius, entity.cy + Math.sin(a2) * entity.radius, entity.cz]);
+                    }
+                } else if (entity.type === 'point') {
+                    if (!pointsByLayer.has(entity.layer)) pointsByLayer.set(entity.layer, []);
+                    pointsByLayer.get(entity.layer).push(...entity.point);
+                }
+            });
+            segmentsByLayer.forEach((positions, layer) => {
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: dxfLayerColor(layer) }));
+                lines.name = layer;
+                root.add(lines);
+            });
+            pointsByLayer.forEach((positions, layer) => {
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: dxfLayerColor(layer), size: 0.12 }));
+                points.name = `${layer} · точки`;
+                root.add(points);
+            });
+            return root;
+        }
+
+        async function loadSingleDXF(file) {
+            showLoader('ЧТЕНИЕ DXF', file.name);
+            try {
+                const entities = parseAsciiDXF(await file.text());
+                if (!entities.length) throw new Error('Не найдены поддерживаемые LINE, ARC, CIRCLE, LWPOLYLINE или POINT.');
+                await addExternalModel(file, 'DXF', buildDXFRoot(entities, file.name));
+                hideLoader();
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                alert('Ошибка DXF: ' + error.message);
+            }
+        }
+
         function getAllChildGeomFBX(modelID, object3d) {
             const res = [];
-            object3d.traverse(child => { if (child.isMesh) res.push({ modelID, expressID: child.userData.expressID }); });
+            object3d.traverse(child => {
+                if (isExternalRenderable(child)) res.push({ modelID, expressID: child.userData.expressID });
+            });
             return res;
         }
 
         function buildTreeForFBXModel(modData, root) {
             function build(obj, depth) {
                 const kids = obj.children || [];
-                const hasGeom = !!obj.isMesh;
+                const hasGeom = isExternalRenderable(obj);
 
                 const node = document.createElement('div');
                 node.className = 'tnode';
@@ -2696,7 +3002,22 @@ let isClipping = false;
 
         function setEmissive(mesh, hex) {
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            mats.forEach(m => { if (m && m.emissive) m.emissive.setHex(hex); });
+            mats.forEach((material, index) => {
+                if (!material) return;
+                if (material.emissive) {
+                    material.emissive.setHex(hex);
+                } else if (material.color) {
+                    mesh.userData._originalColors ||= {};
+                    if (hex === highlightColor) {
+                        if (mesh.userData._originalColors[index] === undefined) {
+                            mesh.userData._originalColors[index] = material.color.getHex();
+                        }
+                        material.color.setHex(highlightColor);
+                    } else if (mesh.userData._originalColors[index] !== undefined) {
+                        material.color.setHex(mesh.userData._originalColors[index]);
+                    }
+                }
+            });
         }
 
         function selectMultiple(items) {
@@ -2755,8 +3076,8 @@ let isClipping = false;
             const raycaster = new THREE.Raycaster();
             raycaster.setFromCamera(pointer, camera);
             
-            // Если включен разрез - нужно сказать рейкастеру игнорировать отрезанное
-            if (isClipping) raycaster.params.Line = { threshold: 1 }; 
+            raycaster.params.Line = { threshold: 0.5 };
+            raycaster.params.Points = { threshold: 0.5 };
             
             const visibleMeshes = allMeshes.filter(m => m.visible);
             const hits = raycaster.intersectObjects(visibleMeshes, false);
@@ -3779,6 +4100,7 @@ let isClipping = false;
             const obj = meshes && meshes[0];
 
             let html = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
+            html += propRow('Формат', modData ? modData.format : '');
             if (obj) {
                 html += propRow('Имя', obj.name || '');
                 html += propRow('Тип', typeLabelFBX(obj));
@@ -3788,7 +4110,7 @@ let isClipping = false;
                 const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
                 html += propRow('Позиция (мир)', `${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}`);
             }
-            html += `<div class="empty" style="padding-top:10px">Файл FBX: свойств/Pset, как в IFC, здесь нет — только геометрия и трансформации.</div>`;
+            html += `<div class="empty" style="padding-top:10px">${esc(modData ? modData.format : 'Внешний формат')}: BIM-семантики и IFC Pset здесь нет — отображаются геометрия, слои/узлы и трансформации.</div>`;
             propsBox.innerHTML = html;
         }
 
@@ -3837,7 +4159,7 @@ let isClipping = false;
             if (loadedModels.size === 0) {
                 if (isClipping) $('btnClip').click();
                 if (isMeasuring) $('btnMeasure').click();
-                treeBox.innerHTML = '<div class="empty">Добавьте файлы .ifc / .fbx</div>';
+                treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
                 ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => {
                     $(id).disabled = true;
@@ -3898,7 +4220,11 @@ let isClipping = false;
         function fitView() {
             if (allMeshes.length === 0) return;
             
-            const box = new THREE.Box3().setFromObject(globalGroup); 
+            const box = new THREE.Box3();
+            const ifcBox = new THREE.Box3().setFromObject(globalGroup);
+            const extBox = new THREE.Box3().setFromObject(externalGroup);
+            if (!ifcBox.isEmpty()) box.union(ifcBox);
+            if (!extBox.isEmpty()) box.union(extBox);
             if (box.isEmpty()) return;
             
             const size = box.getSize(new THREE.Vector3()); 
@@ -3952,13 +4278,17 @@ let isClipping = false;
             globalGroup = new THREE.Group(); 
             globalGroup.rotation.x = MODEL_ROT_X; 
             scene.add(globalGroup);
+
+            scene.remove(externalGroup);
+            externalGroup = new THREE.Group();
+            scene.add(externalGroup);
             
             measurePoints = []; 
             measureVisuals.clear(); 
             labelsContainer.innerHTML = ''; 
             labelsList = [];
             
-            treeBox.innerHTML = '<div class="empty">Добавьте файлы .ifc / .fbx</div>';
+            treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => $(id).disabled = true);
             $('btnExportIFC').disabled = true;
@@ -4021,9 +4351,9 @@ let isClipping = false;
             stage.classList.remove('dragover'); 
         }));
         stage.addEventListener('drop', e => {
-            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx)$/i.test(f.name));
+            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx|dxf|dwg|glb|gltf|obj|stl|ply|dae|3ds)$/i.test(f.name));
             if (files.length) handleFiles(files); 
-            else alert('Нужны файлы .ifc или .fbx');
+            else alert('Поддерживаются IFC, FBX, ASCII DXF, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS.');
         });
 
         // Resizers
