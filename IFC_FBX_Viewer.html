@@ -756,6 +756,15 @@
             font-weight: 600;
         }
 
+        .ctx-item.danger {
+            color: var(--err);
+        }
+
+        .ctx-item.danger:hover {
+            background: var(--err);
+            color: #ffffff;
+        }
+
         .ctx-divider {
             height: 1px;
             background: var(--line);
@@ -885,6 +894,8 @@
         <div class="ctx-divider"></div>
         <button class="ctx-item" id="ctxRenameBranch" title="Изменить атрибут Name реального IFC-узла">✎ Переименовать ветку</button>
         <button class="ctx-item" id="ctxHide" title="Скрыть геометрию выбранной ветки">👁 Скрыть ветку</button>
+        <div class="ctx-divider"></div>
+        <button class="ctx-item danger" id="ctxRemoveFile" title="Удалить весь файл, которому принадлежит выбранная ветка, из просмотрщика">✕ Удалить загруженный файл</button>
     </div>
 
     <div class="ctx-menu" id="stageCtx">
@@ -1704,6 +1715,8 @@ let isClipping = false;
 
             const fRow = document.createElement('div');
             fRow.className = 'trow';
+            fRow.dataset.mid = modData.modelID;
+            fRow.dataset.fileRoot = 'true';
             fRow.innerHTML = `<span class="caret">▾</span><span class="tlabel" style="font-weight:600;color:var(--blue)">${esc(modData.filename)}</span>`;
             fileRoot.appendChild(fRow);
 
@@ -1937,7 +1950,9 @@ let isClipping = false;
             
             const fRow = document.createElement('div'); 
             fRow.className = 'trow';
-            fRow.innerHTML = `<span class="caret">▾</span><span class="tlabel" style="font-weight:600;color:var(--blue)">${modData.filename}</span>`;
+            fRow.dataset.mid = modData.modelID;
+            fRow.dataset.fileRoot = 'true';
+            fRow.innerHTML = `<span class="caret">▾</span><span class="tlabel" style="font-weight:600;color:var(--blue)">${esc(modData.filename)}</span>`;
             fileRoot.appendChild(fRow);
             
             fRow.addEventListener('click', (e) => {
@@ -2935,6 +2950,59 @@ let isClipping = false;
             propsBox.innerHTML = html;
         }
 
+        function disposeModelObject(root) {
+            if (!root) return;
+            root.traverse(object => {
+                if (object.geometry) object.geometry.dispose();
+                const materials = Array.isArray(object.material) ? object.material : [object.material];
+                materials.forEach(material => {
+                    if (!material) return;
+                    for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap']) {
+                        if (material[key] && material[key].dispose) material[key].dispose();
+                    }
+                    material.dispose();
+                });
+            });
+        }
+
+        function removeLoadedModel(modelID) {
+            const modData = loadedModels.get(modelID);
+            if (!modData) return;
+
+            const removedCount = modData.meshesByID.size;
+            disposeModelObject(modData.group);
+            if (!modData.isFBX) {
+                try { ifcAPI.CloseModel(modelID); } catch (error) { console.warn(error); }
+            }
+            if (modData.group.parent) modData.group.parent.remove(modData.group);
+
+            loadedModels.delete(modelID);
+            allMeshes = allMeshes.filter(mesh => String(mesh.userData.modelID) !== String(modelID));
+            totalElements = Math.max(0, totalElements - removedCount);
+
+            [...treeBox.querySelectorAll('.file-root')].forEach(fileRoot => {
+                const fileRow = fileRoot.firstElementChild;
+                if (fileRow && String(fileRow.dataset.mid) === String(modelID)) fileRoot.remove();
+            });
+
+            selectMultiple(selectedItems.filter(item => String(item.modelID) !== String(modelID)));
+            $('sFile').textContent = loadedModels.size;
+            $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+            $('btnExportIFC').disabled = ![...loadedModels.values()].some(model => !model.isFBX && model.ifcIndex);
+
+            if (loadedModels.size === 0) {
+                if (isClipping) $('btnClip').click();
+                if (isMeasuring) $('btnMeasure').click();
+                treeBox.innerHTML = '<div class="empty">Добавьте файлы .ifc / .fbx</div>';
+                $('hint').style.display = '';
+                ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => {
+                    $(id).disabled = true;
+                });
+            } else {
+                fitView();
+            }
+        }
+
         function downloadEditedIfcModels() {
             const editedModels = [...loadedModels.values()].filter(
                 modData => !modData.isFBX && modData.edited && modData.ifcIndex
@@ -3215,6 +3283,25 @@ let isClipping = false;
         });
 
         $('ctxHide').addEventListener('click', () => $('btnHide').click());
+
+        $('ctxRemoveFile').addEventListener('click', () => {
+            const fileRoot = treeContextRow && treeContextRow.closest('.file-root');
+            const fileRow = fileRoot && fileRoot.firstElementChild;
+            if (!fileRow || fileRow.dataset.mid === undefined) {
+                alert('Не удалось определить загруженный файл для этой ветки.');
+                return;
+            }
+            const rawModelID = fileRow.dataset.mid;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const modData = loadedModels.get(modelID);
+            if (!modData) return;
+            const editWarning = modData.edited
+                ? '\n\nВ файле есть несохранённые изменения — они будут потеряны.'
+                : '';
+            if (!confirm(`Удалить «${modData.filename}» из просмотрщика?${editWarning}`)) return;
+            removeLoadedModel(modelID);
+            treeContextRow = null;
+        });
 
         $('ctxRenameBranch').addEventListener('click', () => {
             if (!treeContextRow || !treeContextRow.dataset.eid) {
