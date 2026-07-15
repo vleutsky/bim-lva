@@ -2115,7 +2115,11 @@ let isClipping = false;
         $('treeSelectAll').addEventListener('click', () => {
             const allItems = [];
             for (const [modelID, modData] of loadedModels) {
-                for (const expressID of modData.meshesByID.keys()) {
+                const ids = new Set(modData.meshesByID.keys());
+                if (!modData.isFBX) {
+                    for (const expressID of modData.searchCache.keys()) ids.add(expressID);
+                }
+                for (const expressID of ids) {
                     allItems.push({ modelID, expressID });
                 }
             }
@@ -2162,6 +2166,10 @@ let isClipping = false;
         function renderBulkEditor() {
             const editable = getEditableSelection();
             if (!editable.length) return '';
+            const classEditable = editable.filter(item => {
+                const modData = loadedModels.get(item.modelID);
+                return modData && modData.meshesByID.has(item.expressID);
+            });
             const ignored = selectedItems.length - editable.length;
             const classOptions = IFC_EDITABLE_CLASSES.map(className =>
                 `<option value="${className}">${className.replace(/^IFC/, 'Ifc')}</option>`
@@ -2184,7 +2192,7 @@ let isClipping = false;
                             <input class="editInput" id="bulkPredefinedType" placeholder=".NOTDEFINED.">
                         </div>
                         <button class="btn" style="width:100%;margin-top:8px" data-act="bulkChangeClass">
-                            Применить класс к ${editable.length} элементам
+                            Применить класс к ${classEditable.length} геометрическим элементам
                         </button>
 
                         <div class="sub-head" style="padding-left:0">Переименование PropertySet</div>
@@ -2396,7 +2404,10 @@ let isClipping = false;
         }
 
         function applyBulkClassChange() {
-            const items = getEditableSelection();
+            const items = getEditableSelection().filter(item => {
+                const modData = loadedModels.get(item.modelID);
+                return modData && modData.meshesByID.has(item.expressID);
+            });
             const className = propsBox.querySelector('#bulkClassSelect').value;
             const predefinedType = propsBox.querySelector('#bulkPredefinedType').value.trim();
             if (!items.length) return;
