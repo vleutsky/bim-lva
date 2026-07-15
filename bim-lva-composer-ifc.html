@@ -966,6 +966,7 @@
             <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
             <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ СТРУКТУРА IFC</button>
             <button class="btn" id="btnMergeIFC" disabled title="Объединить все загруженные IFC-файлы в один: ExpressID пересчитываются без коллизий, все пространственные структуры собираются под одним общим IfcProject. Внешние 3D/CAD-форматы (FBX/DXF/OBJ и т.д.) в объединение не входят.">🧩 ОБЪЕДИНИТЬ IFC</button>
+            <button class="btn" id="btnGeoRaster" title="Загрузить геопривязанный растр ECW / GeoTIFF / JPEG+JGW и наложить на рельеф по координатам">🗺 ГЕОРАСТР</button>
             <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ СЕТКА</button>
             <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕ ОЧИСТИТЬ</button>
         </div>
@@ -1144,6 +1145,43 @@
         </div>
     </div>
 
+    <div class="modal-backdrop" id="geoRasterModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="geoRasterModalTitle" style="width:min(520px,100%)">
+            <h3 id="geoRasterModalTitle">Геопривязанный растр на рельеф</h3>
+            <div class="bulk-note">ECW, GeoTIFF и растр с world-файлом (.jgw / .pgw / .tfw / .eww) размещаются по координатам и могут быть «натянуты» на 3D-рельеф модели. ECW в браузере конвертируется через GDAL WASM; если не получится — экспортируйте тот же снимок в GeoTIFF с геопривязкой.</div>
+            <div class="prop small">
+                <div class="k">Файл(ы) растра</div>
+                <input type="file" id="geoRasterFile" accept=".ecw,.tif,.tiff,.gtiff,.jpg,.jpeg,.png,.jgw,.pgw,.tfw,.wld,.eww" multiple class="editInput">
+            </div>
+            <label class="bulk-note" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+                <input type="checkbox" id="geoRasterDrape" checked>
+                Натянуть на рельеф (подгонка Z по геометрии под каждой точкой растра)
+            </label>
+            <div class="range-row">
+                <span>Непрозр.</span>
+                <input type="range" id="geoRasterOpacity" min="0.1" max="1" step="0.01" value="0.92">
+                <span id="geoRasterOpacityVal">0.92</span>
+            </div>
+            <div class="prop small">
+                <div class="k">Смещение над рельефом, м</div>
+                <input class="editInput" id="geoRasterZOffset" type="number" step="0.01" value="0.05" title="Дополнительный отступ по Z после натягивания на поверхность">
+            </div>
+            <div class="prop small">
+                <div class="k">Детализация сетки</div>
+                <select class="editInput" id="geoRasterSegments">
+                    <option value="32">32 × 32 (быстро)</option>
+                    <option value="64" selected>64 × 64</option>
+                    <option value="96">96 × 96 (точнее на рельефе)</option>
+                </select>
+            </div>
+            <div id="geoRasterList" class="bulk-note" style="margin-top:10px">Загруженных георастров: 0</div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelGeoRaster">Закрыть</button>
+                <button class="btn load-btn" id="applyGeoRaster">Загрузить и наложить</button>
+            </div>
+        </div>
+    </div>
+
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
         <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">Дерево: Ctrl — добавить/убрать · Shift — диапазон · ПКМ с движением: камера · Оранжевое: редактируется · Серое: только чтение</span>
@@ -1155,7 +1193,8 @@
         "imports": {
             "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
             "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/",
-            "web-ifc": "https://unpkg.com/web-ifc@0.0.57/web-ifc-api.js"
+            "web-ifc": "https://unpkg.com/web-ifc@0.0.57/web-ifc-api.js",
+            "geotiff": "https://unpkg.com/geotiff@2.1.3/dist-module/geotiff.js"
         }
     }
     </script>
@@ -1172,6 +1211,7 @@
         import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
         import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
         import * as WebIFC from 'web-ifc';
+        import { fromArrayBuffer as geotiffFromArrayBuffer } from 'geotiff';
 
         const WASM_PATH = "https://unpkg.com/web-ifc@0.0.57/";
         const TYPE_NAMES = {};
@@ -1290,6 +1330,297 @@
         scene.add(globalGroup);
         let externalGroup = new THREE.Group();
         scene.add(externalGroup);
+        let geoRasterGroup = new THREE.Group();
+        geoRasterGroup.name = 'GeoRasters';
+        scene.add(geoRasterGroup);
+        const geoRasterLayers = [];
+        let nextGeoRasterId = 1;
+        let gdalModulePromise = null;
+
+        async function getGdalModule() {
+            if (!gdalModulePromise) {
+                gdalModulePromise = import('https://unpkg.com/gdal3.js@2.8.1/dist/package/gdal3.js').then(m => m.default({
+                    path: 'https://unpkg.com/gdal3.js@2.8.1/dist/package',
+                    useWorker: false
+                }));
+            }
+            return gdalModulePromise;
+        }
+
+        async function tryConvertEcwToGeoTiff(file) {
+            showLoader('ECW → GeoTIFF', 'Попытка декодирования через GDAL WASM…');
+            try {
+                const Gdal = await getGdalModule();
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                const opened = await Gdal.open([{ name: file.name, data: bytes }]);
+                const dataset = opened.datasets?.[0];
+                if (!dataset) throw new Error('GDAL не открыл ECW');
+                const translated = await Gdal.gdal_translate(dataset.path ?? dataset, ['-of', 'GTiff', '-co', 'COMPRESS=DEFLATE']);
+                const outBytes = await Gdal.getFileBytes(translated);
+                if (!outBytes || !outBytes.length) throw new Error('пустой результат конвертации');
+                return outBytes.buffer.slice(outBytes.byteOffset, outBytes.byteOffset + outBytes.byteLength);
+            } catch (error) {
+                throw new Error(
+                    `ECW «${file.name}»: ${error.message}. ` +
+                    'Проприетарный ECW часто недоступен в браузерном GDAL. Экспортируйте снимок в GeoTIFF (.tif) с той же геопривязкой в ERDAS Imagine, Global Mapper или QGIS (ECW SDK), затем загрузите GeoTIFF сюда.'
+                );
+            }
+        }
+
+        function parseWorldFileText(text) {
+            const nums = text.trim().split(/\s+/).map(Number);
+            if (nums.length < 6 || nums.some(n => !Number.isFinite(n))) {
+                throw new Error('world-файл должен содержать 6 чисел (A D B E C F)');
+            }
+            return {
+                pixelSizeX: nums[0],
+                rotD: nums[1],
+                rotB: nums[2],
+                pixelSizeY: nums[3],
+                originX: nums[4],
+                originY: nums[5]
+            };
+        }
+
+        function boundsFromWorldFile(wf, pixelWidth, pixelHeight) {
+            const corners = [
+                [0, 0], [pixelWidth, 0], [pixelWidth, pixelHeight], [0, pixelHeight]
+            ].map(([col, row]) => ({
+                x: wf.originX + col * wf.pixelSizeX + row * wf.rotB,
+                y: wf.originY + col * wf.rotD + row * wf.pixelSizeY
+            }));
+            const xs = corners.map(c => c.x);
+            const ys = corners.map(c => c.y);
+            return {
+                minX: Math.min(...xs),
+                maxX: Math.max(...xs),
+                minY: Math.min(...ys),
+                maxY: Math.max(...ys)
+            };
+        }
+
+        async function imageFileToTexture(file) {
+            const bitmap = await createImageBitmap(file);
+            const canvas = document.createElement('canvas');
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            canvas.getContext('2d').drawImage(bitmap, 0, 0);
+            bitmap.close();
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.flipY = false;
+            texture.needsUpdate = true;
+            return { texture, width: canvas.width, height: canvas.height };
+        }
+
+        async function geotiffBufferToTexture(buffer) {
+            const tiff = await geotiffFromArrayBuffer(buffer);
+            const image = await tiff.getImage();
+            const bbox = image.getBoundingBox();
+            const width = image.getWidth();
+            const height = image.getHeight();
+            const samples = image.getSamplesPerPixel();
+            const rasters = await image.readRasters({ interleave: true });
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.createImageData(width, height);
+            const px = width * height;
+            if (samples >= 3) {
+                for (let i = 0; i < px; i++) {
+                    const si = i * samples;
+                    imgData.data[i * 4] = rasters[si];
+                    imgData.data[i * 4 + 1] = rasters[si + 1];
+                    imgData.data[i * 4 + 2] = rasters[si + 2];
+                    imgData.data[i * 4 + 3] = samples >= 4 ? rasters[si + 3] : 255;
+                }
+            } else {
+                for (let i = 0; i < px; i++) {
+                    const v = rasters[i];
+                    imgData.data[i * 4] = v;
+                    imgData.data[i * 4 + 1] = v;
+                    imgData.data[i * 4 + 2] = v;
+                    imgData.data[i * 4 + 3] = 255;
+                }
+            }
+            ctx.putImageData(imgData, 0, 0);
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.flipY = false;
+            texture.needsUpdate = true;
+            return {
+                texture,
+                bounds: { minX: bbox[0], minY: bbox[1], maxX: bbox[2], maxY: bbox[3] },
+                width,
+                height
+            };
+        }
+
+        function getSceneGroundZ() {
+            const box = new THREE.Box3();
+            const ifcBox = new THREE.Box3().setFromObject(globalGroup);
+            const extBox = new THREE.Box3().setFromObject(externalGroup);
+            if (!ifcBox.isEmpty()) box.union(ifcBox);
+            if (!extBox.isEmpty()) box.union(extBox);
+            return box.isEmpty() ? 0 : box.min.z;
+        }
+
+        function sampleTerrainZ(x, y, fallbackZ) {
+            if (!allMeshes.length) return fallbackZ;
+            const raycaster = new THREE.Raycaster();
+            raycaster.set(new THREE.Vector3(x, y, 1e7), new THREE.Vector3(0, 0, -1));
+            const hits = raycaster.intersectObjects(allMeshes.filter(m => m.visible && !m.userData.isGeoRaster), false);
+            return hits.length ? hits[0].point.z : fallbackZ;
+        }
+
+        function buildGeoRasterMesh(bounds, texture, options) {
+            const minX = bounds.minX, maxX = bounds.maxX, minY = bounds.minY, maxY = bounds.maxY;
+            const w = maxX - minX, h = maxY - minY;
+            if (w <= 0 || h <= 0) throw new Error('некорректные границы геопривязки');
+            const seg = options.segments || 64;
+            const positions = [];
+            const uvs = [];
+            const indices = [];
+            const baseZ = options.baseZ ?? getSceneGroundZ();
+            const zOffset = options.zOffset ?? 0.05;
+
+            for (let j = 0; j <= seg; j++) {
+                for (let i = 0; i <= seg; i++) {
+                    const u = i / seg, v = j / seg;
+                    const x = minX + u * w;
+                    const y = minY + v * h;
+                    let z = baseZ + zOffset;
+                    if (options.drape) z = sampleTerrainZ(x, y, baseZ) + zOffset;
+                    positions.push(x, y, z);
+                    uvs.push(u, 1 - v);
+                }
+            }
+            for (let j = 0; j < seg; j++) {
+                for (let i = 0; i < seg; i++) {
+                    const a = j * (seg + 1) + i;
+                    const b = a + 1;
+                    const c = a + seg + 1;
+                    const d = c + 1;
+                    indices.push(a, c, b, b, c, d);
+                }
+            }
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals();
+
+            const material = new THREE.MeshStandardMaterial({
+                map: texture,
+                side: THREE.DoubleSide,
+                transparent: options.opacity < 0.999,
+                opacity: options.opacity ?? 0.92,
+                roughness: 0.95,
+                metalness: 0,
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.userData.isGeoRaster = true;
+            mesh.renderOrder = 5;
+            return mesh;
+        }
+
+        function updateGeoRasterListUI() {
+            const el = $('geoRasterList');
+            if (!el) return;
+            if (!geoRasterLayers.length) {
+                el.textContent = 'Загруженных георастров: 0';
+                return;
+            }
+            el.innerHTML = geoRasterLayers.map(layer =>
+                `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0">
+                    <span>${esc(layer.name)} · ${layer.bounds.minX.toFixed(1)}…${layer.bounds.maxX.toFixed(1)}</span>
+                    <button type="button" class="pop" data-geo-id="${layer.id}" data-act="removeGeoRaster">✕</button>
+                </div>`
+            ).join('');
+        }
+
+        function disposeGeoRasterLayer(layer) {
+            if (!layer) return;
+            geoRasterGroup.remove(layer.mesh);
+            layer.mesh.geometry.dispose();
+            layer.mesh.material.map?.dispose();
+            layer.mesh.material.dispose();
+        }
+
+        function removeGeoRasterLayer(id) {
+            const idx = geoRasterLayers.findIndex(l => l.id === id);
+            if (idx < 0) return;
+            disposeGeoRasterLayer(geoRasterLayers[idx]);
+            geoRasterLayers.splice(idx, 1);
+            updateGeoRasterListUI();
+        }
+
+        function clearAllGeoRasters() {
+            geoRasterLayers.forEach(disposeGeoRasterLayer);
+            geoRasterLayers.length = 0;
+            updateGeoRasterListUI();
+        }
+
+        async function loadGeoRasterFromFiles(files, options) {
+            const fileMap = new Map();
+            for (const file of files) fileMap.set(file.name.toLowerCase(), file);
+
+            const worldExts = ['.jgw', '.pgw', '.tfw', '.wld', '.eww'];
+            const rasterFiles = files.filter(f => /\.(ecw|tif|tiff|gtiff|jpg|jpeg|png)$/i.test(f.name));
+
+            for (const file of rasterFiles) {
+                const ext = file.name.split('.').pop().toLowerCase();
+                const base = file.name.replace(/\.[^.]+$/, '').toLowerCase();
+                let worldFile = null;
+                for (const wext of worldExts) {
+                    const candidate = fileMap.get(base + wext);
+                    if (candidate) { worldFile = candidate; break; }
+                }
+
+                showLoader('ГЕОРАСТР', file.name);
+                let texture, bounds;
+
+                if (ext === 'ecw') {
+                    const tiffBuffer = await tryConvertEcwToGeoTiff(file);
+                    ({ texture, bounds } = await geotiffBufferToTexture(tiffBuffer));
+                } else if (['tif', 'tiff', 'gtiff'].includes(ext)) {
+                    ({ texture, bounds } = await geotiffBufferToTexture(await file.arrayBuffer()));
+                } else {
+                    const img = await imageFileToTexture(file);
+                    texture = img.texture;
+                    if (!worldFile) {
+                        throw new Error(`${file.name}: для JPEG/PNG нужен world-файл (.jgw/.pgw/.tfw/.eww) с координатами`);
+                    }
+                    const wf = parseWorldFileText(await worldFile.text());
+                    bounds = boundsFromWorldFile(wf, img.width, img.height);
+                }
+
+                const mesh = buildGeoRasterMesh(bounds, texture, options);
+                geoRasterGroup.add(mesh);
+                geoRasterLayers.push({
+                    id: nextGeoRasterId++,
+                    name: file.name,
+                    mesh,
+                    bounds
+                });
+            }
+            updateGeoRasterListUI();
+            hideLoader();
+        }
+
+        function openGeoRasterModal() {
+            $('geoRasterModal').classList.add('show');
+            updateGeoRasterListUI();
+        }
+
+        function closeGeoRasterModal() {
+            $('geoRasterModal').classList.remove('show');
+        }
 
         // --- CLIPPING PLANES (Разрез) ---
         // Создаем глобальную плоскость, изначально отодвинута далеко
@@ -3340,6 +3671,7 @@ let isClipping = false;
                         </div>
                         <div class="prop small">
                             <div class="k">Растровая текстура</div>
+                            <div class="bulk-note" style="margin-bottom:6px">Для ортофото/ECW с координатами используйте кнопку <b>🗺 ГЕОРАСТР</b> в шапке — растр ляжет на рельеф по геопривязке. Здесь — текстура на выбранный элемент (UV).</div>
                             <div class="v" style="margin-bottom:6px">${esc(texLabel)}</div>
                             <input type="file" id="matTextureFile" accept="image/*" hidden>
                             <div class="appearance-actions">
@@ -5141,13 +5473,13 @@ let isClipping = false;
         }
 
         function fitView() {
-            if (allMeshes.length === 0) return;
-            
             const box = new THREE.Box3();
             const ifcBox = new THREE.Box3().setFromObject(globalGroup);
             const extBox = new THREE.Box3().setFromObject(externalGroup);
+            const geoBox = new THREE.Box3().setFromObject(geoRasterGroup);
             if (!ifcBox.isEmpty()) box.union(ifcBox);
             if (!extBox.isEmpty()) box.union(extBox);
+            if (!geoBox.isEmpty()) box.union(geoBox);
             if (box.isEmpty()) return;
             
             const size = box.getSize(new THREE.Vector3()); 
@@ -5181,6 +5513,11 @@ let isClipping = false;
         
         $('clear').addEventListener('click', () => {
             for (const [id, m] of loadedModels) {
+                if (m.appearanceByID) {
+                    for (const appearance of m.appearanceByID.values()) {
+                        if (appearance.texture) disposeAppearanceTexture(appearance.texture);
+                    }
+                }
                 if (m.isFBX) {
                     m.group.traverse(o => {
                         if (o.isMesh) {
@@ -5210,6 +5547,9 @@ let isClipping = false;
             measureVisuals.clear(); 
             labelsContainer.innerHTML = ''; 
             labelsList = [];
+            appearanceDraftTexture = null;
+            appearanceDraftTextureName = '';
+            clearAllGeoRasters();
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
@@ -5236,6 +5576,41 @@ let isClipping = false;
         });
 
         // --- Яндекс Диск ---
+        $('btnGeoRaster').addEventListener('click', openGeoRasterModal);
+        $('cancelGeoRaster').addEventListener('click', closeGeoRasterModal);
+        $('geoRasterModal').addEventListener('click', event => {
+            if (event.target === $('geoRasterModal')) closeGeoRasterModal();
+            const removeBtn = event.target.closest('[data-act="removeGeoRaster"]');
+            if (removeBtn) removeGeoRasterLayer(parseInt(removeBtn.dataset.geoId, 10));
+        });
+        window.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && $('geoRasterModal').classList.contains('show')) closeGeoRasterModal();
+        });
+        $('geoRasterOpacity').addEventListener('input', event => {
+            $('geoRasterOpacityVal').textContent = Number(event.target.value).toFixed(2);
+        });
+        $('applyGeoRaster').addEventListener('click', async () => {
+            const files = [...$('geoRasterFile').files];
+            if (!files.length) {
+                alert('Выберите ECW, GeoTIFF или JPEG/PNG вместе с world-файлом (.jgw / .pgw / .tfw / .eww).');
+                return;
+            }
+            try {
+                await loadGeoRasterFromFiles(files, {
+                    drape: $('geoRasterDrape').checked,
+                    opacity: parseFloat($('geoRasterOpacity').value) || 0.92,
+                    zOffset: parseFloat($('geoRasterZOffset').value) || 0,
+                    segments: parseInt($('geoRasterSegments').value, 10) || 64
+                });
+                $('geoRasterFile').value = '';
+                if (allMeshes.length || geoRasterLayers.length) fitView();
+                alert(`Геопривязанный растр добавлен. Всего слоёв: ${geoRasterLayers.length}.`);
+            } catch (error) {
+                hideLoader();
+                alert('Ошибка георастра: ' + error.message);
+            }
+        });
+
         $('btnYaLoad').addEventListener('click', async () => {
             const link = $('yaLink').value.trim();
             if (!link) return alert('Пожалуйста, вставьте ссылку');
