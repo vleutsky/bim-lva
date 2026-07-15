@@ -1363,13 +1363,22 @@
         const geoRasterLayers = [];
         let nextGeoRasterId = 1;
         let gdalModulePromise = null;
+        const GDAL_CDN = 'https://cdn.jsdelivr.net/npm/gdal3.js@2.8.1/dist/package';
 
         async function getGdalModule() {
             if (!gdalModulePromise) {
-                gdalModulePromise = import('https://unpkg.com/gdal3.js@2.8.1/dist/package/gdal3.js').then(m => m.default({
-                    path: 'https://unpkg.com/gdal3.js@2.8.1/dist/package',
-                    useWorker: false
-                }));
+                gdalModulePromise = (async () => {
+                    if (typeof globalThis.initGdalJs !== 'function') {
+                        await import(`${GDAL_CDN}/gdal3.js`);
+                    }
+                    if (typeof globalThis.initGdalJs !== 'function') {
+                        throw new Error('Не удалось загрузить gdal3.js');
+                    }
+                    return globalThis.initGdalJs({
+                        path: GDAL_CDN,
+                        useWorker: false
+                    });
+                })();
             }
             return gdalModulePromise;
         }
@@ -1405,29 +1414,31 @@
             showLoader('ECW → GeoTIFF', 'Чтение геопривязки и декодирование через GDAL WASM…');
             try {
                 const Gdal = await getGdalModule();
-                const ecwOk = await isEcwDriverAvailable();
+                const raster = Gdal.drivers?.raster || {};
+                const ecwOk = Object.keys(raster).some(name => name.toUpperCase() === 'ECW');
                 if (!ecwOk) {
                     throw new Error(
                         'драйвер ECW недоступен в браузерном GDAL (проприетарный SDK Hexagon). ' +
                         'Экспортируйте ECW в GeoTIFF (.tif) с той же геопривязкой в ERDAS Imagine, Global Mapper или QGIS — координаты сохранятся, и растр ляжет на рельеф так же.'
                     );
                 }
-                const bytes = new Uint8Array(await file.arrayBuffer());
-                const opened = await Gdal.open([{ name: file.name, data: bytes }]);
+                const opened = await Gdal.open(file);
                 const dataset = opened.datasets?.[0];
-                if (!dataset) throw new Error('GDAL не открыл ECW');
-                const translated = await Gdal.gdal_translate(dataset.path ?? dataset, [
+                if (!dataset) {
+                    const details = opened.errors?.map(err => err.message).filter(Boolean).join('; ');
+                    throw new Error(details || 'GDAL не открыл ECW');
+                }
+                const translatedPath = await Gdal.gdal_translate(dataset, [
                     '-of', 'GTiff',
                     '-co', 'COMPRESS=DEFLATE',
                     '-co', 'TILED=YES'
                 ]);
-                const outBytes = await Gdal.getFileBytes(translated);
+                const outBytes = await Gdal.getFileBytes(translatedPath);
+                Gdal.close(dataset);
                 if (!outBytes || !outBytes.length) throw new Error('пустой результат конвертации');
                 return outBytes.buffer.slice(outBytes.byteOffset, outBytes.byteOffset + outBytes.byteLength);
             } catch (error) {
-                throw new Error(
-                    `ECW «${file.name}»: ${error.message}`
-                );
+                throw new Error(`ECW «${file.name}»: ${error.message}`);
             }
         }
 
@@ -1682,11 +1693,15 @@
         async function refreshGeoRasterEcwNote() {
             const note = $('geoRasterEcwNote');
             if (!note) return;
-            const ecwOk = await isEcwDriverAvailable();
-            if (ecwOk) {
-                note.innerHTML = 'Формат <b>ECW</b> хранит геопривязку внутри файла — растр автоматически встанет в координаты сцены и ляжет на 3D-рельеф. Также поддерживаются GeoTIFF и JPEG/PNG с world-файлом (.jgw / .pgw / .tfw / .eww).';
-            } else {
-                note.innerHTML = 'Формат <b>ECW</b> содержит координаты растра, но проприетарный декодер недоступен в браузере. Экспортируйте ECW в <b>GeoTIFF (.tif)</b> с той же геопривязкой (ERDAS Imagine, Global Mapper, QGIS) — координаты сохранятся, растр ляжет на рельеф так же. JPEG/PNG + world-файл (.jgw / .eww) тоже поддерживаются.';
+            try {
+                const ecwOk = await isEcwDriverAvailable();
+                if (ecwOk) {
+                    note.innerHTML = 'Формат <b>ECW</b> хранит геопривязку внутри файла — растр автоматически встанет в координаты сцены и ляжет на 3D-рельеф. Также поддерживаются GeoTIFF и JPEG/PNG с world-файлом (.jgw / .pgw / .tfw / .eww).';
+                } else {
+                    note.innerHTML = 'Формат <b>ECW</b> содержит координаты растра, но проприетарный декодер недоступен в браузере. Экспортируйте ECW в <b>GeoTIFF (.tif)</b> с той же геопривязкой (ERDAS Imagine, Global Mapper, QGIS) — координаты сохранятся, растр ляжет на рельеф так же. JPEG/PNG + world-файл (.jgw / .eww) тоже поддерживаются.';
+                }
+            } catch {
+                note.innerHTML = 'Для георастра используйте <b>GeoTIFF (.tif)</b> или JPEG/PNG с world-файлом (.jgw / .eww). ECW в браузере обычно недоступен — экспортируйте его в GeoTIFF с сохранением геопривязки.';
             }
         }
 
