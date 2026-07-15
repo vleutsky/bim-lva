@@ -490,6 +490,12 @@
             color: var(--accent);
         }
 
+        .trow.drag-target {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+            background: #ffe5d5;
+        }
+
         .caret {
             width: 12px;
             flex: 0 0 12px;
@@ -887,7 +893,6 @@
         <div class="panel-head" id="treeHead">
             <h3>Структура</h3>
             <div class="head-actions">
-                <button class="pop" id="treeAddBranch" title="Создать IFC-группу из выбранных элементов и добавить к ней Pset">+ ВЕТКА</button>
                 <button class="pop" id="treeSelectAll" title="Выделить все элементы всех загруженных моделей">ВСЕ</button>
                 <button class="pop" id="treeClearSelection" title="Снять выделение со всех элементов">∅</button>
                 <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
@@ -939,6 +944,7 @@
         <button class="ctx-item" id="ctxFocus" title="Переместить центр камеры к выбранному объекту">🔍 Приблизить камеру</button>
         <div class="ctx-divider"></div>
         <button class="ctx-item" id="ctxRenameBranch" title="Изменить атрибут Name реального IFC-узла">✎ Переименовать ветку</button>
+        <button class="ctx-item" id="ctxAddBranch" title="Создать дочернюю пользовательскую ветку под выбранным разделом">＋ Добавить дочернюю ветку</button>
         <button class="ctx-item" id="ctxHide" title="Скрыть геометрию выбранной ветки">👁 Скрыть ветку</button>
         <div class="ctx-divider"></div>
         <button class="ctx-item danger" id="ctxRemoveFile" title="Удалить весь файл, которому принадлежит выбранная ветка, из просмотрщика">✕ Удалить загруженный файл</button>
@@ -953,7 +959,7 @@
     <div class="modal-backdrop" id="branchModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="branchModalTitle">
             <h3 id="branchModalTitle">Новая пользовательская IFC-ветка</h3>
-            <div class="bulk-note">В каждом затронутом IFC-файле будет создана отдельная IfcGroup, содержащая выбранные элементы.</div>
+            <div class="bulk-note">Новая ветка будет добавлена под разделом: <b id="customBranchParent">—</b>. Выделенные элементы этого IFC-файла будут перемещены в неё без дублирования.</div>
             <div class="prop small">
                 <div class="k">Название ветки</div>
                 <input class="editInput" id="customBranchName" value="Новая группа">
@@ -1058,7 +1064,8 @@
                 } else if (element.classList.contains('pgroup-head')) {
                     element.title = 'Нажмите, чтобы свернуть или раскрыть раздел';
                 } else if (element.classList.contains('trow')) {
-                    element.title = 'ЛКМ — выбрать; Ctrl/Cmd — добавить или убрать; Shift — выбрать диапазон; ПКМ — действия с веткой';
+                    element.title = 'ЛКМ — выбрать; Ctrl/Cmd — добавить или убрать; Shift — выбрать диапазон; ПКМ — действия с веткой' +
+                        (element.draggable ? '; перетащите мышью для перемещения' : '');
                 } else if (element.tagName === 'BUTTON') {
                     element.title = ACTION_TOOLTIPS[element.dataset.act] || `Выполнить: ${element.textContent.trim()}`;
                 } else if (element.tagName === 'INPUT' || element.tagName === 'SELECT') {
@@ -1422,6 +1429,7 @@ let isClipping = false;
 
         function createIfcEditBatch(modData) {
             const changed = new Map();
+            const deleted = new Set();
             const appended = [];
             function entity(id) {
                 if (!changed.has(id)) {
@@ -1447,18 +1455,34 @@ let isClipping = false;
                     return true;
                 },
                 append(line) { appended.push(line); },
+                deleteEntity(id) {
+                    if (!modData.ifcIndex.index.has(id)) return false;
+                    deleted.add(id);
+                    changed.delete(id);
+                    return true;
+                },
                 commit() {
-                    [...changed.entries()]
-                        .sort((a, b) => b[1].span.start - a[1].span.start)
-                        .forEach(([id, item]) => {
-                            const line = `#${id}=${item.className}(${item.args.join(',')});`;
+                    const operations = [
+                        ...[...changed.entries()].map(([id, item]) => ({
+                            id, span: item.span,
+                            line: `#${id}=${item.className}(${item.args.join(',')});`
+                        })),
+                        ...[...deleted].map(id => ({
+                            id,
+                            span: modData.ifcIndex.index.get(id),
+                            line: null
+                        }))
+                    ].filter(operation => operation.span);
+                    operations
+                        .sort((a, b) => b.span.start - a.span.start)
+                        .forEach(operation => {
                             modData.ifcIndex.lines.splice(
-                                item.span.start,
-                                item.span.end - item.span.start + 1,
-                                line
+                                operation.span.start,
+                                operation.span.end - operation.span.start + 1,
+                                ...(operation.line == null ? [] : [operation.line])
                             );
                         });
-                    if (changed.size) {
+                    if (operations.length) {
                         modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
                     }
                     if (appended.length) {
@@ -1466,7 +1490,7 @@ let isClipping = false;
                         modData.ifcIndex.lines.splice(at < 0 ? modData.ifcIndex.lines.length : at, 0, ...appended);
                         modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
                     }
-                    if (changed.size || appended.length) modData.edited = true;
+                    if (operations.length || appended.length) modData.edited = true;
                 }
             };
         }
@@ -1998,6 +2022,7 @@ let isClipping = false;
                             
                             const gRow = document.createElement('div'); 
                             gRow.className = 'trow trow-group';
+                            gRow.dataset.mid = modData.modelID;
                             gRow.innerHTML = `<span class="caret">▾</span><span class="tlabel">${t}</span><span class="ttype">${byType.get(t).length}</span>`;
                             gNode.appendChild(gRow);
                             
@@ -2060,6 +2085,7 @@ let isClipping = false;
             });
             fileRoot.appendChild(ch); 
             treeBox.appendChild(fileRoot);
+            fileRoot.querySelectorAll('.trow').forEach(setupTreeDragRow);
             loadIfcGroupsFromApi(modData);
         }
 
@@ -2077,6 +2103,8 @@ let isClipping = false;
             }
         }
 
+        const TREE_PARENT_PREFIX = 'CURSOR_TREE_PARENT=';
+
         function findFileTreeChildren(modelID) {
             for (const fileRoot of treeBox.querySelectorAll('.file-root')) {
                 const fileRow = fileRoot.firstElementChild;
@@ -2087,12 +2115,116 @@ let isClipping = false;
             return null;
         }
 
-        function appendCustomGroupTreeNode(modData, groupID, memberIDs) {
+        function getDirectTreeChildren(node) {
+            if (!node) return null;
+            return [...node.children].find(child => child.classList.contains('children')) || null;
+        }
+
+        function ensureTreeChildren(row) {
+            const node = row && row.closest('.tnode');
+            if (!node) return null;
+            let children = getDirectTreeChildren(node);
+            if (!children) {
+                children = document.createElement('div');
+                children.className = 'children';
+                node.appendChild(children);
+                const caret = row.querySelector('.caret');
+                if (caret) caret.classList.remove('empty');
+            }
+            return children;
+        }
+
+        function treeParentTokenForRow(row) {
+            if (!row || row.dataset.fileRoot === 'true') return 'ROOT';
+            if (row.dataset.eid) return `ID:${row.dataset.eid}`;
+            const label = row.querySelector('.tlabel');
+            return `LABEL:${label ? label.textContent.trim() : 'ROOT'}`;
+        }
+
+        function getGroupParentToken(modData, groupID) {
+            const group = getEntityParts(modData, groupID);
+            const objectType = group ? unquoteStepString(group.args[4]) : '';
+            return objectType.startsWith(TREE_PARENT_PREFIX)
+                ? objectType.slice(TREE_PARENT_PREFIX.length)
+                : 'ROOT';
+        }
+
+        function findParentTreeChildren(modData, parentToken, groupID) {
+            if (!parentToken || parentToken === 'ROOT') return findFileTreeChildren(modData.modelID);
+            let targetRow = null;
+            if (parentToken.startsWith('ID:')) {
+                const parentID = parentToken.slice(3);
+                targetRow = [...treeBox.querySelectorAll('.trow[data-mid][data-eid]')].find(row =>
+                    String(row.dataset.mid) === String(modData.modelID) &&
+                    String(row.dataset.eid) === String(parentID) &&
+                    String(row.dataset.eid) !== String(groupID)
+                );
+            } else if (parentToken.startsWith('LABEL:')) {
+                const wanted = parentToken.slice(6);
+                targetRow = [...treeBox.querySelectorAll('.trow')].find(row => {
+                    const fileRoot = row.closest('.file-root');
+                    const fileRow = fileRoot && fileRoot.firstElementChild;
+                    const label = row.querySelector('.tlabel');
+                    return fileRow && String(fileRow.dataset.mid) === String(modData.modelID) &&
+                        label && label.textContent.trim() === wanted;
+                });
+            }
+            return targetRow ? ensureTreeChildren(targetRow) : findFileTreeChildren(modData.modelID);
+        }
+
+        function findTreeEntityNode(modData, expressID) {
+            if (modData.customGroups.has(expressID)) {
+                const custom = treeBox.querySelector(`.custom-branch[data-group-id="${expressID}"]`);
+                if (custom) return custom;
+            }
+            const rows = [...treeBox.querySelectorAll('.trow[data-mid][data-eid]')].filter(row =>
+                String(row.dataset.mid) === String(modData.modelID) &&
+                String(row.dataset.eid) === String(expressID)
+            );
+            const preferred = rows.find(row => !row.closest('.custom-branch')) || rows[0];
+            return preferred ? preferred.closest('.tnode') : null;
+        }
+
+        function updateCustomGroupCount(modData, groupID) {
+            const metadata = modData.customGroups.get(groupID);
+            const node = treeBox.querySelector(`.custom-branch[data-group-id="${groupID}"]`);
+            const type = node && node.querySelector(':scope > .trow .ttype');
+            if (type && metadata) type.textContent = `IFCGROUP · ${metadata.memberIDs.length}`;
+        }
+
+        function cleanupEmptyTypeGroups() {
+            treeBox.querySelectorAll('.tnode.group').forEach(groupNode => {
+                const children = getDirectTreeChildren(groupNode);
+                if (children && !children.querySelector('.tnode')) groupNode.remove();
+            });
+        }
+
+        function organizeCustomGroupTree(modData, groupID) {
+            const metadata = modData.customGroups.get(groupID);
+            const node = treeBox.querySelector(`.custom-branch[data-group-id="${groupID}"]`);
+            if (!metadata || !node) return;
+
+            const parentChildren = findParentTreeChildren(modData, metadata.parentToken, groupID);
+            if (parentChildren && !node.contains(parentChildren)) parentChildren.prepend(node);
+
+            const groupRow = node.querySelector(':scope > .trow');
+            const groupChildren = ensureTreeChildren(groupRow);
+            metadata.memberIDs.forEach(memberID => {
+                if (memberID === groupID) return;
+                const memberNode = findTreeEntityNode(modData, memberID);
+                if (memberNode && memberNode !== node && !memberNode.contains(node)) {
+                    groupChildren.appendChild(memberNode);
+                }
+            });
+            updateCustomGroupCount(modData, groupID);
+            cleanupEmptyTypeGroups();
+        }
+
+        function appendCustomGroupTreeNode(modData, groupID, metadata) {
             const fileChildren = findFileTreeChildren(modData.modelID);
             if (!fileChildren) return;
             if (fileChildren.querySelector(`.custom-branch[data-group-id="${groupID}"]`)) return;
 
-            const uniqueMembers = [...new Set(memberIDs)].filter(id => id !== groupID);
             const node = document.createElement('div');
             node.className = 'tnode custom-branch';
             node.dataset.groupId = groupID;
@@ -2102,8 +2234,12 @@ let isClipping = false;
             row.dataset.mid = modData.modelID;
             row.dataset.eid = groupID;
             row._selectionItems = [{ modelID: modData.modelID, expressID: groupID }];
-            row.innerHTML = `<span class="caret ${uniqueMembers.length ? '' : 'empty'}">▾</span><span class="tlabel">${esc(getIfcEntityLabel(modData, groupID))}</span><span class="ttype">IFCGROUP · ${uniqueMembers.length}</span>`;
+            row.draggable = true;
+            row.innerHTML = `<span class="caret">▾</span><span class="tlabel">${esc(getIfcEntityLabel(modData, groupID))}</span><span class="ttype">IFCGROUP · ${metadata.memberIDs.length}</span>`;
             node.appendChild(row);
+            const children = document.createElement('div');
+            children.className = 'children';
+            node.appendChild(children);
 
             row.addEventListener('click', event => {
                 if (event.target.classList.contains('caret')) {
@@ -2113,44 +2249,22 @@ let isClipping = false;
                 handleTreeSelection(row, row._selectionItems, event);
             });
             row.addEventListener('dblclick', () => {
-                const geometryItems = uniqueMembers
+                const current = modData.customGroups.get(groupID);
+                const geometryItems = (current ? current.memberIDs : [])
                     .filter(id => modData.meshesByID.has(id))
                     .map(expressID => ({ modelID: modData.modelID, expressID }));
                 if (geometryItems.length) focusOnList(geometryItems);
             });
-
-            if (uniqueMembers.length) {
-                const children = document.createElement('div');
-                children.className = 'children';
-                uniqueMembers.forEach(expressID => {
-                    const childNode = document.createElement('div');
-                    childNode.className = 'tnode';
-                    const childRow = document.createElement('div');
-                    childRow.className = 'trow';
-                    childRow.dataset.mid = modData.modelID;
-                    childRow.dataset.eid = expressID;
-                    childRow._selectionItems = [{ modelID: modData.modelID, expressID }];
-                    childRow.innerHTML = `<span class="caret empty">▾</span><span class="tlabel">${esc(getIfcEntityLabel(modData, expressID))}</span><span class="ttype">ЭЛЕМЕНТ ГРУППЫ</span>`;
-                    childRow.addEventListener('click', event => {
-                        handleTreeSelection(childRow, childRow._selectionItems, event);
-                    });
-                    childRow.addEventListener('dblclick', () => {
-                        if (modData.meshesByID.has(expressID)) focusOn(modData.modelID, expressID);
-                    });
-                    childNode.appendChild(childRow);
-                    children.appendChild(childNode);
-                });
-                node.appendChild(children);
-            }
             fileChildren.prepend(node);
-            modData.customGroups.set(groupID, uniqueMembers);
+            modData.customGroups.set(groupID, metadata);
             modData.searchCache.set(groupID, `${getIfcEntityLabel(modData, groupID)} ifcgroup`.toLowerCase());
+            setupTreeDragRow(row);
             applyTooltips(node);
         }
 
         function loadIfcGroupsFromApi(modData) {
             if (WebIFC.IFCGROUP == null || WebIFC.IFCRELASSIGNSTOGROUP == null) return;
-            const membersByGroup = new Map();
+            const assignmentByGroup = new Map();
             try {
                 const relationIDs = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCRELASSIGNSTOGROUP);
                 for (let i = 0; i < relationIDs.size(); i++) {
@@ -2159,17 +2273,156 @@ let isClipping = false;
                     let related = relation.RelatedObjects || [];
                     if (!Array.isArray(related)) related = [related];
                     if (groupID != null) {
-                        membersByGroup.set(groupID, related.map(item => item && item.value).filter(Number.isFinite));
+                        assignmentByGroup.set(groupID, {
+                            relationID: relationIDs.get(i),
+                            memberIDs: related.map(item => item && item.value).filter(Number.isFinite)
+                        });
                     }
                 }
                 const groupIDs = ifcAPI.GetLineIDsWithType(modData.modelID, WebIFC.IFCGROUP);
                 for (let i = 0; i < groupIDs.size(); i++) {
                     const groupID = groupIDs.get(i);
-                    appendCustomGroupTreeNode(modData, groupID, membersByGroup.get(groupID) || []);
+                    const assignment = assignmentByGroup.get(groupID) || { relationID: null, memberIDs: [] };
+                    appendCustomGroupTreeNode(modData, groupID, {
+                        memberIDs: [...new Set(assignment.memberIDs)].filter(id => id !== groupID),
+                        relationID: assignment.relationID,
+                        parentToken: getGroupParentToken(modData, groupID)
+                    });
+                }
+                for (let i = 0; i < groupIDs.size(); i++) {
+                    organizeCustomGroupTree(modData, groupIDs.get(i));
                 }
             } catch (error) {
                 console.warn('Не удалось построить IFC-группы:', error);
             }
+        }
+
+        function persistCustomGroupMembers(modData, groupID, batch, idState) {
+            const metadata = modData.customGroups.get(groupID);
+            if (!metadata) return;
+            metadata.memberIDs = [...new Set(metadata.memberIDs)].filter(id => id !== groupID);
+            if (!metadata.memberIDs.length) {
+                if (metadata.relationID != null) batch.deleteEntity(metadata.relationID);
+                metadata.relationID = null;
+                updateCustomGroupCount(modData, groupID);
+                return;
+            }
+            const memberList = `(${metadata.memberIDs.map(id => '#' + id).join(',')})`;
+            if (metadata.relationID != null && getEntityParts(modData, metadata.relationID)) {
+                batch.setAttr(metadata.relationID, 4, memberList);
+            } else {
+                const relationID = ++idState.next;
+                batch.append(`#${relationID}=IFCRELASSIGNSTOGROUP('${ifcGuid()}',$,$,$,${memberList},$,#${groupID});`);
+                metadata.relationID = relationID;
+            }
+            updateCustomGroupCount(modData, groupID);
+        }
+
+        function removeMembersFromOtherGroups(modData, memberIDs, exceptGroupID, batch, idState) {
+            const moving = new Set(memberIDs);
+            for (const [groupID, metadata] of modData.customGroups) {
+                if (groupID === exceptGroupID) continue;
+                const filtered = metadata.memberIDs.filter(id => !moving.has(id));
+                if (filtered.length !== metadata.memberIDs.length) {
+                    metadata.memberIDs = filtered;
+                    persistCustomGroupMembers(modData, groupID, batch, idState);
+                }
+            }
+        }
+
+        function persistCustomGroupParent(modData, groupID, parentToken) {
+            const metadata = modData.customGroups.get(groupID);
+            if (!metadata) return false;
+            const batch = createIfcEditBatch(modData);
+            if (!batch.setAttr(groupID, 4, `'${encodeStepString(TREE_PARENT_PREFIX + parentToken)}'`)) return false;
+            batch.commit();
+            metadata.parentToken = parentToken;
+            return true;
+        }
+
+        let treeDragState = null;
+
+        function setupTreeDragRow(row) {
+            if (!row || row.dataset.dragReady === 'true') return;
+            row.dataset.dragReady = 'true';
+            const modelIDRaw = row.dataset.mid;
+            const expressIDRaw = row.dataset.eid;
+            const modelID = modelIDRaw !== undefined && !isNaN(modelIDRaw) ? parseInt(modelIDRaw, 10) : modelIDRaw;
+            const expressID = expressIDRaw ? parseInt(expressIDRaw, 10) : null;
+            const modData = loadedModels.get(modelID);
+            const customNode = row.closest('.custom-branch');
+            const canDrag = !!(modData && !modData.isFBX && expressID != null &&
+                (customNode && String(customNode.dataset.groupId) === String(expressID) || modData.meshesByID.has(expressID)));
+            row.draggable = canDrag;
+
+            if (canDrag) {
+                row.addEventListener('dragstart', event => {
+                    treeDragState = {
+                        modelID,
+                        expressID,
+                        node: row.closest('.tnode'),
+                        isGroup: modData.customGroups.has(expressID)
+                    };
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', `${modelID}:${expressID}`);
+                });
+                row.addEventListener('dragend', () => {
+                    treeDragState = null;
+                    document.querySelectorAll('.trow.drag-target').forEach(item => item.classList.remove('drag-target'));
+                });
+            }
+
+            row.addEventListener('dragover', event => {
+                if (!treeDragState || String(treeDragState.modelID) !== String(modelID)) return;
+                if (treeDragState.node && treeDragState.node.contains(row)) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                row.classList.add('drag-target');
+            });
+            row.addEventListener('dragleave', () => row.classList.remove('drag-target'));
+            row.addEventListener('drop', event => {
+                row.classList.remove('drag-target');
+                if (!treeDragState || String(treeDragState.modelID) !== String(modelID)) return;
+                event.preventDefault();
+                moveTreeItemToRow(treeDragState, row);
+                treeDragState = null;
+            });
+        }
+
+        function moveTreeItemToRow(dragState, targetRow) {
+            const modData = loadedModels.get(dragState.modelID);
+            if (!modData || !dragState.node || dragState.node.contains(targetRow)) return;
+            const targetCustomNode = targetRow.closest('.custom-branch');
+            const targetGroupID = targetCustomNode ? parseInt(targetCustomNode.dataset.groupId, 10) : null;
+
+            if (dragState.isGroup) {
+                if (targetGroupID === dragState.expressID) return;
+                const parentToken = targetGroupID != null ? `ID:${targetGroupID}` : treeParentTokenForRow(targetRow);
+                if (!persistCustomGroupParent(modData, dragState.expressID, parentToken)) return;
+                const targetChildren = targetGroupID != null
+                    ? ensureTreeChildren(targetCustomNode.querySelector(':scope > .trow'))
+                    : ensureTreeChildren(targetRow);
+                if (targetChildren && !dragState.node.contains(targetChildren)) targetChildren.appendChild(dragState.node);
+                cleanupEmptyTypeGroups();
+                return;
+            }
+
+            const batch = createIfcEditBatch(modData);
+            const idState = { next: getMaxExpressId(modData) };
+            removeMembersFromOtherGroups(modData, [dragState.expressID], targetGroupID, batch, idState);
+            if (targetGroupID != null) {
+                const targetMetadata = modData.customGroups.get(targetGroupID);
+                if (!targetMetadata.memberIDs.includes(dragState.expressID)) {
+                    targetMetadata.memberIDs.push(dragState.expressID);
+                    persistCustomGroupMembers(modData, targetGroupID, batch, idState);
+                }
+            }
+            batch.commit();
+            const targetChildren = targetGroupID != null
+                ? ensureTreeChildren(targetCustomNode.querySelector(':scope > .trow'))
+                : ensureTreeChildren(targetRow);
+            if (targetChildren) targetChildren.appendChild(dragState.node);
+            cleanupEmptyTypeGroups();
         }
 
         // --- 2. GHOSTING (Затенение вместо изоляции) ---
@@ -2383,23 +2636,42 @@ let isClipping = false;
             $('branchModal').classList.remove('show');
         }
 
-        $('treeAddBranch').addEventListener('click', () => {
-            const items = getSelectedIfcObjects();
-            if (!items.length) {
-                alert('Сначала выделите один или несколько IFC-элементов в дереве или на сцене.');
+        let pendingBranchParent = null;
+
+        function openBranchModalForRow(row) {
+            const fileRoot = row && row.closest('.file-root');
+            const fileRow = fileRoot && fileRoot.firstElementChild;
+            if (!fileRow || fileRow.dataset.mid === undefined) return;
+            const rawModelID = fileRow.dataset.mid;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const modData = loadedModels.get(modelID);
+            if (!modData || modData.isFBX || !modData.ifcIndex) {
+                alert('Пользовательские ветки можно создавать только внутри IFC-файла.');
                 return;
             }
+            const label = row.querySelector('.tlabel');
+            pendingBranchParent = {
+                modelID,
+                parentToken: treeParentTokenForRow(row),
+                label: label ? label.textContent.trim() : modData.filename
+            };
+            $('customBranchParent').textContent = pendingBranchParent.label;
             $('branchModal').classList.add('show');
             $('customBranchName').focus();
             $('customBranchName').select();
-        });
+        }
 
-        $('cancelBranch').addEventListener('click', closeBranchModal);
+        function cancelBranchCreation() {
+            pendingBranchParent = null;
+            closeBranchModal();
+        }
+
+        $('cancelBranch').addEventListener('click', cancelBranchCreation);
         $('branchModal').addEventListener('click', event => {
-            if (event.target === $('branchModal')) closeBranchModal();
+            if (event.target === $('branchModal')) cancelBranchCreation();
         });
         window.addEventListener('keydown', event => {
-            if (event.key === 'Escape' && $('branchModal').classList.contains('show')) closeBranchModal();
+            if (event.key === 'Escape' && $('branchModal').classList.contains('show')) cancelBranchCreation();
         });
 
         $('createBranch').addEventListener('click', () => {
@@ -2408,52 +2680,58 @@ let isClipping = false;
             const propertyName = $('customBranchPropName').value.trim();
             const propertyValue = $('customBranchPropValue').value;
             const propertyType = $('customBranchPropType').value;
-            const items = getSelectedIfcObjects();
 
             if (!branchName || !psetName || !propertyName) {
                 alert('Заполните название ветки, Pset и первого параметра.');
                 return;
             }
-            if (!items.length) {
+            if (!pendingBranchParent) {
                 closeBranchModal();
-                alert('Выделение изменилось: выберите IFC-элементы повторно.');
+                alert('Не удалось определить родительский раздел. Откройте форму повторно через ПКМ.');
                 return;
             }
 
-            const byModel = new Map();
-            items.forEach(item => {
-                if (!byModel.has(item.modelID)) byModel.set(item.modelID, []);
-                byModel.get(item.modelID).push(item.expressID);
-            });
+            const modelID = pendingBranchParent.modelID;
+            const modData = loadedModels.get(modelID);
+            const parentID = pendingBranchParent.parentToken.startsWith('ID:')
+                ? parseInt(pendingBranchParent.parentToken.slice(3), 10)
+                : null;
+            const memberIDs = [...new Set(
+                getSelectedIfcObjects()
+                    .filter(item => String(item.modelID) === String(modelID) && item.expressID !== parentID)
+                    .map(item => item.expressID)
+            )];
+            const batch = createIfcEditBatch(modData);
+            const idState = { next: getMaxExpressId(modData) };
+            const groupID = ++idState.next;
+            const propertyID = ++idState.next;
+            const psetID = ++idState.next;
+            const definesRelationID = ++idState.next;
+            const parentMarker = TREE_PARENT_PREFIX + pendingBranchParent.parentToken;
 
-            const createdGroups = [];
-            byModel.forEach((memberIDsRaw, modelID) => {
-                const modData = loadedModels.get(modelID);
-                const memberIDs = [...new Set(memberIDsRaw)];
-                const batch = createIfcEditBatch(modData);
-                let nextId = getMaxExpressId(modData);
-                const groupID = ++nextId;
-                const propertyID = ++nextId;
-                const psetID = ++nextId;
-                const definesRelationID = ++nextId;
-                const assignsRelationID = ++nextId;
+            batch.append(`#${groupID}=IFCGROUP('${ifcGuid()}',$,'${encodeStepString(branchName)}',$,'${encodeStepString(parentMarker)}');`);
+            batch.append(`#${propertyID}=IFCPROPERTYSINGLEVALUE('${encodeStepString(propertyName)}',$,${wrapIfcValue(propertyType, propertyValue)},$);`);
+            batch.append(`#${psetID}=IFCPROPERTYSET('${ifcGuid()}',$,'${encodeStepString(psetName)}',$,(#${propertyID}));`);
+            batch.append(`#${definesRelationID}=IFCRELDEFINESBYPROPERTIES('${ifcGuid()}',$,$,$,(#${groupID}),#${psetID});`);
 
-                batch.append(`#${groupID}=IFCGROUP('${ifcGuid()}',$,'${encodeStepString(branchName)}',$,$);`);
-                batch.append(`#${propertyID}=IFCPROPERTYSINGLEVALUE('${encodeStepString(propertyName)}',$,${wrapIfcValue(propertyType, propertyValue)},$);`);
-                batch.append(`#${psetID}=IFCPROPERTYSET('${ifcGuid()}',$,'${encodeStepString(psetName)}',$,(#${propertyID}));`);
-                batch.append(`#${definesRelationID}=IFCRELDEFINESBYPROPERTIES('${ifcGuid()}',$,$,$,(#${groupID}),#${psetID});`);
-                batch.append(`#${assignsRelationID}=IFCRELASSIGNSTOGROUP('${ifcGuid()}',$,$,$,(${memberIDs.map(id => '#' + id).join(',')}),$,#${groupID});`);
-                batch.commit();
+            removeMembersFromOtherGroups(modData, memberIDs, groupID, batch, idState);
+            const metadata = {
+                memberIDs,
+                relationID: null,
+                parentToken: pendingBranchParent.parentToken
+            };
+            modData.customGroups.set(groupID, metadata);
+            persistCustomGroupMembers(modData, groupID, batch, idState);
+            batch.commit();
 
-                modData.psetIndex.set(groupID, [psetID]);
-                modData.customGroups.set(groupID, memberIDs);
-                appendCustomGroupTreeNode(modData, groupID, memberIDs);
-                createdGroups.push({ modelID, expressID: groupID });
-            });
+            modData.psetIndex.set(groupID, [psetID]);
+            appendCustomGroupTreeNode(modData, groupID, metadata);
+            organizeCustomGroupTree(modData, groupID);
 
             closeBranchModal();
-            selectMultiple(createdGroups);
-            alert(`Создано пользовательских веток: ${createdGroups.length}. Они будут сохранены при экспорте IFC.`);
+            pendingBranchParent = null;
+            selectMultiple([{ modelID, expressID: groupID }]);
+            alert(`Ветка «${branchName}» создана. Перемещено элементов: ${memberIDs.length}.`);
         });
 
         $('treeSelectAll').addEventListener('click', () => {
@@ -3568,6 +3846,11 @@ let isClipping = false;
         });
 
         $('ctxHide').addEventListener('click', () => $('btnHide').click());
+
+        $('ctxAddBranch').addEventListener('click', () => {
+            if (!treeContextRow) return;
+            openBranchModalForRow(treeContextRow);
+        });
 
         $('ctxRemoveFile').addEventListener('click', () => {
             const fileRoot = treeContextRow && treeContextRow.closest('.file-root');
