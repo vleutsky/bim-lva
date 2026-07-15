@@ -966,7 +966,7 @@
             <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
             <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ СТРУКТУРА IFC</button>
             <button class="btn" id="btnMergeIFC" disabled title="Объединить все загруженные IFC-файлы в один: ExpressID пересчитываются без коллизий, все пространственные структуры собираются под одним общим IfcProject. Внешние 3D/CAD-форматы (FBX/DXF/OBJ и т.д.) в объединение не входят.">🧩 ОБЪЕДИНИТЬ IFC</button>
-            <button class="btn" id="btnGeoRaster" title="Загрузить геопривязанный растр ECW / GeoTIFF / JPEG+JGW и наложить на рельеф по координатам">🗺 ГЕОРАСТР</button>
+            <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 ГЕОРАСТР</button>
             <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ СЕТКА</button>
             <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕ ОЧИСТИТЬ</button>
         </div>
@@ -1147,8 +1147,8 @@
 
     <div class="modal-backdrop" id="geoRasterModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="geoRasterModalTitle" style="width:min(520px,100%)">
-            <h3 id="geoRasterModalTitle">Геопривязанный растр на рельеф</h3>
-            <div class="bulk-note">ECW, GeoTIFF и растр с world-файлом (.jgw / .pgw / .tfw / .eww) размещаются по координатам и могут быть «натянуты» на 3D-рельеф модели. ECW в браузере конвертируется через GDAL WASM; если не получится — экспортируйте тот же снимок в GeoTIFF с геопривязкой.</div>
+            <h3 id="geoRasterModalTitle">ECW / GeoTIFF — растр по координатам на рельеф</h3>
+            <div class="bulk-note" id="geoRasterEcwNote">Формат <b>ECW</b> хранит геопривязку внутри файла — растр автоматически встанет в координаты сцены и ляжет на 3D-рельеф. Также поддерживаются GeoTIFF и JPEG/PNG с world-файлом (.jgw / .pgw / .tfw / .eww). Если ECW не откроется в браузере, экспортируйте тот же снимок в GeoTIFF с геопривязкой — координаты сохранятся.</div>
             <div class="prop small">
                 <div class="k">Файл(ы) растра</div>
                 <input type="file" id="geoRasterFile" accept=".ecw,.tif,.tiff,.gtiff,.jpg,.jpeg,.png,.jgw,.pgw,.tfw,.wld,.eww" multiple class="editInput">
@@ -1161,6 +1161,13 @@
                 <span>Непрозр.</span>
                 <input type="range" id="geoRasterOpacity" min="0.1" max="1" step="0.01" value="0.92">
                 <span id="geoRasterOpacityVal">0.92</span>
+            </div>
+            <div class="prop small">
+                <div class="k">Смещение X / Y, м</div>
+                <div style="display:flex;gap:8px">
+                    <input class="editInput" id="geoRasterOffsetX" type="number" step="0.01" value="0" title="Дополнительное смещение по X, если координаты растра и модели не совпадают">
+                    <input class="editInput" id="geoRasterOffsetY" type="number" step="0.01" value="0" title="Дополнительное смещение по Y">
+                </div>
             </div>
             <div class="prop small">
                 <div class="k">Смещение над рельефом, м</div>
@@ -1347,22 +1354,59 @@
             return gdalModulePromise;
         }
 
-        async function tryConvertEcwToGeoTiff(file) {
-            showLoader('ECW → GeoTIFF', 'Попытка декодирования через GDAL WASM…');
+        async function isEcwDriverAvailable() {
             try {
                 const Gdal = await getGdalModule();
+                const raster = Gdal.drivers?.raster || {};
+                return Object.keys(raster).some(name => name.toUpperCase() === 'ECW');
+            } catch {
+                return false;
+            }
+        }
+
+        function applyGeoBoundsTransform(bounds, transform) {
+            const offsetX = transform?.offsetX ?? 0;
+            const offsetY = transform?.offsetY ?? 0;
+            const scale = transform?.scale ?? 1;
+            if (!offsetX && !offsetY && scale === 1) return bounds;
+            const cx = (bounds.minX + bounds.maxX) / 2;
+            const cy = (bounds.minY + bounds.maxY) / 2;
+            const halfW = (bounds.maxX - bounds.minX) / 2 * scale;
+            const halfH = (bounds.maxY - bounds.minY) / 2 * scale;
+            return {
+                minX: cx - halfW + offsetX,
+                maxX: cx + halfW + offsetX,
+                minY: cy - halfH + offsetY,
+                maxY: cy + halfH + offsetY
+            };
+        }
+
+        async function tryConvertEcwToGeoTiff(file) {
+            showLoader('ECW → GeoTIFF', 'Чтение геопривязки и декодирование через GDAL WASM…');
+            try {
+                const Gdal = await getGdalModule();
+                const ecwOk = await isEcwDriverAvailable();
+                if (!ecwOk) {
+                    throw new Error(
+                        'драйвер ECW недоступен в браузерном GDAL (проприетарный SDK Hexagon). ' +
+                        'Экспортируйте ECW в GeoTIFF (.tif) с той же геопривязкой в ERDAS Imagine, Global Mapper или QGIS — координаты сохранятся, и растр ляжет на рельеф так же.'
+                    );
+                }
                 const bytes = new Uint8Array(await file.arrayBuffer());
                 const opened = await Gdal.open([{ name: file.name, data: bytes }]);
                 const dataset = opened.datasets?.[0];
                 if (!dataset) throw new Error('GDAL не открыл ECW');
-                const translated = await Gdal.gdal_translate(dataset.path ?? dataset, ['-of', 'GTiff', '-co', 'COMPRESS=DEFLATE']);
+                const translated = await Gdal.gdal_translate(dataset.path ?? dataset, [
+                    '-of', 'GTiff',
+                    '-co', 'COMPRESS=DEFLATE',
+                    '-co', 'TILED=YES'
+                ]);
                 const outBytes = await Gdal.getFileBytes(translated);
                 if (!outBytes || !outBytes.length) throw new Error('пустой результат конвертации');
                 return outBytes.buffer.slice(outBytes.byteOffset, outBytes.byteOffset + outBytes.byteLength);
             } catch (error) {
                 throw new Error(
-                    `ECW «${file.name}»: ${error.message}. ` +
-                    'Проприетарный ECW часто недоступен в браузерном GDAL. Экспортируйте снимок в GeoTIFF (.tif) с той же геопривязкой в ERDAS Imagine, Global Mapper или QGIS (ECW SDK), затем загрузите GeoTIFF сюда.'
+                    `ECW «${file.name}»: ${error.message}`
                 );
             }
         }
@@ -1538,7 +1582,7 @@
             }
             el.innerHTML = geoRasterLayers.map(layer =>
                 `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0">
-                    <span>${esc(layer.name)} · ${layer.bounds.minX.toFixed(1)}…${layer.bounds.maxX.toFixed(1)}</span>
+                    <span>${esc(layer.name)} · X ${layer.bounds.minX.toFixed(1)}…${layer.bounds.maxX.toFixed(1)}, Y ${layer.bounds.minY.toFixed(1)}…${layer.bounds.maxY.toFixed(1)}</span>
                     <button type="button" class="pop" data-geo-id="${layer.id}" data-act="removeGeoRaster">✕</button>
                 </div>`
             ).join('');
@@ -1600,6 +1644,7 @@
                     bounds = boundsFromWorldFile(wf, img.width, img.height);
                 }
 
+                bounds = applyGeoBoundsTransform(bounds, options);
                 const mesh = buildGeoRasterMesh(bounds, texture, options);
                 geoRasterGroup.add(mesh);
                 geoRasterLayers.push({
@@ -1613,9 +1658,21 @@
             hideLoader();
         }
 
+        async function refreshGeoRasterEcwNote() {
+            const note = $('geoRasterEcwNote');
+            if (!note) return;
+            const ecwOk = await isEcwDriverAvailable();
+            if (ecwOk) {
+                note.innerHTML = 'Формат <b>ECW</b> хранит геопривязку внутри файла — растр автоматически встанет в координаты сцены и ляжет на 3D-рельеф. Также поддерживаются GeoTIFF и JPEG/PNG с world-файлом (.jgw / .pgw / .tfw / .eww).';
+            } else {
+                note.innerHTML = 'Формат <b>ECW</b> содержит координаты растра, но проприетарный декодер недоступен в браузере. Экспортируйте ECW в <b>GeoTIFF (.tif)</b> с той же геопривязкой (ERDAS Imagine, Global Mapper, QGIS) — координаты сохранятся, растр ляжет на рельеф так же. JPEG/PNG + world-файл (.jgw / .eww) тоже поддерживаются.';
+            }
+        }
+
         function openGeoRasterModal() {
             $('geoRasterModal').classList.add('show');
             updateGeoRasterListUI();
+            refreshGeoRasterEcwNote();
         }
 
         function closeGeoRasterModal() {
@@ -5599,6 +5656,8 @@ let isClipping = false;
                 await loadGeoRasterFromFiles(files, {
                     drape: $('geoRasterDrape').checked,
                     opacity: parseFloat($('geoRasterOpacity').value) || 0.92,
+                    offsetX: parseFloat($('geoRasterOffsetX').value) || 0,
+                    offsetY: parseFloat($('geoRasterOffsetY').value) || 0,
                     zOffset: parseFloat($('geoRasterZOffset').value) || 0,
                     segments: parseInt($('geoRasterSegments').value, 10) || 64
                 });
