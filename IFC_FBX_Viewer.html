@@ -2093,6 +2093,23 @@ let isClipping = false;
                             Переименовать Pset у выбранных элементов
                         </button>
 
+                        <div class="sub-head" style="padding-left:0">Переименование параметра</div>
+                        <div class="prop small">
+                            <div class="k">Имя Pset</div>
+                            <input class="editInput" id="bulkRenamePropertyPset" placeholder="Например: Pset_Custom">
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Текущее имя параметра</div>
+                            <input class="editInput" id="bulkPropertyOldName" placeholder="Например: Код">
+                        </div>
+                        <div class="prop small">
+                            <div class="k">Новое имя параметра</div>
+                            <input class="editInput" id="bulkPropertyNewName" placeholder="Например: Код проекта">
+                        </div>
+                        <button class="btn" style="width:100%;margin-top:8px" data-act="bulkRenameProperty">
+                            Переименовать параметр у выбранных элементов
+                        </button>
+
                         <div class="sub-head" style="padding-left:0">Параметр PropertySet</div>
                         <div class="prop small">
                             <div class="k">Имя набора (Pset)</div>
@@ -2162,9 +2179,16 @@ let isClipping = false;
                 if (pset.HasProperties) {
                     let arr = pset.HasProperties; 
                     if (!Array.isArray(arr)) arr = [arr];
+                    const rawPropertyIds = getPsetPropertyIds(modData, pid);
                     
-                    for (const p of arr) {
+                    for (let propIndex = 0; propIndex < arr.length; propIndex++) {
+                        const p = arr[propIndex];
                         if (!p || !p.Name) continue; 
+                        const propId = Number.isFinite(p.expressID) ? p.expressID : rawPropertyIds[propIndex];
+                        const rawProperty = propId != null ? getEntityParts(modData, propId) : null;
+                        const propertyName = rawProperty
+                            ? (unquoteStepString(rawProperty.args[0]) || readVal(p.Name))
+                            : readVal(p.Name);
                         let v = ''; 
                         for (const key of ['NominalValue', 'EnumerationValues', 'ListValues']) { 
                             if (p[key] != null) { 
@@ -2172,7 +2196,19 @@ let isClipping = false;
                                 break; 
                             } 
                         }
-                        items += propRow(readVal(p.Name), v);
+                        if (countTotal === 1 && modData.ifcIndex && propId != null) {
+                            items += `<div class="prop">
+                                <div class="k">Имя параметра</div>
+                                <div style="display:flex;gap:6px;align-items:center">
+                                    <input class="editInput" data-property-name="${propId}" value="${escAttr(propertyName)}">
+                                    <button class="btn" style="padding:6px 8px" data-act="renameProperty" data-model="${modelID}" data-prop="${propId}">💾</button>
+                                </div>
+                                <div class="k" style="margin-top:7px">Значение</div>
+                                <div class="v">${esc(v || '—')}</div>
+                            </div>`;
+                        } else {
+                            items += propRow(propertyName, v);
+                        }
                     }
                 }
                 
@@ -2287,6 +2323,55 @@ let isClipping = false;
             alert(`Переименовано Pset: ${renamedPsets}. Связанных выбранных элементов: ${matchingElements}.`);
         }
 
+        function applyBulkPropertyRename() {
+            const items = getEditableSelection();
+            const psetName = propsBox.querySelector('#bulkRenamePropertyPset').value.trim();
+            const oldName = propsBox.querySelector('#bulkPropertyOldName').value.trim();
+            const newName = propsBox.querySelector('#bulkPropertyNewName').value.trim();
+            if (!psetName || !oldName || !newName) {
+                alert('Укажите имя Pset, текущее и новое имя параметра.');
+                return;
+            }
+            if (oldName === newName) {
+                alert('Новое имя параметра совпадает с текущим.');
+                return;
+            }
+            if (!confirm(`Переименовать параметр «${oldName}» в «${newName}» в наборе «${psetName}»?`)) return;
+
+            const batches = new Map();
+            const renamedByModel = new Map();
+            let matchingElements = 0;
+
+            items.forEach(item => {
+                const modData = loadedModels.get(item.modelID);
+                const psetId = findPsetByName(modData, item.expressID, psetName);
+                const propId = psetId ? findPropertyByName(modData, psetId, oldName) : null;
+                if (!propId) return;
+                matchingElements++;
+
+                if (!batches.has(item.modelID)) {
+                    batches.set(item.modelID, createIfcEditBatch(modData));
+                    renamedByModel.set(item.modelID, new Set());
+                }
+                const renamed = renamedByModel.get(item.modelID);
+                if (renamed.has(propId)) return;
+                batches.get(item.modelID).setAttr(propId, 0, `'${encodeStepString(newName)}'`);
+                renamed.add(propId);
+            });
+
+            batches.forEach(batch => batch.commit());
+            const renamedProperties = [...renamedByModel.values()].reduce((sum, ids) => sum + ids.size, 0);
+            if (!renamedProperties) {
+                alert(`Параметр «${oldName}» в Pset «${psetName}» у выбранных элементов не найден.`);
+                return;
+            }
+            const first = selectedItems[0];
+            if (first && !loadedModels.get(first.modelID).isFBX) {
+                showProps(first.modelID, first.expressID, selectedItems.length);
+            }
+            alert(`Переименовано параметров: ${renamedProperties}. Связанных выбранных элементов: ${matchingElements}.`);
+        }
+
         function renameSinglePset(button) {
             const rawModelID = button.dataset.model;
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
@@ -2301,6 +2386,27 @@ let isClipping = false;
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(psetId, 2, `'${encodeStepString(newName)}'`)) {
                 alert('Не удалось найти Pset в исходном IFC-файле.');
+                return;
+            }
+            batch.commit();
+            const first = selectedItems[0];
+            if (first) showProps(first.modelID, first.expressID, selectedItems.length);
+        }
+
+        function renameSingleProperty(button) {
+            const rawModelID = button.dataset.model;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const propId = parseInt(button.dataset.prop, 10);
+            const modData = loadedModels.get(modelID);
+            const input = propsBox.querySelector(`[data-property-name="${propId}"]`);
+            const newName = input ? input.value.trim() : '';
+            if (!modData || !newName) {
+                alert('Имя параметра не может быть пустым.');
+                return;
+            }
+            const batch = createIfcEditBatch(modData);
+            if (!batch.setAttr(propId, 0, `'${encodeStepString(newName)}'`)) {
+                alert('Не удалось найти параметр в исходном IFC-файле.');
                 return;
             }
             batch.commit();
@@ -2392,8 +2498,10 @@ let isClipping = false;
             if (!action) return;
             if (action.dataset.act === 'bulkChangeClass') applyBulkClassChange();
             if (action.dataset.act === 'bulkRenamePset') applyBulkPsetRename();
+            if (action.dataset.act === 'bulkRenameProperty') applyBulkPropertyRename();
             if (action.dataset.act === 'bulkSetProperty') applyBulkPropertyChange();
             if (action.dataset.act === 'renamePset') renameSinglePset(action);
+            if (action.dataset.act === 'renameProperty') renameSingleProperty(action);
         });
 
         function showFBXProps(modelID, expressID, countTotal) {
