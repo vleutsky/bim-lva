@@ -303,6 +303,15 @@
             overflow: hidden;
         }
 
+        #boxSelectRect {
+            position: absolute;
+            border: 1px dashed var(--accent);
+            background: rgba(240, 100, 36, .12);
+            display: none;
+            pointer-events: none;
+            z-index: 16;
+        }
+
         .measure-label {
             position: absolute;
             top: 0;
@@ -449,6 +458,11 @@
         .search-box input:focus {
             border-color: var(--accent);
             background: #fffaf7;
+        }
+
+        #openPropSearch {
+            width: 100%;
+            text-align: center;
         }
 
         .tree {
@@ -865,6 +879,7 @@
         <div class="btn-group">
             <button class="btn" id="btnMeasure" disabled title="Измерить расстояние">📏 ИЗМЕРИТЬ</button>
             <button class="btn" id="btnClip" disabled title="Секущая плоскость (Z)">✂ РАЗРЕЗ</button>
+            <button class="btn" id="btnBoxSelect" disabled title="Выделение рамкой: перетащите мышью по сцене, чтобы выбрать все элементы в прямоугольнике">▭ РАМКА</button>
         </div>
 
         <div class="divider"></div>
@@ -885,6 +900,7 @@
             <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ КАДР</button>
             <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
             <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ СТРУКТУРА IFC</button>
+            <button class="btn" id="btnMergeIFC" disabled title="Объединить все загруженные IFC-файлы в один: ExpressID пересчитываются без коллизий, все пространственные структуры собираются под одним общим IfcProject. Внешние 3D/CAD-форматы (FBX/DXF/OBJ и т.д.) в объединение не входят.">🧩 ОБЪЕДИНИТЬ IFC</button>
             <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ СЕТКА</button>
             <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕ ОЧИСТИТЬ</button>
         </div>
@@ -901,6 +917,7 @@
         </div>
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="Поиск (Enter)..." title="Введите часть имени или IFC-класса и нажмите Enter">
+            <button class="pop" id="openPropSearch" title="Найти все элементы, у которых есть указанный параметр/Pset (и, при необходимости, значение), и выделить их для массового редактирования">🔎 Поиск по параметру</button>
         </div>
         <div class="tree" id="tree">
             <div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>
@@ -915,7 +932,7 @@
             <h2>Сводные IFC · CAD · 3D модели</h2>
             <p>IFC, FBX, ASCII DXF, GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG необходимо предварительно преобразовать в DXF.</p>
         </div>
-        <div id="labels-container"></div> <div class="loader" id="loader">
+        <div id="labels-container"></div> <div id="boxSelectRect"></div> <div class="loader" id="loader">
             <b id="loadTitle">ОБРАБОТКА</b>
             <div class="bar"><i></i></div>
             <small id="loadSub">инициализация...</small>
@@ -1026,6 +1043,38 @@
             <div class="modal-actions">
                 <button class="btn" id="cancelNormalize">Отмена</button>
                 <button class="btn load-btn" id="applyNormalize">Привести в соответствие</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="propSearchModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="propSearchModalTitle">
+            <h3 id="propSearchModalTitle">Поиск элементов по параметру IFC</h3>
+            <div class="bulk-note">Поиск ведётся по всем загруженным IFC-файлам (внешние 3D/CAD-форматы не участвуют). Найденные элементы будут выделены на сцене и в дереве — после этого их можно массово отредактировать в разделе «Массовое изменение IFC».</div>
+            <div class="prop small">
+                <div class="k">Имя Pset (необязательно)</div>
+                <input class="editInput" id="propSearchPset" placeholder="Например: Pset_Custom — оставьте пустым для поиска по всем Pset">
+            </div>
+            <div class="prop small">
+                <div class="k">Имя параметра (часть имени)</div>
+                <input class="editInput" id="propSearchName" placeholder="Например: Код">
+            </div>
+            <div class="prop small">
+                <div class="k">Режим значения</div>
+                <select class="editInput" id="propSearchValueMode">
+                    <option value="any">Любое значение (не проверять)</option>
+                    <option value="contains">Значение содержит текст</option>
+                    <option value="exact">Значение точно равно</option>
+                    <option value="empty">Значение пустое</option>
+                </select>
+            </div>
+            <div class="prop small">
+                <div class="k">Текст значения</div>
+                <input class="editInput" id="propSearchValue" placeholder="Используется в режимах «содержит» и «точно равно»">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelPropSearch">Отмена</button>
+                <button class="btn load-btn" id="runPropSearch">Найти и выделить</button>
             </div>
         </div>
     </div>
@@ -1855,14 +1904,19 @@ let isClipping = false;
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
             
-            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect'].forEach(id => {
                 $(id).disabled = false;
             });
-            const hasEditableIfc = [...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
-            $('btnExportIFC').disabled = !hasEditableIfc;
-            $('btnNormalizeIFC').disabled = !hasEditableIfc;
+            updateIfcToolButtons();
             
             fitView();
+        }
+
+        function updateIfcToolButtons() {
+            const ifcModels = [...loadedModels.values()].filter(m => !m.isFBX && m.ifcIndex);
+            $('btnExportIFC').disabled = ifcModels.length === 0;
+            $('btnNormalizeIFC').disabled = ifcModels.length === 0;
+            $('btnMergeIFC').disabled = ifcModels.length < 2;
         }
 
         async function loadSingleIFC(file) {
@@ -3135,6 +3189,110 @@ let isClipping = false;
             selectMultiple([{ modelID: ud.modelID, expressID: ud.expressID }]);
         });
 
+        // --- BOX SELECT (Выделение рамкой на сцене) ---
+        let isBoxSelecting = false;
+        let boxSelectDrag = null;
+        const boxSelectRectEl = document.getElementById('boxSelectRect');
+
+        $('btnBoxSelect').addEventListener('click', () => {
+            isBoxSelecting = !isBoxSelecting;
+            $('btnBoxSelect').classList.toggle('on', isBoxSelecting);
+            if (isBoxSelecting && isMeasuring) $('btnMeasure').click();
+            document.body.style.cursor = isBoxSelecting ? 'crosshair' : '';
+        });
+
+        renderer.domElement.addEventListener('pointerdown', e => {
+            if (!isBoxSelecting || e.button !== 0) return;
+            const rect = stage.getBoundingClientRect();
+            boxSelectDrag = {
+                startX: e.clientX - rect.left,
+                startY: e.clientY - rect.top,
+                moved: false,
+                rectPx: null
+            };
+            boxSelectRectEl.style.left = boxSelectDrag.startX + 'px';
+            boxSelectRectEl.style.top = boxSelectDrag.startY + 'px';
+            boxSelectRectEl.style.width = '0px';
+            boxSelectRectEl.style.height = '0px';
+            boxSelectRectEl.style.display = 'block';
+            controls.enabled = false;
+            try { renderer.domElement.setPointerCapture(e.pointerId); } catch (_) {}
+        });
+
+        renderer.domElement.addEventListener('pointermove', e => {
+            if (!boxSelectDrag) return;
+            const rect = stage.getBoundingClientRect();
+            const x = e.clientX - rect.left, y = e.clientY - rect.top;
+            if (Math.hypot(x - boxSelectDrag.startX, y - boxSelectDrag.startY) > 3) boxSelectDrag.moved = true;
+            const left = Math.min(x, boxSelectDrag.startX), top = Math.min(y, boxSelectDrag.startY);
+            const w = Math.abs(x - boxSelectDrag.startX), h = Math.abs(y - boxSelectDrag.startY);
+            boxSelectRectEl.style.left = left + 'px';
+            boxSelectRectEl.style.top = top + 'px';
+            boxSelectRectEl.style.width = w + 'px';
+            boxSelectRectEl.style.height = h + 'px';
+            boxSelectDrag.rectPx = { left, top, right: left + w, bottom: top + h };
+        });
+
+        renderer.domElement.addEventListener('pointerup', e => {
+            if (!boxSelectDrag) return;
+            controls.enabled = true;
+            boxSelectRectEl.style.display = 'none';
+            try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (_) {}
+            const drag = boxSelectDrag;
+            boxSelectDrag = null;
+            if (!drag.moved || !drag.rectPx || drag.rectPx.right - drag.rectPx.left < 4 || drag.rectPx.bottom - drag.rectPx.top < 4) return;
+
+            const stageW = stage.clientWidth, stageH = stage.clientHeight;
+            const found = [];
+            allMeshes.forEach(mesh => {
+                if (!mesh.visible) return;
+                const box = new THREE.Box3().setFromObject(mesh);
+                if (box.isEmpty()) return;
+                const corners = [
+                    [box.min.x, box.min.y, box.min.z], [box.max.x, box.min.y, box.min.z],
+                    [box.min.x, box.max.y, box.min.z], [box.min.x, box.min.y, box.max.z],
+                    [box.max.x, box.max.y, box.min.z], [box.max.x, box.min.y, box.max.z],
+                    [box.min.x, box.max.y, box.max.z], [box.max.x, box.max.y, box.max.z]
+                ];
+                let minSx = Infinity, minSy = Infinity, maxSx = -Infinity, maxSy = -Infinity, anyInFront = false;
+                const v = new THREE.Vector3();
+                corners.forEach(([cx, cy, cz]) => {
+                    v.set(cx, cy, cz).project(camera);
+                    if (v.z < 1) anyInFront = true;
+                    const sx = (v.x * .5 + .5) * stageW;
+                    const sy = (v.y * -.5 + .5) * stageH;
+                    if (sx < minSx) minSx = sx; if (sx > maxSx) maxSx = sx;
+                    if (sy < minSy) minSy = sy; if (sy > maxSy) maxSy = sy;
+                });
+                if (!anyInFront) return;
+                const intersects = maxSx >= drag.rectPx.left && minSx <= drag.rectPx.right &&
+                    maxSy >= drag.rectPx.top && minSy <= drag.rectPx.bottom;
+                if (intersects) found.push({ modelID: mesh.userData.modelID, expressID: mesh.userData.expressID });
+            });
+
+            let items = uniqueSelectionItems(found);
+            if (e.ctrlKey || e.metaKey) {
+                const current = new Map(selectedItems.map(item => [selectionKey(item), item]));
+                items.forEach(item => {
+                    const k = selectionKey(item);
+                    if (current.has(k)) current.delete(k); else current.set(k, item);
+                });
+                items = [...current.values()];
+            } else if (e.shiftKey) {
+                items = uniqueSelectionItems([...selectedItems, ...items]);
+            }
+            treeSelectionAnchor = null;
+            selectMultiple(items);
+        });
+
+        renderer.domElement.addEventListener('pointercancel', () => {
+            if (boxSelectDrag) {
+                controls.enabled = true;
+                boxSelectRectEl.style.display = 'none';
+                boxSelectDrag = null;
+            }
+        });
+
         // Hide / Show All Logic
         $('btnHide').addEventListener('click', () => {
             selectedItems.forEach(i => {
@@ -3167,6 +3325,99 @@ let isClipping = false;
                 }
             }
             selectMultiple(found);
+        });
+
+        // --- Поиск элементов по параметру / Pset / значению ---
+        function valuePassesFilter(value, mode, wanted) {
+            const v = String(value ?? '').trim();
+            if (mode === 'empty') return v === '';
+            if (mode === 'any') return true;
+            const w = String(wanted ?? '').trim();
+            if (mode === 'exact') return v.toLocaleLowerCase('ru-RU') === w.toLocaleLowerCase('ru-RU');
+            if (mode === 'contains') return v.toLocaleLowerCase('ru-RU').includes(w.toLocaleLowerCase('ru-RU'));
+            return true;
+        }
+
+        function findElementsByProperty(modData, { psetName, propertyName, valueMode, valueText }) {
+            const psetWanted = psetName.trim().toLowerCase();
+            const propWanted = propertyName.trim().toLowerCase();
+            const results = new Set();
+            for (const [objectID, psetIds] of modData.psetIndex) {
+                for (const psetId of psetIds) {
+                    const pset = getEntityParts(modData, psetId);
+                    if (!pset) continue;
+                    if (psetWanted && unquoteStepString(pset.args[2] || '').trim().toLowerCase() !== psetWanted) continue;
+                    const propIds = getPsetPropertyIds(modData, psetId);
+                    for (const propId of propIds) {
+                        const prop = getEntityParts(modData, propId);
+                        if (!prop) continue;
+                        const propNameFound = unquoteStepString(prop.args[0] || '').trim().toLowerCase();
+                        if (propWanted && !propNameFound.includes(propWanted)) continue;
+                        let value = '';
+                        if (prop.className === 'IFCPROPERTYSINGLEVALUE') {
+                            value = unwrapIfcValue(prop.args[2]).value;
+                        } else if (prop.args.length > 1) {
+                            value = unquoteStepString(prop.args[1] || '');
+                        }
+                        if (!valuePassesFilter(value, valueMode, valueText)) continue;
+                        results.add(objectID);
+                    }
+                }
+            }
+            return [...results];
+        }
+
+        function closePropSearchModal() {
+            $('propSearchModal').classList.remove('show');
+        }
+
+        $('openPropSearch').addEventListener('click', () => {
+            const hasIfc = [...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
+            if (!hasIfc) {
+                alert('Сначала загрузите хотя бы один IFC-файл.');
+                return;
+            }
+            $('propSearchModal').classList.add('show');
+            $('propSearchName').focus();
+        });
+        $('cancelPropSearch').addEventListener('click', closePropSearchModal);
+        $('propSearchModal').addEventListener('click', event => {
+            if (event.target === $('propSearchModal')) closePropSearchModal();
+        });
+        window.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && $('propSearchModal').classList.contains('show')) closePropSearchModal();
+        });
+
+        $('runPropSearch').addEventListener('click', () => {
+            const psetName = $('propSearchPset').value;
+            const propertyName = $('propSearchName').value.trim();
+            const valueMode = $('propSearchValueMode').value;
+            const valueText = $('propSearchValue').value;
+
+            if (!propertyName) {
+                alert('Укажите имя параметра (или его часть) для поиска.');
+                return;
+            }
+            if ((valueMode === 'contains' || valueMode === 'exact') && !valueText.trim()) {
+                alert('Для выбранного режима значения укажите текст значения.');
+                return;
+            }
+
+            let found = [];
+            for (const modData of loadedModels.values()) {
+                if (modData.isFBX || !modData.ifcIndex) continue;
+                findElementsByProperty(modData, { psetName, propertyName, valueMode, valueText })
+                    .forEach(expressID => found.push({ modelID: modData.modelID, expressID }));
+            }
+
+            closePropSearchModal();
+            if (!found.length) {
+                alert('Совпадений не найдено. Проверьте имя Pset/параметра или режим значения.');
+                return;
+            }
+            treeSelectionAnchor = null;
+            selectMultiple(uniqueSelectionItems(found));
+            alert(`Найдено и выделено элементов: ${found.length}. Откройте «Свойства» → «Массовое изменение IFC», чтобы переименовать параметр(ы)/Pset или заменить значения у всех найденных элементов сразу.`);
         });
 
         function getSelectedIfcObjects() {
@@ -4152,16 +4403,15 @@ let isClipping = false;
             selectMultiple(selectedItems.filter(item => String(item.modelID) !== String(modelID)));
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
-            const hasEditableIfc = [...loadedModels.values()].some(model => !model.isFBX && model.ifcIndex);
-            $('btnExportIFC').disabled = !hasEditableIfc;
-            $('btnNormalizeIFC').disabled = !hasEditableIfc;
+            updateIfcToolButtons();
 
             if (loadedModels.size === 0) {
                 if (isClipping) $('btnClip').click();
                 if (isMeasuring) $('btnMeasure').click();
+                if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect'].forEach(id => {
                     $(id).disabled = true;
                 });
             } else {
@@ -4196,6 +4446,119 @@ let isClipping = false;
             });
         }
         $('btnExportIFC').addEventListener('click', downloadEditedIfcModels);
+
+        // --- ОБЪЕДИНЕНИЕ НЕСКОЛЬКИХ IFC В ОДИН ФАЙЛ ---
+        function remapStepArgRef(arg, offset) {
+            if (/^#\d+$/.test(arg)) {
+                return '#' + (parseInt(arg.slice(1), 10) + offset);
+            }
+            if (arg.startsWith('(') && arg.includes('#')) {
+                return arg.replace(/#(\d+)/g, (_, d) => '#' + (parseInt(d, 10) + offset));
+            }
+            return arg;
+        }
+
+        function buildMergedIfcText(models, combinedFileName) {
+            models.forEach(modData => {
+                const schemaLine = modData.ifcIndex.lines.find(line => /FILE_SCHEMA/i.test(line)) || '';
+                if (!/IFC4/i.test(schemaLine)) {
+                    throw new Error(`${modData.filename}: объединение поддерживает только схему IFC4/IFC4X3.`);
+                }
+            });
+
+            const infos = [];
+            let runningMax = 0;
+            models.forEach(modData => {
+                const offset = runningMax;
+                const maxId = getMaxExpressId(modData);
+                runningMax = offset + maxId;
+                const projectOldID = getIfcIdsByClass(modData, 'IFCPROJECT')[0];
+                infos.push({ modData, offset, projectOldID: projectOldID != null ? projectOldID : null });
+            });
+
+            const masterInfo = infos[0];
+            if (masterInfo.projectOldID == null) {
+                throw new Error(`${masterInfo.modData.filename}: не найден IfcProject — объединение невозможно.`);
+            }
+            const masterProjectNewID = masterInfo.projectOldID + masterInfo.offset;
+
+            const combinedEntities = [];
+            infos.forEach((info, index) => {
+                const { modData, offset, projectOldID } = info;
+                const isMaster = index === 0;
+                const oldProjectNewID = projectOldID != null ? projectOldID + offset : null;
+
+                for (const oldId of modData.ifcIndex.index.keys()) {
+                    if (!isMaster && oldId === projectOldID) continue;
+                    const entity = getEntityParts(modData, oldId);
+                    if (!entity) continue;
+                    const newId = oldId + offset;
+                    let args = entity.args.map(arg => remapStepArgRef(arg, offset));
+                    if (!isMaster && oldProjectNewID != null) {
+                        args = args.map(arg => {
+                            if (arg === `#${oldProjectNewID}`) return `#${masterProjectNewID}`;
+                            if (arg.startsWith('(') && arg.includes(`#${oldProjectNewID}`)) {
+                                return arg.replace(new RegExp(`#${oldProjectNewID}(?!\\d)`, 'g'), `#${masterProjectNewID}`);
+                            }
+                            return arg;
+                        });
+                    }
+                    combinedEntities.push(`#${newId}=${entity.className}(${args.join(',')});`);
+                }
+            });
+
+            const timestamp = new Date().toISOString();
+            const sourceNote = encodeStepString('Объединено из: ' + models.map(m => m.filename).join(', '));
+            return [
+                'ISO-10303-21;',
+                'HEADER;',
+                `FILE_DESCRIPTION(('${sourceNote}'),'2;1');`,
+                `FILE_NAME('${combinedFileName}','${timestamp}',(''),(''),'','LVA IFC Merge','');`,
+                `FILE_SCHEMA(('IFC4'));`,
+                'ENDSEC;',
+                'DATA;',
+                ...combinedEntities,
+                'ENDSEC;',
+                'END-ISO-10303-21;'
+            ].join('\n');
+        }
+
+        $('btnMergeIFC').addEventListener('click', async () => {
+            const models = [...loadedModels.values()].filter(m => !m.isFBX && m.ifcIndex);
+            if (models.length < 2) {
+                alert('Для объединения нужно как минимум два загруженных IFC-файла.');
+                return;
+            }
+            const names = models.map(m => ` · ${m.filename}`).join('\n');
+            const confirmed = confirm(
+                `Объединить ${models.length} IFC-файлов в один?\n\n${names}\n\n` +
+                'Все ExpressID будут пересчитаны без коллизий, пространственные структуры (Site/Building/Storey) ' +
+                'соберутся под одним общим IfcProject первого файла в списке.\n\n' +
+                'Внешние 3D/CAD-форматы (FBX/DXF/OBJ и т.п.), если они загружены, в объединение не входят и останутся отдельно.'
+            );
+            if (!confirmed) return;
+
+            showLoader('ОБЪЕДИНЕНИЕ IFC', 'Пересчёт ExpressID и сборка структуры...');
+            await new Promise(r => setTimeout(r, 20));
+
+            let mergedText;
+            try {
+                mergedText = buildMergedIfcText(models, `Merged_${models.length}_files.ifc`);
+            } catch (error) {
+                hideLoader();
+                alert('Ошибка объединения: ' + error.message);
+                return;
+            }
+
+            models.forEach(modData => removeLoadedModel(modData.modelID));
+            hideLoader();
+
+            const mergedFile = new File([mergedText], `Merged_${models.length}_files.ifc`, { type: 'application/octet-stream' });
+            await handleFiles([mergedFile]);
+            const newModel = [...loadedModels.values()].find(m => !m.isFBX && m.filename === mergedFile.name);
+            if (newModel) newModel.edited = true;
+            alert(`Готово: ${models.length} файлов объединены в один IFC (загружен в просмотрщик и провалидирован движком). Нажмите «Экспорт IFC», чтобы скачать результат.`);
+        });
 
         // --- Camera Tools ---
         function focusOnList(items) {
@@ -4290,9 +4653,8 @@ let isClipping = false;
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure'].forEach(id => $(id).disabled = true);
-            $('btnExportIFC').disabled = true;
-            $('btnNormalizeIFC').disabled = true;
+            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect'].forEach(id => $(id).disabled = true);
+            updateIfcToolButtons();
             
             isClipping = false; 
             renderer.localClippingEnabled = false;
@@ -4304,6 +4666,12 @@ let isClipping = false;
             
             isMeasuring = false; 
             $('btnMeasure').classList.remove('on'); 
+
+            isBoxSelecting = false;
+            $('btnBoxSelect').classList.remove('on');
+            boxSelectDrag = null;
+            boxSelectRectEl.style.display = 'none';
+
             document.body.style.cursor = '';
         });
 
