@@ -245,6 +245,23 @@
             border-right: none;
         }
 
+        .tool-select {
+            appearance: none;
+            background: var(--panel);
+            color: var(--text);
+            border: none;
+            border-right: 1px solid var(--line);
+            padding: 0 10px;
+            font: inherit;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            min-width: 52px;
+        }
+        .tool-select:disabled { opacity: 0.45; cursor: default; }
+        .tool-select:focus { outline: none; background: var(--bg); }
+
         /* ---- generic panel ---- */
         .panel {
             background: var(--panel);
@@ -1004,7 +1021,14 @@
         
         <div class="btn-group">
             <button class="btn" id="btnMeasure" disabled title="Измерить расстояние">📏 ИЗМЕРИТЬ</button>
-            <button class="btn" id="btnClip" disabled title="Секущая плоскость (Z)">✂ РАЗРЕЗ</button>
+            <button class="btn" id="btnClip" disabled title="Секущая плоскость или коробка сечения">✂ РАЗРЕЗ</button>
+            <select id="clipModeSelect" class="tool-select" disabled title="Ось плоскости или коробка сечения">
+                <option value="z">Z</option>
+                <option value="x">X</option>
+                <option value="y">Y</option>
+                <option value="box">BOX</option>
+            </select>
+            <button class="btn" id="btnClipGizmo" disabled title="Для коробки: сдвиг (↔) или масштаб (⤢) ручки">↔</button>
             <button class="btn" id="btnBoxSelect" disabled title="Выделение рамкой: перетащите мышью по сцене, чтобы выбрать все элементы в прямоугольнике">▭ РАМКА</button>
             <button class="btn on" id="btnZoomCursor" title="Зум к точке под курсором (как в Navisworks / BIMvision). Выкл — зум к центру орбиты">🎯 ЗУМ К КУРСОРУ</button>
             <button class="btn" id="btnPivotLock" disabled title="Фиксировать центр вращения/зума на выделенных элементах. Вкл после выделения — орбита крутится вокруг них">📌 НА ВЫДЕЛЕНИИ</button>
@@ -1837,73 +1861,194 @@
             $('geoRasterModal').classList.remove('show');
         }
 
-        // --- CLIPPING PLANES (Разрез) ---
-        // Создаем глобальную плоскость, изначально отодвинута далеко
+        // --- CLIPPING PLANES (Разрез X/Y/Z + коробка) ---
         const globalClipPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 999999999);
-        
-        // Вспомогательный кубик-ручка для TransformControls
+        const clipPlanesPool = [
+            new THREE.Plane(), new THREE.Plane(), new THREE.Plane(),
+            new THREE.Plane(), new THREE.Plane(), new THREE.Plane()
+        ];
+        let activeClipPlanes = [];
+        let clipMode = 'z'; // x | y | z | box
+        let clipGizmoMode = 'translate'; // translate | scale (для box)
+        let isClipping = false;
+
         const clipProxy = new THREE.Mesh(
-            new THREE.BoxGeometry(2, 2, 2), 
-            new THREE.MeshBasicMaterial({color: 0xff6b35, wireframe: true})
+            new THREE.BoxGeometry(1, 1, 1),
+            new THREE.MeshBasicMaterial({ color: 0xff6b35, wireframe: true, depthTest: false })
         );
         clipProxy.visible = false;
+        clipProxy.renderOrder = 999;
         scene.add(clipProxy);
 
+        const sectionBox = new THREE.Box3();
+        const sectionBoxHelper = new THREE.Box3Helper(sectionBox, 0x00e8ff);
+        sectionBoxHelper.visible = false;
+        scene.add(sectionBoxHelper);
+
         const transformControl = new TransformControls(camera, renderer.domElement);
-        transformControl.addEventListener('dragging-changed', e => controls.enabled = !e.value);
+        transformControl.addEventListener('dragging-changed', e => { controls.enabled = !e.value; });
         transformControl.addEventListener('change', () => {
-            globalClipPlane.constant = clipProxy.position.z;
+            syncClipFromGizmo();
             markNeedsRender();
         });
-        
         transformControl.attach(clipProxy);
         transformControl.visible = false;
         transformControl.enabled = false;
-        transformControl.showX = false; // Тягаем только по Z
-        transformControl.showY = false;
         scene.add(transformControl);
 
-let isClipping = false;
-        $('btnClip').addEventListener('click', () => {
-            // Защита: если ничего не выделено, не даем включить разрез
-            if (!isClipping && selectedItems.length === 0) {
-                alert('Сначала выделите элемент(ы) на сцене или в дереве для установки плоскости разреза.');
-                return;
+        function pointPassesClipping(point) {
+            if (!isClipping || !activeClipPlanes.length) return true;
+            for (const plane of activeClipPlanes) {
+                if (plane.distanceToPoint(point) < 0) return false;
             }
+            return true;
+        }
 
-            isClipping = !isClipping;
-            $('btnClip').classList.toggle('on', isClipping);
-            clipProxy.visible = isClipping;
-            transformControl.visible = isClipping;
-            transformControl.enabled = isClipping;
-            
-            // Аппаратно включаем/выключаем отсечение в видеокарте
+        function getActiveClipPlanes() {
+            return isClipping ? activeClipPlanes : [];
+        }
+
+        function applyClippingToAllMaterials() {
+            const planes = getActiveClipPlanes();
             renderer.localClippingEnabled = isClipping;
             allMeshes.forEach(mesh => {
                 const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
                 mats.forEach(mat => {
                     if (!mat) return;
-                    mat.clippingPlanes = isClipping ? [globalClipPlane] : [];
+                    mat.clippingPlanes = planes;
                     mat.needsUpdate = true;
                 });
             });
-            markNeedsRender();
-            
-            if(isClipping) {
-                // Вычисляем BoundingBox ТОЛЬКО для выделенных элементов
-                const box = getSelectionBounds(selectedItems);
+        }
 
-                if (!box.isEmpty()) {
-                    const center = box.getCenter(new THREE.Vector3());
-                    // Ставим плоскость ровно по верхней грани выделенного элемента
-                    clipProxy.position.z = box.max.z; 
-                    // Смещаем саму ручку (кубик) в центр элемента по X и Y, чтобы ее было удобно тянуть
-                    clipProxy.position.x = center.x;
-                    clipProxy.position.y = center.y;
-                    
-                    globalClipPlane.constant = clipProxy.position.z;
-                }
+        function setPlaneGizmoAxes(mode) {
+            transformControl.setMode('translate');
+            transformControl.showX = mode === 'x';
+            transformControl.showY = mode === 'y';
+            transformControl.showZ = mode === 'z';
+            clipProxy.scale.set(2, 2, 2);
+        }
+
+        function syncClipFromGizmo() {
+            if (clipMode === 'box') {
+                const sx = Math.max(0.05, Math.abs(clipProxy.scale.x));
+                const sy = Math.max(0.05, Math.abs(clipProxy.scale.y));
+                const sz = Math.max(0.05, Math.abs(clipProxy.scale.z));
+                const c = clipProxy.position;
+                sectionBox.min.set(c.x - sx * 0.5, c.y - sy * 0.5, c.z - sz * 0.5);
+                sectionBox.max.set(c.x + sx * 0.5, c.y + sy * 0.5, c.z + sz * 0.5);
+                sectionBoxHelper.box = sectionBox;
+                // 6 плоскостей: оставляем внутри box
+                clipPlanesPool[0].set(new THREE.Vector3(1, 0, 0), -sectionBox.min.x);
+                clipPlanesPool[1].set(new THREE.Vector3(-1, 0, 0), sectionBox.max.x);
+                clipPlanesPool[2].set(new THREE.Vector3(0, 1, 0), -sectionBox.min.y);
+                clipPlanesPool[3].set(new THREE.Vector3(0, -1, 0), sectionBox.max.y);
+                clipPlanesPool[4].set(new THREE.Vector3(0, 0, 1), -sectionBox.min.z);
+                clipPlanesPool[5].set(new THREE.Vector3(0, 0, -1), sectionBox.max.z);
+                activeClipPlanes = clipPlanesPool.slice();
+                globalClipPlane.copy(clipPlanesPool[5]);
+            } else if (clipMode === 'x') {
+                globalClipPlane.set(new THREE.Vector3(-1, 0, 0), clipProxy.position.x);
+                activeClipPlanes = [globalClipPlane];
+            } else if (clipMode === 'y') {
+                globalClipPlane.set(new THREE.Vector3(0, -1, 0), clipProxy.position.y);
+                activeClipPlanes = [globalClipPlane];
+            } else {
+                globalClipPlane.set(new THREE.Vector3(0, 0, -1), clipProxy.position.z);
+                activeClipPlanes = [globalClipPlane];
             }
+            applyClippingToAllMaterials();
+        }
+
+        function placeClipGizmoFromBounds(box) {
+            if (!box || box.isEmpty()) return;
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            if (clipMode === 'box') {
+                const pad = 0.02;
+                sectionBox.copy(box);
+                clipProxy.position.copy(center);
+                clipProxy.scale.set(
+                    Math.max(0.1, size.x + pad),
+                    Math.max(0.1, size.y + pad),
+                    Math.max(0.1, size.z + pad)
+                );
+            } else if (clipMode === 'x') {
+                clipProxy.position.set(box.max.x, center.y, center.z);
+                clipProxy.scale.set(2, 2, 2);
+            } else if (clipMode === 'y') {
+                clipProxy.position.set(center.x, box.max.y, center.z);
+                clipProxy.scale.set(2, 2, 2);
+            } else {
+                clipProxy.position.set(center.x, center.y, box.max.z);
+                clipProxy.scale.set(2, 2, 2);
+            }
+        }
+
+        function updateClipUiState() {
+            $('clipModeSelect').disabled = !isClipping && $('btnClip').disabled;
+            $('btnClipGizmo').disabled = !isClipping || clipMode !== 'box';
+            $('btnClipGizmo').textContent = clipGizmoMode === 'scale' ? '⤢' : '↔';
+            $('btnClipGizmo').classList.toggle('on', isClipping && clipMode === 'box' && clipGizmoMode === 'scale');
+            sectionBoxHelper.visible = isClipping && clipMode === 'box';
+            if (clipMode === 'box') {
+                transformControl.setMode(clipGizmoMode);
+                transformControl.showX = true;
+                transformControl.showY = true;
+                transformControl.showZ = true;
+            } else {
+                setPlaneGizmoAxes(clipMode);
+            }
+        }
+
+        function enableClipping(on) {
+            isClipping = on;
+            $('btnClip').classList.toggle('on', isClipping);
+            clipProxy.visible = isClipping;
+            transformControl.visible = isClipping;
+            transformControl.enabled = isClipping;
+            if (isClipping) {
+                clipMode = $('clipModeSelect').value || 'z';
+                const box = selectedItems.length
+                    ? getSelectionBounds(selectedItems)
+                    : new THREE.Box3().setFromObject(globalGroup);
+                if (box.isEmpty()) {
+                    isClipping = false;
+                    $('btnClip').classList.remove('on');
+                    alert('Нет геометрии для установки разреза. Загрузите модель или выделите элементы.');
+                    return;
+                }
+                placeClipGizmoFromBounds(box);
+                syncClipFromGizmo();
+            } else {
+                activeClipPlanes = [];
+                applyClippingToAllMaterials();
+            }
+            updateClipUiState();
+            markNeedsRender();
+        }
+
+        $('btnClip').addEventListener('click', () => {
+            enableClipping(!isClipping);
+        });
+
+        $('clipModeSelect').addEventListener('change', () => {
+            clipMode = $('clipModeSelect').value || 'z';
+            if (!isClipping) return;
+            const box = selectedItems.length
+                ? getSelectionBounds(selectedItems)
+                : new THREE.Box3().setFromObject(globalGroup);
+            if (!box.isEmpty()) placeClipGizmoFromBounds(box);
+            syncClipFromGizmo();
+            updateClipUiState();
+            markNeedsRender();
+        });
+
+        $('btnClipGizmo').addEventListener('click', () => {
+            if (!isClipping || clipMode !== 'box') return;
+            clipGizmoMode = clipGizmoMode === 'translate' ? 'scale' : 'translate';
+            updateClipUiState();
+            markNeedsRender();
         });
 
         // --- MEASUREMENT TOOL (Линейка) ---
@@ -2632,6 +2777,7 @@ let isClipping = false;
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
+            $('clipModeSelect').disabled = loadedModels.size === 0;
             updateIfcToolButtons();
 
             if (loadedModels.size) fitView();
@@ -2848,7 +2994,7 @@ let isClipping = false;
                 if (!merged) continue;
                 merged.computeBoundingSphere();
                 const mat = createIfcMaterial(list[0].hex, list[0].opacity);
-                if (isClipping) mat.clippingPlanes = [globalClipPlane];
+                mat.clippingPlanes = getActiveClipPlanes();
                 const mesh = new THREE.Mesh(merged, mat);
                 mesh.matrixAutoUpdate = false;
                 mesh.userData = {
@@ -2872,7 +3018,7 @@ let isClipping = false;
             modData.batched = false;
             fragments.forEach(frag => {
                 const mat = createIfcMaterial(frag.hex, frag.opacity);
-                if (isClipping) mat.clippingPlanes = [globalClipPlane];
+                mat.clippingPlanes = getActiveClipPlanes();
                 const mesh = new THREE.Mesh(frag.geom, mat);
                 mesh.matrix.copy(frag.matrix);
                 mesh.matrixAutoUpdate = false;
@@ -3038,7 +3184,7 @@ let isClipping = false;
                     else if (obj.isLine || obj.isLineSegments) normalized = new THREE.LineBasicMaterial({ color: 0x465d70 });
                     else normalized = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
                     if (obj.isMesh) normalized.side = THREE.DoubleSide;
-                    normalized.clippingPlanes = [globalClipPlane];
+                    normalized.clippingPlanes = getActiveClipPlanes();
                     return normalized;
                 });
                 obj.material = Array.isArray(obj.material) ? materials : materials[0];
@@ -4412,7 +4558,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     side: mat.side ?? THREE.DoubleSide,
                     transparent: mat.transparent,
                     opacity: mat.opacity ?? 1,
-                    clippingPlanes: mat.clippingPlanes || [globalClipPlane]
+                    clippingPlanes: mat.clippingPlanes || getActiveClipPlanes()
                 });
                 if (mat.map) std.map = mat.map;
                 mat.dispose();
@@ -4942,7 +5088,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const hits = raycaster.intersectObjects(visibleMeshes, false);
             
             // Фильтруем попадания, которые отсеклись плоскостью
-            const validHits = isClipping ? hits.filter(h => h.point.z <= globalClipPlane.constant) : hits;
+            const validHits = isClipping ? hits.filter(h => pointPassesClipping(h.point)) : hits;
 
             if (validHits.length === 0) { 
                 if (!isMeasuring) selectMultiple([]); 
@@ -6332,6 +6478,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
+                $('clipModeSelect').disabled = true;
+                $('btnClipGizmo').disabled = true;
                 pivotLockToSelection = false;
                 $('btnPivotLock').classList.remove('on');
             } else {
@@ -6842,15 +6990,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
             ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            $('clipModeSelect').disabled = true;
+            $('btnClipGizmo').disabled = true;
             updateIfcToolButtons();
-            
-            isClipping = false; 
+
+            isClipping = false;
+            activeClipPlanes = [];
             renderer.localClippingEnabled = false;
-            transformControl.visible = false; 
-            transformControl.enabled = false; 
-            clipProxy.visible = false; 
-            globalClipPlane.constant = 999999999; 
+            transformControl.visible = false;
+            transformControl.enabled = false;
+            clipProxy.visible = false;
+            sectionBoxHelper.visible = false;
+            globalClipPlane.set(new THREE.Vector3(0, 0, -1), 999999999);
             $('btnClip').classList.remove('on');
+            $('btnClipGizmo').classList.remove('on');
             
             isMeasuring = false; 
             $('btnMeasure').classList.remove('on'); 
