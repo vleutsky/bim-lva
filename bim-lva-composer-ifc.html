@@ -1059,7 +1059,7 @@
         <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
             <h2>BIM.LVA Composer IFC</h2>
-            <p>IFC, FBX, ASCII DXF (в т.ч. 3DFACE/MESH/TIN), GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG → DXF; 3DSOLID лучше в MESH/OBJ.<br><span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
+            <p>IFC, FBX, ASCII DXF (3DFACE/MESH/TIN и 3DSOLID→mesh), GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG → DXF.<br><span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
         </div>
         <div id="labels-container"></div> <div id="boxSelectRect"></div> <div class="loader" id="loader">
             <b id="loadTitle">ОБРАБОТКА</b>
@@ -3550,24 +3550,139 @@ let isClipping = false;
             return root;
         }
 
+        // 3DSOLID/BODY/REGION хранят геометрию в ACIS (SAT/SAB). Извлекаем плоские грани через ezdxf в Pyodide.
+        let ezdxfRuntimePromise = null;
+
+        function loadScriptOnce(src) {
+            return new Promise((resolve, reject) => {
+                if ([...document.scripts].some(s => s.src === src)) {
+                    resolve();
+                    return;
+                }
+                const el = document.createElement('script');
+                el.src = src;
+                el.async = true;
+                el.onload = () => resolve();
+                el.onerror = () => reject(new Error('Не удалось загрузить ' + src));
+                document.head.appendChild(el);
+            });
+        }
+
+        async function ensureEzdxfRuntime(onStatus) {
+            if (ezdxfRuntimePromise) return ezdxfRuntimePromise;
+            ezdxfRuntimePromise = (async () => {
+                onStatus?.('Загрузка Python/Pyodide…');
+                const indexURL = 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/';
+                await loadScriptOnce(indexURL + 'pyodide.js');
+                if (typeof loadPyodide !== 'function') throw new Error('Pyodide недоступен');
+                const pyodide = await loadPyodide({ indexURL });
+                onStatus?.('Загрузка numpy / ezdxf…');
+                await pyodide.loadPackage(['micropip', 'numpy']);
+                const micropip = pyodide.pyimport('micropip');
+                await micropip.install('ezdxf');
+                onStatus?.('Движок ACIS готов');
+                return pyodide;
+            })().catch(err => {
+                ezdxfRuntimePromise = null;
+                throw err;
+            });
+            return ezdxfRuntimePromise;
+        }
+
+        async function extractAcisMeshesFromDxf(dxfText, onStatus) {
+            const pyodide = await ensureEzdxfRuntime(onStatus);
+            onStatus?.('Разбор 3DSOLID (ACIS)…');
+            // Через FS — надёжнее для больших DXF, чем globals
+            pyodide.FS.writeFile('input.dxf', dxfText);
+            const raw = await pyodide.runPythonAsync(`
+import ezdxf, json
+from ezdxf.acis import api as acis
+
+doc = ezdxf.readfile("input.dxf")
+out = []
+errors = []
+for e in doc.modelspace().query("3DSOLID BODY REGION SURFACE"):
+    layer = getattr(e.dxf, "layer", "0") or "0"
+    try:
+        bodies = acis.load_dxf(e)
+    except Exception as ex:
+        errors.append(f"{e.dxftype()}: {ex}")
+        continue
+    for body in bodies:
+        try:
+            meshes = acis.mesh_from_body(body)
+        except Exception as ex:
+            errors.append(f"mesh: {ex}")
+            continue
+        for mesh in meshes:
+            if not mesh.vertices or not mesh.faces:
+                continue
+            out.append({
+                "layer": layer,
+                "vertices": [[float(v.x), float(v.y), float(v.z)] for v in mesh.vertices],
+                "faces": [list(map(int, f)) for f in mesh.faces],
+            })
+json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
+`);
+            try { pyodide.FS.unlink('input.dxf'); } catch (_) {}
+            const parsed = JSON.parse(raw);
+            return parsed;
+        }
+
         async function loadSingleDXF(file) {
             showLoader('ЧТЕНИЕ DXF', file.name);
             try {
-                const entities = parseAsciiDXF(await file.text());
+                const text = await file.text();
+                const entities = parseAsciiDXF(text);
+                const seen = entities._seenTypes || [];
+                const needsAcis = seen.some(t => /^(3DSOLID|BODY|REGION|SURFACE)$/i.test(t));
+
+                if (needsAcis) {
+                    showLoader('3DSOLID → MESH', 'Подготовка конвертера ACIS…');
+                    try {
+                        const result = await extractAcisMeshesFromDxf(text, msg => showLoader('3DSOLID → MESH', msg));
+                        (result.meshes || []).forEach(mesh => {
+                            entities.push({
+                                type: 'mesh',
+                                layer: mesh.layer || '0',
+                                vertices: mesh.vertices,
+                                faces: mesh.faces
+                            });
+                        });
+                        if (!(result.meshes || []).length) {
+                            const detail = (result.errors || []).join('; ');
+                            throw new Error(
+                                '3DSOLID найден, но плоские грани не извлечены' +
+                                (detail ? ` (${detail})` : '') +
+                                '. Тело может содержать криволинейные поверхности. В CAD: CONVTOMESH / экспорт в OBJ/GLB.'
+                            );
+                        }
+                    } catch (acisErr) {
+                        console.error(acisErr);
+                        if (!entities.length) {
+                            throw new Error(
+                                'Не удалось прочитать 3DSOLID: ' + acisErr.message +
+                                ' Альтернатива: в nanoCAD/AutoCAD команда CONVTOMESH или экспорт в OBJ/GLB.'
+                            );
+                        }
+                        // Есть обычные примитивы — грузим их, ACIS пропускаем
+                        console.warn('ACIS conversion skipped:', acisErr);
+                    }
+                }
+
                 if (!entities.length) {
-                    const seen = entities._seenTypes || [];
                     const solidLike = seen.filter(t =>
                         /^(3DSOLID|BODY|REGION|SURFACE|PLANESURFACE|NURBSURFACE|ACAD_PROXY_ENTITY)$/i.test(t)
                     );
-                    let msg = 'Не найдены поддерживаемые примитивы (LINE, ARC, CIRCLE, LWPOLYLINE, POINT, 3DFACE, MESH, polyface).';
+                    let msg = 'Не найдены поддерживаемые примитивы (LINE, ARC, CIRCLE, LWPOLYLINE, POINT, 3DFACE, MESH, polyface, 3DSOLID).';
                     if (solidLike.length) {
-                        msg += ` В файле есть ${solidLike.join(', ')} — это тела/поверхности AutoCAD без триангуляции. ` +
-                            'В AutoCAD/Civil 3D: Explode или экспорт в MESH/3DFACE, либо сохраните как OBJ/GLB.';
+                        msg += ` В файле есть ${solidLike.join(', ')}.`;
                     } else if (seen.length) {
                         msg += ` Найдены типы: ${seen.slice(0, 12).join(', ')}.`;
                     }
                     throw new Error(msg);
                 }
+                showLoader('ГЕОМЕТРИЯ DXF', 'Построение объектов…');
                 const root = buildDXFRoot(entities, file.name);
                 if (!root.children.length) throw new Error('DXF прочитан, но геометрия пуста.');
                 await addExternalModel(file, 'DXF', root);
