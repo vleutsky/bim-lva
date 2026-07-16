@@ -1039,7 +1039,9 @@
 
         <div class="btn-group">
             <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы">👁 СКРЫТЬ</button>
-            <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие">👁‍🗨 ПОКАЗАТЬ ВСЁ</button>
+            <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное">◎ ИЗОЛИРОВАТЬ</button>
+            <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию">👁‍🗨 ПОКАЗАТЬ ВСЁ</button>
+            <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ ВИДЫ</button>
         </div>
 
         <div class="tools">
@@ -1228,6 +1230,24 @@
             <div class="modal-actions">
                 <button class="btn" id="cancelPropSearch">Отмена</button>
                 <button class="btn load-btn" id="runPropSearch">Найти и выделить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="viewsModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="viewsModalTitle" style="width:min(520px,100%)">
+            <h3 id="viewsModalTitle">Сохранённые виды</h3>
+            <div class="bulk-note">Вид хранит камеру, выделение, скрытые элементы и состояние разреза. Список сохраняется в браузере (localStorage).</div>
+            <div class="prop small">
+                <div class="k">Имя нового вида</div>
+                <input class="editInput" id="viewNameInput" placeholder="Например: Разрез по оси А">
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start;margin-top:4px">
+                <button class="btn load-btn" id="viewSaveBtn">Сохранить текущий</button>
+            </div>
+            <div id="viewsList" class="bulk-note" style="margin-top:10px;max-height:280px;overflow:auto">Пока нет сохранённых видов.</div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelViews">Закрыть</button>
             </div>
         </div>
     </div>
@@ -2774,7 +2794,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnShowAll', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -5277,25 +5297,59 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
         });
 
-        // Hide / Show All Logic
-        $('btnHide').addEventListener('click', () => {
-            const batchedToRebuild = new Set();
-            selectedItems.forEach(i => {
-                const mod = loadedModels.get(i.modelID);
-                if (!mod) return;
-                if (mod.batched && mod._fragments) {
-                    mod.hiddenIds.add(i.expressID);
-                    batchedToRebuild.add(mod);
-                } else if (mod.meshesByID.has(i.expressID)) {
-                    mod.meshesByID.get(i.expressID).forEach(m => { m.visible = false; });
-                }
-            });
-            batchedToRebuild.forEach(mod => buildIfcBatches(mod, mod._fragments));
-            selectMultiple([]);
-            markNeedsRender();
-        });
+        // Hide / Isolate / Show All / Saved views
+        let isolateActive = false;
+        const VIEWS_STORAGE_KEY = 'bimlva_saved_views_v1';
 
-        $('btnShowAll').addEventListener('click', () => {
+        function setElementHidden(mod, expressID, hidden) {
+            if (!mod) return false;
+            if (mod.batched && mod._fragments) {
+                if (hidden) mod.hiddenIds.add(expressID);
+                else mod.hiddenIds.delete(expressID);
+                return true;
+            }
+            if (mod.meshesByID?.has(expressID)) {
+                mod.meshesByID.get(expressID).forEach(m => { m.visible = !hidden; });
+            }
+            return false;
+        }
+
+        function rebuildBatchedVisibility(mods) {
+            mods.forEach(mod => {
+                if (mod.batched && mod._fragments) buildIfcBatches(mod, mod._fragments);
+            });
+        }
+
+        function collectHiddenItems() {
+            const hidden = [];
+            for (const [modelID, mod] of loadedModels) {
+                if (mod.batched && mod.hiddenIds?.size) {
+                    for (const expressID of mod.hiddenIds) hidden.push({ modelID, expressID });
+                } else if (mod.meshesByID) {
+                    for (const [expressID, meshes] of mod.meshesByID) {
+                        if (meshes.some(m => m.visible === false)) hidden.push({ modelID, expressID });
+                    }
+                }
+            }
+            return hidden;
+        }
+
+        function applyHiddenItems(hiddenList) {
+            const rebuild = new Set();
+            for (const mod of loadedModels.values()) {
+                if (mod.batched) mod.hiddenIds.clear();
+            }
+            allMeshes.forEach(m => { m.visible = true; });
+            (hiddenList || []).forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                if (setElementHidden(mod, item.expressID, true) && mod) rebuild.add(mod);
+            });
+            rebuildBatchedVisibility(rebuild);
+        }
+
+        function showAllGeometry() {
+            isolateActive = false;
+            $('btnIsolate').classList.remove('on');
             for (const mod of loadedModels.values()) {
                 if (mod.batched && mod._fragments && mod.hiddenIds?.size) {
                     mod.hiddenIds.clear();
@@ -5304,6 +5358,174 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             allMeshes.forEach(m => { m.visible = true; });
             markNeedsRender();
+        }
+
+        $('btnHide').addEventListener('click', () => {
+            const batchedToRebuild = new Set();
+            selectedItems.forEach(i => {
+                const mod = loadedModels.get(i.modelID);
+                if (!mod) return;
+                if (setElementHidden(mod, i.expressID, true)) batchedToRebuild.add(mod);
+            });
+            rebuildBatchedVisibility(batchedToRebuild);
+            selectMultiple([]);
+            markNeedsRender();
+        });
+
+        $('btnIsolate').addEventListener('click', () => {
+            if (!selectedItems.length) {
+                alert('Сначала выделите элементы для изоляции.');
+                return;
+            }
+            const keep = new Set(selectedItems.map(selectionKey));
+            const rebuild = new Set();
+            for (const [modelID, mod] of loadedModels) {
+                const ids = mod.batched
+                    ? (mod._fragments ? [...new Set(mod._fragments.map(f => f.expressID))] : [...(mod.meshesByID?.keys() || [])])
+                    : [...(mod.meshesByID?.keys() || [])];
+                ids.forEach(expressID => {
+                    const key = `${String(modelID)}::${String(expressID)}`;
+                    const hide = !keep.has(key);
+                    if (setElementHidden(mod, expressID, hide) && hide) rebuild.add(mod);
+                });
+                if (mod.batched) rebuild.add(mod);
+            }
+            rebuildBatchedVisibility(rebuild);
+            isolateActive = true;
+            $('btnIsolate').classList.add('on');
+            markNeedsRender();
+        });
+
+        $('btnShowAll').addEventListener('click', showAllGeometry);
+
+        function loadSavedViews() {
+            try {
+                const raw = localStorage.getItem(VIEWS_STORAGE_KEY);
+                const list = raw ? JSON.parse(raw) : [];
+                return Array.isArray(list) ? list : [];
+            } catch (_) {
+                return [];
+            }
+        }
+
+        function persistSavedViews(list) {
+            localStorage.setItem(VIEWS_STORAGE_KEY, JSON.stringify(list.slice(0, 40)));
+        }
+
+        function captureCurrentView(name) {
+            return {
+                id: Date.now(),
+                name: name || ('Вид ' + new Date().toLocaleString('ru-RU')),
+                camera: {
+                    position: camera.position.toArray(),
+                    target: controls.target.toArray(),
+                    up: camera.up.toArray()
+                },
+                selection: selectedItems.map(i => ({ modelID: i.modelID, expressID: i.expressID })),
+                hidden: collectHiddenItems(),
+                isolateActive,
+                clip: {
+                    enabled: isClipping,
+                    mode: clipMode,
+                    gizmo: clipGizmoMode,
+                    proxyPos: clipProxy.position.toArray(),
+                    proxyScale: clipProxy.scale.toArray()
+                },
+                pivotLock: pivotLockToSelection
+            };
+        }
+
+        function restoreSavedView(view) {
+            if (!view) return;
+            if (view.camera) {
+                camera.position.fromArray(view.camera.position);
+                if (view.camera.up) camera.up.fromArray(view.camera.up);
+                controls.target.fromArray(view.camera.target);
+                controls.update();
+            }
+            applyHiddenItems(view.hidden || []);
+            isolateActive = !!view.isolateActive;
+            $('btnIsolate').classList.toggle('on', isolateActive);
+
+            if (view.clip?.enabled) {
+                clipMode = view.clip.mode || 'z';
+                $('clipModeSelect').value = clipMode;
+                clipGizmoMode = view.clip.gizmo || 'translate';
+                if (view.clip.proxyPos) clipProxy.position.fromArray(view.clip.proxyPos);
+                if (view.clip.proxyScale) clipProxy.scale.fromArray(view.clip.proxyScale);
+                if (!isClipping) enableClipping(true);
+                else {
+                    syncClipFromGizmo();
+                    updateClipUiState();
+                }
+            } else if (isClipping) {
+                enableClipping(false);
+            }
+
+            pivotLockToSelection = !!view.pivotLock;
+            $('btnPivotLock').classList.toggle('on', pivotLockToSelection);
+
+            const sel = (view.selection || []).filter(i => {
+                const mod = loadedModels.get(i.modelID);
+                return mod && mod.meshesByID?.has(i.expressID);
+            });
+            selectMultiple(sel);
+            markNeedsRender();
+        }
+
+        function renderViewsList() {
+            const list = loadSavedViews();
+            const el = $('viewsList');
+            if (!list.length) {
+                el.textContent = 'Пока нет сохранённых видов.';
+                return;
+            }
+            el.innerHTML = list.map(v => `
+                <div class="ya-file-row" style="margin-bottom:6px">
+                    <span class="ya-name">${esc(v.name)}</span>
+                    <button type="button" class="btn" data-view-act="restore" data-view-id="${v.id}">Открыть</button>
+                    <button type="button" class="btn" data-view-act="delete" data-view-id="${v.id}">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function openViewsModal() {
+            $('viewNameInput').value = '';
+            renderViewsList();
+            $('viewsModal').classList.add('show');
+        }
+        function closeViewsModal() {
+            $('viewsModal').classList.remove('show');
+        }
+
+        $('btnViews').addEventListener('click', openViewsModal);
+        $('cancelViews').addEventListener('click', closeViewsModal);
+        $('viewsModal').addEventListener('click', e => {
+            if (e.target === $('viewsModal')) closeViewsModal();
+        });
+        $('viewSaveBtn').addEventListener('click', () => {
+            const name = $('viewNameInput').value.trim();
+            const list = loadSavedViews();
+            list.unshift(captureCurrentView(name));
+            persistSavedViews(list);
+            renderViewsList();
+        });
+        $('viewsList').addEventListener('click', e => {
+            const btn = e.target.closest('[data-view-act]');
+            if (!btn) return;
+            const id = Number(btn.dataset.viewId);
+            let list = loadSavedViews();
+            if (btn.dataset.viewAct === 'delete') {
+                list = list.filter(v => v.id !== id);
+                persistSavedViews(list);
+                renderViewsList();
+                return;
+            }
+            if (btn.dataset.viewAct === 'restore') {
+                const view = list.find(v => v.id === id);
+                restoreSavedView(view);
+                closeViewsModal();
+            }
         });
 
         // --- Search ---
