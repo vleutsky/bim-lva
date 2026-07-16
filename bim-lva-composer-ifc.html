@@ -262,6 +262,44 @@
         .tool-select:disabled { opacity: 0.45; cursor: default; }
         .tool-select:focus { outline: none; background: var(--bg); }
 
+        .color-legend {
+            position: absolute;
+            right: 16px;
+            bottom: 48px;
+            z-index: 40;
+            min-width: 180px;
+            max-width: 280px;
+            max-height: 45vh;
+            overflow: auto;
+            background: color-mix(in srgb, var(--panel) 92%, transparent);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 10px 12px;
+            backdrop-filter: blur(6px);
+            box-shadow: 0 8px 24px rgba(0,0,0,.25);
+            font-size: 12px;
+        }
+        .color-legend-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .color-legend-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0;
+        }
+        .color-legend-swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            flex: 0 0 auto;
+            border: 1px solid rgba(255,255,255,.25);
+        }
+
         /* ---- generic panel ---- */
         .panel {
             background: var(--panel);
@@ -1049,6 +1087,7 @@
             <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное">◎ ИЗОЛИРОВАТЬ</button>
             <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию">👁‍🗨 ПОКАЗАТЬ ВСЁ</button>
             <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ ВИДЫ</button>
+            <button class="btn" id="btnColorBy" disabled title="Раскрасить элементы по IFC-классу или значению Pset">🎨 ЦВЕТ</button>
         </div>
 
         <div class="tools">
@@ -1237,6 +1276,39 @@
             <div class="modal-actions">
                 <button class="btn" id="cancelPropSearch">Отмена</button>
                 <button class="btn load-btn" id="runPropSearch">Найти и выделить</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="colorLegend" class="color-legend" hidden>
+        <div class="color-legend-head">
+            <b id="colorLegendTitle">Легенда</b>
+            <button type="button" class="pop" id="colorLegendClose" title="Скрыть легенду">✕</button>
+        </div>
+        <div id="colorLegendBody"></div>
+    </div>
+
+    <div class="modal-backdrop" id="colorByModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="colorByModalTitle" style="width:min(480px,100%)">
+            <h3 id="colorByModalTitle">Цвет по классу / параметру</h3>
+            <div class="bulk-note">Раскраска применяется ко всем загруженным IFC (через оформление). Внешние CAD/3D не участвуют.</div>
+            <div class="prop small">
+                <div class="k">Режим</div>
+                <select class="editInput" id="colorByMode">
+                    <option value="class">По IFC-классу</option>
+                    <option value="pset">По значению параметра Pset</option>
+                </select>
+            </div>
+            <div class="prop small" id="colorByPsetFields" hidden>
+                <div class="k">Имя Pset (необязательно)</div>
+                <input class="editInput" id="colorByPset" placeholder="Pset_…">
+                <div class="k" style="margin-top:8px">Имя параметра</div>
+                <input class="editInput" id="colorByProp" placeholder="Например: FireRating">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="colorByReset">Сбросить раскраску</button>
+                <button class="btn" id="cancelColorBy">Отмена</button>
+                <button class="btn load-btn" id="runColorBy">Применить</button>
             </div>
         </div>
     </div>
@@ -2932,7 +3004,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -5634,6 +5706,179 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
         });
 
+        // --- Color by class / Pset + legend ---
+        let colorByLegend = [];
+        let colorByTagged = []; // {modelID, expressID} tagged by last color-by run
+
+        function hashStringColor(str) {
+            let h = 2166136261;
+            const s = String(str || '');
+            for (let i = 0; i < s.length; i++) {
+                h ^= s.charCodeAt(i);
+                h = Math.imul(h, 16777619);
+            }
+            const hue = (h >>> 0) % 360;
+            return new THREE.Color().setHSL(hue / 360, 0.62, 0.48).getHex();
+        }
+
+        function readElementPsetValue(modData, expressID, psetName, propName) {
+            const psetWanted = (psetName || '').trim().toLowerCase();
+            const propWanted = (propName || '').trim().toLowerCase();
+            if (!propWanted) return '';
+            for (const psetId of (modData.psetIndex?.get(expressID) || [])) {
+                const pset = getEntityParts(modData, psetId);
+                if (!pset) continue;
+                if (psetWanted && unquoteStepString(pset.args[2] || '').trim().toLowerCase() !== psetWanted) continue;
+                for (const propId of getPsetPropertyIds(modData, psetId)) {
+                    const prop = getEntityParts(modData, propId);
+                    if (!prop) continue;
+                    const name = unquoteStepString(prop.args[0] || '').trim().toLowerCase();
+                    if (!name.includes(propWanted)) continue;
+                    if ((prop.className || '').includes('PROPERTYSINGLEVALUE')) {
+                        return String(unwrapIfcValue(prop.args[2]).value ?? '').trim();
+                    }
+                    return unquoteStepString(prop.args[2] || '').trim();
+                }
+            }
+            return '';
+        }
+
+        function renderColorLegend(title, entries) {
+            colorByLegend = entries;
+            const box = $('colorLegend');
+            $('colorLegendTitle').textContent = title || 'Легенда';
+            if (!entries.length) {
+                box.hidden = true;
+                $('colorLegendBody').innerHTML = '';
+                return;
+            }
+            $('colorLegendBody').innerHTML = entries.map(e => `
+                <div class="color-legend-row">
+                    <span class="color-legend-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
+                    <span>${esc(e.label)} <span style="opacity:.65">(${e.count})</span></span>
+                </div>
+            `).join('');
+            box.hidden = false;
+        }
+
+        function applyColorByMap(valueFn, legendTitle) {
+            const buckets = new Map(); // value -> {color, items:[]}
+            colorByTagged = [];
+            const rebuild = new Set();
+
+            for (const [modelID, mod] of loadedModels) {
+                if (mod.isFBX || !mod.ifcIndex) continue;
+                const ids = mod.meshesByID ? [...mod.meshesByID.keys()] : [];
+                ids.forEach(expressID => {
+                    const key = valueFn(mod, expressID) || '(пусто)';
+                    if (!buckets.has(key)) {
+                        buckets.set(key, { color: hashStringColor(key), items: [] });
+                    }
+                    buckets.get(key).items.push({ modelID, expressID });
+                });
+            }
+
+            for (const [label, bucket] of buckets) {
+                bucket.items.forEach(item => {
+                    const mod = loadedModels.get(item.modelID);
+                    if (!mod) return;
+                    const prev = mod.appearanceByID.get(item.expressID) || {};
+                    mod.appearanceByID.set(item.expressID, {
+                        ...prev,
+                        color: bucket.color,
+                        opacity: prev.opacity ?? 1,
+                        _colorBy: true
+                    });
+                    colorByTagged.push(item);
+                    if (mod.batched) rebuild.add(mod);
+                    else reapplyAppearanceForItem(item.modelID, item.expressID);
+                });
+            }
+            rebuild.forEach(mod => {
+                if (mod._fragments) buildIfcBatches(mod, mod._fragments);
+            });
+
+            const legend = [...buckets.entries()]
+                .map(([label, b]) => ({ label, color: b.color, count: b.items.length }))
+                .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ru'));
+            renderColorLegend(legendTitle, legend);
+            markNeedsRender();
+            return legend.length;
+        }
+
+        function resetColorBy() {
+            const rebuild = new Set();
+            colorByTagged.forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod?.appearanceByID?.has(item.expressID)) return;
+                const entry = mod.appearanceByID.get(item.expressID);
+                if (!entry?._colorBy) return;
+                delete entry._colorBy;
+                // Если цвет был только от color-by — убираем appearance
+                if (entry.color != null && !entry.preset && !entry.texture && (entry.opacity == null || entry.opacity >= 0.999)) {
+                    mod.appearanceByID.delete(item.expressID);
+                } else {
+                    mod.appearanceByID.set(item.expressID, entry);
+                }
+                if (mod.batched) rebuild.add(mod);
+                else reapplyAppearanceForItem(item.modelID, item.expressID);
+            });
+            colorByTagged = [];
+            rebuild.forEach(mod => {
+                if (mod._fragments) buildIfcBatches(mod, mod._fragments);
+            });
+            renderColorLegend('', []);
+            markNeedsRender();
+        }
+
+        function openColorByModal() {
+            $('colorByModal').classList.add('show');
+            const mode = $('colorByMode').value;
+            $('colorByPsetFields').hidden = mode !== 'pset';
+        }
+        function closeColorByModal() {
+            $('colorByModal').classList.remove('show');
+        }
+
+        $('btnColorBy').addEventListener('click', openColorByModal);
+        $('cancelColorBy').addEventListener('click', closeColorByModal);
+        $('colorByModal').addEventListener('click', e => {
+            if (e.target === $('colorByModal')) closeColorByModal();
+        });
+        $('colorByMode').addEventListener('change', () => {
+            $('colorByPsetFields').hidden = $('colorByMode').value !== 'pset';
+        });
+        $('colorLegendClose').addEventListener('click', () => {
+            $('colorLegend').hidden = true;
+        });
+        $('colorByReset').addEventListener('click', () => {
+            resetColorBy();
+            closeColorByModal();
+        });
+        $('runColorBy').addEventListener('click', () => {
+            const mode = $('colorByMode').value;
+            let n = 0;
+            if (mode === 'class') {
+                n = applyColorByMap((mod, id) => {
+                    const ent = getEntityParts(mod, id);
+                    return ent?.className ? ent.className.replace(/^IFC/, '') : 'Unknown';
+                }, 'По IFC-классу');
+            } else {
+                const pset = $('colorByPset').value;
+                const prop = $('colorByProp').value.trim();
+                if (!prop) {
+                    alert('Укажите имя параметра.');
+                    return;
+                }
+                n = applyColorByMap(
+                    (mod, id) => readElementPsetValue(mod, id, pset, prop) || '(нет значения)',
+                    `Pset: ${prop}`
+                );
+            }
+            closeColorByModal();
+            if (!n) alert('Нет IFC-элементов для раскраски.');
+        });
+
         // --- Search ---
         $('searchInput').addEventListener('keyup', (e) => {
             if (e.key !== 'Enter') return;
@@ -6803,7 +7048,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -7318,7 +7563,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
