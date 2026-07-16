@@ -108,6 +108,46 @@
             background: #fffaf7;
         }
 
+        .ya-file-list {
+            margin-top: 10px;
+            max-height: 280px;
+            overflow: auto;
+            border: 1px solid var(--line);
+            background: var(--panel-2);
+        }
+
+        .ya-file-row {
+            display: grid;
+            grid-template-columns: 22px 1fr auto auto;
+            gap: 8px;
+            align-items: center;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--line);
+            font-size: 12px;
+        }
+
+        .ya-file-row:last-child {
+            border-bottom: none;
+        }
+
+        .ya-file-row .ya-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-family: 'IBM Plex Mono', monospace;
+        }
+
+        .ya-file-row .ya-size {
+            color: var(--txt-dim);
+            font-size: 11px;
+            white-space: nowrap;
+        }
+
+        .ya-file-row .ya-open {
+            font-size: 11px;
+            padding: 4px 8px;
+        }
+
         .btn-cloud {
             color: #ffffff;
             background: var(--blue);
@@ -979,8 +1019,7 @@
         </div>
 
         <div class="tools">
-            <input type="text" id="yaLink" class="cloud-input" placeholder="Ссылка Яндекс.Диск" title="Вставьте публичную ссылку на поддерживаемый файл в Яндекс.Диске">
-            <button class="btn btn-cloud" id="btnYaLoad" title="Скачать и открыть модель по публичной ссылке Яндекс.Диска">☁ ИЗ ОБЛАКА</button>
+            <button class="btn btn-cloud" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ ЯНДЕКС.ДИСК</button>
             
             <div class="divider"></div>
 
@@ -1165,6 +1204,36 @@
             <div class="modal-actions">
                 <button class="btn" id="cancelPropSearch">Отмена</button>
                 <button class="btn load-btn" id="runPropSearch">Найти и выделить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="yandexModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="yandexModalTitle" style="width:min(640px,100%)">
+            <h3 id="yandexModalTitle">Яндекс.Диск — облачная библиотека моделей</h3>
+            <div class="bulk-note">
+                <b>Как настроить (один раз):</b>
+                <ol style="margin:8px 0 0 18px;line-height:1.55">
+                    <li>На <a href="https://disk.yandex.ru" target="_blank" rel="noopener">disk.yandex.ru</a> создайте папку, например <b>BIM.LVA Models</b>.</li>
+                    <li>Загрузите туда IFC / FBX / DXF / GLB (и при необходимости GeoTIFF).</li>
+                    <li>ПКМ по папке → <b>Поделиться</b> → скопируйте публичную ссылку вида <code>https://disk.yandex.ru/d/XXXX</code>.</li>
+                    <li>Вставьте ссылку ниже и нажмите <b>Открыть папку</b> — выберите файл и загрузите <b>по одному</b> (так экономится память).</li>
+                </ol>
+                OAuth-токен не нужен: Composer работает через публичный API Яндекс.Диска.
+            </div>
+            <div class="prop small">
+                <div class="k">Публичная ссылка на папку или файл</div>
+                <input class="editInput" id="yaLink" placeholder="https://disk.yandex.ru/d/XXXXXXXX или /i/XXXXXXXX">
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start;margin-top:4px">
+                <button class="btn btn-cloud" id="yaBrowse">Открыть папку / файл</button>
+                <button class="btn" id="yaClearList" title="Очистить список файлов">Очистить список</button>
+            </div>
+            <div class="bulk-note" id="yaStatus" style="margin-top:10px">Папка не открыта. Вставьте публичную ссылку.</div>
+            <div id="yaFileList" class="ya-file-list"></div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelYandex">Закрыть</button>
+                <button class="btn load-btn" id="yaLoadSelected" disabled title="Загрузить отмеченные файлы по одному">Загрузить выбранные</button>
             </div>
         </div>
     </div>
@@ -6288,7 +6357,264 @@ let isClipping = false;
             document.body.style.cursor = '';
         });
 
-        // --- Яндекс Диск ---
+        // --- Яндекс.Диск (публичная папка как «сервер» моделей) ---
+        const YA_SUPPORTED_EXT = /\.(ifc|fbx|dxf|dwg|glb|gltf|obj|stl|ply|dae|3ds|tif|tiff|gtiff)$/i;
+        const YA_STORAGE_KEY = 'bimlva_yandex_public_link';
+        let yaPublicKey = '';
+        let yaListedFiles = [];
+        let yaFolderName = '';
+
+        function formatBytes(n) {
+            if (!Number.isFinite(n) || n < 0) return '—';
+            if (n < 1024) return n + ' B';
+            if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+            if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+            return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        }
+
+        function openYandexModal() {
+            const saved = localStorage.getItem(YA_STORAGE_KEY);
+            if (saved && !$('yaLink').value.trim()) $('yaLink').value = saved;
+            $('yandexModal').classList.add('show');
+            updateYaLoadSelectedState();
+        }
+
+        function closeYandexModal() {
+            $('yandexModal').classList.remove('show');
+        }
+
+        function updateYaLoadSelectedState() {
+            const any = !!document.querySelector('#yaFileList input[type="checkbox"]:checked');
+            $('yaLoadSelected').disabled = !any;
+        }
+
+        function renderYaFileList(files, folderName) {
+            yaListedFiles = files;
+            const list = $('yaFileList');
+            const status = $('yaStatus');
+            if (!files.length) {
+                list.innerHTML = '';
+                status.textContent = folderName
+                    ? `Папка «${folderName}»: подходящих файлов не найдено (IFC/FBX/DXF/GLB…).`
+                    : 'Подходящих файлов не найдено.';
+                updateYaLoadSelectedState();
+                return;
+            }
+            status.textContent = folderName
+                ? `Папка «${folderName}»: ${files.length} файл(ов). Открывайте по одному — так меньше нагрузка на память.`
+                : `Найдено файлов: ${files.length}`;
+            list.innerHTML = files.map((f, idx) => `
+                <div class="ya-file-row" data-ya-idx="${idx}">
+                    <input type="checkbox" class="ya-check" data-ya-idx="${idx}" title="Выбрать для пакетной загрузки">
+                    <span class="ya-name" title="${escAttr(f.path)}">${esc(f.name)}</span>
+                    <span class="ya-size">${formatBytes(f.size)}${f.loaded ? ' · в сцене' : ''}</span>
+                    <button type="button" class="btn ya-open" data-ya-idx="${idx}">Открыть</button>
+                </div>
+            `).join('');
+            updateYaLoadSelectedState();
+        }
+
+        async function yaFetchJson(url) {
+            const res = await fetch(url);
+            if (!res.ok) {
+                const text = await res.text().catch(() => '');
+                throw new Error(`Яндекс.Диск API ${res.status}${text ? ': ' + text.slice(0, 120) : ''}`);
+            }
+            return res.json();
+        }
+
+        async function yaListPublicResource(publicKey, path = '') {
+            const params = new URLSearchParams({
+                public_key: publicKey,
+                limit: '200',
+                offset: '0',
+                preview_size: 'S',
+                fields: '_embedded.items.name,_embedded.items.type,_embedded.items.path,_embedded.items.size,_embedded.items.mime_type,name,type,path,size'
+            });
+            if (path) params.set('path', path);
+            return yaFetchJson(`https://cloud-api.yandex.net/v1/disk/public/resources?${params}`);
+        }
+
+        async function yaGetDownloadHref(publicKey, path = '') {
+            const params = new URLSearchParams({ public_key: publicKey });
+            if (path) params.set('path', path);
+            const data = await yaFetchJson(`https://cloud-api.yandex.net/v1/disk/public/resources/download?${params}`);
+            if (!data.href) throw new Error('Нет прямой ссылки на скачивание');
+            return data.href;
+        }
+
+        async function yaCollectFiles(publicKey, meta, path = '') {
+            if (meta.type === 'file') {
+                if (YA_SUPPORTED_EXT.test(meta.name || '')) {
+                    return [{
+                        name: meta.name,
+                        path: meta.path || path || '/',
+                        size: meta.size || 0,
+                        loaded: false
+                    }];
+                }
+                return [];
+            }
+
+            const items = meta._embedded?.items || [];
+            const files = [];
+            for (const item of items) {
+                if (item.type === 'file' && YA_SUPPORTED_EXT.test(item.name || '')) {
+                    files.push({
+                        name: item.name,
+                        path: item.path,
+                        size: item.size || 0,
+                        loaded: false
+                    });
+                } else if (item.type === 'dir') {
+                    // Один уровень вложенности для простоты UX
+                    try {
+                        const sub = await yaListPublicResource(publicKey, item.path);
+                        const nested = await yaCollectFiles(publicKey, sub, item.path);
+                        files.push(...nested);
+                    } catch (err) {
+                        console.warn('Подпапка недоступна', item.path, err);
+                    }
+                }
+            }
+            files.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+            return files;
+        }
+
+        async function yaBrowsePublicLink() {
+            const link = $('yaLink').value.trim();
+            if (!link) {
+                alert('Вставьте публичную ссылку Яндекс.Диска (Поделиться → Скопировать ссылку).');
+                return;
+            }
+            yaPublicKey = link;
+            localStorage.setItem(YA_STORAGE_KEY, link);
+            showLoader('ЯНДЕКС.ДИСК', 'Чтение содержимого папки…');
+            try {
+                const meta = await yaListPublicResource(link);
+                yaFolderName = meta.name || 'облако';
+                const files = await yaCollectFiles(link, meta);
+                renderYaFileList(files, yaFolderName);
+                // Если это одиночный файл — сразу предложить открыть
+                if (meta.type === 'file' && files.length === 1) {
+                    $('yaStatus').textContent = `Файл «${files[0].name}» (${formatBytes(files[0].size)}). Нажмите «Открыть».`;
+                }
+            } catch (error) {
+                console.error(error);
+                alert(
+                    'Не удалось открыть ссылку Яндекс.Диска.\n\n' +
+                    'Проверьте:\n' +
+                    '1) ссылка публичная (Поделиться → доступ по ссылке);\n' +
+                    '2) это ссылка на папку (/d/...) или файл (/i/...);\n' +
+                    '3) нет ограничений по паролю.\n\n' +
+                    (error.message || error)
+                );
+                $('yaStatus').textContent = 'Ошибка открытия ссылки.';
+                $('yaFileList').innerHTML = '';
+            } finally {
+                hideLoader();
+            }
+        }
+
+        async function yaDownloadAndOpen(fileInfo) {
+            if (!yaPublicKey) throw new Error('Сначала откройте папку по публичной ссылке');
+            showLoader('ОБЛАКО', fileInfo.name);
+            const href = await yaGetDownloadHref(yaPublicKey, fileInfo.path === '/' ? '' : fileInfo.path);
+            showLoader('СКАЧИВАНИЕ', `${fileInfo.name} (${formatBytes(fileInfo.size)})…`);
+            const fileRes = await fetch(href);
+            if (!fileRes.ok) throw new Error(`Ошибка скачивания ${fileRes.status}`);
+            const buffer = await fileRes.arrayBuffer();
+            const file = new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
+
+            // GeoTIFF из облака — в георастр; остальное — в обычную загрузку моделей
+            if (/\.(tif|tiff|gtiff)$/i.test(fileInfo.name)) {
+                await loadGeoRasterFromFiles([file], {
+                    drape: true,
+                    opacity: 0.92,
+                    offsetX: 0,
+                    offsetY: 0,
+                    zOffset: 0.05,
+                    segments: 64
+                });
+            } else {
+                await handleFiles([file]);
+            }
+            fileInfo.loaded = true;
+            renderYaFileList(yaListedFiles, yaFolderName);
+            markNeedsRender();
+        }
+
+        async function yaLoadCheckedFiles() {
+            const checks = [...document.querySelectorAll('#yaFileList input.ya-check:checked')];
+            if (!checks.length) return;
+            if (checks.length > 3) {
+                const ok = confirm(
+                    `Выбрано ${checks.length} файлов. Массовая загрузка IFC сильно нагружает память.\n\n` +
+                    'Рекомендуется открывать по 1–2 файла. Продолжить?'
+                );
+                if (!ok) return;
+            }
+            const errors = [];
+            for (const check of checks) {
+                const idx = parseInt(check.dataset.yaIdx, 10);
+                const info = yaListedFiles[idx];
+                if (!info) continue;
+                try {
+                    await yaDownloadAndOpen(info);
+                    await new Promise(r => setTimeout(r, 80));
+                } catch (error) {
+                    console.error(info.name, error);
+                    errors.push(`${info.name}: ${error.message || error}`);
+                }
+            }
+            hideLoader();
+            if (errors.length) {
+                alert('Часть файлов не загрузилась:\n\n' + errors.slice(0, 8).join('\n'));
+            } else {
+                alert(`Загружено из облака: ${checks.length}`);
+            }
+        }
+
+        $('btnYaLoad').addEventListener('click', openYandexModal);
+        $('cancelYandex').addEventListener('click', closeYandexModal);
+        $('yandexModal').addEventListener('click', event => {
+            if (event.target === $('yandexModal')) closeYandexModal();
+        });
+        window.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && $('yandexModal').classList.contains('show')) closeYandexModal();
+        });
+        $('yaBrowse').addEventListener('click', yaBrowsePublicLink);
+        $('yaLink').addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                yaBrowsePublicLink();
+            }
+        });
+        $('yaClearList').addEventListener('click', () => {
+            yaListedFiles = [];
+            $('yaFileList').innerHTML = '';
+            $('yaStatus').textContent = 'Список очищен. Вставьте ссылку и откройте папку снова.';
+            updateYaLoadSelectedState();
+        });
+        $('yaFileList').addEventListener('change', event => {
+            if (event.target.classList.contains('ya-check')) updateYaLoadSelectedState();
+        });
+        $('yaFileList').addEventListener('click', async event => {
+            const btn = event.target.closest('.ya-open');
+            if (!btn) return;
+            const idx = parseInt(btn.dataset.yaIdx, 10);
+            const info = yaListedFiles[idx];
+            if (!info) return;
+            try {
+                await yaDownloadAndOpen(info);
+                hideLoader();
+            } catch (error) {
+                hideLoader();
+                alert('Ошибка загрузки из облака: ' + (error.message || error));
+            }
+        });
+        $('yaLoadSelected').addEventListener('click', yaLoadCheckedFiles);
+
         $('btnGeoRaster').addEventListener('click', openGeoRasterModal);
         $('cancelGeoRaster').addEventListener('click', closeGeoRasterModal);
         $('geoRasterModal').addEventListener('click', event => {
@@ -6323,39 +6649,6 @@ let isClipping = false;
             } catch (error) {
                 hideLoader();
                 alert('Ошибка георастра: ' + error.message);
-            }
-        });
-
-        $('btnYaLoad').addEventListener('click', async () => {
-            const link = $('yaLink').value.trim();
-            if (!link) return alert('Пожалуйста, вставьте ссылку');
-            
-            showLoader('ОБЛАКО', 'Получение метаданных...');
-            
-            try {
-                const api = `https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=${encodeURIComponent(link)}`;
-                const res = await fetch(api);
-                if (!res.ok) throw new Error('Не удалось получить файл.');
-                
-                const data = await res.json();
-                
-                showLoader('СКАЧИВАНИЕ', 'Загрузка файла...');
-                const fileRes = await fetch(data.href);
-                if (!fileRes.ok) throw new Error('Ошибка скачивания.');
-                
-                let fileName = "Cloud_Model.ifc";
-                try { 
-                    const params = new URLSearchParams(new URL(data.href).search); 
-                    if (params.has('filename')) fileName = params.get('filename'); 
-                } catch(e) {}
-                
-                const buffer = await fileRes.arrayBuffer();
-                await handleFiles([new File([buffer], fileName, { type: "application/octet-stream" })]);
-                $('yaLink').value = '';
-                
-            } catch (err) { 
-                alert('Ошибка: ' + err.message); 
-                hideLoader(); 
             }
         });
 
