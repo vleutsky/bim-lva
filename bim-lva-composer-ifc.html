@@ -1089,6 +1089,7 @@
             <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ ВИДЫ</button>
             <button class="btn" id="btnColorBy" disabled title="Раскрасить элементы по IFC-классу или значению Pset">🎨 ЦВЕТ</button>
             <button class="btn" id="btnBcf" disabled title="BCF-заметки: точка + комментарий + камера">💬 BCF</button>
+            <button class="btn" id="btnAlign" disabled title="Сдвиг / поворот выбранной модели в сводке">✥ СДВИГ</button>
         </div>
 
         <div class="tools">
@@ -1287,6 +1288,28 @@
             <button type="button" class="pop" id="colorLegendClose" title="Скрыть легенду">✕</button>
         </div>
         <div id="colorLegendBody"></div>
+    </div>
+
+    <div class="modal-backdrop" id="alignModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="alignModalTitle" style="width:min(460px,100%)">
+            <h3 id="alignModalTitle">Выравнивание модели</h3>
+            <div class="bulk-note">Выберите модель и двигайте/вращайте её ручкой на сцене. Полезно для сведения разных файлов.</div>
+            <div class="prop small">
+                <div class="k">Модель</div>
+                <select class="editInput" id="alignModelSelect"></select>
+            </div>
+            <div class="prop small">
+                <div class="k">Режим ручки</div>
+                <select class="editInput" id="alignGizmoMode">
+                    <option value="translate">Сдвиг</option>
+                    <option value="rotate">Поворот</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="alignResetBtn">Сбросить трансформацию</button>
+                <button class="btn" id="alignDoneBtn">Готово</button>
+            </div>
+        </div>
     </div>
 
     <div class="modal-backdrop" id="bcfModal">
@@ -3030,7 +3053,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -5925,6 +5948,80 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!n) alert('Нет IFC-элементов для раскраски.');
         });
 
+        // --- Model align (сдвиг/поворот сводки) ---
+        let alignActive = false;
+        let alignModelId = null;
+        const alignControl = new TransformControls(camera, renderer.domElement);
+        alignControl.visible = false;
+        alignControl.enabled = false;
+        alignControl.addEventListener('dragging-changed', e => { controls.enabled = !e.value; });
+        alignControl.addEventListener('change', markNeedsRender);
+        scene.add(alignControl);
+
+        function stopAlignTool() {
+            alignActive = false;
+            alignModelId = null;
+            alignControl.detach();
+            alignControl.visible = false;
+            alignControl.enabled = false;
+            $('btnAlign').classList.remove('on');
+            $('alignModal').classList.remove('show');
+            markNeedsRender();
+        }
+
+        function startAlignOnModel(modelID) {
+            const mod = loadedModels.get(modelID);
+            if (!mod?.group) return;
+            if (isClipping) enableClipping(false);
+            alignActive = true;
+            alignModelId = modelID;
+            alignControl.attach(mod.group);
+            alignControl.setMode($('alignGizmoMode').value || 'translate');
+            alignControl.visible = true;
+            alignControl.enabled = true;
+            $('btnAlign').classList.add('on');
+            markNeedsRender();
+        }
+
+        function fillAlignModelSelect() {
+            const sel = $('alignModelSelect');
+            sel.innerHTML = [...loadedModels.entries()].map(([id, mod]) =>
+                `<option value="${id}">${esc(mod.filename || id)} (${esc(mod.format || 'IFC')})</option>`
+            ).join('');
+        }
+
+        $('btnAlign').addEventListener('click', () => {
+            if (!loadedModels.size) return;
+            if (alignActive) {
+                stopAlignTool();
+                return;
+            }
+            fillAlignModelSelect();
+            $('alignModal').classList.add('show');
+            const first = Number($('alignModelSelect').value);
+            if (Number.isFinite(first)) startAlignOnModel(first);
+        });
+        $('alignDoneBtn').addEventListener('click', stopAlignTool);
+        $('alignModal').addEventListener('click', e => {
+            if (e.target === $('alignModal')) stopAlignTool();
+        });
+        $('alignModelSelect').addEventListener('change', () => {
+            const id = Number($('alignModelSelect').value);
+            if (Number.isFinite(id)) startAlignOnModel(id);
+        });
+        $('alignGizmoMode').addEventListener('change', () => {
+            alignControl.setMode($('alignGizmoMode').value || 'translate');
+            markNeedsRender();
+        });
+        $('alignResetBtn').addEventListener('click', () => {
+            const mod = loadedModels.get(alignModelId ?? Number($('alignModelSelect').value));
+            if (!mod?.group) return;
+            mod.group.position.set(0, 0, 0);
+            mod.group.rotation.set(0, 0, 0);
+            mod.group.scale.set(1, 1, 1);
+            markNeedsRender();
+        });
+
         // --- BCF topics ---
         const bcfTopics = [];
         let bcfPickMode = false;
@@ -7299,7 +7396,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -7814,7 +7911,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
