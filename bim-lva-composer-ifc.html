@@ -1669,6 +1669,7 @@
         let basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         let perfMode = false;
         let sceneNeedsRender = true;
+        let allMeshes = [];
         const markNeedsRender = () => { sceneNeedsRender = true; };
         renderer.setPixelRatio(basePixelRatio);
         renderer.setClearColor(0xf3f5f7, 1);
@@ -2130,7 +2131,9 @@
         const transformControl = new TransformControls(camera, renderer.domElement);
         transformControl.addEventListener('dragging-changed', e => { controls.enabled = !e.value; });
         transformControl.addEventListener('change', () => {
-            syncClipFromGizmo();
+            // Не трогаем материалы до готовности сцены / пока разрез выключен
+            // (attach() шлёт change и раньше ронял модуль: allMeshes в TDZ)
+            if (isClipping) syncClipFromGizmo();
             markNeedsRender();
         });
         transformControl.attach(clipProxy);
@@ -3006,7 +3009,6 @@
         }
 
         const loadedModels = new Map();
-        let allMeshes = [];
         let selectedItems = [];
         let totalElements = 0;
         let engineReady = false;
