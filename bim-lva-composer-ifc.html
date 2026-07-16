@@ -1423,6 +1423,10 @@
         controls.dampingFactor = 0.08;
         controls.zoomToCursor = false;
         controls.enableZoom = false;
+        // ЛКМ-вращение вокруг точки под курсором обрабатываем сами (без скачка lookAt)
+        controls.mouseButtons.LEFT = -1;
+        let suppressControlsUpdate = false;
+        let skipOrbitClick = false;
         controls.addEventListener('change', markNeedsRender);
         controls.addEventListener('start', () => {
             if (perfMode || allMeshes.length > 8000) {
@@ -1944,7 +1948,7 @@ let isClipping = false;
         
         function tick(now) {
             requestAnimationFrame(tick);
-            controls.update();
+            if (!suppressControlsUpdate) controls.update();
             if (sceneNeedsRender) {
                 renderer.render(scene, camera);
                 sceneNeedsRender = false;
@@ -4527,6 +4531,7 @@ let isClipping = false;
 
         // Raycaster (Клик по геометрии)
         renderer.domElement.addEventListener('click', (ev) => {
+            if (skipOrbitClick) { skipOrbitClick = false; return; }
             if (allMeshes.length === 0) return;
             const rect = renderer.domElement.getBoundingClientRect();
             const pointer = new THREE.Vector2(
@@ -6208,59 +6213,100 @@ let isClipping = false;
             return pickScenePoint(clientX, clientY) || controls.target.clone();
         }
 
-        // Вращение вокруг объекта под курсором (как в Navis/BIMvision)
-        function setOrbitPivotUnderCursor(clientX, clientY) {
-            if (!controls.enabled || !controls.enableRotate) return false;
-            if (isBoxSelecting || isMeasuring) return false;
-            if (pivotLockToSelection && selectedItems.length) {
-                setOrbitPivotToSelection(false);
-                return true;
-            }
+        // Вращение ЛКМ вокруг точки под курсором (как Navis): без предварительной сдвижки lookAt
+        let orbitDrag = null;
+        const ORBIT_DRAG_PX = 3;
+        const ORBIT_SPEED = 0.005;
+        const _orbitOffset = new THREE.Vector3();
+        const _orbitYawQ = new THREE.Quaternion();
+        const _orbitPitchQ = new THREE.Quaternion();
+        const _orbitRight = new THREE.Vector3();
+        const _orbitDir = new THREE.Vector3();
 
-            const hit = pickScenePoint(clientX, clientY, {
-                forceRaycast: true,
-                allowPlaneFallback: false,
-                ignorePivotLock: true
-            });
-            if (!hit) return false;
-
-            // Переносим центр орбиты на точку попадания, сохраняя смещение камеры к target
-            const offset = camera.position.clone().sub(controls.target);
-            controls.target.copy(hit);
-            camera.position.copy(hit).add(offset);
-            controls.update();
-            markNeedsRender();
-            return true;
-        }
-
-        // Пивот ставим только при начале вращения (drag), не при простом клике выбора
-        let orbitPivotGesture = null;
-        const ORBIT_PIVOT_DRAG_PX = 4;
-
-        renderer.domElement.addEventListener('pointerdown', event => {
-            if (!controls.enabled) return;
-            if (event.button !== 0 && event.button !== 1) return;
+        function beginOrbitDrag(event) {
+            if (!controls.enabled || !controls.enableRotate) return;
             if (isBoxSelecting || isMeasuring) return;
             if (event.target !== renderer.domElement) return;
-            orbitPivotGesture = {
+            if (event.button !== 0) return;
+
+            let pivot;
+            if (pivotLockToSelection && selectedItems.length) {
+                const box = getSelectionBounds(selectedItems);
+                pivot = (!box.isEmpty()) ? box.getCenter(new THREE.Vector3()) : controls.target.clone();
+            } else {
+                pivot = pickScenePoint(event.clientX, event.clientY, {
+                    forceRaycast: true,
+                    allowPlaneFallback: true,
+                    ignorePivotLock: true
+                }) || controls.target.clone();
+            }
+
+            orbitDrag = {
+                pointerId: event.pointerId,
                 x: event.clientX,
                 y: event.clientY,
-                pointerId: event.pointerId,
-                applied: false
+                pivot,
+                dragging: false
             };
-        }, true);
+        }
 
-        renderer.domElement.addEventListener('pointermove', event => {
-            if (!orbitPivotGesture || orbitPivotGesture.applied) return;
-            if (event.pointerId !== orbitPivotGesture.pointerId) return;
-            if (Math.hypot(event.clientX - orbitPivotGesture.x, event.clientY - orbitPivotGesture.y) < ORBIT_PIVOT_DRAG_PX) return;
-            setOrbitPivotUnderCursor(orbitPivotGesture.x, orbitPivotGesture.y);
-            orbitPivotGesture.applied = true;
-        }, true);
+        function moveOrbitDrag(event) {
+            if (!orbitDrag || event.pointerId !== orbitDrag.pointerId) return;
 
-        const clearOrbitPivotGesture = () => { orbitPivotGesture = null; };
-        renderer.domElement.addEventListener('pointerup', clearOrbitPivotGesture, true);
-        renderer.domElement.addEventListener('pointercancel', clearOrbitPivotGesture, true);
+            const dx = event.clientX - orbitDrag.x;
+            const dy = event.clientY - orbitDrag.y;
+
+            if (!orbitDrag.dragging) {
+                if (Math.hypot(dx, dy) < ORBIT_DRAG_PX) return;
+                orbitDrag.dragging = true;
+                suppressControlsUpdate = true;
+                try { renderer.domElement.setPointerCapture(event.pointerId); } catch (_) {}
+            }
+
+            orbitDrag.x = event.clientX;
+            orbitDrag.y = event.clientY;
+
+            const pivot = orbitDrag.pivot;
+            _orbitOffset.copy(camera.position).sub(pivot);
+
+            // Yaw вокруг мировой оси up (Z)
+            _orbitYawQ.setFromAxisAngle(camera.up, -dx * ORBIT_SPEED);
+            _orbitOffset.applyQuaternion(_orbitYawQ);
+            camera.quaternion.premultiply(_orbitYawQ);
+
+            // Pitch вокруг локальной правой оси камеры
+            _orbitRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+            _orbitPitchQ.setFromAxisAngle(_orbitRight, -dy * ORBIT_SPEED);
+            _orbitOffset.applyQuaternion(_orbitPitchQ);
+            camera.quaternion.premultiply(_orbitPitchQ);
+
+            camera.position.copy(pivot).add(_orbitOffset);
+            markNeedsRender();
+        }
+
+        function endOrbitDrag(event) {
+            if (!orbitDrag) return;
+            if (event && event.pointerId !== orbitDrag.pointerId) return;
+
+            if (orbitDrag.dragging) {
+                // Синхронизируем OrbitControls: target на луче взгляда — без визуального скачка
+                const dist = Math.max(camera.position.distanceTo(orbitDrag.pivot), 0.05);
+                camera.getWorldDirection(_orbitDir);
+                controls.target.copy(camera.position).addScaledVector(_orbitDir, dist);
+                camera.up.set(0, 0, 1);
+                camera.lookAt(controls.target);
+                suppressControlsUpdate = false;
+                controls.update();
+                markNeedsRender();
+                try { renderer.domElement.releasePointerCapture(orbitDrag.pointerId); } catch (_) {}
+            }
+            orbitDrag = null;
+        }
+
+        renderer.domElement.addEventListener('pointerdown', beginOrbitDrag, true);
+        renderer.domElement.addEventListener('pointermove', moveOrbitDrag, true);
+        renderer.domElement.addEventListener('pointerup', endOrbitDrag, true);
+        renderer.domElement.addEventListener('pointercancel', endOrbitDrag, true);
 
         function zoomCameraTowardPoint(point, deltaY) {
             // Как в OrbitControls: прокрутка вверх (deltaY < 0) — приближение
