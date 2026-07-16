@@ -1059,7 +1059,7 @@
         <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
             <h2>BIM.LVA Composer IFC</h2>
-            <p>IFC, FBX, ASCII DXF, GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG необходимо предварительно преобразовать в DXF.<br><span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
+            <p>IFC, FBX, ASCII DXF (в т.ч. 3DFACE/MESH/TIN), GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG → DXF; 3DSOLID лучше в MESH/OBJ.<br><span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
         </div>
         <div id="labels-container"></div> <div id="boxSelectRect"></div> <div class="loader" id="loader">
             <b id="loadTitle">ОБРАБОТКА</b>
@@ -2671,6 +2671,23 @@ let isClipping = false;
         }
 
         let activeSelectionOverlays = [];
+        const selectionOutlineColor = 0x00e8ff;
+        let selectionOutlineMat = null;
+
+        function getSelectionOutlineMaterial() {
+            if (!selectionOutlineMat) {
+                selectionOutlineMat = new THREE.LineBasicMaterial({
+                    color: selectionOutlineColor,
+                    depthTest: true,
+                    depthWrite: false,
+                    transparent: true,
+                    opacity: 1,
+                    toneMapped: false
+                });
+                selectionOutlineMat.userData.outlineShared = true;
+            }
+            return selectionOutlineMat;
+        }
 
         function createIfcMaterial(hex, opacity) {
             const transparent = opacity < 0.999;
@@ -2694,12 +2711,35 @@ let isClipping = false;
             return g;
         }
 
+        function addSelectionOutlineObject(object3d, parent) {
+            if (!object3d || !parent) return;
+            object3d.userData.isOverlay = true;
+            object3d.renderOrder = 1000;
+            parent.add(object3d);
+            activeSelectionOverlays.push(object3d);
+        }
+
+        function addEdgesOutlineFromGeometry(geometry, parent, matrix) {
+            if (!geometry?.attributes?.position || geometry.attributes.position.count < 3) return;
+            try {
+                const edges = new THREE.EdgesGeometry(geometry, 30);
+                if (!edges.attributes.position || edges.attributes.position.count < 2) {
+                    edges.dispose();
+                    return;
+                }
+                if (matrix) edges.applyMatrix4(matrix);
+                const line = new THREE.LineSegments(edges, getSelectionOutlineMaterial());
+                line.userData.ownsGeometry = true;
+                addSelectionOutlineObject(line, parent);
+            } catch (_) { /* geometry may be non-triangulated */ }
+        }
+
         function showSelectionOverlays(items) {
             clearSelectionOverlays();
             const mat = new THREE.MeshBasicMaterial({
                 color: highlightColor,
                 transparent: true,
-                opacity: 0.4,
+                opacity: 0.35,
                 depthTest: true,
                 depthWrite: false,
                 polygonOffset: true,
@@ -2707,38 +2747,63 @@ let isClipping = false;
                 polygonOffsetUnits: -2
             });
             mat.userData.overlayShared = true;
-            let used = false;
+            let usedFill = false;
+
             items.forEach(item => {
                 const mod = loadedModels.get(item.modelID);
-                if (!mod?.batched || !mod.fragmentGeoms?.has(item.expressID)) return;
+                if (!mod) return;
                 if (mod.hiddenIds?.has(item.expressID)) return;
-                mod.fragmentGeoms.get(item.expressID).forEach(frag => {
-                    const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
-                    const mesh = new THREE.Mesh(geom, mat);
-                    mesh.userData.isOverlay = true;
-                    mesh.userData.ownsGeometry = true;
-                    mod.group.add(mesh);
-                    activeSelectionOverlays.push(mesh);
-                    used = true;
+
+                // Батч-IFC: заливка + контур по фрагментам
+                if (mod.batched && mod.fragmentGeoms?.has(item.expressID)) {
+                    mod.fragmentGeoms.get(item.expressID).forEach(frag => {
+                        const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
+                        const mesh = new THREE.Mesh(geom, mat);
+                        mesh.userData.isOverlay = true;
+                        mesh.userData.ownsGeometry = true;
+                        addSelectionOutlineObject(mesh, mod.group);
+                        usedFill = true;
+                        addEdgesOutlineFromGeometry(geom, mod.group, null);
+                    });
+                    return;
+                }
+
+                // Обычные меши / внешние модели: яркий контур по рёбрам
+                const meshes = mod.meshesByID.get(item.expressID) || [];
+                meshes.forEach(src => {
+                    if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
+                    if (src.isMesh && src.geometry) {
+                        src.updateWorldMatrix(true, false);
+                        addEdgesOutlineFromGeometry(src.geometry, mod.group, src.matrixWorld);
+                    } else if ((src.isLine || src.isLineSegments) && src.geometry) {
+                        // Для линий — дублируем ярким цветом поверх
+                        const cloneGeom = src.geometry.clone();
+                        src.updateWorldMatrix(true, false);
+                        cloneGeom.applyMatrix4(src.matrixWorld);
+                        const line = new THREE.LineSegments(cloneGeom, getSelectionOutlineMaterial());
+                        line.userData.ownsGeometry = true;
+                        addSelectionOutlineObject(line, mod.group);
+                    }
                 });
             });
-            if (!used) mat.dispose();
+
+            if (!usedFill) mat.dispose();
             markNeedsRender();
         }
 
         function clearSelectionOverlays() {
-            activeSelectionOverlays.forEach(mesh => {
-                mesh.parent?.remove(mesh);
-                if (mesh.userData.ownsGeometry) mesh.geometry?.dispose();
-                if (mesh.material && mesh.material.userData?.overlayShared !== true) {
-                    mesh.material.dispose();
-                } else if (mesh.material?.userData?.overlayShared) {
-                    // shared material disposed once below if last
-                }
+            let fillShared = null;
+            activeSelectionOverlays.forEach(obj => {
+                obj.parent?.remove(obj);
+                if (obj.userData.ownsGeometry) obj.geometry?.dispose();
+                const mat = obj.material;
+                if (!mat) return;
+                if (mat.userData?.outlineShared) return;
+                if (mat.userData?.overlayShared) { fillShared = mat; return; }
+                if (!Array.isArray(mat)) mat.dispose();
             });
-            const shared = activeSelectionOverlays[0]?.material;
             activeSelectionOverlays = [];
-            if (shared) shared.dispose();
+            if (fillShared) fillShared.dispose();
             markNeedsRender();
         }
 
@@ -3151,8 +3216,105 @@ let isClipping = false;
                 const code = parseInt(lines[i].trim(), 10);
                 if (Number.isFinite(code)) pairs.push({ code, value: lines[i + 1].trim() });
             }
+
             const entities = [];
+            const seenTypes = new Set();
             let inEntities = false;
+
+            const firstNumber = (data, code) => {
+                const found = data.find(item => item.code === code);
+                return found ? parseFloat(found.value) : undefined;
+            };
+            const firstInt = (data, code) => {
+                const found = data.find(item => item.code === code);
+                return found ? parseInt(found.value, 10) : undefined;
+            };
+            const layerOf = data => {
+                const layerEntry = data.find(item => item.code === 8);
+                return layerEntry ? layerEntry.value : '0';
+            };
+
+            const readVertexBlock = (startIndex) => {
+                let i = startIndex;
+                const verts = [];
+                while (i < pairs.length && pairs[i].code === 0 && pairs[i].value === 'VERTEX') {
+                    i++;
+                    const vertex = [];
+                    while (i < pairs.length && pairs[i].code !== 0) vertex.push(pairs[i++]);
+                    const value = code => {
+                        const found = vertex.find(item => item.code === code);
+                        return found ? parseFloat(found.value) : undefined;
+                    };
+                    const intVal = code => {
+                        const found = vertex.find(item => item.code === code);
+                        return found ? parseInt(found.value, 10) : 0;
+                    };
+                    verts.push({
+                        point: [value(10), value(20), value(30) || 0],
+                        flags: intVal(70) || 0,
+                        indices: [intVal(71), intVal(72), intVal(73), intVal(74)]
+                    });
+                }
+                if (i < pairs.length && pairs[i].code === 0 && pairs[i].value === 'SEQEND') {
+                    i++;
+                    while (i < pairs.length && pairs[i].code !== 0) i++;
+                }
+                return { verts, next: i };
+            };
+
+            const parseMeshData = (data, layer) => {
+                let vertexCount = 0;
+                let faceListSize = 0;
+                const vertices = [];
+                const faceCodes = [];
+                let mode = 'scan';
+                let px = null;
+                let py = null;
+
+                for (const item of data) {
+                    if (item.code === 92) {
+                        vertexCount = parseInt(item.value, 10) || 0;
+                        mode = 'verts';
+                        continue;
+                    }
+                    if (item.code === 93) {
+                        faceListSize = parseInt(item.value, 10) || 0;
+                        mode = 'faces';
+                        continue;
+                    }
+                    if (item.code === 94 || item.code === 95) {
+                        mode = 'skip';
+                        continue;
+                    }
+                    if (mode === 'verts') {
+                        if (item.code === 10) px = parseFloat(item.value);
+                        else if (item.code === 20) py = parseFloat(item.value);
+                        else if (item.code === 30 && px != null && py != null) {
+                            vertices.push([px, py, parseFloat(item.value) || 0]);
+                            px = py = null;
+                            if (vertexCount > 0 && vertices.length >= vertexCount) mode = 'scan';
+                        }
+                    } else if (mode === 'faces' && item.code === 90) {
+                        faceCodes.push(parseInt(item.value, 10));
+                        if (faceListSize > 0 && faceCodes.length >= faceListSize) mode = 'scan';
+                    }
+                }
+
+                const faces = [];
+                for (let i = 0; i < faceCodes.length;) {
+                    const n = faceCodes[i++];
+                    if (!Number.isFinite(n) || n < 3) break;
+                    if (i + n > faceCodes.length) break;
+                    const face = [];
+                    for (let k = 0; k < n; k++) face.push(faceCodes[i++]);
+                    faces.push(face);
+                }
+                if (vertices.length >= 3 && faces.length) {
+                    return { type: 'mesh', layer, vertices, faces };
+                }
+                return null;
+            };
+
             for (let i = 0; i < pairs.length;) {
                 const pair = pairs[i++];
                 if (!inEntities) {
@@ -3167,44 +3329,73 @@ let isClipping = false;
                 if (pair.code !== 0) continue;
 
                 const type = pair.value;
+                seenTypes.add(type);
                 const data = [];
                 while (i < pairs.length && pairs[i].code !== 0) data.push(pairs[i++]);
-                const firstNumber = code => {
-                    const found = data.find(item => item.code === code);
-                    return found ? parseFloat(found.value) : undefined;
-                };
-                const layerEntry = data.find(item => item.code === 8);
-                const layer = layerEntry ? layerEntry.value : '0';
+                const layer = layerOf(data);
 
                 if (type === 'POLYLINE') {
-                    const points = [];
-                    const flags = firstNumber(70) || 0;
-                    while (i < pairs.length && pairs[i].code === 0 && pairs[i].value === 'VERTEX') {
-                        i++;
-                        const vertex = [];
-                        while (i < pairs.length && pairs[i].code !== 0) vertex.push(pairs[i++]);
-                        const value = code => {
-                            const found = vertex.find(item => item.code === code);
-                            return found ? parseFloat(found.value) : undefined;
-                        };
-                        const point = [value(10), value(20), value(30) || 0];
-                        if (point.every(Number.isFinite)) points.push(point);
+                    const flags = firstNumber(data, 70) || 0;
+                    const mCount = firstInt(data, 71) || 0;
+                    const nCount = firstInt(data, 72) || 0;
+                    const { verts, next } = readVertexBlock(i);
+                    i = next;
+
+                    if (flags & 64) {
+                        // Polyface mesh (часто TIN / 3D тело из поверхности)
+                        const meshVerts = [];
+                        const faces = [];
+                        verts.forEach(vert => {
+                            if ((vert.flags & 128) && (vert.flags & 64)) {
+                                if (vert.point.every(Number.isFinite)) meshVerts.push(vert.point);
+                            } else if (vert.flags & 128) {
+                                const idx = vert.indices
+                                    .map(n => Math.abs(n || 0))
+                                    .filter(n => n > 0)
+                                    .map(n => n - 1);
+                                if (idx.length >= 3) faces.push(idx);
+                            }
+                        });
+                        if (meshVerts.length >= 3 && faces.length) {
+                            entities.push({ type: 'mesh', layer, vertices: meshVerts, faces });
+                        }
+                    } else if (flags & 16) {
+                        // 3D polygon mesh M×N
+                        const points = verts
+                            .filter(v => !(v.flags & 128) || (v.flags & 64))
+                            .map(v => v.point)
+                            .filter(p => p.every(Number.isFinite));
+                        const m = mCount || 0;
+                        const n = nCount || 0;
+                        if (m > 1 && n > 1 && points.length >= m * n) {
+                            const faces = [];
+                            for (let r = 0; r < m - 1; r++) {
+                                for (let c = 0; c < n - 1; c++) {
+                                    const a = r * n + c;
+                                    const b = a + 1;
+                                    const d = (r + 1) * n + c;
+                                    const e = d + 1;
+                                    faces.push([a, b, e, d]);
+                                }
+                            }
+                            entities.push({ type: 'mesh', layer, vertices: points.slice(0, m * n), faces });
+                        }
+                    } else {
+                        const points = verts.map(v => v.point).filter(p => p.every(Number.isFinite));
+                        if (points.length > 1) {
+                            entities.push({ type: 'polyline', layer, points, closed: !!(flags & 1) });
+                        }
                     }
-                    if (i < pairs.length && pairs[i].code === 0 && pairs[i].value === 'SEQEND') {
-                        i++;
-                        while (i < pairs.length && pairs[i].code !== 0) i++;
-                    }
-                    if (points.length > 1) entities.push({ type: 'polyline', layer, points, closed: !!(flags & 1) });
                 } else if (type === 'LINE') {
-                    const values = [firstNumber(10), firstNumber(20), firstNumber(30) || 0,
-                        firstNumber(11), firstNumber(21), firstNumber(31) || 0];
+                    const values = [firstNumber(data, 10), firstNumber(data, 20), firstNumber(data, 30) || 0,
+                        firstNumber(data, 11), firstNumber(data, 21), firstNumber(data, 31) || 0];
                     if (values.every(Number.isFinite)) entities.push({ type: 'line', layer, values });
                 } else if (type === 'CIRCLE' || type === 'ARC') {
-                    const cx = firstNumber(10), cy = firstNumber(20), cz = firstNumber(30) || 0;
-                    const radius = firstNumber(40);
+                    const cx = firstNumber(data, 10), cy = firstNumber(data, 20), cz = firstNumber(data, 30) || 0;
+                    const radius = firstNumber(data, 40);
                     if ([cx, cy, cz, radius].every(Number.isFinite)) {
-                        let start = type === 'ARC' ? (firstNumber(50) || 0) : 0;
-                        let end = type === 'ARC' ? (firstNumber(51) ?? 360) : 360;
+                        let start = type === 'ARC' ? (firstNumber(data, 50) || 0) : 0;
+                        let end = type === 'ARC' ? (firstNumber(data, 51) ?? 360) : 360;
                         if (end < start) end += 360;
                         entities.push({ type: 'arc', layer, cx, cy, cz, radius, start, end });
                     }
@@ -3214,17 +3405,44 @@ let isClipping = false;
                     data.forEach(item => {
                         if (item.code === 10) x = parseFloat(item.value);
                         if (item.code === 20 && x != null) {
-                            points.push([x, parseFloat(item.value), firstNumber(38) || 0]);
+                            points.push([x, parseFloat(item.value), firstNumber(data, 38) || 0]);
                             x = null;
                         }
                     });
-                    const flags = firstNumber(70) || 0;
+                    const flags = firstNumber(data, 70) || 0;
                     if (points.length > 1) entities.push({ type: 'polyline', layer, points, closed: !!(flags & 1) });
                 } else if (type === 'POINT') {
-                    const point = [firstNumber(10), firstNumber(20), firstNumber(30) || 0];
+                    const point = [firstNumber(data, 10), firstNumber(data, 20), firstNumber(data, 30) || 0];
                     if (point.every(Number.isFinite)) entities.push({ type: 'point', layer, point });
+                } else if (type === '3DFACE' || type === 'FACE3D') {
+                    const corners = [
+                        [firstNumber(data, 10), firstNumber(data, 20), firstNumber(data, 30) || 0],
+                        [firstNumber(data, 11), firstNumber(data, 21), firstNumber(data, 31) || 0],
+                        [firstNumber(data, 12), firstNumber(data, 22), firstNumber(data, 32) || 0],
+                        [firstNumber(data, 13), firstNumber(data, 23), firstNumber(data, 33) || 0]
+                    ];
+                    if (corners.slice(0, 3).every(p => p.every(Number.isFinite))) {
+                        const pts = corners.filter(p => p.every(Number.isFinite));
+                        // Треугольник: 4-я точка совпадает с 3-й
+                        const unique = [pts[0], pts[1], pts[2]];
+                        if (pts[3] && pts[3].some((v, idx) => Math.abs(v - pts[2][idx]) > 1e-9)) unique.push(pts[3]);
+                        entities.push({ type: 'face', layer, points: unique });
+                    }
+                } else if (type === 'MESH') {
+                    const mesh = parseMeshData(data, layer);
+                    if (mesh) entities.push(mesh);
+                } else if (type === 'SOLID' || type === 'TRACE') {
+                    const corners = [
+                        [firstNumber(data, 10), firstNumber(data, 20), firstNumber(data, 30) || 0],
+                        [firstNumber(data, 11), firstNumber(data, 21), firstNumber(data, 31) || 0],
+                        [firstNumber(data, 12), firstNumber(data, 22), firstNumber(data, 32) || 0],
+                        [firstNumber(data, 13), firstNumber(data, 23), firstNumber(data, 33) || 0]
+                    ].filter(p => p.every(Number.isFinite));
+                    if (corners.length >= 3) entities.push({ type: 'face', layer, points: corners });
                 }
             }
+
+            entities._seenTypes = [...seenTypes];
             return entities;
         }
 
@@ -3234,15 +3452,37 @@ let isClipping = false;
             return new THREE.Color().setHSL((hash % 360) / 360, 0.55, 0.45);
         }
 
+        function dxfEnsureMeshBucket(map, layer) {
+            if (!map.has(layer)) map.set(layer, { positions: [] });
+            return map.get(layer);
+        }
+
+        function dxfPushTri(bucket, a, b, c) {
+            bucket.positions.push(
+                a[0], a[1], a[2],
+                b[0], b[1], b[2],
+                c[0], c[1], c[2]
+            );
+        }
+
+        function dxfPushFace(bucket, points) {
+            if (!points || points.length < 3) return;
+            for (let i = 1; i < points.length - 1; i++) {
+                dxfPushTri(bucket, points[0], points[i], points[i + 1]);
+            }
+        }
+
         function buildDXFRoot(entities, filename) {
             const root = new THREE.Group();
             root.name = filename;
             const segmentsByLayer = new Map();
             const pointsByLayer = new Map();
+            const meshByLayer = new Map();
             const addSegment = (layer, a, b) => {
                 if (!segmentsByLayer.has(layer)) segmentsByLayer.set(layer, []);
                 segmentsByLayer.get(layer).push(...a, ...b);
             };
+
             entities.forEach(entity => {
                 if (entity.type === 'line') {
                     addSegment(entity.layer, entity.values.slice(0, 3), entity.values.slice(3, 6));
@@ -3263,8 +3503,36 @@ let isClipping = false;
                 } else if (entity.type === 'point') {
                     if (!pointsByLayer.has(entity.layer)) pointsByLayer.set(entity.layer, []);
                     pointsByLayer.get(entity.layer).push(...entity.point);
+                } else if (entity.type === 'face') {
+                    dxfPushFace(dxfEnsureMeshBucket(meshByLayer, entity.layer), entity.points);
+                } else if (entity.type === 'mesh') {
+                    const bucket = dxfEnsureMeshBucket(meshByLayer, entity.layer);
+                    const verts = entity.vertices;
+                    entity.faces.forEach(face => {
+                        const pts = face.map(idx => verts[idx]).filter(Boolean);
+                        dxfPushFace(bucket, pts);
+                    });
                 }
             });
+
+            meshByLayer.forEach((bucket, layer) => {
+                if (bucket.positions.length < 9) return;
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(bucket.positions, 3));
+                geometry.computeVertexNormals();
+                geometry.computeBoundingSphere();
+                const mesh = new THREE.Mesh(
+                    geometry,
+                    new THREE.MeshLambertMaterial({
+                        color: dxfLayerColor(layer),
+                        side: THREE.DoubleSide,
+                        flatShading: true
+                    })
+                );
+                mesh.name = `${layer} · TIN/mesh`;
+                root.add(mesh);
+            });
+
             segmentsByLayer.forEach((positions, layer) => {
                 const geometry = new THREE.BufferGeometry();
                 geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -3286,8 +3554,23 @@ let isClipping = false;
             showLoader('ЧТЕНИЕ DXF', file.name);
             try {
                 const entities = parseAsciiDXF(await file.text());
-                if (!entities.length) throw new Error('Не найдены поддерживаемые LINE, ARC, CIRCLE, LWPOLYLINE или POINT.');
-                await addExternalModel(file, 'DXF', buildDXFRoot(entities, file.name));
+                if (!entities.length) {
+                    const seen = entities._seenTypes || [];
+                    const solidLike = seen.filter(t =>
+                        /^(3DSOLID|BODY|REGION|SURFACE|PLANESURFACE|NURBSURFACE|ACAD_PROXY_ENTITY)$/i.test(t)
+                    );
+                    let msg = 'Не найдены поддерживаемые примитивы (LINE, ARC, CIRCLE, LWPOLYLINE, POINT, 3DFACE, MESH, polyface).';
+                    if (solidLike.length) {
+                        msg += ` В файле есть ${solidLike.join(', ')} — это тела/поверхности AutoCAD без триангуляции. ` +
+                            'В AutoCAD/Civil 3D: Explode или экспорт в MESH/3DFACE, либо сохраните как OBJ/GLB.';
+                    } else if (seen.length) {
+                        msg += ` Найдены типы: ${seen.slice(0, 12).join(', ')}.`;
+                    }
+                    throw new Error(msg);
+                }
+                const root = buildDXFRoot(entities, file.name);
+                if (!root.children.length) throw new Error('DXF прочитан, но геометрия пуста.');
+                await addExternalModel(file, 'DXF', root);
                 hideLoader();
             } catch (error) {
                 console.error(error);
@@ -4462,7 +4745,7 @@ let isClipping = false;
                         emissiveIntensity: material.emissiveIntensity ?? 0
                     };
                     material.emissive.setHex(highlightColor);
-                    material.emissiveIntensity = 0.45;
+                    material.emissiveIntensity = 0.65;
                 } else if (material.color) {
                     mesh.userData._highlightBase[index] = { color: material.color.getHex() };
                     material.color.setHex(highlightColor);
@@ -4494,20 +4777,15 @@ let isClipping = false;
                 return;
             }
 
-            // 2. Подсветка: батчи — overlay, иначе emissive
-            const batchedItems = [];
+            // 2. Подсветка: emissive + яркий контур по рёбрам
             items.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
-                if (!mod) return;
-                if (mod.batched) {
-                    batchedItems.push(i);
-                    return;
-                }
+                if (!mod || mod.batched) return;
                 if (mod.meshesByID.has(i.expressID)) {
                     mod.meshesByID.get(i.expressID).forEach(m => setEmissive(m, highlightColor));
                 }
             });
-            if (batchedItems.length) showSelectionOverlays(batchedItems);
+            showSelectionOverlays(items);
 
             const mod0 = loadedModels.get(items[0].modelID);
             if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
