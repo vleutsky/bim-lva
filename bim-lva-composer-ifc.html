@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#1a2332">
+    <link rel="manifest" href="manifest.webmanifest">
     <title>BIM.LVA Composer IFC · Сводные модели</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1104,7 +1106,8 @@
             <div class="divider"></div>
 
             <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.dwg,.glb,.gltf,.obj,.stl,.ply,.dae,.3ds" multiple>
-            <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="Поддерживаются IFC, FBX, DXF, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS">⬆ ЛОКАЛЬНО</label>
+            <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="Поддерживаются IFC, FBX, DXF, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS. RVT/Tekla/Plant — экспорт в IFC">⬆ ЛОКАЛЬНО</label>
+            <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT/TEKLA</button>
             <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ КАДР</button>
             <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ ЭКСПОРТ IFC</button>
             <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ СТРУКТУРА IFC</button>
@@ -1139,7 +1142,9 @@
         <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
             <h2>BIM.LVA Composer IFC</h2>
-            <p>IFC, FBX, ASCII DXF (3DFACE/MESH/TIN и 3DSOLID→mesh), GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG → DXF.<br><span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
+            <p>IFC, FBX, ASCII DXF (3DFACE/MESH/TIN и 3DSOLID→mesh), GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG → DXF.<br>
+            <span style="opacity:.85">Revit (.rvt), Plant 3D и Tekla — только через экспорт в IFC (или будущий облачный конвертер).</span><br>
+            <span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
         </div>
         <div id="labels-container"></div> <div id="boxSelectRect"></div> <div class="loader" id="loader">
             <b id="loadTitle">ОБРАБОТКА</b>
@@ -1294,6 +1299,29 @@
             <button type="button" class="pop" id="colorLegendClose" title="Скрыть легенду">✕</button>
         </div>
         <div id="colorLegendBody"></div>
+    </div>
+
+    <div class="modal-backdrop" id="proprietaryModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(520px,100%)">
+            <h3>Revit / Tekla / Plant 3D</h3>
+            <div class="bulk-note">
+                Нативные <b>.rvt</b>, модели Tekla и Autodesk Plant 3D — проприетарные форматы.
+                В браузере их нельзя разобрать без SDK вендора.
+                <br><br>
+                <b>Сейчас:</b> экспортируйте в <b>IFC 2x3 / IFC4</b> и откройте здесь.
+                <ul style="margin:8px 0 0 18px;line-height:1.5">
+                    <li>Revit → File → Export → IFC</li>
+                    <li>Tekla → Export → IFC</li>
+                    <li>Plant 3D → Export to IFC / Navisworks → IFC</li>
+                </ul>
+                <br>
+                <b>Заготовка на будущее:</b> облачный конвейер Autodesk APS / Trimble Connect
+                (загрузка → перевод в IFC/SVF → открытие в Composer). Серверная часть пока не подключена.
+            </div>
+            <div class="modal-actions">
+                <button class="btn load-btn" id="closeProprietaryHint">Понятно</button>
+            </div>
+        </div>
     </div>
 
     <div class="modal-backdrop" id="clashModal">
@@ -8883,6 +8911,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         // Восстановление вида из URL (если модели уже будут — повторно вызовется после загрузки)
         setTimeout(() => restoreSharedViewFromHash(), 0);
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw-composer.js').catch(err => {
+                    console.warn('SW register failed', err);
+                });
+            });
+        }
+
+        $('btnProprietaryHint').addEventListener('click', () => $('proprietaryModal').classList.add('show'));
+        $('closeProprietaryHint').addEventListener('click', () => $('proprietaryModal').classList.remove('show'));
+        $('proprietaryModal').addEventListener('click', e => {
+            if (e.target === $('proprietaryModal')) $('proprietaryModal').classList.remove('show');
+        });
 
     </script>
 </body>
