@@ -1090,6 +1090,12 @@
             <button class="btn" id="btnColorBy" disabled title="Раскрасить элементы по IFC-классу или значению Pset">🎨 ЦВЕТ</button>
             <button class="btn" id="btnBcf" disabled title="BCF-заметки: точка + комментарий + камера">💬 BCF</button>
             <button class="btn" id="btnAlign" disabled title="Сдвиг / поворот выбранной модели в сводке">✥ СДВИГ</button>
+            <button class="btn" id="btnClash" disabled title="Простая проверка коллизий AABB между двумя моделями">⚡ КОЛЛИЗИИ</button>
+            <button class="btn" id="btnClassFilter" disabled title="Фильтр видимости по IFC-классам">☰ КЛАССЫ</button>
+            <button class="btn" id="btnCompare" disabled title="Сравнить два IFC: добавлено / удалено">⇄ СРАВНЕНИЕ</button>
+            <button class="btn" id="btnSchedule" disabled title="Ведомость выделенного → CSV">▦ CSV</button>
+            <button class="btn" id="btnCrs" disabled title="Смещение модели / northing (CRS offset)">🌐 CRS</button>
+            <button class="btn" id="btnShareView" disabled title="Скопировать ссылку на текущий вид">🔗 ВИД</button>
         </div>
 
         <div class="tools">
@@ -1288,6 +1294,66 @@
             <button type="button" class="pop" id="colorLegendClose" title="Скрыть легенду">✕</button>
         </div>
         <div id="colorLegendBody"></div>
+    </div>
+
+    <div class="modal-backdrop" id="clashModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(480px,100%)">
+            <h3>Коллизии (AABB)</h3>
+            <div class="bulk-note">Быстрая проверка пересечения габаритов элементов двух моделей. Не заменяет точный clash detection.</div>
+            <div class="prop small"><div class="k">Модель A</div><select class="editInput" id="clashModelA"></select></div>
+            <div class="prop small"><div class="k">Модель B</div><select class="editInput" id="clashModelB"></select></div>
+            <div class="prop small"><div class="k">Допуск (м)</div><input class="editInput" id="clashTolerance" type="number" step="0.01" value="0.01"></div>
+            <div class="bulk-note" id="clashStatus">Выберите две разные модели и запустите проверку.</div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelClash">Закрыть</button>
+                <button class="btn load-btn" id="runClash">Проверить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="classFilterModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
+            <h3>Фильтр по IFC-классам</h3>
+            <div class="bulk-note">Снимите галочки, чтобы скрыть классы. Только IFC.</div>
+            <div id="classFilterList" style="max-height:320px;overflow:auto;margin:8px 0"></div>
+            <div class="modal-actions" style="justify-content:flex-start">
+                <button class="btn" id="classFilterAll">Все</button>
+                <button class="btn" id="classFilterNone">Ничего</button>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelClassFilter">Закрыть</button>
+                <button class="btn load-btn" id="applyClassFilter">Применить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="compareModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(520px,100%)">
+            <h3>Сравнение двух IFC</h3>
+            <div class="bulk-note">Сравнение по GlobalId / ExpressID+класс. Результат выделяется на сцене.</div>
+            <div class="prop small"><div class="k">Базовая (старая)</div><select class="editInput" id="compareModelA"></select></div>
+            <div class="prop small"><div class="k">Новая</div><select class="editInput" id="compareModelB"></select></div>
+            <div class="bulk-note" id="compareStatus">—</div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelCompare">Закрыть</button>
+                <button class="btn load-btn" id="runCompare">Сравнить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="crsModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
+            <h3>CRS / смещение координат</h3>
+            <div class="bulk-note">Сдвигает всю сводку (IFC + внешние модели) в мировой системе сцены. Удобно подогнать northing/easting.</div>
+            <div class="prop small"><div class="k">ΔX (east)</div><input class="editInput" id="crsOffsetX" type="number" step="0.01" value="0"></div>
+            <div class="prop small"><div class="k">ΔY (north)</div><input class="editInput" id="crsOffsetY" type="number" step="0.01" value="0"></div>
+            <div class="prop small"><div class="k">ΔZ</div><input class="editInput" id="crsOffsetZ" type="number" step="0.01" value="0"></div>
+            <div class="modal-actions">
+                <button class="btn" id="crsResetBtn">Сбросить</button>
+                <button class="btn" id="cancelCrs">Отмена</button>
+                <button class="btn load-btn" id="applyCrs">Применить</button>
+            </div>
+        </div>
     </div>
 
     <div class="modal-backdrop" id="alignModal">
@@ -3053,7 +3119,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -3061,6 +3127,7 @@
             updateIfcToolButtons();
 
             if (loadedModels.size) fitView();
+            restoreSharedViewFromHash();
             hideLoader();
             markNeedsRender();
         }
@@ -5948,6 +6015,279 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!n) alert('Нет IFC-элементов для раскраски.');
         });
 
+        // --- Clash / class filter / compare / CSV / CRS / share ---
+        function fillModelSelect(selectEl, ifcOnly = false) {
+            selectEl.innerHTML = [...loadedModels.entries()]
+                .filter(([, mod]) => !ifcOnly || (!mod.isFBX && mod.ifcIndex))
+                .map(([id, mod]) => `<option value="${id}">${esc(mod.filename || id)}</option>`)
+                .join('');
+        }
+
+        function getElementWorldBox(mod, expressID) {
+            const box = new THREE.Box3();
+            const meshes = mod.meshesByID?.get(expressID);
+            if (!meshes?.length) return null;
+            meshes.forEach(m => {
+                if (!m.visible) return;
+                m.updateWorldMatrix(true, false);
+                box.expandByObject(m);
+            });
+            return box.isEmpty() ? null : box;
+        }
+
+        function boxesOverlap(a, b, tol = 0) {
+            return !(
+                a.max.x < b.min.x - tol || a.min.x > b.max.x + tol ||
+                a.max.y < b.min.y - tol || a.min.y > b.max.y + tol ||
+                a.max.z < b.min.z - tol || a.min.z > b.max.z + tol
+            );
+        }
+
+        $('btnClash').addEventListener('click', () => {
+            fillModelSelect($('clashModelA'));
+            fillModelSelect($('clashModelB'));
+            $('clashModal').classList.add('show');
+        });
+        $('cancelClash').addEventListener('click', () => $('clashModal').classList.remove('show'));
+        $('clashModal').addEventListener('click', e => { if (e.target === $('clashModal')) $('clashModal').classList.remove('show'); });
+        $('runClash').addEventListener('click', () => {
+            const idA = Number($('clashModelA').value);
+            const idB = Number($('clashModelB').value);
+            const tol = parseFloat($('clashTolerance').value) || 0;
+            if (idA === idB) { alert('Выберите две разные модели.'); return; }
+            const modA = loadedModels.get(idA);
+            const modB = loadedModels.get(idB);
+            if (!modA || !modB) return;
+            showLoader('КОЛЛИЗИИ', 'Проверка AABB…');
+            const boxesA = [];
+            for (const eid of modA.meshesByID.keys()) {
+                const box = getElementWorldBox(modA, eid);
+                if (box) boxesA.push({ modelID: idA, expressID: eid, box });
+            }
+            const hits = [];
+            for (const eid of modB.meshesByID.keys()) {
+                const boxB = getElementWorldBox(modB, eid);
+                if (!boxB) continue;
+                for (const a of boxesA) {
+                    if (boxesOverlap(a.box, boxB, tol)) {
+                        hits.push({ modelID: idB, expressID: eid });
+                        hits.push({ modelID: a.modelID, expressID: a.expressID });
+                        break;
+                    }
+                }
+            }
+            hideLoader();
+            const unique = uniqueSelectionItems(hits);
+            $('clashStatus').textContent = unique.length
+                ? `Найдено пересечений (элементов): ${unique.length}. Выделено на сцене.`
+                : 'Пересечений AABB не найдено.';
+            selectMultiple(unique);
+            $('clashModal').classList.remove('show');
+        });
+
+        function collectIfcClasses() {
+            const map = new Map();
+            for (const mod of loadedModels.values()) {
+                if (mod.isFBX || !mod.ifcIndex) continue;
+                for (const eid of mod.meshesByID.keys()) {
+                    const cls = (getEntityParts(mod, eid)?.className || 'UNKNOWN').replace(/^IFC/, '');
+                    map.set(cls, (map.get(cls) || 0) + 1);
+                }
+            }
+            return [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        }
+
+        $('btnClassFilter').addEventListener('click', () => {
+            const classes = collectIfcClasses();
+            $('classFilterList').innerHTML = classes.map(([cls, n]) => `
+                <label class="bulk-note" style="display:flex;gap:8px;align-items:center;cursor:pointer;margin:4px 0">
+                    <input type="checkbox" class="class-filter-cb" data-cls="${escAttr(cls)}" checked>
+                    <span>${esc(cls)} <span style="opacity:.6">(${n})</span></span>
+                </label>
+            `).join('') || '<div class="bulk-note">Нет IFC-классов.</div>';
+            $('classFilterModal').classList.add('show');
+        });
+        $('cancelClassFilter').addEventListener('click', () => $('classFilterModal').classList.remove('show'));
+        $('classFilterModal').addEventListener('click', e => { if (e.target === $('classFilterModal')) $('classFilterModal').classList.remove('show'); });
+        $('classFilterAll').addEventListener('click', () => document.querySelectorAll('.class-filter-cb').forEach(c => { c.checked = true; }));
+        $('classFilterNone').addEventListener('click', () => document.querySelectorAll('.class-filter-cb').forEach(c => { c.checked = false; }));
+        $('applyClassFilter').addEventListener('click', () => {
+            const allowed = new Set([...document.querySelectorAll('.class-filter-cb:checked')].map(c => c.dataset.cls));
+            const rebuild = new Set();
+            for (const [modelID, mod] of loadedModels) {
+                if (mod.isFBX || !mod.ifcIndex) continue;
+                for (const eid of [...mod.meshesByID.keys()]) {
+                    const cls = (getEntityParts(mod, eid)?.className || 'UNKNOWN').replace(/^IFC/, '');
+                    const hide = !allowed.has(cls);
+                    if (setElementHidden(mod, eid, hide)) rebuild.add(mod);
+                }
+                if (mod.batched) rebuild.add(mod);
+            }
+            rebuildBatchedVisibility(rebuild);
+            $('classFilterModal').classList.remove('show');
+            markNeedsRender();
+        });
+
+        function elementIdentityKey(mod, expressID) {
+            try {
+                if (typeof ifcAPI !== 'undefined' && mod.modelID != null) {
+                    const line = ifcAPI.GetLine(mod.modelID, expressID, false);
+                    const gid = line?.GlobalId?.value || line?.GlobalId;
+                    if (gid) return 'gid:' + gid;
+                }
+            } catch (_) {}
+            const ent = getEntityParts(mod, expressID);
+            const name = ent ? unquoteStepString(ent.args?.[2] || '') : '';
+            return `cls:${ent?.className || '?'}|name:${name}|id:${expressID}`;
+        }
+
+        $('btnCompare').addEventListener('click', () => {
+            fillModelSelect($('compareModelA'), true);
+            fillModelSelect($('compareModelB'), true);
+            $('compareStatus').textContent = '—';
+            $('compareModal').classList.add('show');
+        });
+        $('cancelCompare').addEventListener('click', () => $('compareModal').classList.remove('show'));
+        $('compareModal').addEventListener('click', e => { if (e.target === $('compareModal')) $('compareModal').classList.remove('show'); });
+        $('runCompare').addEventListener('click', () => {
+            const idA = Number($('compareModelA').value);
+            const idB = Number($('compareModelB').value);
+            if (idA === idB) { alert('Выберите два разных IFC.'); return; }
+            const modA = loadedModels.get(idA);
+            const modB = loadedModels.get(idB);
+            const mapA = new Map();
+            for (const eid of modA.meshesByID.keys()) mapA.set(elementIdentityKey(modA, eid), eid);
+            const mapB = new Map();
+            for (const eid of modB.meshesByID.keys()) mapB.set(elementIdentityKey(modB, eid), eid);
+            const added = [];
+            const removed = [];
+            for (const [k, eid] of mapB) if (!mapA.has(k)) added.push({ modelID: idB, expressID: eid });
+            for (const [k, eid] of mapA) if (!mapB.has(k)) removed.push({ modelID: idA, expressID: eid });
+            $('compareStatus').textContent = `Добавлено: ${added.length}, удалено: ${removed.length}. Выделены добавленные (новая модель).`;
+            selectMultiple(added.length ? added : removed);
+            $('compareModal').classList.remove('show');
+        });
+
+        $('btnSchedule').addEventListener('click', () => {
+            const items = selectedItems.length ? selectedItems : [];
+            if (!items.length) {
+                alert('Выделите элементы для ведомости.');
+                return;
+            }
+            const rows = [['model', 'expressID', 'class', 'name', 'file']];
+            items.forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod) return;
+                let cls = '';
+                let name = '';
+                if (!mod.isFBX && mod.ifcIndex) {
+                    const ent = getEntityParts(mod, item.expressID);
+                    cls = ent?.className || '';
+                    name = ent ? unquoteStepString(ent.args?.[2] || '') : '';
+                } else {
+                    const mesh = mod.meshesByID.get(item.expressID)?.[0];
+                    name = mesh?.name || '';
+                    cls = mod.format || 'EXTERNAL';
+                }
+                rows.push([item.modelID, item.expressID, cls, name, mod.filename || '']);
+            });
+            const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\n');
+            const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bim-lva-schedule-${items.length}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        let crsOffsets = { x: 0, y: 0, z: 0 };
+        function applyCrsOffsets() {
+            globalGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
+            if (typeof externalGroup !== 'undefined' && externalGroup) {
+                externalGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
+            }
+            markNeedsRender();
+        }
+        $('btnCrs').addEventListener('click', () => {
+            $('crsOffsetX').value = crsOffsets.x;
+            $('crsOffsetY').value = crsOffsets.y;
+            $('crsOffsetZ').value = crsOffsets.z;
+            $('crsModal').classList.add('show');
+        });
+        $('cancelCrs').addEventListener('click', () => $('crsModal').classList.remove('show'));
+        $('crsModal').addEventListener('click', e => { if (e.target === $('crsModal')) $('crsModal').classList.remove('show'); });
+        $('applyCrs').addEventListener('click', () => {
+            crsOffsets = {
+                x: parseFloat($('crsOffsetX').value) || 0,
+                y: parseFloat($('crsOffsetY').value) || 0,
+                z: parseFloat($('crsOffsetZ').value) || 0
+            };
+            applyCrsOffsets();
+            $('crsModal').classList.remove('show');
+        });
+        $('crsResetBtn').addEventListener('click', () => {
+            crsOffsets = { x: 0, y: 0, z: 0 };
+            $('crsOffsetX').value = 0;
+            $('crsOffsetY').value = 0;
+            $('crsOffsetZ').value = 0;
+            applyCrsOffsets();
+        });
+
+        $('btnShareView').addEventListener('click', async () => {
+            const state = {
+                v: 1,
+                cam: {
+                    p: camera.position.toArray().map(n => +n.toFixed(4)),
+                    t: controls.target.toArray().map(n => +n.toFixed(4)),
+                    u: camera.up.toArray().map(n => +n.toFixed(4))
+                },
+                crs: crsOffsets,
+                clip: isClipping ? {
+                    mode: clipMode,
+                    pos: clipProxy.position.toArray().map(n => +n.toFixed(4)),
+                    scl: clipProxy.scale.toArray().map(n => +n.toFixed(4))
+                } : null
+            };
+            const hash = '#view=' + btoa(unescape(encodeURIComponent(JSON.stringify(state))));
+            const url = location.origin + location.pathname + location.search + hash;
+            try {
+                await navigator.clipboard.writeText(url);
+                alert('Ссылка на вид скопирована в буфер обмена.');
+            } catch (_) {
+                prompt('Скопируйте ссылку:', url);
+            }
+            history.replaceState(null, '', hash);
+        });
+
+        function restoreSharedViewFromHash() {
+            const m = location.hash.match(/#view=([^&]+)/);
+            if (!m) return;
+            try {
+                const state = JSON.parse(decodeURIComponent(escape(atob(m[1]))));
+                if (state.cam?.p) camera.position.fromArray(state.cam.p);
+                if (state.cam?.t) controls.target.fromArray(state.cam.t);
+                if (state.cam?.u) camera.up.fromArray(state.cam.u);
+                if (state.crs) {
+                    crsOffsets = { x: state.crs.x || 0, y: state.crs.y || 0, z: state.crs.z || 0 };
+                    applyCrsOffsets();
+                }
+                if (state.clip) {
+                    clipMode = state.clip.mode || 'z';
+                    $('clipModeSelect').value = clipMode;
+                    if (state.clip.pos) clipProxy.position.fromArray(state.clip.pos);
+                    if (state.clip.scl) clipProxy.scale.fromArray(state.clip.scl);
+                    if (!isClipping) enableClipping(true);
+                    else syncClipFromGizmo();
+                }
+                controls.update();
+                markNeedsRender();
+            } catch (err) {
+                console.warn('Не удалось восстановить вид из URL', err);
+            }
+        }
+        window.addEventListener('hashchange', restoreSharedViewFromHash);
+
         // --- Model align (сдвиг/поворот сводки) ---
         let alignActive = false;
         let alignModelId = null;
@@ -7396,7 +7736,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -7911,7 +8251,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -8540,6 +8880,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         
         setupDockable($('treePanel'), $('treeHead'), $('treePop')); 
         setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
+
+        // Восстановление вида из URL (если модели уже будут — повторно вызовется после загрузки)
+        setTimeout(() => restoreSharedViewFromHash(), 0);
 
     </script>
 </body>
