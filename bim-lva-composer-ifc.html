@@ -1020,7 +1020,14 @@
         </div>
         
         <div class="btn-group">
-            <button class="btn" id="btnMeasure" disabled title="Измерить расстояние">📏 ИЗМЕРИТЬ</button>
+            <button class="btn" id="btnMeasure" disabled title="Инструмент замеров">📏 ЗАМЕР</button>
+            <select id="measureModeSelect" class="tool-select" disabled title="Режим замера">
+                <option value="distance">м</option>
+                <option value="chain">∑</option>
+                <option value="height">ΔZ</option>
+                <option value="angle">∠</option>
+                <option value="area">м²</option>
+            </select>
             <button class="btn" id="btnClip" disabled title="Секущая плоскость или коробка сечения">✂ РАЗРЕЗ</button>
             <select id="clipModeSelect" class="tool-select" disabled title="Ось плоскости или коробка сечения">
                 <option value="z">Z</option>
@@ -2071,27 +2078,158 @@
             markNeedsRender();
         });
 
-        // --- MEASUREMENT TOOL (Линейка) ---
+        // --- MEASUREMENT TOOL (расстояние / цепочка / ΔZ / угол / площадь) ---
         let isMeasuring = false;
+        let measureMode = 'distance';
         let measurePoints = [];
         let measureVisuals = new THREE.Group();
         scene.add(measureVisuals);
-        let labelsList = []; // Объекты { pos: Vector3, div: HTMLElement }
+        let labelsList = [];
+        let measureChainTotal = 0;
+
+        function clearMeasureDraft() {
+            measurePoints = [];
+            measureChainTotal = 0;
+        }
+
+        function clearMeasureAll() {
+            clearMeasureDraft();
+            measureVisuals.clear();
+            labelsContainer.innerHTML = '';
+            labelsList = [];
+        }
+
+        function addMeasureMarker(pt) {
+            const sphere = new THREE.Mesh(
+                new THREE.SphereGeometry(0.15),
+                new THREE.MeshBasicMaterial({ color: 0x46d39a, depthTest: false })
+            );
+            sphere.position.copy(pt);
+            measureVisuals.add(sphere);
+        }
+
+        function addMeasureSegment(a, b) {
+            const geom = new THREE.BufferGeometry().setFromPoints([a, b]);
+            measureVisuals.add(new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0x46d39a, depthTest: false })));
+        }
+
+        function addMeasureLabel(pos, text) {
+            const div = document.createElement('div');
+            div.className = 'measure-label';
+            div.innerText = text;
+            labelsContainer.appendChild(div);
+            labelsList.push({ pos: pos.clone(), div });
+        }
+
+        function polygonArea3D(points) {
+            if (points.length < 3) return 0;
+            const n = new THREE.Vector3();
+            for (let i = 0; i < points.length; i++) {
+                const a = points[i];
+                const b = points[(i + 1) % points.length];
+                n.x += (a.y - b.y) * (a.z + b.z);
+                n.y += (a.z - b.z) * (a.x + b.x);
+                n.z += (a.x - b.x) * (a.y + b.y);
+            }
+            return n.length() * 0.5;
+        }
+
+        function finishMeasurePolygon() {
+            if (measurePoints.length < 3) return;
+            const pts = measurePoints.slice();
+            addMeasureSegment(pts[pts.length - 1], pts[0]);
+            const area = polygonArea3D(pts);
+            const center = new THREE.Vector3();
+            pts.forEach(p => center.add(p));
+            center.multiplyScalar(1 / pts.length);
+            addMeasureLabel(center, `${area.toFixed(2)} м²`);
+            clearMeasureDraft();
+            markNeedsRender();
+        }
+
+        function handleMeasureClick(pt) {
+            measureMode = $('measureModeSelect').value || 'distance';
+            addMeasureMarker(pt);
+            measurePoints.push(pt.clone());
+
+            if (measureMode === 'distance' || measureMode === 'height') {
+                if (measurePoints.length < 2) return;
+                const p1 = measurePoints[0];
+                const p2 = measurePoints[1];
+                addMeasureSegment(p1, p2);
+                const mid = p1.clone().lerp(p2, 0.5);
+                if (measureMode === 'height') {
+                    const dz = Math.abs(p2.z - p1.z);
+                    const horiz = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                    addMeasureLabel(mid, `ΔZ ${dz.toFixed(2)} м · Lxy ${horiz.toFixed(2)} м`);
+                } else {
+                    addMeasureLabel(mid, `${p1.distanceTo(p2).toFixed(2)} м`);
+                }
+                clearMeasureDraft();
+                return;
+            }
+
+            if (measureMode === 'angle') {
+                if (measurePoints.length >= 2) addMeasureSegment(measurePoints[measurePoints.length - 2], measurePoints[measurePoints.length - 1]);
+                if (measurePoints.length < 3) return;
+                const [a, b, c] = measurePoints;
+                const v1 = a.clone().sub(b).normalize();
+                const v2 = c.clone().sub(b).normalize();
+                const deg = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(v1.dot(v2), -1, 1)));
+                addMeasureLabel(b.clone(), `${deg.toFixed(1)}°`);
+                clearMeasureDraft();
+                return;
+            }
+
+            if (measureMode === 'chain') {
+                if (measurePoints.length >= 2) {
+                    const a = measurePoints[measurePoints.length - 2];
+                    const b = measurePoints[measurePoints.length - 1];
+                    const seg = a.distanceTo(b);
+                    measureChainTotal += seg;
+                    addMeasureSegment(a, b);
+                    addMeasureLabel(a.clone().lerp(b, 0.5), `${seg.toFixed(2)} м`);
+                    addMeasureLabel(b.clone(), `∑ ${measureChainTotal.toFixed(2)} м`);
+                }
+                return;
+            }
+
+            if (measureMode === 'area') {
+                if (measurePoints.length >= 2) {
+                    addMeasureSegment(measurePoints[measurePoints.length - 2], measurePoints[measurePoints.length - 1]);
+                }
+                // Замыкание: двойной клик
+            }
+        }
 
         $('btnMeasure').addEventListener('click', () => {
             isMeasuring = !isMeasuring;
             $('btnMeasure').classList.toggle('on', isMeasuring);
-            
+            $('measureModeSelect').disabled = !isMeasuring && $('btnMeasure').disabled;
             if (!isMeasuring) {
-                // Очистка при выключении
-                measurePoints = [];
-                measureVisuals.clear();
-                labelsContainer.innerHTML = '';
-                labelsList = [];
+                clearMeasureAll();
                 document.body.style.cursor = '';
             } else {
                 document.body.style.cursor = 'crosshair';
+                measureMode = $('measureModeSelect').value || 'distance';
             }
+        });
+
+        $('measureModeSelect').addEventListener('change', () => {
+            measureMode = $('measureModeSelect').value || 'distance';
+            clearMeasureDraft();
+        });
+
+        renderer.domElement.addEventListener('dblclick', () => {
+            if (!isMeasuring) return;
+            measureMode = $('measureModeSelect').value || 'distance';
+            // Второй click из dblclick часто дублирует последнюю точку
+            if (measurePoints.length >= 2 &&
+                measurePoints[measurePoints.length - 1].distanceTo(measurePoints[measurePoints.length - 2]) < 0.05) {
+                measurePoints.pop();
+            }
+            if (measureMode === 'area') finishMeasurePolygon();
+            else if (measureMode === 'chain') clearMeasureDraft();
         });
 
         function resize() {
@@ -2798,6 +2936,7 @@
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
+            $('measureModeSelect').disabled = loadedModels.size === 0;
             updateIfcToolButtons();
 
             if (loadedModels.size) fitView();
@@ -5115,44 +5254,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 return; 
             }
 
-            // ЛОГИКА ЛИНЕЙКИ
+            // ЗАМЕРЫ
             if (isMeasuring) {
-                const pt = validHits[0].point;
-                measurePoints.push(pt);
-                
-                // Рисуем точку
-                const sphere = new THREE.Mesh(
-                    new THREE.SphereGeometry(0.2), 
-                    new THREE.MeshBasicMaterial({color: 0x46d39a})
-                );
-                sphere.position.copy(pt);
-                measureVisuals.add(sphere);
-
-                if (measurePoints.length === 2) {
-                    const p1 = measurePoints[0]; 
-                    const p2 = measurePoints[1];
-                    
-                    // Рисуем линию
-                    const geom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-                    const line = new THREE.Line(
-                        geom, 
-                        new THREE.LineBasicMaterial({color: 0x46d39a, depthTest: false})
-                    );
-                    measureVisuals.add(line);
-                    
-                    // Расстояние и HTML бирка
-                    const dist = p1.distanceTo(p2).toFixed(2);
-                    const midPoint = p1.clone().lerp(p2, 0.5);
-                    
-                    const div = document.createElement('div');
-                    div.className = 'measure-label';
-                    div.innerText = `${dist} м`;
-                    labelsContainer.appendChild(div);
-                    labelsList.push({ pos: midPoint, div: div });
-
-                    measurePoints = []; // Сброс для следующего замера
-                }
-                return; // Прерываем обычное выделение
+                handleMeasureClick(validHits[0].point);
+                markNeedsRender();
+                return;
             }
             
             // ОБЫЧНОЕ ВЫДЕЛЕНИЕ
@@ -6701,6 +6807,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
+                $('measureModeSelect').disabled = true;
                 $('btnClipGizmo').disabled = true;
                 pivotLockToSelection = false;
                 $('btnPivotLock').classList.remove('on');
@@ -7213,6 +7320,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
             ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
+            $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
             updateIfcToolButtons();
 
@@ -7228,9 +7336,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             globalClipPlane.set(new THREE.Vector3(0, 0, -1), 999999999);
             $('btnClip').classList.remove('on');
             $('btnClipGizmo').classList.remove('on');
-            
-            isMeasuring = false; 
-            $('btnMeasure').classList.remove('on'); 
+
+            isMeasuring = false;
+            $('btnMeasure').classList.remove('on');
+            clearMeasureAll(); 
 
             isBoxSelecting = false;
             $('btnBoxSelect').classList.remove('on');
