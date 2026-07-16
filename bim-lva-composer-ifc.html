@@ -1088,6 +1088,7 @@
             <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию">👁‍🗨 ПОКАЗАТЬ ВСЁ</button>
             <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ ВИДЫ</button>
             <button class="btn" id="btnColorBy" disabled title="Раскрасить элементы по IFC-классу или значению Pset">🎨 ЦВЕТ</button>
+            <button class="btn" id="btnBcf" disabled title="BCF-заметки: точка + комментарий + камера">💬 BCF</button>
         </div>
 
         <div class="tools">
@@ -1286,6 +1287,31 @@
             <button type="button" class="pop" id="colorLegendClose" title="Скрыть легенду">✕</button>
         </div>
         <div id="colorLegendBody"></div>
+    </div>
+
+    <div class="modal-backdrop" id="bcfModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bcfModalTitle" style="width:min(560px,100%)">
+            <h3 id="bcfModalTitle">BCF-заметки</h3>
+            <div class="bulk-note">Кликните по модели, чтобы поставить точку замечания, введите текст и сохраните. Экспорт — файл <b>.bcfzip</b> (BCF 2.1).</div>
+            <div class="prop small">
+                <div class="k">Заголовок</div>
+                <input class="editInput" id="bcfTitle" placeholder="Например: Коллизия трубы и балки">
+            </div>
+            <div class="prop small">
+                <div class="k">Комментарий</div>
+                <input class="editInput" id="bcfComment" placeholder="Описание замечания">
+            </div>
+            <div class="bulk-note" id="bcfPickStatus">Точка не выбрана. Включите режим «Поставить точку» и кликните по геометрии.</div>
+            <div class="modal-actions" style="justify-content:flex-start">
+                <button class="btn" id="bcfPickBtn">Поставить точку</button>
+                <button class="btn load-btn" id="bcfAddBtn">Добавить заметку</button>
+                <button class="btn" id="bcfExportBtn">⬇ Экспорт BCF</button>
+            </div>
+            <div id="bcfList" class="bulk-note" style="margin-top:10px;max-height:240px;overflow:auto">Заметок пока нет.</div>
+            <div class="modal-actions">
+                <button class="btn" id="cancelBcf">Закрыть</button>
+            </div>
+        </div>
     </div>
 
     <div class="modal-backdrop" id="colorByModal">
@@ -5332,6 +5358,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 markNeedsRender();
                 return;
             }
+
+            // BCF: выбор точки замечания
+            if (bcfPickMode) {
+                const hit = validHits[0];
+                bcfPickPoint = hit.point.toArray();
+                const ud = hit.object.userData || {};
+                let expressID = ud.expressID;
+                if (ud.isBatch) {
+                    const attr = hit.object.geometry?.getAttribute('expressId');
+                    if (attr && hit.face) expressID = Math.round(attr.getX(hit.face.a));
+                }
+                bcfPickSelection = (expressID != null && ud.modelID != null)
+                    ? { modelID: ud.modelID, expressID }
+                    : null;
+                bcfPickMode = false;
+                $('bcfPickBtn').classList.remove('on');
+                $('bcfPickStatus').textContent = `Точка: ${bcfPickPoint.map(n => n.toFixed(2)).join(', ')}`;
+                openBcfModal();
+                return;
+            }
             
             // ОБЫЧНОЕ ВЫДЕЛЕНИЕ
             const hitObj = validHits[0].object;
@@ -5877,6 +5923,211 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             closeColorByModal();
             if (!n) alert('Нет IFC-элементов для раскраски.');
+        });
+
+        // --- BCF topics ---
+        const bcfTopics = [];
+        let bcfPickMode = false;
+        let bcfPickPoint = null;
+        let bcfPickSelection = null;
+        const bcfMarkers = new THREE.Group();
+        bcfMarkers.name = 'BCFMarkers';
+        scene.add(bcfMarkers);
+
+        function uuid4() {
+            if (crypto?.randomUUID) return crypto.randomUUID();
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+        }
+
+        function renderBcfList() {
+            const el = $('bcfList');
+            if (!bcfTopics.length) {
+                el.textContent = 'Заметок пока нет.';
+                return;
+            }
+            el.innerHTML = bcfTopics.map((t, idx) => `
+                <div class="ya-file-row" style="margin-bottom:6px">
+                    <span class="ya-name" title="${escAttr(t.comment || '')}">${esc(t.title)}</span>
+                    <button type="button" class="btn" data-bcf-act="focus" data-bcf-idx="${idx}">▶</button>
+                    <button type="button" class="btn" data-bcf-act="del" data-bcf-idx="${idx}">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function syncBcfMarkers() {
+            while (bcfMarkers.children.length) {
+                const ch = bcfMarkers.children[0];
+                bcfMarkers.remove(ch);
+                ch.geometry?.dispose?.();
+                ch.material?.dispose?.();
+            }
+            bcfTopics.forEach(t => {
+                if (!t.point) return;
+                const m = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.18),
+                    new THREE.MeshBasicMaterial({ color: 0xff3355, depthTest: false })
+                );
+                m.position.fromArray(t.point);
+                m.renderOrder = 1001;
+                bcfMarkers.add(m);
+            });
+            markNeedsRender();
+        }
+
+        function openBcfModal() {
+            renderBcfList();
+            $('bcfModal').classList.add('show');
+        }
+        function closeBcfModal() {
+            $('bcfModal').classList.remove('show');
+            bcfPickMode = false;
+            $('bcfPickBtn').classList.remove('on');
+        }
+
+        async function ensureJSZip() {
+            if (globalThis.JSZip) return globalThis.JSZip;
+            await loadScriptOnce('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+            if (!globalThis.JSZip) throw new Error('JSZip не загрузился');
+            return globalThis.JSZip;
+        }
+
+        function bcfEscapeXml(s) {
+            return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        async function exportBcfZip() {
+            if (!bcfTopics.length) {
+                alert('Нет заметок для экспорта.');
+                return;
+            }
+            const JSZip = await ensureJSZip();
+            const zip = new JSZip();
+            zip.file('bcf.version', `<?xml version="1.0" encoding="UTF-8"?>\n<Version VersionId="2.1" xmlns="http://www.buildingsmart-tech.org/specifications/bcf-releases/bcfversion.xsd"/>\n`);
+            bcfTopics.forEach(topic => {
+                const folder = zip.folder(topic.guid);
+                const markup = `<?xml version="1.0" encoding="UTF-8"?>
+<Markup xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Topic Guid="${topic.guid}" TopicType="Comment" TopicStatus="Open">
+    <Title>${bcfEscapeXml(topic.title)}</Title>
+    <CreationDate>${topic.created}</CreationDate>
+    <CreationAuthor>BIM.LVA Composer</CreationAuthor>
+    <Description>${bcfEscapeXml(topic.comment)}</Description>
+  </Topic>
+  <Comment Guid="${topic.commentGuid}">
+    <Date>${topic.created}</Date>
+    <Author>BIM.LVA Composer</Author>
+    <Comment>${bcfEscapeXml(topic.comment)}</Comment>
+  </Comment>
+  <Viewpoints Guid="${topic.viewpointGuid}">
+    <Viewpoint>viewpoint.bcfv</Viewpoint>
+  </Viewpoints>
+</Markup>`;
+                const [px, py, pz] = topic.camera.position;
+                const [tx, ty, tz] = topic.camera.target;
+                const dir = new THREE.Vector3(tx - px, ty - py, tz - pz).normalize();
+                const up = new THREE.Vector3().fromArray(topic.camera.up || [0, 0, 1]);
+                const vp = `<?xml version="1.0" encoding="UTF-8"?>
+<VisualizationInfo Guid="${topic.viewpointGuid}">
+  <Components><Selection/><Visibility DefaultVisibility="true"><Exceptions/></Visibility><Coloring/></Components>
+  <PerspectiveCamera>
+    <CameraViewPoint><X>${px}</X><Y>${py}</Y><Z>${pz}</Z></CameraViewPoint>
+    <CameraDirection><X>${dir.x}</X><Y>${dir.y}</Y><Z>${dir.z}</Z></CameraDirection>
+    <CameraUpVector><X>${up.x}</X><Y>${up.y}</Y><Z>${up.z}</Z></CameraUpVector>
+    <FieldOfView>60</FieldOfView>
+  </PerspectiveCamera>
+  ${topic.point ? `<ClippingPlanes/><OrthogonalCamera/><Lines/><Bitmaps/><Viewpoint/><Components/><Snapshot/><Index>0</Index>` : ''}
+</VisualizationInfo>`;
+                // Simplified valid-enough viewpoint for many BCF readers
+                const vpSimple = `<?xml version="1.0" encoding="UTF-8"?>
+<VisualizationInfo Guid="${topic.viewpointGuid}">
+  <PerspectiveCamera>
+    <CameraViewPoint><X>${px}</X><Y>${py}</Y><Z>${pz}</Z></CameraViewPoint>
+    <CameraDirection><X>${dir.x}</X><Y>${dir.y}</Y><Z>${dir.z}</Z></CameraDirection>
+    <CameraUpVector><X>${up.x}</X><Y>${up.y}</Y><Z>${up.z}</Z></CameraUpVector>
+    <FieldOfView>60.0</FieldOfView>
+  </PerspectiveCamera>
+</VisualizationInfo>`;
+                folder.file('markup.bcf', markup);
+                folder.file('viewpoint.bcfv', vpSimple);
+            });
+            const blob = await zip.generateAsync({ type: 'blob' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bim-lva-notes-${new Date().toISOString().slice(0, 10)}.bcfzip`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        $('btnBcf').addEventListener('click', openBcfModal);
+        $('cancelBcf').addEventListener('click', closeBcfModal);
+        $('bcfModal').addEventListener('click', e => {
+            if (e.target === $('bcfModal')) closeBcfModal();
+        });
+        $('bcfPickBtn').addEventListener('click', () => {
+            bcfPickMode = !bcfPickMode;
+            $('bcfPickBtn').classList.toggle('on', bcfPickMode);
+            $('bcfPickStatus').textContent = bcfPickMode
+                ? 'Кликните по геометрии на сцене…'
+                : (bcfPickPoint ? `Точка: ${bcfPickPoint.map(n => n.toFixed(2)).join(', ')}` : 'Точка не выбрана.');
+            if (bcfPickMode) closeBcfModal();
+        });
+        $('bcfAddBtn').addEventListener('click', () => {
+            const title = $('bcfTitle').value.trim() || 'Замечание';
+            const comment = $('bcfComment').value.trim() || title;
+            if (!bcfPickPoint) {
+                alert('Сначала поставьте точку на модели.');
+                return;
+            }
+            bcfTopics.push({
+                guid: uuid4(),
+                commentGuid: uuid4(),
+                viewpointGuid: uuid4(),
+                title,
+                comment,
+                created: new Date().toISOString(),
+                point: bcfPickPoint.slice(),
+                selection: bcfPickSelection,
+                camera: {
+                    position: camera.position.toArray(),
+                    target: controls.target.toArray(),
+                    up: camera.up.toArray()
+                }
+            });
+            $('bcfTitle').value = '';
+            $('bcfComment').value = '';
+            bcfPickPoint = null;
+            bcfPickSelection = null;
+            $('bcfPickStatus').textContent = 'Точка не выбрана.';
+            renderBcfList();
+            syncBcfMarkers();
+        });
+        $('bcfExportBtn').addEventListener('click', () => {
+            exportBcfZip().catch(err => alert('Ошибка экспорта BCF: ' + err.message));
+        });
+        $('bcfList').addEventListener('click', e => {
+            const btn = e.target.closest('[data-bcf-act]');
+            if (!btn) return;
+            const idx = Number(btn.dataset.bcfIdx);
+            if (btn.dataset.bcfAct === 'del') {
+                bcfTopics.splice(idx, 1);
+                renderBcfList();
+                syncBcfMarkers();
+                return;
+            }
+            if (btn.dataset.bcfAct === 'focus') {
+                const t = bcfTopics[idx];
+                if (!t) return;
+                camera.position.fromArray(t.camera.position);
+                controls.target.fromArray(t.camera.target);
+                if (t.camera.up) camera.up.fromArray(t.camera.up);
+                controls.update();
+                markNeedsRender();
+                closeBcfModal();
+            }
         });
 
         // --- Search ---
