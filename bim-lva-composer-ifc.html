@@ -1230,6 +1230,10 @@
                 <button class="btn" id="yaClearList" title="Очистить список файлов">Очистить список</button>
             </div>
             <div class="bulk-note" id="yaStatus" style="margin-top:10px">Папка не открыта. Вставьте публичную ссылку.</div>
+            <div class="modal-actions" style="justify-content:flex-start;margin-top:6px;gap:6px">
+                <button class="btn" id="yaSelectAll" disabled title="Отметить все файлы в списке">Выделить всё</button>
+                <button class="btn" id="yaSelectNone" disabled title="Снять все отметки">Снять всё</button>
+            </div>
             <div id="yaFileList" class="ya-file-list"></div>
             <div class="modal-actions">
                 <button class="btn" id="cancelYandex">Закрыть</button>
@@ -1284,7 +1288,7 @@
 
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
-        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">Колесо: зум к курсору · F: кадр · 📌 пивот · ⚡ быстро на больших моделях · Ctrl/Shift в дереве</span>
+        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">ЛКМ+drag: вращение вокруг точки под курсором · Колесо: зум к курсору · F: кадр · 📌 пивот · ⚡ быстро</span>
         <span class="right" id="fps">—</span>
     </footer>
 
@@ -6148,29 +6152,28 @@ let isClipping = false;
             focusOnList([{ modelID, expressID }]);
         }
 
-        function getZoomAnchorPoint(clientX, clientY) {
-            if (pivotLockToSelection && selectedItems.length) {
+        function pickScenePoint(clientX, clientY, options = {}) {
+            const forceRaycast = options.forceRaycast !== false;
+            const allowPlaneFallback = options.allowPlaneFallback !== false;
+
+            if (pivotLockToSelection && selectedItems.length && !options.ignorePivotLock) {
                 const box = getSelectionBounds(selectedItems);
                 if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
             }
 
-            if (!zoomToCursorEnabled || perfMode || allMeshes.length > 15000) {
-                return lastZoomHitPoint ? lastZoomHitPoint.clone() : controls.target.clone();
-            }
-
             const rect = renderer.domElement.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return controls.target.clone();
+            if (rect.width <= 0 || rect.height <= 0) return null;
 
             zoomMouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
             zoomMouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
             zoomRaycaster.setFromCamera(zoomMouse, camera);
 
             const now = performance.now();
-            const canRaycast = allMeshes.length < 4000 || (now - lastZoomRaycastAt) > 40;
+            const canRaycast = forceRaycast || allMeshes.length < 4000 || (now - lastZoomRaycastAt) > 40;
             if (canRaycast && allMeshes.length) {
                 lastZoomRaycastAt = now;
                 const hits = zoomRaycaster.intersectObjects(
-                    allMeshes.filter(m => m.visible && !m.userData.isGeoRaster),
+                    allMeshes.filter(m => m.visible && !m.userData.isGeoRaster && !m.userData.isOverlay),
                     false
                 );
                 if (hits.length) {
@@ -6181,6 +6184,7 @@ let isClipping = false;
                 return lastZoomHitPoint.clone();
             }
 
+            if (!allowPlaneFallback) return null;
             const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
                 camera.getWorldDirection(new THREE.Vector3()),
                 controls.target
@@ -6190,8 +6194,73 @@ let isClipping = false;
                 lastZoomHitPoint = hit.clone();
                 return hit;
             }
-            return controls.target.clone();
+            return null;
         }
+
+        function getZoomAnchorPoint(clientX, clientY) {
+            if (!zoomToCursorEnabled || perfMode || allMeshes.length > 15000) {
+                if (pivotLockToSelection && selectedItems.length) {
+                    const box = getSelectionBounds(selectedItems);
+                    if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
+                }
+                return lastZoomHitPoint ? lastZoomHitPoint.clone() : controls.target.clone();
+            }
+            return pickScenePoint(clientX, clientY) || controls.target.clone();
+        }
+
+        // Вращение вокруг объекта под курсором (как в Navis/BIMvision)
+        function setOrbitPivotUnderCursor(clientX, clientY) {
+            if (!controls.enabled || !controls.enableRotate) return false;
+            if (isBoxSelecting || isMeasuring) return false;
+            if (pivotLockToSelection && selectedItems.length) {
+                setOrbitPivotToSelection(false);
+                return true;
+            }
+
+            const hit = pickScenePoint(clientX, clientY, {
+                forceRaycast: true,
+                allowPlaneFallback: false,
+                ignorePivotLock: true
+            });
+            if (!hit) return false;
+
+            // Переносим центр орбиты на точку попадания, сохраняя смещение камеры к target
+            const offset = camera.position.clone().sub(controls.target);
+            controls.target.copy(hit);
+            camera.position.copy(hit).add(offset);
+            controls.update();
+            markNeedsRender();
+            return true;
+        }
+
+        // Пивот ставим только при начале вращения (drag), не при простом клике выбора
+        let orbitPivotGesture = null;
+        const ORBIT_PIVOT_DRAG_PX = 4;
+
+        renderer.domElement.addEventListener('pointerdown', event => {
+            if (!controls.enabled) return;
+            if (event.button !== 0 && event.button !== 1) return;
+            if (isBoxSelecting || isMeasuring) return;
+            if (event.target !== renderer.domElement) return;
+            orbitPivotGesture = {
+                x: event.clientX,
+                y: event.clientY,
+                pointerId: event.pointerId,
+                applied: false
+            };
+        }, true);
+
+        renderer.domElement.addEventListener('pointermove', event => {
+            if (!orbitPivotGesture || orbitPivotGesture.applied) return;
+            if (event.pointerId !== orbitPivotGesture.pointerId) return;
+            if (Math.hypot(event.clientX - orbitPivotGesture.x, event.clientY - orbitPivotGesture.y) < ORBIT_PIVOT_DRAG_PX) return;
+            setOrbitPivotUnderCursor(orbitPivotGesture.x, orbitPivotGesture.y);
+            orbitPivotGesture.applied = true;
+        }, true);
+
+        const clearOrbitPivotGesture = () => { orbitPivotGesture = null; };
+        renderer.domElement.addEventListener('pointerup', clearOrbitPivotGesture, true);
+        renderer.domElement.addEventListener('pointercancel', clearOrbitPivotGesture, true);
 
         function zoomCameraTowardPoint(point, deltaY) {
             // Как в OrbitControls: прокрутка вверх (deltaY < 0) — приближение
@@ -6384,8 +6453,17 @@ let isClipping = false;
         }
 
         function updateYaLoadSelectedState() {
-            const any = !!document.querySelector('#yaFileList input[type="checkbox"]:checked');
+            const checks = document.querySelectorAll('#yaFileList input.ya-check');
+            const any = [...checks].some(c => c.checked);
+            const hasFiles = checks.length > 0;
             $('yaLoadSelected').disabled = !any;
+            $('yaSelectAll').disabled = !hasFiles;
+            $('yaSelectNone').disabled = !hasFiles || !any;
+        }
+
+        function yaSetAllChecked(checked) {
+            document.querySelectorAll('#yaFileList input.ya-check').forEach(c => { c.checked = checked; });
+            updateYaLoadSelectedState();
         }
 
         function renderYaFileList(files, folderName) {
@@ -6596,6 +6674,8 @@ let isClipping = false;
             $('yaStatus').textContent = 'Список очищен. Вставьте ссылку и откройте папку снова.';
             updateYaLoadSelectedState();
         });
+        $('yaSelectAll').addEventListener('click', () => yaSetAllChecked(true));
+        $('yaSelectNone').addEventListener('click', () => yaSetAllChecked(false));
         $('yaFileList').addEventListener('change', event => {
             if (event.target.classList.contains('ya-check')) updateYaLoadSelectedState();
         });
