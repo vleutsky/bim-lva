@@ -5358,6 +5358,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 markNeedsRender();
                 return;
             }
+
+            // BCF: выбор точки замечания
+            if (bcfPickMode) {
+                const hit = validHits[0];
+                bcfPickPoint = hit.point.toArray();
+                const ud = hit.object.userData || {};
+                let expressID = ud.expressID;
+                if (ud.isBatch) {
+                    const attr = hit.object.geometry?.getAttribute('expressId');
+                    if (attr && hit.face) expressID = Math.round(attr.getX(hit.face.a));
+                }
+                bcfPickSelection = (expressID != null && ud.modelID != null)
+                    ? { modelID: ud.modelID, expressID }
+                    : null;
+                bcfPickMode = false;
+                $('bcfPickBtn').classList.remove('on');
+                $('bcfPickStatus').textContent = `Точка: ${bcfPickPoint.map(n => n.toFixed(2)).join(', ')}`;
+                openBcfModal();
+                return;
+            }
             
             // ОБЫЧНОЕ ВЫДЕЛЕНИЕ
             const hitObj = validHits[0].object;
