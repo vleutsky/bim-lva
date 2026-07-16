@@ -1387,7 +1387,7 @@
                 <b>Как настроить (один раз):</b>
                 <ol style="margin:8px 0 0 18px;line-height:1.55">
                     <li>На <a href="https://disk.yandex.ru" target="_blank" rel="noopener">disk.yandex.ru</a> создайте папку, например <b>BIM.LVA Models</b>.</li>
-                    <li>Загрузите туда IFC / FBX / DXF / GLB (и при необходимости GeoTIFF).</li>
+                    <li>Загрузите туда IFC / FBX / DXF / GLB и георастры (GeoTIFF, ECW, JPEG/PNG + world-файл .jgw/.pgw).</li>
                     <li>ПКМ по папке → <b>Поделиться</b> → скопируйте публичную ссылку вида <code>https://disk.yandex.ru/d/XXXX</code>.</li>
                     <li>Вставьте ссылку ниже и нажмите <b>Открыть папку</b> — выберите файл и загрузите <b>по одному</b> (так экономится память).</li>
                 </ol>
@@ -7946,7 +7946,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
 
         // --- Яндекс.Диск (публичная папка как «сервер» моделей) ---
-        const YA_SUPPORTED_EXT = /\.(ifc|fbx|dxf|dwg|glb|gltf|obj|stl|ply|dae|3ds|tif|tiff|gtiff)$/i;
+        const YA_SUPPORTED_EXT = /\.(ifc|fbx|dxf|dwg|glb|gltf|obj|stl|ply|dae|3ds|tif|tiff|gtiff|ecw|jpg|jpeg|png|jgw|pgw|tfw|wld|eww)$/i;
+        const YA_RASTER_EXT = /\.(tif|tiff|gtiff|ecw|jpg|jpeg|png)$/i;
+        const YA_WORLD_EXT = /\.(jgw|pgw|tfw|wld|eww)$/i;
         const YA_STORAGE_KEY = 'bimlva_yandex_public_link';
         let yaPublicKey = '';
         let yaListedFiles = [];
@@ -8113,19 +8115,47 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
         }
 
-        async function yaDownloadAndOpen(fileInfo) {
-            if (!yaPublicKey) throw new Error('Сначала откройте папку по публичной ссылке');
-            showLoader('ОБЛАКО', fileInfo.name);
+        function yaBaseName(name) {
+            return String(name || '').replace(/\.[^.]+$/, '').toLowerCase();
+        }
+
+        async function yaFetchFileBlob(fileInfo) {
             const href = await yaGetDownloadHref(yaPublicKey, fileInfo.path === '/' ? '' : fileInfo.path);
             showLoader('СКАЧИВАНИЕ', `${fileInfo.name} (${formatBytes(fileInfo.size)})…`);
             const fileRes = await fetch(href);
             if (!fileRes.ok) throw new Error(`Ошибка скачивания ${fileRes.status}`);
             const buffer = await fileRes.arrayBuffer();
-            const file = new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
+            return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
+        }
 
-            // GeoTIFF из облака — в георастр; остальное — в обычную загрузку моделей
-            if (/\.(tif|tiff|gtiff)$/i.test(fileInfo.name)) {
-                await loadGeoRasterFromFiles([file], {
+        async function yaDownloadAndOpen(fileInfo) {
+            if (!yaPublicKey) throw new Error('Сначала откройте папку по публичной ссылке');
+            showLoader('ОБЛАКО', fileInfo.name);
+
+            // World-файл сам по себе — ищем парный растр
+            let rasterInfo = fileInfo;
+            let worldInfo = null;
+            if (YA_WORLD_EXT.test(fileInfo.name)) {
+                worldInfo = fileInfo;
+                rasterInfo = yaListedFiles.find(f =>
+                    YA_RASTER_EXT.test(f.name) && yaBaseName(f.name) === yaBaseName(fileInfo.name)
+                );
+                if (!rasterInfo) throw new Error(`Не найден растр для world-файла «${fileInfo.name}»`);
+            }
+
+            if (YA_RASTER_EXT.test(rasterInfo.name) || worldInfo) {
+                const files = [await yaFetchFileBlob(rasterInfo)];
+                if (/\.(jpg|jpeg|png)$/i.test(rasterInfo.name)) {
+                    worldInfo = worldInfo || yaListedFiles.find(f =>
+                        YA_WORLD_EXT.test(f.name) && yaBaseName(f.name) === yaBaseName(rasterInfo.name)
+                    );
+                    if (!worldInfo) {
+                        throw new Error(`${rasterInfo.name}: нужен world-файл (.jgw/.pgw/.tfw/.eww) рядом в той же папке`);
+                    }
+                    files.push(await yaFetchFileBlob(worldInfo));
+                    worldInfo.loaded = true;
+                }
+                await loadGeoRasterFromFiles(files, {
                     drape: true,
                     opacity: 0.92,
                     offsetX: 0,
@@ -8133,10 +8163,13 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     zOffset: 0.05,
                     segments: 64
                 });
+                rasterInfo.loaded = true;
             } else {
+                const file = await yaFetchFileBlob(fileInfo);
                 await handleFiles([file]);
+                fileInfo.loaded = true;
             }
-            fileInfo.loaded = true;
+
             renderYaFileList(yaListedFiles, yaFolderName);
             markNeedsRender();
         }
