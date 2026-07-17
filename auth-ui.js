@@ -263,10 +263,29 @@
 
   async function boot() {
     if (!window.BimLvaAuth) return;
-    await window.BimLvaAuth.init();
+    try {
+      await window.BimLvaAuth.init();
+    } catch (e) {
+      console.error(e);
+      const slots = document.querySelectorAll('[data-bimlva-auth-slot]');
+      slots.forEach((slot) => {
+        slot.innerHTML = `<button type="button" class="bimlva-auth-btn light" data-auth-open title="${String(e.message || e)}">Вход (ошибка)</button>`;
+        slot.querySelector('[data-auth-open]')?.addEventListener('click', () => openAuth('login'));
+      });
+    }
     renderSlot(window.BimLvaAuth.getUser());
     window.BimLvaAuth.onChange(renderSlot);
     updateNote();
+
+    // После перехода с лендинга на Composer — подтянуть сессию ещё раз
+    window.addEventListener('focus', () => {
+      window.BimLvaAuth?.refresh?.().then((user) => renderSlot(user));
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        window.BimLvaAuth?.refresh?.().then((user) => renderSlot(user));
+      }
+    });
   }
 
   window.BimLvaAuthUI = { open: openAuth, close: closeAuth };

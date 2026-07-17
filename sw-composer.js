@@ -1,14 +1,10 @@
-/* BIM.LVA Composer — lightweight offline shell cache */
-const CACHE = 'bimlva-composer-shell-v6';
+/* BIM.LVA Composer — lightweight shell cache */
+const CACHE = 'bimlva-composer-shell-v7';
 const SHELL = [
   './',
   './index.html',
   './bim-lva-composer-ifc.html',
-  './manifest.webmanifest',
-  './stats.js',
-  './auth-config.js',
-  './auth.js',
-  './auth-ui.js'
+  './manifest.webmanifest'
 ];
 
 self.addEventListener('install', event => {
@@ -29,19 +25,37 @@ self.addEventListener('fetch', event => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  // Кэшируем только same-origin shell; CDN (three/web-ifc) — network-first
   if (url.origin !== self.location.origin) return;
 
+  const path = url.pathname;
+  const isScript = path.endsWith('.js') || path.endsWith('.css');
+  const isShellDoc =
+    path.endsWith('.html') ||
+    path.endsWith('.webmanifest') ||
+    path.endsWith('/') ||
+    /\/bim-lva\/?$/.test(path);
+
+  // JS/CSS всегда с сети — иначе auth-config залипает в SW и ломает вход на Composer
+  if (isScript) {
+    event.respondWith(
+      fetch(req)
+        .then(res => res)
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
+
+  if (!isShellDoc) return;
+
   event.respondWith(
-    caches.match(req).then(cached => {
-      const network = fetch(req).then(res => {
-        if (res && res.ok && (url.pathname.endsWith('.html') || url.pathname.endsWith('.webmanifest') || url.pathname === '/' || url.pathname.endsWith('/'))) {
+    fetch(req)
+      .then(res => {
+        if (res && res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then(cache => cache.put(req, copy));
         }
         return res;
-      }).catch(() => cached);
-      return cached || network;
-    })
+      })
+      .catch(() => caches.match(req))
   );
 });
