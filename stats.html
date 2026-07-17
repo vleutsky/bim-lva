@@ -55,7 +55,7 @@
       text-transform: uppercase;
       margin-top: 4px;
     }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     button, a.btn {
       font-family: inherit;
       font-size: 13px;
@@ -140,9 +140,48 @@
       font-size: 12px;
       color: var(--dim);
       margin-top: 8px;
+      margin-bottom: 16px;
     }
     .status.ok { color: var(--ok); }
     .status.err { color: #d43c59; }
+    .gate {
+      max-width: 420px;
+      margin: 12vh auto 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .gate h2 { font-size: 18px; margin-bottom: 8px; }
+    .gate p { color: var(--dim); font-size: 13px; margin-bottom: 14px; line-height: 1.5; }
+    .gate input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px 12px;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .gate .err { color: #d43c59; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+    .hidden { display: none !important; }
+    table.users {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    table.users th, table.users td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    table.users th {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--dim);
+    }
+    .empty-users { color: var(--dim); font-size: 13px; }
   </style>
 </head>
 <body>
@@ -150,53 +189,80 @@
     <header>
       <div class="brand">
         <div class="dot"></div>
-        <h1>BIM.LVA <small>Статистика посещений</small></h1>
+        <h1>BIM.LVA <small>Статистика и пользователи</small></h1>
       </div>
       <div class="actions">
-        <button type="button" class="primary" id="refreshBtn">Обновить</button>
+        <div data-bimlva-auth-slot></div>
         <a class="btn" href="index.html">← На сайт</a>
-        <a class="btn" href="bim-lva-composer-ifc.html">Composer</a>
       </div>
     </header>
 
-    <div class="grid" id="cards">
-      <div class="card"><div class="label">Сайт</div><div class="value" data-key="site">…</div><div class="hint">Уникальные сессии лендинга и страниц</div></div>
-      <div class="card"><div class="label">Composer</div><div class="value" data-key="composer">…</div><div class="hint">Открытия Composer IFC</div></div>
-      <div class="card"><div class="label">Загрузки моделей</div><div class="value" data-key="load">…</div><div class="hint">Успешные открытия файлов</div></div>
-      <div class="card"><div class="label">Функции</div><div class="value" data-key="feature">…</div><div class="hint">Экспорт, clash, merge и др.</div></div>
-      <div class="card"><div class="label">Лиды / скачивания</div><div class="value" data-key="lead">…</div><div class="hint">Запросы плагинов и download</div></div>
+    <div id="gate" class="gate">
+      <h2>Доступ к статистике</h2>
+      <p>
+        Введите пароль администратора
+        (по умолчанию <code>bimlva-stats</code>, смените в <code>auth-config.js</code>)
+        или войдите админ-аккаунтом.
+      </p>
+      <form id="gateForm">
+        <input type="password" id="gatePassword" placeholder="Пароль" autocomplete="current-password" required>
+        <div class="err" id="gateErr"></div>
+        <button class="primary" type="submit" style="width:100%;justify-content:center">Открыть</button>
+      </form>
     </div>
 
-    <p class="status" id="status">Загрузка…</p>
+    <div id="dashboard" class="hidden">
+      <div class="actions" style="margin-bottom:16px">
+        <button type="button" class="primary" id="refreshBtn">Обновить</button>
+        <button type="button" id="lockBtn">Заблокировать</button>
+      </div>
 
-    <div class="panel">
-      <h2>Как читать</h2>
-      <p>
-        Счётчики растут на стороне посетителей (без вашего сервера).
-        «Сайт» и «Composer» считаются <b>раз за вкладку/сессию</b>, чтобы F5 не раздувал цифры.
-        Загрузки моделей и лиды считаются каждый раз.
-      </p>
-      <ul>
-        <li>Рост «Composer» и «Загрузки» — кто-то реально открывает и грузит модели.</li>
-        <li>«Лиды / скачивания» — интерес к платным/бесплатным плагинам с лендинга.</li>
-        <li>Страница не индексируется; держите ссылку у себя: <code>…/bim-lva/stats.html</code></li>
-      </ul>
-    </div>
+      <div class="grid" id="cards">
+        <div class="card"><div class="label">Сайт</div><div class="value" data-key="site">…</div><div class="hint">Уникальные сессии лендинга</div></div>
+        <div class="card"><div class="label">Composer</div><div class="value" data-key="composer">…</div><div class="hint">Открытия Composer IFC</div></div>
+        <div class="card"><div class="label">Загрузки моделей</div><div class="value" data-key="load">…</div><div class="hint">Успешные открытия файлов</div></div>
+        <div class="card"><div class="label">Функции</div><div class="value" data-key="feature">…</div><div class="hint">Экспорт, clash, merge и др.</div></div>
+        <div class="card"><div class="label">Лиды / скачивания</div><div class="value" data-key="lead">…</div><div class="hint">Запросы плагинов и download</div></div>
+      </div>
 
-    <div class="panel">
-      <h2>Яндекс.Метрика (опционально)</h2>
-      <p>
-        Для графиков, географии и целей откройте
-        <a href="https://metrika.yandex.ru/" target="_blank" rel="noopener">metrika.yandex.ru</a>,
-        создайте счётчик на домен GitHub Pages и вставьте номер в
-        <code>stats.js</code> → <code>YANDEX_METRIKA_ID</code>.
-        Цели уходят как <code>reachGoal</code> с теми же именами событий.
-      </p>
+      <p class="status" id="status">Загрузка…</p>
+
+      <div class="panel">
+        <h2>Зарегистрированные пользователи (локальный режим)</h2>
+        <p id="usersModeNote" style="margin-bottom:12px"></p>
+        <div id="usersBox"><p class="empty-users">Пока нет</p></div>
+      </div>
+
+      <div class="panel">
+        <h2>Как читать</h2>
+        <p>
+          «Сайт» и «Composer» считаются раз за вкладку. Загрузки и лиды — каждый раз.
+          Имена файлов и модели не отправляются.
+        </p>
+      </div>
     </div>
   </div>
 
   <script src="./stats.js"></script>
+  <script src="./auth-config.js"></script>
+  <script src="./auth.js"></script>
+  <script src="./auth-ui.js"></script>
   <script>
+    const gate = document.getElementById('gate');
+    const dashboard = document.getElementById('dashboard');
+
+    function showDashboard() {
+      gate.classList.add('hidden');
+      dashboard.classList.remove('hidden');
+      refresh();
+      renderUsers();
+    }
+
+    function showGate() {
+      dashboard.classList.add('hidden');
+      gate.classList.remove('hidden');
+    }
+
     async function refresh() {
       const status = document.getElementById('status');
       status.className = 'status';
@@ -214,9 +280,71 @@
         status.textContent = 'Не удалось прочитать счётчики: ' + (e.message || e);
       }
     }
-    document.getElementById('refreshBtn').addEventListener('click', refresh);
-    refresh();
-    setInterval(refresh, 60000);
+
+    function renderUsers() {
+      const box = document.getElementById('usersBox');
+      const note = document.getElementById('usersModeNote');
+      const mode = BimLvaAuth.mode();
+      note.textContent = mode === 'supabase'
+        ? 'Сейчас Supabase: список смотрите в панели Authentication → Users.'
+        : 'Локальный режим: видны только пользователи, зарегистрированные в ЭТОМ браузере. Для общей базы подключите Supabase в auth-config.js.';
+
+      if (mode === 'supabase') {
+        box.innerHTML = '<p class="empty-users">Откройте dashboard Supabase → Authentication → Users.</p>';
+        return;
+      }
+
+      const users = BimLvaAuth.listLocalUsers();
+      if (!users.length) {
+        box.innerHTML = '<p class="empty-users">Пока никто не регистрировался в этом браузере.</p>';
+        return;
+      }
+      box.innerHTML = `<table class="users">
+        <thead><tr><th>Имя</th><th>Email</th><th>Telegram</th><th>Когда</th></tr></thead>
+        <tbody>
+          ${users.map(u => `<tr>
+            <td>${escapeHtml(u.name || '—')}</td>
+            <td>${escapeHtml(u.email)}</td>
+            <td>${escapeHtml(u.telegram || '—')}</td>
+            <td>${escapeHtml(u.createdAt ? new Date(u.createdAt).toLocaleString('ru-RU') : '—')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    document.getElementById('gateForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('gateErr');
+      err.textContent = '';
+      try {
+        await BimLvaAuth.unlockStats(document.getElementById('gatePassword').value);
+        showDashboard();
+      } catch (ex) {
+        err.textContent = ex.message || String(ex);
+      }
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      refresh();
+      renderUsers();
+    });
+    document.getElementById('lockBtn').addEventListener('click', () => {
+      BimLvaAuth.lockStats();
+      showGate();
+    });
+
+    BimLvaAuth.init().then(() => {
+      if (BimLvaAuth.isStatsUnlocked()) showDashboard();
+      BimLvaAuth.onChange((user) => {
+        if (user?.isAdmin) showDashboard();
+      });
+    });
   </script>
 </body>
 </html>
