@@ -103,6 +103,18 @@
     return publicUser(readSession());
   }
 
+  function sessionFromUser(u) {
+    if (!u) return null;
+    return {
+      id: u.id,
+      email: u.email,
+      name: u.user_metadata?.name || '',
+      telegram: u.user_metadata?.telegram || '',
+      createdAt: u.created_at,
+      provider: 'supabase'
+    };
+  }
+
   async function ensureSupabase() {
     if (supabaseClient) return supabaseClient;
     if (mode() !== 'supabase') return null;
@@ -113,63 +125,90 @@
     if (!global.supabase?.createClient) {
       await new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        // Актуальный SDK лучше понимает sb_publishable_ ключи
-        s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.min.js';
+        s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js';
         s.async = true;
         s.onload = resolve;
-        s.onerror = () => reject(new Error('Не удалось загрузить Supabase SDK'));
+        s.onerror = () => reject(new Error('Не удалось загрузить Supabase SDK (CDN)'));
         document.head.appendChild(s);
       });
     }
+    if (!global.supabase?.createClient) {
+      throw new Error('Supabase SDK загружен, но createClient недоступен');
+    }
+
+    // Не парсим hash Composer (#view=...) как OAuth-callback
     supabaseClient = global.supabase.createClient(cfg.supabaseUrl, key, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true,
-        flowType: 'pkce'
+        detectSessionInUrl: false,
+        storage: global.localStorage
       }
     });
     return supabaseClient;
+  }
+
+  async function syncFromSupabaseSession(client) {
+    const { data, error } = await client.auth.getSession();
+    if (error) throw error;
+    const u = data?.session?.user;
+    if (u) {
+      writeSession(sessionFromUser(u));
+      return getUser();
+    }
+    return null;
   }
 
   async function init() {
     if (initPromise) return initPromise;
     initPromise = (async () => {
       if (mode() === 'supabase') {
-        const client = await ensureSupabase();
-        const { data } = await client.auth.getSession();
-        const s = data?.session?.user;
-        if (s) {
-          writeSession({
-            id: s.id,
-            email: s.email,
-            name: s.user_metadata?.name || '',
-            telegram: s.user_metadata?.telegram || '',
-            createdAt: s.created_at,
-            provider: 'supabase'
-          });
-        }
-        client.auth.onAuthStateChange((_event, session) => {
-          const u = session?.user;
-          if (u) {
-            writeSession({
-              id: u.id,
-              email: u.email,
-              name: u.user_metadata?.name || '',
-              telegram: u.user_metadata?.telegram || '',
-              createdAt: u.created_at,
-              provider: 'supabase'
-            });
-          } else {
-            writeSession(null);
+        try {
+          const client = await ensureSupabase();
+          await syncFromSupabaseSession(client);
+
+          // Если зеркало пустое — пробуем refresh (после перехода index→composer)
+          if (!getUser()) {
+            try {
+              const { data } = await client.auth.refreshSession();
+              if (data?.session?.user) writeSession(sessionFromUser(data.session.user));
+            } catch (_) {}
           }
-          emit();
-        });
+
+          client.auth.onAuthStateChange((_event, session) => {
+            const u = session?.user;
+            writeSession(u ? sessionFromUser(u) : null);
+            emit();
+          });
+        } catch (e) {
+          console.error('BimLvaAuth init:', e);
+          global.__bimlvaAuthInitError = e?.message || String(e);
+          // Не затираем уже сохранённую сессию — UI на Composer останется в аккаунте
+        }
       }
       emit();
       return getUser();
     })();
     return initPromise;
+  }
+
+  async function refresh() {
+    if (mode() !== 'supabase') {
+      emit();
+      return getUser();
+    }
+    try {
+      const client = await ensureSupabase();
+      await syncFromSupabaseSession(client);
+      if (!getUser()) {
+        const { data } = await client.auth.refreshSession();
+        if (data?.session?.user) writeSession(sessionFromUser(data.session.user));
+      }
+    } catch (e) {
+      console.warn('BimLvaAuth refresh:', e);
+    }
+    emit();
+    return getUser();
   }
 
   async function register({ email, password, name, telegram }) {
@@ -328,6 +367,7 @@
 
   global.BimLvaAuth = {
     init,
+    refresh,
     mode,
     getUser,
     register,
