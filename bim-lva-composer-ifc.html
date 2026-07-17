@@ -2264,7 +2264,7 @@
 
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
-        <span class="coord-readout" id="coordReadout" title="Координаты в метрах. Если задан авто-origin — абсолютные (мир), иначе относительно сцены.">
+        <span class="coord-readout" id="coordReadout" title="Координаты CAD X · Y · Z в метрах (абсолютные, если задан origin). IFC и LandXML/DXF считаются в своих корнях сцены — без ложного минуса на Y.">
             <span>курсор <b id="coordCursor">—</b></span>
             <span class="coord-sep">·</span>
             <span>выделение <b id="coordSelection">—</b></span>
@@ -4214,6 +4214,14 @@
             } catch (_) { /* geometry may be non-triangulated */ }
         }
 
+        /** matrixWorld объекта → локальная матрица относительно parent (без двойного поворота). */
+        const _overlayRelMat = new THREE.Matrix4();
+        function matrixRelativeToParent(object, parent) {
+            parent.updateWorldMatrix(true, false);
+            object.updateWorldMatrix(true, false);
+            return _overlayRelMat.copy(parent.matrixWorld).invert().multiply(object.matrixWorld);
+        }
+
         function showSelectionOverlays(items) {
             clearSelectionOverlays();
             const mat = new THREE.MeshBasicMaterial({
@@ -4253,20 +4261,21 @@
                 meshes.forEach(src => {
                     if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
                     if (src.isMesh && src.geometry) {
-                        src.updateWorldMatrix(true, false);
+                        // Важно: bake в локал parent, НЕ matrixWorld — иначе поворот globalGroup
+                        // применяется второй раз и подсветка «улетает» (странная проекция).
+                        const rel = matrixRelativeToParent(src, mod.group).clone();
                         const fillGeom = src.geometry.clone();
-                        fillGeom.applyMatrix4(src.matrixWorld);
+                        fillGeom.applyMatrix4(rel);
                         const fillMesh = new THREE.Mesh(fillGeom, mat);
                         fillMesh.userData.isOverlay = true;
                         fillMesh.userData.ownsGeometry = true;
                         addSelectionOutlineObject(fillMesh, mod.group);
                         usedFill = true;
-                        addEdgesOutlineFromGeometry(src.geometry, mod.group, src.matrixWorld);
+                        addEdgesOutlineFromGeometry(src.geometry, mod.group, rel);
                     } else if ((src.isLine || src.isLineSegments) && src.geometry) {
-                        // Для линий — дублируем ярким цветом поверх
+                        const rel = matrixRelativeToParent(src, mod.group).clone();
                         const cloneGeom = src.geometry.clone();
-                        src.updateWorldMatrix(true, false);
-                        cloneGeom.applyMatrix4(src.matrixWorld);
+                        cloneGeom.applyMatrix4(rel);
                         const line = new THREE.LineSegments(cloneGeom, getSelectionOutlineMaterial());
                         line.userData.ownsGeometry = true;
                         addSelectionOutlineObject(line, mod.group);
@@ -4501,11 +4510,59 @@
             return `${v.x.toFixed(digits)} · ${v.y.toFixed(digits)} · ${v.z.toFixed(digits)}`;
         }
 
-        /** Мировая точка сцены → CAD XYZ (до поворота globalGroup), с восстановлением origin. */
-        function worldPointToAbsoluteXYZ(worldPoint) {
+        function getCoordRootForObject(obj) {
+            let o = obj;
+            while (o) {
+                // LandXML/DXF/FBX живут в externalGroup (сцена Z-up = CAD XYZ).
+                // Георастр — отдельная группа с другим сдвигом origin.
+                // IFC — под globalGroup с rotation.x = π/2.
+                if (o === geoRasterGroup) return geoRasterGroup;
+                if (o === externalGroup) return externalGroup;
+                if (o === globalGroup) return globalGroup;
+                o = o.parent;
+            }
+            return globalGroup;
+        }
+
+        function getCoordRootForModel(modData) {
+            if (!modData) return globalGroup;
+            if (modData.isExternal || modData.isFBX || modData.group?.parent === externalGroup) {
+                return externalGroup;
+            }
+            return globalGroup;
+        }
+
+        /**
+         * Мировая точка сцены → абсолютные CAD XYZ (м), с восстановлением origin.
+         * Важно: IFC и LandXML/DXF лежат в разных корнях — нельзя всегда делать
+         * globalGroup.worldToLocal, иначе Y/Z «переворачиваются» (минус на оси).
+         */
+        function worldPointToAbsoluteXYZ(worldPoint, rootHint = null) {
             if (!worldPoint) return null;
             const local = worldPoint.clone();
-            globalGroup.worldToLocal(local);
+            let root = globalGroup;
+            if (rootHint === externalGroup || rootHint === globalGroup || rootHint === geoRasterGroup) {
+                root = rootHint;
+            } else if (rootHint && rootHint.isObject3D) {
+                root = getCoordRootForObject(rootHint);
+            } else if (rootHint && (rootHint.group || rootHint.isExternal != null || rootHint.isFBX != null)) {
+                root = getCoordRootForModel(rootHint);
+            }
+
+            // Георастр: вершины в CAD XYZ, position группы = −R(origin) = (−ox, oz, −oy)
+            if (root === geoRasterGroup) {
+                if (ifcWorldOrigin) {
+                    return new THREE.Vector3(
+                        local.x + ifcWorldOrigin.x,
+                        local.y - ifcWorldOrigin.z,
+                        local.z + ifcWorldOrigin.y
+                    );
+                }
+                return local;
+            }
+
+            root.updateWorldMatrix(true, false);
+            root.worldToLocal(local);
             if (ifcWorldOrigin) {
                 local.x += ifcWorldOrigin.x;
                 local.y += ifcWorldOrigin.y;
@@ -4514,14 +4571,14 @@
             return local;
         }
 
-        function updateCoordCursorReadout(worldPoint) {
+        function updateCoordCursorReadout(worldPoint, fromObject = null) {
             const el = $('coordCursor');
             if (!el) return;
             if (!worldPoint) {
                 el.textContent = '—';
                 return;
             }
-            const abs = worldPointToAbsoluteXYZ(worldPoint);
+            const abs = worldPointToAbsoluteXYZ(worldPoint, fromObject);
             el.textContent = formatCoordTriple(abs) + ' м';
         }
 
@@ -4538,7 +4595,8 @@
                 return;
             }
             const center = box.getCenter(new THREE.Vector3());
-            const abs = worldPointToAbsoluteXYZ(center);
+            const mod = loadedModels.get(selectedItems[0].modelID);
+            const abs = worldPointToAbsoluteXYZ(center, mod);
             const suffix = selectedItems.length > 1 ? ` (${selectedItems.length})` : '';
             el.textContent = formatCoordTriple(abs) + ' м' + suffix;
         }
@@ -4558,7 +4616,7 @@
                 }
                 const hit = pickStageHit(p.clientX, p.clientY);
                 if (hit?.point) {
-                    updateCoordCursorReadout(hit.point);
+                    updateCoordCursorReadout(hit.point, hit.object);
                     return;
                 }
                 // Плоскость по пивоту орбиты — чтобы координаты были и «в воздухе»
@@ -4567,7 +4625,10 @@
                     allowPlaneFallback: true,
                     ignorePivotLock: true
                 });
-                updateCoordCursorReadout(planeHit || null);
+                const anyExternal = [...loadedModels.values()].some(m => m.isExternal || m.isFBX);
+                const anyIfc = [...loadedModels.values()].some(m => !m.isExternal && !m.isFBX);
+                const fallbackRoot = anyIfc ? globalGroup : (anyExternal ? externalGroup : globalGroup);
+                updateCoordCursorReadout(planeHit || null, fallbackRoot);
             });
         }
 
