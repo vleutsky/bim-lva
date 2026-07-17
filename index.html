@@ -929,10 +929,38 @@
 
             const tgUrl = `https://t.me/vleutsky?text=${encodeURIComponent(text)}`;
 
+            if (window.BimLvaStats) {
+                BimLvaStats.track('lead_request', { plugin: String(plugin || '').slice(0, 80) });
+            }
+
             window.open(tgUrl, '_blank');
 
             closeRequestModal();
         }
+    </script>
+    <script src="./stats.js"></script>
+    <script>
+        (function initLandingStats() {
+            const s = window.BimLvaStats;
+            if (!s) return;
+            s.trackPage('site');
+
+            document.querySelectorAll('a[href="bim-lva-composer-ifc.html"]').forEach((a) => {
+                a.addEventListener('click', () => s.track('composer_cta'));
+            });
+
+            document.querySelectorAll('a[href*="disk.yandex.ru"]').forEach((a) => {
+                a.addEventListener('click', () => {
+                    s.track('download_click', { href: (a.getAttribute('href') || '').slice(0, 120) });
+                });
+            });
+
+            const _openRequestModal = window.openRequestModal;
+            window.openRequestModal = function (pluginName) {
+                s.track('lead_open', { plugin: String(pluginName || '').slice(0, 80) });
+                return _openRequestModal.apply(this, arguments);
+            };
+        })();
     </script>
 </body>
 </html>

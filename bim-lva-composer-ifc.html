@@ -1774,6 +1774,7 @@
     }
     </script>
 
+    <script src="./stats.js"></script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -1803,6 +1804,11 @@
         const propsBox = document.getElementById('props');
         const labelsContainer = document.getElementById('labels-container');
         const $ = id => document.getElementById(id);
+
+        function trackUsage(event, props) {
+            try { window.BimLvaStats?.track?.(event, props); } catch (_) {}
+        }
+        try { window.BimLvaStats?.trackPage?.('composer'); } catch (_) {}
 
         (function initToolbarMenus() {
             const menus = Array.from(document.querySelectorAll('.tb-menu'));
@@ -3316,6 +3322,7 @@
         });
 
         // --- Загрузка ---
+        let loadSourceHint = 'local';
         async function handleFiles(fileList) {
             const files = fileList ? [...fileList] : [];
             if (!files.length) return;
@@ -3405,6 +3412,15 @@
             restoreSharedViewFromHash();
             hideLoader();
             markNeedsRender();
+
+            const loadedOk = files.length - skipped.length - failed.length;
+            if (loadedOk > 0) {
+                const types = [...new Set(files.map(f => (f.name.split('.').pop() || '').toLowerCase()))]
+                    .filter(Boolean)
+                    .slice(0, 8)
+                    .join(',');
+                trackUsage('model_load', { count: loadedOk, types, source: loadSourceHint || 'local' });
+            }
         }
 
         function onLocalFileInputChange(event) {
@@ -6357,6 +6373,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('clashStatus').textContent = unique.length
                 ? `Найдено пересечений (элементов): ${unique.length}. Выделено на сцене.`
                 : 'Пересечений AABB не найдено.';
+            trackUsage('run_clash', { hits: unique.length });
             selectMultiple(unique);
             $('clashModal').classList.remove('show');
         });
@@ -6442,6 +6459,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('compareStatus').textContent = `Добавлено: ${added.length}, удалено: ${removed.length}. Выделены добавленные (новая модель).`;
             selectMultiple(added.length ? added : removed);
             $('compareModal').classList.remove('show');
+            trackUsage('compare_ifc', { added: added.length, removed: removed.length });
         });
 
         $('btnSchedule').addEventListener('click', () => {
@@ -6475,6 +6493,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             a.download = `bim-lva-schedule-${items.length}.csv`;
             a.click();
             URL.revokeObjectURL(url);
+            trackUsage('export_csv', { rows: items.length });
         });
 
         let crsOffsets = { x: 0, y: 0, z: 0 };
@@ -6534,6 +6553,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 prompt('Скопируйте ссылку:', url);
             }
             history.replaceState(null, '', hash);
+            trackUsage('share_view');
         });
 
         function restoreSharedViewFromHash() {
@@ -6773,6 +6793,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             a.download = `bim-lva-notes-${new Date().toISOString().slice(0, 10)}.bcfzip`;
             a.click();
             URL.revokeObjectURL(url);
+            trackUsage('export_bcf', { topics: bcfTopics.length });
         }
 
         $('btnBcf').addEventListener('click', openBcfModal);
@@ -8033,6 +8054,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 alert('Нет изменённых IFC-файлов для сохранения.');
                 return;
             }
+            trackUsage('export_ifc', { models: editedModels.length });
             editedModels.forEach((modData, index) => {
                 setTimeout(() => {
                     const blob = new Blob(
@@ -8163,6 +8185,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             await handleFiles([mergedFile]);
             const newModel = [...loadedModels.values()].find(m => !m.isFBX && m.filename === mergedFile.name);
             if (newModel) newModel.edited = true;
+            trackUsage('merge_ifc', { models: models.length });
             alert(`Готово: ${models.length} файлов объединены в один IFC (загружен в просмотрщик и провалидирован движком). Нажмите «Экспорт IFC», чтобы скачать результат.`);
         });
 
@@ -8780,9 +8803,15 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     segments: 64
                 });
                 rasterInfo.loaded = true;
+                trackUsage('model_load', { count: 1, source: 'yandex', types: 'raster' });
             } else {
                 const file = await yaFetchFileBlob(fileInfo);
-                await handleFiles([file]);
+                loadSourceHint = 'yandex';
+                try {
+                    await handleFiles([file]);
+                } finally {
+                    loadSourceHint = 'local';
+                }
                 fileInfo.loaded = true;
             }
 
