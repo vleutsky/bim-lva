@@ -690,6 +690,32 @@
             z-index: 16;
         }
 
+        .tour-hud {
+            position: absolute;
+            left: 50%;
+            bottom: 18px;
+            transform: translateX(-50%);
+            z-index: 25;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: rgba(28, 39, 51, 0.9);
+            color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+            font-family: 'Archivo', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .tour-hud[hidden] { display: none !important; }
+        .tour-hud .btn {
+            background: #fff;
+            color: var(--txt);
+            border-color: transparent;
+            font-weight: 700;
+        }
+
         .measure-label {
             position: absolute;
             top: 0;
@@ -1690,6 +1716,10 @@
             <span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
         </div>
         <div id="labels-container"></div> <div id="boxSelectRect"></div>
+        <div id="tourHud" class="tour-hud" hidden>
+            <span id="tourHudText">Проезд…</span>
+            <button type="button" class="btn load-btn" id="tourHudCancel">⏹ Отменить</button>
+        </div>
     </main>
 
     <div class="resizer" id="dragRight"></div>
@@ -6400,26 +6430,44 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         // Raycaster (Клик по геометрии)
-        renderer.domElement.addEventListener('click', (ev) => {
-            if (skipOrbitClick) { skipOrbitClick = false; return; }
-            if (allMeshes.length === 0) return;
+        function pickStageHit(clientX, clientY) {
+            if (allMeshes.length === 0) return null;
             const rect = renderer.domElement.getBoundingClientRect();
             const pointer = new THREE.Vector2(
-                ((ev.clientX - rect.left) / rect.width) * 2 - 1, 
-                -((ev.clientY - rect.top) / rect.height) * 2 + 1
+                ((clientX - rect.left) / rect.width) * 2 - 1,
+                -((clientY - rect.top) / rect.height) * 2 + 1
             );
-            
             const raycaster = new THREE.Raycaster();
             raycaster.setFromCamera(pointer, camera);
-            
             raycaster.params.Line = { threshold: 0.5 };
             raycaster.params.Points = { threshold: 0.5 };
-            
             const visibleMeshes = allMeshes.filter(m => m.visible);
             const hits = raycaster.intersectObjects(visibleMeshes, false);
-            
-            // Фильтруем попадания, которые отсеклись плоскостью
             const validHits = isClipping ? hits.filter(h => pointPassesClipping(h.point)) : hits;
+            return validHits[0] || null;
+        }
+
+        renderer.domElement.addEventListener('click', (ev) => {
+            // Расстановка точек маршрута — всегда по попаданию в геометрию, даже если был лёгкий drag
+            if (typeof tourRecording !== 'undefined' && tourRecording) {
+                skipOrbitClick = false;
+                const hit = pickStageHit(ev.clientX, ev.clientY);
+                if (hit) addTourWaypoint(hit.point.clone(), hit);
+                else {
+                    const planeHit = pickScenePoint(ev.clientX, ev.clientY, {
+                        forceRaycast: true,
+                        allowPlaneFallback: true,
+                        ignorePivotLock: true
+                    });
+                    if (planeHit) addTourWaypoint(planeHit);
+                }
+                return;
+            }
+
+            if (skipOrbitClick) { skipOrbitClick = false; return; }
+            if (allMeshes.length === 0) return;
+            const validHit = pickStageHit(ev.clientX, ev.clientY);
+            const validHits = validHit ? [validHit] : [];
 
             if (validHits.length === 0) { 
                 if (!isMeasuring) selectMultiple([]); 
@@ -6463,10 +6511,6 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (attr && face) expressID = Math.round(attr.getX(face.a));
             }
             if (expressID == null || ud.modelID == null) return;
-            if (typeof tourRecording !== 'undefined' && tourRecording) {
-                addTourWaypoint(validHits[0].point.clone());
-                return;
-            }
             treeSelectionAnchor = null;
             selectMultiple([{ modelID: ud.modelID, expressID }]);
         });
@@ -9185,6 +9229,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         function beginOrbitDrag(event) {
             if (!controls.enabled || !controls.enableRotate) return;
             if (isBoxSelecting || isMeasuring) return;
+            if (typeof tourRecording !== 'undefined' && tourRecording) return;
+            if (typeof tourPlaying !== 'undefined' && tourPlaying) return;
             if (event.target !== renderer.domElement) return;
             if (event.button !== 0) return;
 
@@ -10629,16 +10675,19 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             markNeedsRender();
         }
 
-        function addTourWaypoint(point) {
+        function addTourWaypoint(point, hit) {
             if (!point) return;
+            // Точка ровно в месте клика по элементу (без сброса на «землю»)
             const p = point.clone();
-            // Точки маршрута — у земли (колёса); клик по мешу часто выше
-            const box = getSceneContentBox();
-            if (!box.isEmpty()) p.z = Math.min(p.z, box.min.z + 0.2);
             tourWaypoints.push(p);
             rebuildTourVisuals();
             updateTourStatus();
+            const hint = $('hintControls');
+            if (hint) {
+                hint.textContent = `Точка маршрута #${tourWaypoints.length} · кликните ещё или откройте Проезд → Старт`;
+            }
             trackUsage('tour_waypoint', { count: tourWaypoints.length });
+            markNeedsRender();
         }
 
         function getSceneContentBox() {
@@ -10693,6 +10742,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             trackUsage('tour_auto', { mode: style, points: pts.length });
         }
 
+        function setTourHud(visible, text) {
+            const hud = $('tourHud');
+            if (!hud) return;
+            hud.hidden = !visible;
+            const label = $('tourHudText');
+            if (label && text) label.textContent = text;
+        }
+
         function stopTourPlayback() {
             tourPlaying = false;
             tourCurve = null;
@@ -10700,6 +10757,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             controls.enabled = true;
             if (tourCar) tourCar.visible = false;
             $('tourPlayBtn')?.classList.remove('on');
+            setTourHud(false);
             updateTourStatus();
             markNeedsRender();
         }
@@ -10787,6 +10845,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             else if (tourCar) tourCar.visible = false;
             $('tourModal')?.classList.remove('show');
             applyTourCamera(0);
+            setTourHud(true, tourStyle === 'fly' ? 'Облёт… Esc или «Отменить»' : 'Проезд Ferrari… Esc или «Отменить»');
             updateTourStatus();
             trackUsage('tour_play', {
                 mode: tourStyle,
@@ -10864,6 +10923,18 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
         $('tourPlayBtn')?.addEventListener('click', () => startTourPlayback());
         $('tourStopBtn')?.addEventListener('click', () => stopTourPlayback());
+        $('tourHudCancel')?.addEventListener('click', () => stopTourPlayback());
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && tourPlaying) {
+                event.preventDefault();
+                stopTourPlayback();
+            }
+            if (event.key === 'Escape' && tourRecording) {
+                tourRecording = false;
+                $('tourRecordBtn')?.classList.remove('on');
+                updateTourStatus();
+            }
+        });
         readTourSettingsFromUi();
 
         // Dockable Panels + left/right swap
