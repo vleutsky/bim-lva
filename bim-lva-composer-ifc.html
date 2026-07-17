@@ -8644,7 +8644,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 return;
             }
             status.textContent = folderName
-                ? `Папка «${folderName}»: ${files.length} файл(ов). Открывайте по одному — так меньше нагрузка на память.`
+                ? `Папка «${folderName}»: ${files.length} файл(ов). Для надёжности открывайте по одному («Открыть»).`
                 : `Найдено файлов: ${files.length}`;
             list.innerHTML = files.map((f, idx) => `
                 <div class="ya-file-row" data-ya-idx="${idx}">
@@ -8670,55 +8670,69 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return new Promise(r => setTimeout(r, ms));
         }
 
-        async function yaFetchArrayBufferOnce(url) {
-            const res = await fetch(url, {
-                method: 'GET',
-                credentials: 'omit',
-                cache: 'no-store',
-                mode: 'cors',
-                redirect: 'follow'
-            });
-            if (!res.ok) throw new Error(`Ошибка скачивания HTTP ${res.status}`);
-            return res.arrayBuffer();
+        async function yaFetchArrayBufferOnce(url, timeoutMs = 45000) {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+            try {
+                const res = await fetch(url, {
+                    method: 'GET',
+                    credentials: 'omit',
+                    cache: 'no-store',
+                    mode: 'cors',
+                    redirect: 'follow',
+                    signal: ctrl.signal
+                });
+                if (!res.ok) throw new Error(`Ошибка скачивания HTTP ${res.status}`);
+                return res.arrayBuffer();
+            } catch (err) {
+                if (err?.name === 'AbortError') throw new Error('Таймаут скачивания с Яндекс.Диска');
+                throw err;
+            } finally {
+                clearTimeout(timer);
+            }
         }
 
         async function yaFetchFileBlob(fileInfo) {
             const path = fileInfo.path === '/' ? '' : fileInfo.path;
             showLoader('СКАЧИВАНИЕ', `${fileInfo.name} (${formatBytes(fileInfo.size)})…`);
 
+            const tryUrls = [];
+            // 1) Прямая ссылка из листинга — быстрее (без лишнего API-запроса)
+            if (fileInfo.fileUrl) tryUrls.push(fileInfo.fileUrl);
+            // 2) Свежий href через download API
+            try {
+                tryUrls.push(await yaGetDownloadHref(yaPublicKey, path));
+            } catch (e) {
+                if (!tryUrls.length) throw e;
+            }
+
             let lastError = null;
-            for (let attempt = 1; attempt <= 4; attempt++) {
+            for (let i = 0; i < tryUrls.length; i++) {
                 try {
-                    // Каждый раз берём свежую ссылку — старые downloader URL быстро протухают
-                    const href = await yaGetDownloadHref(yaPublicKey, path);
-                    const buffer = await yaFetchArrayBufferOnce(href);
-                    if (!buffer || buffer.byteLength === 0) {
-                        throw new Error('Пустой ответ от Яндекс.Диска');
-                    }
+                    const buffer = await yaFetchArrayBufferOnce(tryUrls[i]);
+                    if (!buffer || buffer.byteLength === 0) throw new Error('Пустой ответ от Яндекс.Диска');
                     return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
                 } catch (err) {
                     lastError = err;
-                    console.warn(`Я.Диск попытка ${attempt}/4:`, fileInfo.name, err);
-                    // запасной прямой file URL из листинга
-                    if (fileInfo.fileUrl && attempt === 2) {
-                        try {
-                            const buffer = await yaFetchArrayBufferOnce(fileInfo.fileUrl);
-                            if (buffer?.byteLength) {
-                                return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
-                            }
-                        } catch (err2) {
-                            lastError = err2;
-                        }
-                    }
-                    await yaSleep(600 * attempt);
+                    console.warn(`Я.Диск URL ${i + 1}/${tryUrls.length}:`, fileInfo.name, err);
                 }
             }
 
+            // Один быстрый повтор со свежей ссылкой (без длинных пауз)
+            try {
+                const href = await yaGetDownloadHref(yaPublicKey, path);
+                const buffer = await yaFetchArrayBufferOnce(href);
+                if (buffer?.byteLength) {
+                    return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
+                }
+            } catch (err) {
+                lastError = err;
+            }
+
             const msg = lastError?.message || String(lastError);
-            if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+            if (/Failed to fetch|NetworkError|Load failed|Таймаут/i.test(msg)) {
                 throw new Error(
-                    'Failed to fetch — Яндекс оборвал скачивание (сеть/лимит). ' +
-                    'Откройте файлы по одному кнопкой «Открыть», не пакетом.'
+                    'Не удалось скачать с Яндекс.Диска (сеть/лимит). Попробуйте ещё раз или откройте файл по одному.'
                 );
             }
             throw lastError || new Error('Не удалось скачать файл');
