@@ -294,6 +294,35 @@
             background: var(--panel-2);
             min-width: 0;
         }
+        .tb-menu-row .near-input {
+            flex: 1;
+            min-width: 0;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: var(--panel-2);
+            color: var(--txt);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 12px;
+            padding: 7px 8px;
+            outline: none;
+        }
+        .tb-menu-row .near-input:focus {
+            border-color: var(--accent);
+        }
+        .tb-menu-row #cameraNearAuto {
+            width: auto;
+            flex: 0 0 auto;
+            justify-content: center;
+            padding: 7px 10px;
+            border: 1px solid var(--line);
+            background: var(--panel-2);
+        }
+        .tb-menu-hint {
+            font-size: 11px;
+            color: var(--txt-dim);
+            padding: 0 10px 8px;
+            line-height: 1.35;
+        }
 
         .tools {
             display: none;
@@ -1662,6 +1691,12 @@
                     <button class="btn" id="btnTour" disabled title="Проезд «как на машине» или облёт по траектории">🚗 Проезд / облёт</button>
                     <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
                     <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
+                    <div class="tb-menu-label">Ближнее отсечение</div>
+                    <div class="tb-menu-row" title="Near plane камеры: при приближении слишком большое значение «съедает» близкую геометрию. Выключите Авто и поставьте 0.01–0.05">
+                        <input class="near-input" id="cameraNearInput" type="number" min="0.001" max="50" step="0.01" value="0.05" aria-label="Near clip">
+                        <button type="button" class="btn on" id="cameraNearAuto" title="Считать near по дистанции до модели (при зуме уменьшается сам)">Авто</button>
+                    </div>
+                    <div class="tb-menu-hint" id="cameraNearHint">сейчас: 0.10 · меньше = ближе без обрезания</div>
                 </div>
             </div>
 
@@ -2496,6 +2531,61 @@
         camera.up.set(0, 0, 1); 
         camera.position.set(20, -24, 16);
 
+        const CAMERA_NEAR_STORAGE = 'bimlva_camera_near_v1';
+        let lastSceneMaxDim = 10;
+        let cameraNearAuto = true;
+        let cameraNearManual = 0.05;
+        try {
+            const savedNear = JSON.parse(localStorage.getItem(CAMERA_NEAR_STORAGE) || 'null');
+            if (savedNear && typeof savedNear === 'object') {
+                cameraNearAuto = savedNear.auto !== false;
+                const n = Number(savedNear.value);
+                if (Number.isFinite(n) && n > 0) cameraNearManual = n;
+            }
+        } catch (_) {}
+
+        function persistCameraNear() {
+            try {
+                localStorage.setItem(CAMERA_NEAR_STORAGE, JSON.stringify({
+                    auto: cameraNearAuto,
+                    value: cameraNearManual
+                }));
+            } catch (_) {}
+        }
+
+        function syncCameraNearUi() {
+            const input = $('cameraNearInput');
+            const autoBtn = $('cameraNearAuto');
+            const hint = $('cameraNearHint');
+            if (input && document.activeElement !== input) {
+                input.value = String(Number(camera.near.toPrecision(4)));
+            }
+            if (autoBtn) autoBtn.classList.toggle('on', cameraNearAuto);
+            if (hint) {
+                const mode = cameraNearAuto ? 'авто' : 'вручную';
+                hint.textContent =
+                    `сейчас: ${Number(camera.near.toPrecision(4))} м (${mode}) · меньше = ближе без обрезания`;
+            }
+        }
+
+        function applyCameraNear(maxDim) {
+            if (Number.isFinite(maxDim) && maxDim > 0) lastSceneMaxDim = maxDim;
+            const dist = camera.position.distanceTo(controls?.target || camera.position) || lastSceneMaxDim || 10;
+            if (cameraNearAuto) {
+                // Раньше near = maxDim/200 на больших моделях давал метры и «съедал» геометрию при зуме.
+                // Авто: near уменьшается при приближении к цели орбиты.
+                const byDist = Math.max(0.01, dist / 500);
+                const byScene = Math.max(0.01, (lastSceneMaxDim || 10) / 1000);
+                camera.near = Math.max(0.01, Math.min(byDist, byScene, dist * 0.25));
+            } else {
+                camera.near = Math.max(0.001, Number(cameraNearManual) || 0.05);
+            }
+            camera.far = Math.max((lastSceneMaxDim || 10) * 40, dist * 40, camera.far || 0, 1000);
+            camera.updateProjectionMatrix();
+            syncCameraNearUi();
+            markNeedsRender();
+        }
+
         const controls = new OrbitControls(camera, renderer.domElement);
         // Без damping: поворот (кастомный) и зум одинаково «жёсткие», меньше усталости при долгой работе
         controls.enableDamping = false;
@@ -2506,7 +2596,10 @@
         controls.mouseButtons.LEFT = -1;
         let suppressControlsUpdate = false;
         let skipOrbitClick = false;
-        controls.addEventListener('change', markNeedsRender);
+        controls.addEventListener('change', () => {
+            if (cameraNearAuto) applyCameraNear();
+            markNeedsRender();
+        });
         controls.addEventListener('start', () => {
             if (perfMode || allMeshes.length > 8000) {
                 renderer.setPixelRatio(1);
@@ -2515,6 +2608,7 @@
         });
         controls.addEventListener('end', () => {
             applyRenderQuality();
+            if (cameraNearAuto) applyCameraNear();
             markNeedsRender();
         });
 
@@ -10501,7 +10595,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             dir.normalize();
             controls.target.copy(center);
             camera.position.copy(center).add(dir.multiplyScalar(dist));
-            camera.near = Math.max(0.01, maxDim / 200);
+            applyCameraNear(maxDim);
             camera.far = Math.max(maxDim * 40, camera.far, 1000);
             camera.updateProjectionMatrix();
             controls.update();
@@ -10684,6 +10778,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const dir = camOffset.lengthSq() > 0 ? camOffset.normalize() : new THREE.Vector3(0, -1, 0);
                 camera.position.copy(controls.target).add(dir.multiplyScalar(0.05));
             }
+            if (cameraNearAuto) applyCameraNear();
             controls.update();
             markNeedsRender();
         }
@@ -10750,8 +10845,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const dist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.6;
             
             camera.position.copy(center.clone().add(new THREE.Vector3(1, -1, 0.8).normalize().multiplyScalar(dist)));
-            camera.near = Math.max(0.01, maxDim / 200); 
-            camera.far = Math.max(maxDim * 40, 999999999); camera.updateProjectionMatrix();
+            applyCameraNear(maxDim);
+            camera.far = Math.max(maxDim * 40, 999999999);
             camera.updateProjectionMatrix();
             
             controls.target.copy(center); 
@@ -10774,6 +10869,39 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             grid.visible = e.currentTarget.classList.toggle('on');
             trackUsage('grid_toggle', { on: grid.visible });
         });
+
+        function commitCameraNearFromInput() {
+            const input = $('cameraNearInput');
+            if (!input) return;
+            const v = Number(input.value);
+            if (!Number.isFinite(v) || v <= 0) {
+                syncCameraNearUi();
+                return;
+            }
+            cameraNearManual = Math.min(50, Math.max(0.001, v));
+            cameraNearAuto = false;
+            persistCameraNear();
+            applyCameraNear();
+        }
+
+        $('cameraNearInput')?.addEventListener('change', commitCameraNearFromInput);
+        $('cameraNearInput')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commitCameraNearFromInput();
+                e.currentTarget.blur();
+            }
+        });
+        $('cameraNearAuto')?.addEventListener('click', () => {
+            cameraNearAuto = !cameraNearAuto;
+            if (!cameraNearAuto) {
+                cameraNearManual = Math.max(0.001, Number(camera.near) || cameraNearManual || 0.05);
+            }
+            persistCameraNear();
+            applyCameraNear();
+            trackUsage('camera_near', { auto: cameraNearAuto, value: cameraNearManual });
+        });
+        applyCameraNear();
         
         $('clear').addEventListener('click', () => {
             for (const [id, m] of loadedModels) {
