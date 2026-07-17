@@ -989,15 +989,33 @@
             background: var(--panel-2);
         }
 
-        .trow.sel {
-            background: #fff0e7;
-            color: var(--accent);
+        .trow.sel,
+        .file-root > .trow.sel,
+        .custom-branch > .trow.sel,
+        .trow.trow-group.sel {
+            background: #dceefc;
+            color: #135f9a;
+            box-shadow: inset 3px 0 0 var(--blue);
+            font-weight: 600;
+        }
+
+        .trow.sel .tlabel {
+            color: #0f5f9c;
+            font-weight: 700;
+        }
+
+        .trow.sel .ttype {
+            color: #2a7ab8;
+        }
+
+        .trow.sel .caret {
+            color: var(--blue);
         }
 
         .trow.drag-target {
-            outline: 2px solid var(--accent);
+            outline: 2px solid var(--blue);
             outline-offset: -2px;
-            background: #ffe5d5;
+            background: #cfe6f8;
         }
 
         .caret {
@@ -1308,40 +1326,48 @@
 
         .pgroup-head {
             font-family: 'Archivo', sans-serif;
-            font-size: var(--panel-label);
+            font-size: 13px;
             font-weight: 800;
-            letter-spacing: .04em;
-            color: var(--blue);
-            text-transform: uppercase;
-            border: 1px solid rgba(36, 120, 181, 0.22);
-            border-radius: 7px;
-            background: rgba(36, 120, 181, 0.07);
-            padding: 7px 9px;
+            letter-spacing: .03em;
+            color: #fff;
+            text-transform: none;
+            border: 1px solid #1f6aa3;
+            border-radius: 8px;
+            background: linear-gradient(180deg, #2f86c7 0%, #2478b5 100%);
+            padding: 8px 10px;
             cursor: pointer;
             display: flex;
             align-items: center;
-            gap: 7px;
+            gap: 8px;
             user-select: none;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
+            box-shadow: 0 1px 0 rgba(20, 70, 110, 0.18);
         }
 
         .pgroup-head:hover {
-            color: var(--accent-dim);
-            border-color: rgba(240, 100, 36, 0.45);
-            background: #fff7f2;
+            color: #fff;
+            border-color: var(--accent-dim);
+            background: linear-gradient(180deg, #f07838 0%, #e45a1a 100%);
         }
 
         .pgroup:not(.collapsed) .pgroup-head {
-            color: var(--accent-dim);
-            border-color: rgba(240, 100, 36, 0.4);
-            background: #fff7f2;
+            color: #fff;
+            border-color: #1f6aa3;
+            background: linear-gradient(180deg, #2f86c7 0%, #2478b5 100%);
+        }
+
+        .pgroup.collapsed .pgroup-head {
+            background: linear-gradient(180deg, #5ea0d0 0%, #3b88bc 100%);
+            border-color: #3b88bc;
+            opacity: 0.92;
         }
 
         .ar {
             display: inline-block;
             transition: transform .1s;
-            font-size: 10px;
+            font-size: 11px;
             color: inherit;
+            font-weight: 800;
         }
 
         .pgroup.collapsed .pgroup-body {
@@ -3791,20 +3817,21 @@
         }
 
         let activeSelectionOverlays = [];
-        const selectionOutlineColor = 0x00e8ff;
+        const selectionOutlineColor = 0x1aa3ff;
         let selectionOutlineMat = null;
 
         function getSelectionOutlineMaterial() {
             if (!selectionOutlineMat) {
                 selectionOutlineMat = new THREE.LineBasicMaterial({
                     color: selectionOutlineColor,
+                    linewidth: 2,
                     depthTest: true,
-                    depthWrite: false,
                     transparent: true,
-                    opacity: 1,
-                    toneMapped: false
+                    opacity: 0.95
                 });
                 selectionOutlineMat.userData.outlineShared = true;
+            } else {
+                selectionOutlineMat.color.setHex(selectionOutlineColor);
             }
             return selectionOutlineMat;
         }
@@ -3860,7 +3887,7 @@
             const mat = new THREE.MeshBasicMaterial({
                 color: highlightColor,
                 transparent: true,
-                opacity: 0.35,
+                opacity: 0.42,
                 depthTest: true,
                 depthWrite: false,
                 polygonOffset: true,
@@ -3889,12 +3916,19 @@
                     return;
                 }
 
-                // Обычные меши / внешние модели: яркий контур по рёбрам
+                // Обычные меши / внешние модели: заливка + контур по рёбрам
                 const meshes = mod.meshesByID.get(item.expressID) || [];
                 meshes.forEach(src => {
                     if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
                     if (src.isMesh && src.geometry) {
                         src.updateWorldMatrix(true, false);
+                        const fillGeom = src.geometry.clone();
+                        fillGeom.applyMatrix4(src.matrixWorld);
+                        const fillMesh = new THREE.Mesh(fillGeom, mat);
+                        fillMesh.userData.isOverlay = true;
+                        fillMesh.userData.ownsGeometry = true;
+                        addSelectionOutlineObject(fillMesh, mod.group);
+                        usedFill = true;
                         addEdgesOutlineFromGeometry(src.geometry, mod.group, src.matrixWorld);
                     } else if ((src.isLine || src.isLineSegments) && src.geometry) {
                         // Для линий — дублируем ярким цветом поверх
@@ -5920,7 +5954,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         // --- SELECTION (Только подсветка, без прозрачности) ---
-        const highlightColor = 0xff6b35;
+        const highlightColor = 0x2b7fd4;
         let treeSelectionAnchor = null;
 
         const selectionKey = item => `${String(item.modelID)}::${String(item.expressID)}`;
@@ -5929,6 +5963,29 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const unique = new Map();
             items.forEach(item => unique.set(selectionKey(item), item));
             return [...unique.values()];
+        }
+
+        function syncTreeSelectionHighlight() {
+            document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
+            if (!selectedItems.length) return;
+
+            const selectedKeys = new Set(selectedItems.map(selectionKey));
+
+            // Строки с прямым eid из выделения
+            document.querySelectorAll('.trow[data-mid][data-eid]').forEach(row => {
+                if (selectedKeys.has(`${row.dataset.mid}::${row.dataset.eid}`)) {
+                    row.classList.add('sel');
+                }
+            });
+
+            // Ветки / группы / корень файла: если все их _selectionItems выделены
+            document.querySelectorAll('.trow').forEach(row => {
+                const items = row._selectionItems;
+                if (!items || !items.length) return;
+                if (items.every(item => selectedKeys.has(selectionKey(item)))) {
+                    row.classList.add('sel');
+                }
+            });
         }
 
         function handleTreeSelection(row, rowItems, event) {
@@ -5960,8 +6017,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 items = [...current.values()];
             }
 
-            selectMultiple(items);
             if (!event.shiftKey) treeSelectionAnchor = row;
+            selectMultiple(items);
         }
 
         function setEmissive(mesh, hex) {
@@ -6008,6 +6065,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('sSelected').textContent = selectedItems.length;
 
             if (items.length === 0) {
+                treeSelectionAnchor = null;
                 propsBox.innerHTML = '<div class="empty">Ничего не выбрано.</div>';
                 markNeedsRender();
                 return;
@@ -6027,12 +6085,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
             else showProps(items[0].modelID, items[0].expressID, items.length);
             
-            // Скроллим дерево к первому выделенному
-            const selectedKeys = new Set(items.map(selectionKey));
-            document.querySelectorAll('.trow[data-mid][data-eid]').forEach(row => {
-                if (selectedKeys.has(`${row.dataset.mid}::${row.dataset.eid}`)) row.classList.add('sel');
-            });
-            const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`);
+            syncTreeSelectionHighlight();
+            const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`)
+                || treeSelectionAnchor;
             if (firstRow) {
                 firstRow.scrollIntoView({ block: 'nearest' });
             }
