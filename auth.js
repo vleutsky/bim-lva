@@ -365,6 +365,17 @@
     return () => listeners.delete(fn);
   }
 
+  function mapAuthError(msg) {
+    const m = String(msg || '');
+    if (/Invalid login credentials/i.test(m)) return 'Неверный email или пароль';
+    if (/Email not confirmed/i.test(m)) return 'Подтвердите email — письмо уже отправлено';
+    if (/User already registered/i.test(m)) return 'Этот email уже зарегистрирован — войдите';
+    if (/rate limit/i.test(m)) return 'Слишком много попыток. Подождите минуту';
+    if (/Password/i.test(m) && /least/i.test(m)) return 'Пароль слишком короткий';
+    if (/mapAuthError is not defined/i.test(m)) return 'Ошибка авторизации';
+    return m || 'Ошибка авторизации';
+  }
+
   global.BimLvaAuth = {
     init,
     refresh,
