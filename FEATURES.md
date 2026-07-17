@@ -4,7 +4,16 @@
 
 Легенда: `[ ]` todo · `[~]` в работе · `[x]` сделано
 
-## Очередь
+## Приоритет сейчас
+
+1. **[~] Координация** — абсолютные XYZ, origin, IFC↔LandXML, без ложных знаков осей
+2. **[~] Быстродействие на крупных сводках** — авто ⚡, агрессивный батч/квантование цвета, BasicMaterial, меньше raycast на mousemove; дальше: LOD/этажи, BVH pick, скрытие мелкой внутрянки по умолчанию
+
+## Отложено
+
+- [ ] **Мобильный браузер** — адаптация UI + touch-навигация (pinch-zoom, orbit/pan жестами), одноколоночный layout, авто «быстрый режим», упор на просмотр/замер/свойства. PWA/viewport уже есть; полноценный mobile UX **пока не делаем** (решение 2026-07-17). Вернуться после стабилизации координации и perf.
+
+## Очередь (закрыто)
 
 1. [x] **Разрезы X/Y/Z + коробка сечения** — плоскости по осям и section box
 2. [x] **Изоляция выделения + сохранённые виды** — isolate / unisolate, save/restore camera+visibility
@@ -35,10 +44,11 @@
 - Generic mm→m heuristic for DXF/FBX/etc. and LandXML millimeter units
 - View → near-clip (Auto by zoom distance, or manual 0.01–0.05) so close zoom does not cut geometry
 - Selection outline, box select, measure distance, Z-clip
-- Perf mode / batching
+- Perf mode / batching (расширяется: авто на тяжёлых сценах, квантование цвета, BasicMaterial)
 
 ## Заметки
 
 - Канонический файл: `bim-lva-composer-ifc.html`
-- Ветка: `cursor/ifc-bulk-edit-37f9` → периодически merge в `main`
+- Ветка агента: `cursor/<topic>-37f9` → PR → merge в `main`
 - Браузер-only: без серверного Revit/Tekla SDK
+- На больших моделях: ⚡ Быстрый режим, фильтр классов (скрыть мебель/MEP), изоляция этажа — сильнее всего бьют по FPS

@@ -1690,7 +1690,7 @@
                     <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
                     <button class="btn" id="btnTour" disabled title="Проезд «как на машине» или облёт по траектории">🚗 Проезд / облёт</button>
                     <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
-                    <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
+                    <button class="btn" id="btnPerfMode" title="Быстрый режим: BasicMaterial, агрессивный батч, меньше GPU. На крупных зданиях включается сам">⚡ Быстрый режим</button>
                     <div class="tb-menu-label">Ближнее отсечение</div>
                     <div class="tb-menu-row" title="Near plane камеры: при приближении слишком большое значение «съедает» близкую геометрию. Выключите Авто и поставьте 0.01–0.05">
                         <input class="near-input" id="cameraNearInput" type="number" min="0.001" max="50" step="0.01" value="0.05" aria-label="Near clip">
@@ -2516,6 +2516,8 @@
         let perfMode = false;
         let sceneNeedsRender = true;
         let allMeshes = [];
+        let sceneTriangleHint = 0;
+        let sceneFragmentHint = 0;
         const markNeedsRender = () => { sceneNeedsRender = true; };
         renderer.setPixelRatio(basePixelRatio);
         renderer.setClearColor(0xf3f5f7, 1);
@@ -2601,7 +2603,7 @@
             markNeedsRender();
         });
         controls.addEventListener('start', () => {
-            if (perfMode || allMeshes.length > 8000) {
+            if (perfMode || isHeavyScene()) {
                 renderer.setPixelRatio(1);
             }
             markNeedsRender();
@@ -2619,7 +2621,93 @@
         const ZOOM_FACTOR = 0.12;
         let lastZoomHitPoint = null;
         let lastZoomRaycastAt = 0;
-        const IFC_BATCH_THRESHOLD = 2000;
+        // Раньше 2000 — мелкие IFC без батча давали тысячи draw call на одном здании
+        const IFC_BATCH_THRESHOLD = 400;
+        const IFC_BATCH_ALWAYS_FRAGMENTS = 2500;
+        const PERF_AUTO_ELEMENTS = 20000;
+        const PERF_AUTO_FRAGMENTS = 12000;
+        const PERF_AUTO_TRIANGLES = 1_800_000;
+
+        function isHeavyScene() {
+            return perfMode
+                || allMeshes.length > 6000
+                || sceneTriangleHint > 900000
+                || sceneFragmentHint > 8000
+                || totalElements > 15000;
+        }
+
+        function recountSceneGeometryHints() {
+            let tris = 0;
+            let frags = 0;
+            for (const mod of loadedModels.values()) {
+                if (mod._fragments?.length) frags += mod._fragments.length;
+                (mod.batchMeshes || []).forEach(mesh => {
+                    const g = mesh.geometry;
+                    if (!g) return;
+                    if (g.index) tris += g.index.count / 3;
+                    else if (g.attributes?.position) tris += g.attributes.position.count / 3;
+                });
+                if (!mod.batched && mod.meshesByID) {
+                    for (const meshes of mod.meshesByID.values()) {
+                        meshes.forEach(mesh => {
+                            const g = mesh.geometry;
+                            if (!g?.attributes?.position) return;
+                            if (g.index) tris += g.index.count / 3;
+                            else tris += g.attributes.position.count / 3;
+                        });
+                    }
+                }
+            }
+            sceneTriangleHint = tris;
+            sceneFragmentHint = frags;
+        }
+
+        function enablePerfMode(reason = '') {
+            if (perfMode) {
+                applyRenderQuality();
+                return false;
+            }
+            perfMode = true;
+            $('btnPerfMode')?.classList.add('on');
+            controls.enableDamping = false;
+            zoomToCursorEnabled = false;
+            $('btnZoomCursor')?.classList.remove('on');
+            applyRenderQuality();
+            if (reason) {
+                console.info('[BIM.LVA] Авто ⚡ быстрый режим:', reason);
+                const hint = $('hintControls');
+                if (hint && !hint.dataset.perfAutoShown) {
+                    hint.dataset.perfAutoShown = '1';
+                    hint.textContent = '⚡ Быстрый режим включён автоматически (большая модель). Вид → выключить при необходимости';
+                }
+            }
+            trackUsage('perf_mode', { on: true, auto: reason !== 'manual', reason: reason || 'manual' });
+            markNeedsRender();
+            return true;
+        }
+
+        function maybeAutoEnablePerfMode(extra = {}) {
+            const frags = extra.fragments ?? sceneFragmentHint;
+            const elems = extra.elements ?? totalElements;
+            const tris = extra.triangles ?? sceneTriangleHint;
+            const meshes = allMeshes.length;
+            if (frags >= PERF_AUTO_FRAGMENTS) return enablePerfMode(`${frags} фрагментов`);
+            if (elems >= PERF_AUTO_ELEMENTS) return enablePerfMode(`${elems} элементов`);
+            if (tris >= PERF_AUTO_TRIANGLES) return enablePerfMode(`~${Math.round(tris / 1e6)}M треугольников`);
+            if (meshes >= 8000) return enablePerfMode(`${meshes} мешей`);
+            return false;
+        }
+
+        function ifcBatchColorKey(hex, opacity, aggressive) {
+            if (!aggressive) return `${hex}_${opacity.toFixed(3)}`;
+            // Квантование цвета → меньше материалов/батчей на «пёстрой» внутрянке
+            const r = (hex >> 16) & 0xff;
+            const g = (hex >> 8) & 0xff;
+            const b = hex & 0xff;
+            const q = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+            const o = opacity < 0.995 ? Math.round(opacity * 4) / 4 : 1;
+            return `q${q}_${o}`;
+        }
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const key = new THREE.DirectionalLight(0xffffff, 1.6); 
@@ -2646,8 +2734,12 @@
         scene.add(externalGroup);
         function applyRenderQuality() {
             const meshCount = typeof allMeshes !== 'undefined' ? allMeshes.length : 0;
-            const heavy = perfMode || meshCount > 12000;
-            const ratio = heavy ? 1 : (meshCount > 6000 ? Math.min(basePixelRatio, 1.25) : basePixelRatio);
+            const heavy = isHeavyScene();
+            const ratio = heavy
+                ? 1
+                : (meshCount > 4000 || sceneTriangleHint > 500000
+                    ? Math.min(basePixelRatio, 1.25)
+                    : basePixelRatio);
             renderer.setPixelRatio(ratio);
             markNeedsRender();
         }
@@ -3386,7 +3478,7 @@
                 sceneNeedsRender = false;
             }
             
-            if (labelsList.length) {
+            if (labelsList.length && !(typeof orbitDrag !== 'undefined' && orbitDrag)) {
                 labelsList.forEach(lbl => {
                     const pos = lbl.pos.clone();
                     pos.project(camera);
@@ -4004,14 +4096,7 @@
             if (loadedModels.size === 0) treeBox.innerHTML = '';
 
             const ifcCount = files.filter(f => /\.ifc$/i.test(f.name)).length;
-            if (ifcCount >= 3 && !perfMode) {
-                perfMode = true;
-                $('btnPerfMode')?.classList.add('on');
-                controls.enableDamping = false;
-                zoomToCursorEnabled = false;
-                $('btnZoomCursor')?.classList.remove('on');
-                applyRenderQuality();
-            }
+            if (ifcCount >= 2) enablePerfMode(`${ifcCount} IFC за раз`);
 
             const skipped = [];
             const failed = [];
@@ -4170,14 +4255,17 @@
 
         function createIfcMaterial(hex, opacity) {
             const transparent = opacity < 0.999;
-            return new THREE.MeshLambertMaterial({
+            const common = {
                 color: hex,
                 // DoubleSide: в IFC часто «перевёрнутые» нормали — иначе плоскость видна только снизу/сзади
                 side: THREE.DoubleSide,
                 transparent,
                 opacity,
                 depthWrite: !transparent
-            });
+            };
+            // Basic без освещения — заметно дешевле на миллионах треугольников
+            if (perfMode) return new THREE.MeshBasicMaterial(common);
+            return new THREE.MeshLambertMaterial(common);
         }
 
         function bakeFragmentGeometry(geom, matrix, expressID) {
@@ -4310,13 +4398,14 @@
             modData.meshesByID = new Map();
             modData.batched = true;
 
+            const aggressiveMerge = perfMode || fragments.length >= IFC_BATCH_ALWAYS_FRAGMENTS;
             const byKey = new Map();
             fragments.forEach(frag => {
                 if (modData.hiddenIds.has(frag.expressID)) return;
                 const appearance = modData.appearanceByID.get(frag.expressID);
                 const hex = appearance?.color ?? frag.hex;
                 const opacity = appearance?.opacity ?? frag.opacity;
-                const key = `${hex}_${opacity.toFixed(3)}`;
+                const key = ifcBatchColorKey(hex, opacity, aggressiveMerge);
                 if (!byKey.has(key)) byKey.set(key, []);
                 byKey.get(key).push({ ...frag, hex, opacity });
                 if (!modData.fragmentGeoms.has(frag.expressID)) modData.fragmentGeoms.set(frag.expressID, []);
@@ -4334,10 +4423,12 @@
                 geoms.forEach(g => g.dispose());
                 if (!merged) continue;
                 merged.computeBoundingSphere();
+                // Представительный цвет батча — первый фрагмент (при квантовании оттенки близки)
                 const mat = createIfcMaterial(list[0].hex, list[0].opacity);
                 mat.clippingPlanes = getActiveClipPlanes();
                 const mesh = new THREE.Mesh(merged, mat);
                 mesh.matrixAutoUpdate = false;
+                mesh.frustumCulled = true;
                 mesh.userData = {
                     modelID: modData.modelID,
                     isBatch: true,
@@ -4545,15 +4636,33 @@
 
         let _coordCursorRaf = 0;
         let _coordCursorPending = null;
+        let _coordCursorLastAt = 0;
         function scheduleCoordCursorUpdate(clientX, clientY) {
+            // Во время орбиты/на тяжёлой сцене raycast каждый mousemove убивает FPS
+            if (typeof orbitDrag !== 'undefined' && orbitDrag) return;
+            if (typeof tourPlaying !== 'undefined' && tourPlaying) return;
+            const minGap = isHeavyScene() ? 180 : 50;
+            const now = performance.now();
             _coordCursorPending = { clientX, clientY };
             if (_coordCursorRaf) return;
-            _coordCursorRaf = requestAnimationFrame(() => {
+            const delay = Math.max(0, minGap - (now - _coordCursorLastAt));
+            const run = () => {
                 _coordCursorRaf = 0;
+                _coordCursorLastAt = performance.now();
                 const p = _coordCursorPending;
                 _coordCursorPending = null;
                 if (!p || !loadedModels.size) {
                     updateCoordCursorReadout(null);
+                    return;
+                }
+                if (isHeavyScene()) {
+                    // На тяжёлых сценах — только плоскость орбиты, без полного raycast по всем мешам
+                    const planeHit = pickScenePoint?.(p.clientX, p.clientY, {
+                        forceRaycast: false,
+                        allowPlaneFallback: true,
+                        ignorePivotLock: true
+                    });
+                    updateCoordCursorReadout(planeHit || null);
                     return;
                 }
                 const hit = pickStageHit(p.clientX, p.clientY);
@@ -4561,14 +4670,21 @@
                     updateCoordCursorReadout(hit.point);
                     return;
                 }
-                // Плоскость по пивоту орбиты — чтобы координаты были и «в воздухе»
                 const planeHit = pickScenePoint?.(p.clientX, p.clientY, {
                     forceRaycast: false,
                     allowPlaneFallback: true,
                     ignorePivotLock: true
                 });
                 updateCoordCursorReadout(planeHit || null);
-            });
+            };
+            if (delay > 0) {
+                _coordCursorRaf = setTimeout(() => {
+                    _coordCursorRaf = 0;
+                    requestAnimationFrame(run);
+                }, delay);
+            } else {
+                _coordCursorRaf = requestAnimationFrame(run);
+            }
         }
 
         function estimateFragmentsOrigin(fragments) {
@@ -4881,9 +4997,11 @@
                     await new Promise(r => setTimeout(r, 10));
                 }
 
-                if (fragments.length >= IFC_BATCH_THRESHOLD) {
+                if (fragments.length >= IFC_BATCH_THRESHOLD
+                    || perfMode
+                    || fragments.length >= IFC_BATCH_ALWAYS_FRAGMENTS) {
+                    maybeAutoEnablePerfMode({ fragments: fragments.length });
                     buildIfcBatches(modData, fragments);
-                    applyRenderQuality();
                 } else {
                     addIndividualIfcMeshes(modData, fragments);
                 }
@@ -4893,6 +5011,13 @@
                 }
 
                 totalElements += modData.meshesByID.size;
+                recountSceneGeometryHints();
+                maybeAutoEnablePerfMode({
+                    fragments: sceneFragmentHint,
+                    elements: totalElements,
+                    triangles: sceneTriangleHint
+                });
+                applyRenderQuality();
 
                 // Текстовый STEP-индекс ПОСЛЕ геометрии — иначе пик RAM удваивается на каждом файле
                 showLoader('ИНДЕКС IFC', 'Подготовка к редактированию…');
@@ -4981,6 +5106,12 @@
             });
             totalElements += modData.meshesByID.size;
             buildTreeForFBXModel(modData, root);
+            recountSceneGeometryHints();
+            maybeAutoEnablePerfMode({
+                elements: totalElements,
+                triangles: sceneTriangleHint
+            });
+            applyRenderQuality();
         }
 
         async function addExternalModel(file, format, root, opts = {}) {
@@ -7856,6 +7987,16 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         // Raycaster (Клик по геометрии)
+        let _pickVisibleCache = null;
+        let _pickVisibleCacheAt = 0;
+        function getPickableMeshes() {
+            const now = performance.now();
+            if (_pickVisibleCache && (now - _pickVisibleCacheAt) < 250) return _pickVisibleCache;
+            _pickVisibleCache = allMeshes.filter(m => m.visible && !m.userData?.isOverlay);
+            _pickVisibleCacheAt = now;
+            return _pickVisibleCache;
+        }
+
         function pickStageHit(clientX, clientY) {
             if (allMeshes.length === 0) return null;
             const rect = renderer.domElement.getBoundingClientRect();
@@ -7867,8 +8008,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             raycaster.setFromCamera(pointer, camera);
             raycaster.params.Line = { threshold: 0.5 };
             raycaster.params.Points = { threshold: 0.5 };
-            const visibleMeshes = allMeshes.filter(m => m.visible);
-            const hits = raycaster.intersectObjects(visibleMeshes, false);
+            // На больших батчах полный перебор треугольников дорогой — ограничиваем кандидатов
+            const candidates = getPickableMeshes();
+            const hits = raycaster.intersectObjects(candidates, false);
             const validHits = isClipping ? hits.filter(h => pointPassesClipping(h.point)) : hits;
             return validHits[0] || null;
         }
@@ -10657,7 +10799,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         function getZoomAnchorPoint(clientX, clientY) {
-            if (!zoomToCursorEnabled || perfMode || allMeshes.length > 15000) {
+            if (!zoomToCursorEnabled || perfMode || isHeavyScene() || allMeshes.length > 10000) {
                 if (pivotLockToSelection && selectedItems.length) {
                     const box = getSelectionBounds(selectedItems);
                     if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
@@ -10805,18 +10947,29 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
 
         $('btnPerfMode').addEventListener('click', () => {
-            perfMode = $('btnPerfMode').classList.toggle('on');
-            controls.enableDamping = false;
-            controls.dampingFactor = 0;
-            if (perfMode) {
-                zoomToCursorEnabled = false;
-                $('btnZoomCursor').classList.remove('on');
+            const on = $('btnPerfMode').classList.toggle('on');
+            if (on) {
+                enablePerfMode('manual');
+                // Пересобрать IFC-батчи с квантованием цвета / BasicMaterial
+                for (const mod of loadedModels.values()) {
+                    if (mod._fragments?.length && (mod.batched || mod._fragments.length >= IFC_BATCH_THRESHOLD)) {
+                        buildIfcBatches(mod, mod._fragments);
+                    }
+                }
+                recountSceneGeometryHints();
             } else {
+                perfMode = false;
                 zoomToCursorEnabled = true;
                 $('btnZoomCursor').classList.add('on');
+                for (const mod of loadedModels.values()) {
+                    if (mod._fragments?.length && mod.batched) {
+                        buildIfcBatches(mod, mod._fragments);
+                    }
+                }
+                recountSceneGeometryHints();
+                applyRenderQuality();
+                trackUsage('perf_mode', { on: false });
             }
-            applyRenderQuality();
-            trackUsage('perf_mode', { on: perfMode });
             markNeedsRender();
         });
 
@@ -10923,7 +11076,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             loadedModels.clear(); 
             allMeshes = []; 
-            totalElements = 0; 
+            totalElements = 0;
+            sceneTriangleHint = 0;
+            sceneFragmentHint = 0;
             selectMultiple([]);
             
             scene.remove(globalGroup); 
