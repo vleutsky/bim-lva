@@ -745,6 +745,97 @@
             font-weight: 700;
         }
 
+        /* Видовой куб (грани: вид сверху / спереди / …) */
+        .view-cube {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 96px;
+            height: 96px;
+            z-index: 22;
+            perspective: 480px;
+            perspective-origin: 50% 50%;
+            pointer-events: none;
+            user-select: none;
+        }
+        .view-cube[hidden] { display: none !important; }
+        .view-cube-scene {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .view-cube-box {
+            --vc-size: 54px;
+            --vc-half: 27px;
+            width: var(--vc-size);
+            height: var(--vc-size);
+            position: relative;
+            transform-style: preserve-3d;
+            pointer-events: none;
+        }
+        .view-cube-face {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 0;
+            border: 1px solid rgba(40, 55, 70, 0.55);
+            background: linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(230, 236, 242, 0.92));
+            color: #2a3a4a;
+            font-family: 'Archivo', sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            pointer-events: auto;
+            backface-visibility: hidden;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+            transition: background 0.12s ease, color 0.12s ease;
+        }
+        .view-cube-face:hover,
+        .view-cube-face:focus-visible {
+            background: linear-gradient(160deg, #fff7f0, #ffe0cc);
+            color: var(--accent);
+            outline: none;
+        }
+        .view-cube-face:active {
+            background: var(--accent);
+            color: #fff;
+        }
+        .view-cube-face[data-view="front"]  { transform: rotateY(0deg) translateZ(var(--vc-half)); }
+        .view-cube-face[data-view="back"]   { transform: rotateY(180deg) translateZ(var(--vc-half)); }
+        .view-cube-face[data-view="right"]  { transform: rotateY(90deg) translateZ(var(--vc-half)); }
+        .view-cube-face[data-view="left"]   { transform: rotateY(-90deg) translateZ(var(--vc-half)); }
+        .view-cube-face[data-view="top"]    { transform: rotateX(90deg) translateZ(var(--vc-half)); }
+        .view-cube-face[data-view="bottom"] { transform: rotateX(-90deg) translateZ(var(--vc-half)); }
+        .view-cube-home {
+            position: absolute;
+            left: 50%;
+            bottom: 2px;
+            transform: translateX(-50%);
+            z-index: 1;
+            pointer-events: auto;
+            border: 1px solid rgba(40, 55, 70, 0.35);
+            background: rgba(255, 255, 255, 0.92);
+            color: #2a3a4a;
+            font-family: 'Archivo', sans-serif;
+            font-size: 9px;
+            font-weight: 700;
+            line-height: 1;
+            padding: 3px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .view-cube-home:hover,
+        .view-cube-home:focus-visible {
+            color: var(--accent);
+            outline: none;
+        }
+
         .measure-label {
             position: absolute;
             top: 0;
@@ -1688,6 +1779,7 @@
                     <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ Сохранённые виды</button>
                     <button class="btn" id="btnShareView" disabled title="Скопировать ссылку на текущий вид">🔗 Ссылка на вид</button>
                     <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
+                    <button class="btn" id="btnZoomElement" disabled title="Приблизить камеру к выделенным элементам (клавиша F)">🔍 Зум к элементу</button>
                     <button class="btn" id="btnTour" disabled title="Проезд «как на машине» или облёт по траектории">🚗 Проезд / облёт</button>
                     <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
                     <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
@@ -1773,6 +1865,19 @@
             <span id="tourHudText">Проезд…</span>
             <button type="button" class="btn load-btn" id="tourHudCancel">⏹ Отменить</button>
         </div>
+        <div class="view-cube" id="viewCube" hidden aria-label="Видовой куб">
+            <div class="view-cube-scene">
+                <div class="view-cube-box" id="viewCubeBox">
+                    <button type="button" class="view-cube-face" data-view="front" title="Вид спереди">Перед</button>
+                    <button type="button" class="view-cube-face" data-view="back" title="Вид сзади">Зад</button>
+                    <button type="button" class="view-cube-face" data-view="right" title="Вид справа">Право</button>
+                    <button type="button" class="view-cube-face" data-view="left" title="Вид слева">Лево</button>
+                    <button type="button" class="view-cube-face" data-view="top" title="Вид сверху">Верх</button>
+                    <button type="button" class="view-cube-face" data-view="bottom" title="Вид снизу">Низ</button>
+                </div>
+            </div>
+            <button type="button" class="view-cube-home" id="viewCubeHome" title="Изометрия">ISO</button>
+        </div>
     </main>
 
     <div class="resizer" id="dragRight"></div>
@@ -1814,6 +1919,7 @@
         <button class="ctx-item" id="ctxBg" title="Переключить светлый цвет фона 3D-сцены">🎨 Изменить цвет фона</button>
         <button class="ctx-item" id="ctxShowAll" title="Снова показать всю скрытую геометрию">👁‍🗨 Показать скрытое</button>
         <button class="ctx-item" id="ctxFit" title="Вписать все модели в окно просмотра">⤢ Вписать всё в кадр</button>
+        <button class="ctx-item" id="ctxZoomElement" title="Приблизить камеру к выделенным элементам (клавиша F)">🔍 Зум к элементу</button>
     </div>
 
     <div class="modal-backdrop" id="branchModal">
@@ -3380,7 +3486,9 @@
             const dt = Math.min(0.05, ((now - (tick._lastNow || now)) || 16) / 1000);
             tick._lastNow = now;
             if (typeof updateTourPlayback === 'function') updateTourPlayback(dt);
+            if (typeof updateCameraAnimation === 'function') updateCameraAnimation(now);
             if (!suppressControlsUpdate) controls.update();
+            if (typeof syncViewCubeOrientation === 'function') syncViewCubeOrientation();
             if (sceneNeedsRender) {
                 renderer.render(scene, camera);
                 sceneNeedsRender = false;
@@ -4062,12 +4170,13 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnZoomElement', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
             $('measureModeSelect').disabled = loadedModels.size === 0;
             updateIfcToolButtons();
+            syncViewCubeVisibility();
 
             if (loadedModels.size) fitView();
             restoreSharedViewFromHash();
@@ -10385,7 +10494,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnZoomElement', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -10393,6 +10502,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 $('btnClipGizmo').disabled = true;
                 pivotLockToSelection = false;
                 $('btnPivotLock').classList.remove('on');
+                syncViewCubeVisibility();
             } else {
                 fitView();
             }
@@ -10825,7 +10935,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (event.key === 'f' || event.key === 'F' || event.key === 'а' || event.key === 'А') {
                 if (!selectedItems.length) return;
                 event.preventDefault();
-                focusOnList(selectedItems);
+                zoomToSelectedElements();
             }
         });
 
@@ -10865,6 +10975,120 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             fitView();
             trackUsage('fit_view');
         });
+
+        const STANDARD_VIEWS = {
+            front:  { dir: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, 1) },
+            back:   { dir: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, 1) },
+            left:   { dir: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3(0, 0, 1) },
+            right:  { dir: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 0, 1) },
+            top:    { dir: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0) },
+            bottom: { dir: new THREE.Vector3(0, 0, -1), up: new THREE.Vector3(0, 1, 0) },
+            iso:    { dir: new THREE.Vector3(1, -1, 0.8), up: new THREE.Vector3(0, 0, 1) }
+        };
+        const viewCubeEl = $('viewCube');
+        const viewCubeBox = $('viewCubeBox');
+        const _viewCubeMat = new THREE.Matrix4();
+        const _viewCubeFix = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+        const _viewCubeFlip = new THREE.Matrix4().makeScale(1, -1, 1);
+        let cameraAnim = null;
+
+        function syncViewCubeVisibility() {
+            if (!viewCubeEl) return;
+            viewCubeEl.hidden = loadedModels.size === 0;
+        }
+
+        function syncViewCubeOrientation() {
+            if (!viewCubeBox || !viewCubeEl || viewCubeEl.hidden) return;
+            _viewCubeMat.extractRotation(camera.matrixWorldInverse);
+            _viewCubeMat.multiply(_viewCubeFix);
+            _viewCubeMat.premultiply(_viewCubeFlip);
+            const e = _viewCubeMat.elements;
+            viewCubeBox.style.transform =
+                `matrix3d(${e[0]},${e[1]},${e[2]},0,${e[4]},${e[5]},${e[6]},0,${e[8]},${e[9]},${e[10]},0,0,0,0,1)`;
+        }
+
+        function updateCameraAnimation(now) {
+            if (!cameraAnim) return;
+            const u = Math.min(1, (now - cameraAnim.t0) / cameraAnim.duration);
+            const e = u * u * (3 - 2 * u);
+            camera.position.lerpVectors(cameraAnim.fromPos, cameraAnim.toPos, e);
+            controls.target.lerpVectors(cameraAnim.fromTarget, cameraAnim.toTarget, e);
+            camera.up.copy(cameraAnim.fromUp).lerp(cameraAnim.toUp, e).normalize();
+            camera.lookAt(controls.target);
+            if (cameraNearAuto) applyCameraNear();
+            markNeedsRender();
+            if (u >= 1) {
+                camera.position.copy(cameraAnim.toPos);
+                controls.target.copy(cameraAnim.toTarget);
+                camera.up.copy(cameraAnim.toUp);
+                camera.lookAt(controls.target);
+                controls.update();
+                cameraAnim = null;
+                markNeedsRender();
+            }
+        }
+
+        function animateCameraTo(position, target, up, duration = 280) {
+            suppressControlsUpdate = true;
+            cameraAnim = {
+                t0: performance.now(),
+                duration,
+                fromPos: camera.position.clone(),
+                toPos: position.clone(),
+                fromTarget: controls.target.clone(),
+                toTarget: target.clone(),
+                fromUp: camera.up.clone().normalize(),
+                toUp: up.clone().normalize()
+            };
+            markNeedsRender();
+            const unlock = () => {
+                if (cameraAnim) {
+                    requestAnimationFrame(unlock);
+                    return;
+                }
+                suppressControlsUpdate = false;
+                controls.update();
+            };
+            requestAnimationFrame(unlock);
+        }
+
+        function setStandardView(name) {
+            const view = STANDARD_VIEWS[name];
+            if (!view) return;
+            const target = controls.target.clone();
+            let dist = camera.position.distanceTo(target);
+            if (!Number.isFinite(dist) || dist < 0.05) dist = 20;
+            const dir = view.dir.clone().normalize();
+            const pos = target.clone().addScaledVector(dir, dist);
+            animateCameraTo(pos, target, view.up);
+            trackUsage('view_cube', { view: name });
+        }
+
+        function zoomToSelectedElements() {
+            if (!selectedItems.length) {
+                alert('Сначала выделите элемент(ы) в сцене или дереве.');
+                return;
+            }
+            focusOnList(selectedItems);
+            trackUsage('zoom_element', { count: selectedItems.length });
+        }
+
+        viewCubeEl?.addEventListener('pointerdown', e => e.stopPropagation());
+        viewCubeEl?.addEventListener('click', e => {
+            const face = e.target.closest('[data-view]');
+            if (!face || !viewCubeEl.contains(face)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setStandardView(face.getAttribute('data-view'));
+        });
+        $('viewCubeHome')?.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            setStandardView('iso');
+        });
+        $('btnZoomElement')?.addEventListener('click', zoomToSelectedElements);
+        $('ctxZoomElement')?.addEventListener('click', zoomToSelectedElements);
+
         $('gridBtn').addEventListener('click', e => {
             grid.visible = e.currentTarget.classList.toggle('on');
             trackUsage('grid_toggle', { on: grid.visible });
@@ -10953,7 +11177,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnZoomElement', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            syncViewCubeVisibility();
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
