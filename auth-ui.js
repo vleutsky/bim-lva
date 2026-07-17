@@ -223,7 +223,8 @@
     const btnClass = onDarkNav ? 'bimlva-auth-btn' : 'bimlva-auth-btn light';
 
     const html = user
-      ? `<button type="button" class="${btnClass}" data-auth-menu title="${escapeHtml(user.email)}">
+      ? `${user.isAdmin ? `<a class="${btnClass}" href="stats.html" title="Статистика (только admin)">Статистика</a>` : ''}
+         <button type="button" class="${btnClass}" data-auth-menu title="${escapeHtml(user.email)}">
            <span class="bimlva-auth-user">${escapeHtml(user.name || user.email)}${user.isAdmin ? ' · admin' : ''}</span>
            <span aria-hidden="true">▾</span>
          </button>`

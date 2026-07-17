@@ -25,6 +25,9 @@
             --err: #d43c59;
             --w-left: 280px;
             --w-right: 320px;
+            --panel-font: 13px;
+            --panel-font-sm: 12px;
+            --panel-label: 12px;
         }
 
         * {
@@ -51,6 +54,40 @@
                 "tree resL stage resR side"
                 "status status status status status";
             height: 100vh;
+        }
+
+        body.panels-swapped {
+            grid-template-areas:
+                "top top top top top"
+                "side resL stage resR tree"
+                "status status status status status";
+        }
+
+        body.panel-drag-active {
+            cursor: grabbing;
+            user-select: none;
+        }
+        body.panel-drag-active .dock-zone {
+            opacity: 1;
+            pointer-events: none;
+        }
+        .dock-zone {
+            position: fixed;
+            top: 58px;
+            bottom: 28px;
+            width: min(22vw, 280px);
+            z-index: 55;
+            opacity: 0;
+            pointer-events: none;
+            border: 2px dashed transparent;
+            border-radius: 10px;
+            transition: opacity .15s, background .15s, border-color .15s;
+        }
+        .dock-zone.left { left: 8px; }
+        .dock-zone.right { right: 8px; }
+        .dock-zone.hot {
+            background: rgba(36, 120, 181, 0.12);
+            border-color: var(--blue);
         }
 
         /* ---- top bar ---- */
@@ -142,11 +179,12 @@
 
         .tb-menu-btn {
             font-family: 'Archivo', sans-serif;
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--txt);
-            background: transparent;
-            border: 1px solid transparent;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: .02em;
+            color: var(--blue);
+            background: rgba(36, 120, 181, 0.08);
+            border: 1px solid rgba(36, 120, 181, 0.28);
             border-radius: 7px;
             padding: 7px 11px;
             cursor: pointer;
@@ -154,7 +192,7 @@
             align-items: center;
             gap: 6px;
             white-space: nowrap;
-            transition: .15s background, .15s border-color, .15s color;
+            transition: .15s background, .15s border-color, .15s color, .15s box-shadow;
         }
         .tb-menu-btn::after {
             content: '';
@@ -162,17 +200,25 @@
             height: 0;
             border-left: 4px solid transparent;
             border-right: 4px solid transparent;
-            border-top: 5px solid var(--txt-dim);
+            border-top: 5px solid var(--blue);
             margin-left: 2px;
+            transition: transform .15s, border-top-color .15s;
         }
-        .tb-menu-btn:hover,
-        .tb-menu.open .tb-menu-btn {
+        .tb-menu-btn:hover {
             background: #fff;
-            border-color: var(--line);
-            color: var(--txt);
+            border-color: var(--blue);
+            color: var(--blue);
+            box-shadow: 0 1px 0 rgba(36, 120, 181, 0.12);
+        }
+        .tb-menu.open .tb-menu-btn {
+            background: #fff7f2;
+            border-color: var(--accent);
+            color: var(--accent-dim);
+            box-shadow: 0 0 0 1px rgba(240, 100, 36, 0.12);
         }
         .tb-menu.open .tb-menu-btn::after {
             border-top-color: var(--accent);
+            transform: rotate(180deg);
         }
 
         .tb-menu-panel {
@@ -505,9 +551,9 @@
 
         .panel-head h3 {
             font-family: 'IBM Plex Mono';
-            font-size: 11px;
-            letter-spacing: 1.5px;
-            color: var(--txt-dim);
+            font-size: var(--panel-label);
+            letter-spacing: 1.2px;
+            color: var(--blue);
             text-transform: uppercase;
             font-weight: 600;
         }
@@ -550,6 +596,16 @@
             border-left: 1px solid var(--line);
         }
 
+        body.panels-swapped .tree-panel {
+            border-right: none;
+            border-left: 1px solid var(--line);
+        }
+
+        body.panels-swapped .side {
+            border-left: none;
+            border-right: 1px solid var(--line);
+        }
+
         .panel.floating {
             position: fixed;
             z-index: 60;
@@ -561,9 +617,17 @@
             border-radius: 6px;
         }
 
-        .panel.floating .panel-head {
-            cursor: move;
+        .panel .panel-head {
+            cursor: grab;
+        }
+        .panel.floating .panel-head,
+        .panel.panel-dragging .panel-head {
+            cursor: grabbing;
             background: var(--panel-2);
+        }
+        .panel.panel-dragging {
+            opacity: 0.92;
+            z-index: 70;
         }
 
         /* ---- resizers ---- */
@@ -876,7 +940,7 @@
             box-shadow: inset 3px 0 0 var(--accent);
             color: var(--txt);
             font-family: 'IBM Plex Mono';
-            font-size: 11px;
+            font-size: var(--panel-font-sm);
             outline: none;
             transition: border 0.2s;
         }
@@ -896,7 +960,7 @@
             overflow: auto;
             padding: 6px 6px 16px;
             font-family: 'IBM Plex Mono';
-            font-size: 11px;
+            font-size: var(--panel-font);
             min-height: 0;
         }
 
@@ -925,15 +989,33 @@
             background: var(--panel-2);
         }
 
-        .trow.sel {
-            background: #fff0e7;
-            color: var(--accent);
+        .trow.sel,
+        .file-root > .trow.sel,
+        .custom-branch > .trow.sel,
+        .trow.trow-group.sel {
+            background: #dceefc;
+            color: #135f9a;
+            box-shadow: inset 3px 0 0 var(--blue);
+            font-weight: 600;
+        }
+
+        .trow.sel .tlabel {
+            color: #0f5f9c;
+            font-weight: 700;
+        }
+
+        .trow.sel .ttype {
+            color: #2a7ab8;
+        }
+
+        .trow.sel .caret {
+            color: var(--blue);
         }
 
         .trow.drag-target {
-            outline: 2px solid var(--accent);
+            outline: 2px solid var(--blue);
             outline-offset: -2px;
-            background: #ffe5d5;
+            background: #cfe6f8;
         }
 
         .caret {
@@ -1005,7 +1087,7 @@
             display: flex;
             justify-content: space-between;
             font-family: 'IBM Plex Mono';
-            font-size: 12px;
+            font-size: var(--panel-font);
             padding: 5px 0;
             color: var(--txt-dim);
         }
@@ -1017,8 +1099,8 @@
 
         .sub-head {
             font-family: 'IBM Plex Mono';
-            font-size: 11px;
-            letter-spacing: 1.5px;
+            font-size: var(--panel-label);
+            letter-spacing: 1.2px;
             color: var(--txt-dim);
             text-transform: uppercase;
             padding: 14px 16px 8px;
@@ -1030,7 +1112,7 @@
 
         .props .empty {
             font-family: 'IBM Plex Mono';
-            font-size: 12px;
+            font-size: var(--panel-font);
             color: var(--txt-dim);
             line-height: 1.7;
             padding-top: 8px;
@@ -1041,24 +1123,95 @@
             padding: 9px 0;
         }
 
-        .prop .k {
-            font-family: 'IBM Plex Mono';
-            font-size: 10px;
-            letter-spacing: .5px;
-            color: var(--txt-dim);
+        .props .prop .k {
+            font-family: 'Archivo', sans-serif;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .04em;
+            color: #1f6aa3;
             text-transform: uppercase;
-            margin-bottom: 3px;
+            margin-bottom: 5px;
         }
 
-        .prop .v {
+        .props .prop .v {
             font-family: 'IBM Plex Mono';
-            font-size: 13px;
-            color: #68727d;
-            background: #eef1f4;
-            border: 1px solid #d8dde3;
-            border-left: 3px solid #aab2bc;
+            font-size: 14px;
+            color: var(--txt);
+            background: #eef5fb;
+            border: 1px solid #c5d8ea;
+            border-left: 3px solid var(--blue);
             padding: 6px 8px;
             word-break: break-word;
+        }
+
+        .props .bulk-note {
+            border-left-color: var(--blue);
+            background: #eef5fb;
+            color: #35556e;
+        }
+
+        .props .editInput,
+        .props select.editInput {
+            border-color: #c5d8ea;
+            background: #f7fbfe;
+        }
+
+        .props .range-row {
+            font-size: 11px;
+            color: #35556e;
+        }
+
+        .props .range-row input[type="range"] {
+            accent-color: var(--blue);
+        }
+
+        .aci-grid {
+            display: grid;
+            grid-template-columns: repeat(10, 1fr);
+            gap: 2px;
+            margin: 4px 0 6px;
+            max-width: 100%;
+        }
+
+        .aci-swatch {
+            aspect-ratio: 1;
+            width: 100%;
+            height: auto;
+            min-height: 0;
+            border: 1px solid var(--line);
+            border-radius: 2px;
+            cursor: pointer;
+            padding: 0;
+            transition: transform .1s, box-shadow .1s;
+        }
+
+        .aci-swatch:hover {
+            transform: scale(1.12);
+            box-shadow: 0 0 0 1px var(--blue);
+            z-index: 1;
+        }
+
+        .aci-swatch.on {
+            box-shadow: 0 0 0 2px var(--blue);
+            outline: 1px solid #fff;
+            z-index: 1;
+        }
+
+        .aci-swatch.reset {
+            background: repeating-linear-gradient(45deg, #eef1f4, #eef1f4 3px, #fff 3px, #fff 6px);
+            font-family: 'IBM Plex Mono';
+            font-size: 7px;
+            color: var(--txt-dim);
+            line-height: 1;
+        }
+
+        .mat-preview {
+            width: 100%;
+            height: 36px;
+            border: 1px solid #c5d8ea;
+            border-radius: 4px;
+            margin: 6px 0;
+            background: #eef1f4;
         }
 
         .tag {
@@ -1133,49 +1286,6 @@
             line-height: 1.5;
         }
 
-        .aci-grid {
-            display: grid;
-            grid-template-columns: repeat(8, 1fr);
-            gap: 4px;
-            margin: 8px 0 10px;
-        }
-
-        .aci-swatch {
-            aspect-ratio: 1;
-            border: 1px solid var(--line);
-            border-radius: 3px;
-            cursor: pointer;
-            padding: 0;
-            min-height: 22px;
-            transition: transform .1s, box-shadow .1s;
-        }
-
-        .aci-swatch:hover {
-            transform: scale(1.08);
-            box-shadow: 0 0 0 2px var(--accent);
-        }
-
-        .aci-swatch.on {
-            box-shadow: 0 0 0 2px var(--accent);
-            outline: 1px solid #fff;
-        }
-
-        .aci-swatch.reset {
-            background: repeating-linear-gradient(45deg, #eef1f4, #eef1f4 4px, #fff 4px, #fff 8px);
-            font-family: 'IBM Plex Mono';
-            font-size: 8px;
-            color: var(--txt-dim);
-        }
-
-        .mat-preview {
-            width: 100%;
-            height: 52px;
-            border: 1px solid var(--line);
-            border-radius: 4px;
-            margin: 8px 0;
-            background: #eef1f4;
-        }
-
         .range-row {
             display: flex;
             align-items: center;
@@ -1243,29 +1353,49 @@
         }
 
         .pgroup-head {
-            font-family: 'IBM Plex Mono';
-            font-size: 10px;
-            letter-spacing: 1.5px;
-            color: var(--txt-dim);
-            text-transform: uppercase;
-            border-bottom: 1px solid var(--line);
-            padding: 5px 0;
+            font-family: 'Archivo', sans-serif;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: .03em;
+            color: #fff;
+            text-transform: none;
+            border: 1px solid #1f6aa3;
+            border-radius: 8px;
+            background: linear-gradient(180deg, #2f86c7 0%, #2478b5 100%);
+            padding: 8px 10px;
             cursor: pointer;
             display: flex;
             align-items: center;
-            gap: 7px;
+            gap: 8px;
             user-select: none;
+            margin-bottom: 8px;
+            box-shadow: 0 1px 0 rgba(20, 70, 110, 0.18);
         }
 
         .pgroup-head:hover {
-            color: var(--accent);
+            color: #fff;
+            border-color: var(--accent-dim);
+            background: linear-gradient(180deg, #f07838 0%, #e45a1a 100%);
+        }
+
+        .pgroup:not(.collapsed) .pgroup-head {
+            color: #fff;
+            border-color: #1f6aa3;
+            background: linear-gradient(180deg, #2f86c7 0%, #2478b5 100%);
+        }
+
+        .pgroup.collapsed .pgroup-head {
+            background: linear-gradient(180deg, #5ea0d0 0%, #3b88bc 100%);
+            border-color: #3b88bc;
+            opacity: 0.92;
         }
 
         .ar {
             display: inline-block;
             transition: transform .1s;
-            font-size: 9px;
-            color: var(--txt-dim);
+            font-size: 11px;
+            color: inherit;
+            font-weight: 800;
         }
 
         .pgroup.collapsed .pgroup-body {
@@ -1456,6 +1586,7 @@
             <div class="head-actions">
                 <button class="pop" id="treeSelectAll" title="Выделить все элементы всех загруженных моделей">ВСЕ</button>
                 <button class="pop" id="treeClearSelection" title="Снять выделение со всех элементов">∅</button>
+                <button class="pop panel-swap" id="treeSwap" title="Поменять панели местами (слева ↔ справа)">⇄</button>
                 <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
             </div>
         </div>
@@ -1486,7 +1617,10 @@
     <aside class="panel side" id="sidePanel">
         <div class="panel-head" id="sideHead">
             <h3>Свойства</h3>
-            <button class="pop" id="sidePop" title="Открепить или вернуть панель свойств">⧉</button>
+            <div class="head-actions">
+                <button class="pop panel-swap" id="sideSwap" title="Поменять панели местами (слева ↔ справа)">⇄</button>
+                <button class="pop" id="sidePop" title="Открепить или вернуть панель свойств">⧉</button>
+            </div>
         </div>
         <div class="scroll">
             <div class="stats">
@@ -1499,6 +1633,9 @@
             </div>
         </div>
     </aside>
+
+    <div class="dock-zone left" id="dockZoneLeft" aria-hidden="true"></div>
+    <div class="dock-zone right" id="dockZoneRight" aria-hidden="true"></div>
 
     <div class="ctx-menu" id="treeCtx">
                         <button class="ctx-item" id="ctxFocus" title="Кадрировать камеру на выделенные элементы (клавиша F)">🔍 Приблизить к выделению</button>
@@ -3708,20 +3845,21 @@
         }
 
         let activeSelectionOverlays = [];
-        const selectionOutlineColor = 0x00e8ff;
+        const selectionOutlineColor = 0x1aa3ff;
         let selectionOutlineMat = null;
 
         function getSelectionOutlineMaterial() {
             if (!selectionOutlineMat) {
                 selectionOutlineMat = new THREE.LineBasicMaterial({
                     color: selectionOutlineColor,
+                    linewidth: 2,
                     depthTest: true,
-                    depthWrite: false,
                     transparent: true,
-                    opacity: 1,
-                    toneMapped: false
+                    opacity: 0.95
                 });
                 selectionOutlineMat.userData.outlineShared = true;
+            } else {
+                selectionOutlineMat.color.setHex(selectionOutlineColor);
             }
             return selectionOutlineMat;
         }
@@ -3777,7 +3915,7 @@
             const mat = new THREE.MeshBasicMaterial({
                 color: highlightColor,
                 transparent: true,
-                opacity: 0.35,
+                opacity: 0.42,
                 depthTest: true,
                 depthWrite: false,
                 polygonOffset: true,
@@ -3806,12 +3944,19 @@
                     return;
                 }
 
-                // Обычные меши / внешние модели: яркий контур по рёбрам
+                // Обычные меши / внешние модели: заливка + контур по рёбрам
                 const meshes = mod.meshesByID.get(item.expressID) || [];
                 meshes.forEach(src => {
                     if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
                     if (src.isMesh && src.geometry) {
                         src.updateWorldMatrix(true, false);
+                        const fillGeom = src.geometry.clone();
+                        fillGeom.applyMatrix4(src.matrixWorld);
+                        const fillMesh = new THREE.Mesh(fillGeom, mat);
+                        fillMesh.userData.isOverlay = true;
+                        fillMesh.userData.ownsGeometry = true;
+                        addSelectionOutlineObject(fillMesh, mod.group);
+                        usedFill = true;
                         addEdgesOutlineFromGeometry(src.geometry, mod.group, src.matrixWorld);
                     } else if ((src.isLine || src.isLineSegments) && src.geometry) {
                         // Для линий — дублируем ярким цветом поверх
@@ -5837,7 +5982,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         // --- SELECTION (Только подсветка, без прозрачности) ---
-        const highlightColor = 0xff6b35;
+        const highlightColor = 0x2b7fd4;
         let treeSelectionAnchor = null;
 
         const selectionKey = item => `${String(item.modelID)}::${String(item.expressID)}`;
@@ -5846,6 +5991,29 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const unique = new Map();
             items.forEach(item => unique.set(selectionKey(item), item));
             return [...unique.values()];
+        }
+
+        function syncTreeSelectionHighlight() {
+            document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
+            if (!selectedItems.length) return;
+
+            const selectedKeys = new Set(selectedItems.map(selectionKey));
+
+            // Строки с прямым eid из выделения
+            document.querySelectorAll('.trow[data-mid][data-eid]').forEach(row => {
+                if (selectedKeys.has(`${row.dataset.mid}::${row.dataset.eid}`)) {
+                    row.classList.add('sel');
+                }
+            });
+
+            // Ветки / группы / корень файла: если все их _selectionItems выделены
+            document.querySelectorAll('.trow').forEach(row => {
+                const items = row._selectionItems;
+                if (!items || !items.length) return;
+                if (items.every(item => selectedKeys.has(selectionKey(item)))) {
+                    row.classList.add('sel');
+                }
+            });
         }
 
         function handleTreeSelection(row, rowItems, event) {
@@ -5877,8 +6045,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 items = [...current.values()];
             }
 
-            selectMultiple(items);
             if (!event.shiftKey) treeSelectionAnchor = row;
+            selectMultiple(items);
         }
 
         function setEmissive(mesh, hex) {
@@ -5925,6 +6093,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('sSelected').textContent = selectedItems.length;
 
             if (items.length === 0) {
+                treeSelectionAnchor = null;
                 propsBox.innerHTML = '<div class="empty">Ничего не выбрано.</div>';
                 markNeedsRender();
                 return;
@@ -5944,12 +6113,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
             else showProps(items[0].modelID, items[0].expressID, items.length);
             
-            // Скроллим дерево к первому выделенному
-            const selectedKeys = new Set(items.map(selectionKey));
-            document.querySelectorAll('.trow[data-mid][data-eid]').forEach(row => {
-                if (selectedKeys.has(`${row.dataset.mid}::${row.dataset.eid}`)) row.classList.add('sel');
-            });
-            const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`);
+            syncTreeSelectionHighlight();
+            const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`)
+                || treeSelectionAnchor;
             if (firstRow) {
                 firstRow.scrollIntoView({ block: 'nearest' });
             }
@@ -6024,6 +6190,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (attr && face) expressID = Math.round(attr.getX(face.a));
             }
             if (expressID == null || ud.modelID == null) return;
+            treeSelectionAnchor = null;
             selectMultiple([{ modelID: ud.modelID, expressID }]);
         });
 
@@ -6228,6 +6395,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (setElementHidden(mod, i.expressID, true)) batchedToRebuild.add(mod);
             });
             rebuildBatchedVisibility(batchedToRebuild);
+            trackUsage('hide_selection', { count: selectedItems.length });
             selectMultiple([]);
             markNeedsRender();
         });
@@ -6253,10 +6421,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             rebuildBatchedVisibility(rebuild);
             isolateActive = true;
             $('btnIsolate').classList.add('on');
+            trackUsage('isolate_selection', { count: selectedItems.length });
             markNeedsRender();
         });
 
-        $('btnShowAll').addEventListener('click', showAllGeometry);
+        $('btnShowAll').addEventListener('click', () => {
+            showAllGeometry();
+            trackUsage('show_all');
+        });
 
         function loadSavedViews() {
             try {
@@ -8176,8 +8348,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             const action = e.target.closest('[data-act]');
             if (!action) return;
-            if (action.dataset.act === 'applyAppearance') applyAppearanceFromPanel();
-            if (action.dataset.act === 'resetAppearance') resetAppearanceSelection();
+            if (action.dataset.act === 'applyAppearance') {
+                applyAppearanceFromPanel();
+                trackUsage('appearance_apply');
+            }
+            if (action.dataset.act === 'resetAppearance') {
+                resetAppearanceSelection();
+                trackUsage('appearance_reset');
+            }
             if (action.dataset.act === 'pickTexture') propsBox.querySelector('#matTextureFile')?.click();
             if (action.dataset.act === 'clearTextureDraft') {
                 appearanceDraftTexture = null;
@@ -8704,6 +8882,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         $('btnZoomCursor').addEventListener('click', () => {
             zoomToCursorEnabled = $('btnZoomCursor').classList.toggle('on');
+            trackUsage('zoom_to_cursor', { on: zoomToCursorEnabled });
         });
 
         $('btnPivotLock').addEventListener('click', () => {
@@ -8712,6 +8891,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (pivotLockToSelection && selectedItems.length) {
                 setOrbitPivotToSelection(false);
             }
+            trackUsage('pivot_lock', { on: pivotLockToSelection });
         });
 
         $('btnPerfMode').addEventListener('click', () => {
@@ -8726,6 +8906,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 $('btnZoomCursor').classList.add('on');
             }
             applyRenderQuality();
+            trackUsage('perf_mode', { on: perfMode });
             markNeedsRender();
         });
 
@@ -8770,9 +8951,13 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             scene.add(grid);
         }
 
-        $('fit').addEventListener('click', fitView);
+        $('fit').addEventListener('click', () => {
+            fitView();
+            trackUsage('fit_view');
+        });
         $('gridBtn').addEventListener('click', e => {
             grid.visible = e.currentTarget.classList.toggle('on');
+            trackUsage('grid_toggle', { on: grid.visible });
         });
         
         $('clear').addEventListener('click', () => {
@@ -8822,6 +9007,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
             updateIfcToolButtons();
+            trackUsage('scene_clear');
 
             isolateActive = false;
             $('btnIsolate').classList.remove('on');
@@ -9826,63 +10012,172 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             scene.add(grid);
         });
 
-        // Dockable Panels
+        // Dockable Panels + left/right swap
+        const PANEL_LAYOUT_KEY = 'bimlva_panel_layout_v1';
+        let panelsSwapped = false;
+        try { panelsSwapped = localStorage.getItem(PANEL_LAYOUT_KEY) === 'swapped'; } catch (_) {}
+
+        const dockZoneLeft = $('dockZoneLeft');
+        const dockZoneRight = $('dockZoneRight');
+
+        function leftDockPanel() {
+            return panelsSwapped ? $('sidePanel') : $('treePanel');
+        }
+        function rightDockPanel() {
+            return panelsSwapped ? $('treePanel') : $('sidePanel');
+        }
+
+        function updateDockColumns() {
+            if (window.innerWidth <= 860) {
+                document.body.style.gridTemplateColumns = '';
+                return;
+            }
+            const colL = leftDockPanel().classList.contains('floating') ? '0px' : 'var(--w-left)';
+            const colR = rightDockPanel().classList.contains('floating') ? '0px' : 'var(--w-right)';
+            document.body.style.gridTemplateColumns =
+                `${colL} ${colL === '0px' ? '0px' : '4px'} 1fr ${colR === '0px' ? '0px' : '4px'} ${colR}`;
+        }
+
+        function applyPanelLayout() {
+            document.body.classList.toggle('panels-swapped', panelsSwapped);
+            try { localStorage.setItem(PANEL_LAYOUT_KEY, panelsSwapped ? 'swapped' : 'default'); } catch (_) {}
+            updateDockColumns();
+            if (typeof resize === 'function') resize();
+        }
+
+        function swapPanelSides() {
+            panelsSwapped = !panelsSwapped;
+            applyPanelLayout();
+            trackUsage('panel_swap', { swapped: panelsSwapped });
+        }
+
+        function setPanelFloating(panel, floating, popBtn) {
+            const wasFloating = panel.classList.contains('floating');
+            panel.classList.toggle('floating', !!floating);
+            if (floating) {
+                if (!wasFloating) {
+                    const r = panel.getBoundingClientRect();
+                    panel.style.left = Math.max(8, r.left) + 'px';
+                    panel.style.top = Math.max(60, r.top) + 'px';
+                }
+                if (popBtn) popBtn.textContent = '⤓';
+            } else {
+                panel.style.left = panel.style.top = panel.style.width = panel.style.height = '';
+                if (popBtn) popBtn.textContent = '⧉';
+            }
+            updateDockColumns();
+            if (typeof resize === 'function') resize();
+        }
+
+        function dockSideFromClientX(x) {
+            const w = window.innerWidth || 1;
+            if (x < w * 0.32) return 'left';
+            if (x > w * 0.68) return 'right';
+            return null;
+        }
+
+        function desiredSwapForDock(panel, side) {
+            if (!side) return false;
+            const wantTreeLeft = side === 'left' ? panel === $('treePanel') : panel === $('sidePanel');
+            const currentlyTreeLeft = !panelsSwapped;
+            return wantTreeLeft !== currentlyTreeLeft;
+        }
+
         function setupDockable(panel, head, popBtn) {
             popBtn.addEventListener('click', e => {
-                e.stopPropagation(); 
-                const isFloating = panel.classList.toggle('floating');
-                
-                if (isFloating) { 
-                    const r = panel.getBoundingClientRect(); 
-                    panel.style.left = Math.max(8, r.left) + 'px'; 
-                    panel.style.top = Math.max(60, r.top) + 'px'; 
-                    popBtn.textContent = '⤓'; 
-                } else { 
-                    panel.style.left = panel.style.top = panel.style.width = panel.style.height = ''; 
-                    popBtn.textContent = '⧉'; 
+                e.stopPropagation();
+                setPanelFloating(panel, !panel.classList.contains('floating'), popBtn);
+                trackUsage('panel_float', {
+                    panel: panel.id === 'treePanel' ? 'tree' : 'side',
+                    floating: panel.classList.contains('floating')
+                });
+            });
+
+            let drag = false;
+            let moved = false;
+            let sx = 0, sy = 0, ox = 0, oy = 0;
+            let startedFloating = false;
+            let ptrId = null;
+
+            head.addEventListener('pointerdown', e => {
+                if (e.button !== 0 || e.target.closest('.pop')) return;
+                drag = true;
+                moved = false;
+                startedFloating = panel.classList.contains('floating');
+                ptrId = e.pointerId;
+                head.setPointerCapture(e.pointerId);
+                const r = panel.getBoundingClientRect();
+                ox = r.left;
+                oy = r.top;
+                sx = e.clientX;
+                sy = e.clientY;
+                e.preventDefault();
+            });
+
+            head.addEventListener('pointermove', e => {
+                if (!drag || e.pointerId !== ptrId) return;
+                const dx = e.clientX - sx;
+                const dy = e.clientY - sy;
+                if (!moved && Math.hypot(dx, dy) < 6) return;
+                if (!moved) {
+                    moved = true;
+                    document.body.classList.add('panel-drag-active');
+                    panel.classList.add('panel-dragging');
+                    if (!panel.classList.contains('floating')) {
+                        setPanelFloating(panel, true, popBtn);
+                        const r = panel.getBoundingClientRect();
+                        ox = r.left;
+                        oy = r.top;
+                        sx = e.clientX;
+                        sy = e.clientY;
+                    }
                 }
-                
-                if (window.innerWidth > 860) {
-                    const colL = $('treePanel').classList.contains('floating') ? '0px' : 'var(--w-left)';
-                    const colR = $('sidePanel').classList.contains('floating') ? '0px' : 'var(--w-right)';
-                    document.body.style.gridTemplateColumns = `${colL} ${colL==='0px'?'0px':'4px'} 1fr ${colR==='0px'?'0px':'4px'} ${colR}`;
-                } 
-                resize();
+                panel.style.left = Math.min(Math.max(0, ox + (e.clientX - sx)), window.innerWidth - 80) + 'px';
+                panel.style.top = Math.min(Math.max(52, oy + (e.clientY - sy)), window.innerHeight - 40) + 'px';
+                const side = dockSideFromClientX(e.clientX);
+                dockZoneLeft?.classList.toggle('hot', side === 'left');
+                dockZoneRight?.classList.toggle('hot', side === 'right');
             });
-            
-            let drag = false, sx = 0, sy = 0, ox = 0, oy = 0;
-            
-            head.addEventListener('pointerdown', e => { 
-                if (!panel.classList.contains('floating') || e.target.closest('.pop')) return; 
-                drag = true; 
-                head.setPointerCapture(e.pointerId); 
-                const r = panel.getBoundingClientRect(); 
-                ox = r.left; 
-                oy = r.top; 
-                sx = e.clientX; 
-                sy = e.clientY; 
-                e.preventDefault(); 
-            });
-            
-            head.addEventListener('pointermove', e => { 
-                if (!drag) return; 
-                panel.style.left = Math.min(Math.max(0, ox + (e.clientX - sx)), window.innerWidth - 80) + 'px'; 
-                panel.style.top = Math.min(Math.max(52, oy + (e.clientY - sy)), window.innerHeight - 40) + 'px'; 
-            });
-            
-            const stop = e => { 
-                if (drag) { 
-                    drag = false; 
-                    try { head.releasePointerCapture(e.pointerId); } catch (_) {} 
-                } 
-            }; 
-            
-            head.addEventListener('pointerup', stop); 
+
+            const stop = e => {
+                if (!drag || (e && ptrId != null && e.pointerId !== ptrId)) return;
+                const clientX = e?.clientX ?? sx;
+                drag = false;
+                try { if (ptrId != null) head.releasePointerCapture(ptrId); } catch (_) {}
+                ptrId = null;
+                document.body.classList.remove('panel-drag-active');
+                panel.classList.remove('panel-dragging');
+                dockZoneLeft?.classList.remove('hot');
+                dockZoneRight?.classList.remove('hot');
+
+                if (!moved) return;
+
+                const side = dockSideFromClientX(clientX);
+                if (side) {
+                    if (desiredSwapForDock(panel, side)) swapPanelSides();
+                    setPanelFloating(panel, false, popBtn);
+                    trackUsage('panel_dock', {
+                        panel: panel.id === 'treePanel' ? 'tree' : 'side',
+                        side
+                    });
+                } else if (!startedFloating) {
+                    trackUsage('panel_float', {
+                        panel: panel.id === 'treePanel' ? 'tree' : 'side',
+                        floating: true
+                    });
+                }
+            };
+
+            head.addEventListener('pointerup', stop);
             head.addEventListener('pointercancel', stop);
         }
-        
-        setupDockable($('treePanel'), $('treeHead'), $('treePop')); 
+
+        applyPanelLayout();
+        $('treeSwap')?.addEventListener('click', e => { e.stopPropagation(); swapPanelSides(); });
+        $('sideSwap')?.addEventListener('click', e => { e.stopPropagation(); swapPanelSides(); });
+        setupDockable($('treePanel'), $('treeHead'), $('treePop'));
         setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
+        window.addEventListener('resize', updateDockColumns);
 
         // Восстановление вида из URL (если модели уже будут — повторно вызовется после загрузки)
         setTimeout(() => restoreSharedViewFromHash(), 0);
