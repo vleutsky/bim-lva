@@ -1915,19 +1915,33 @@
     </div>
 
     <div class="modal-backdrop" id="tourModal">
-        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(460px,100%)">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(480px,100%)">
             <h3>Проезд / облёт</h3>
             <div class="bulk-note">
-                <b>Проезд</b> — камера на высоте «водителя» вдоль модели.
-                <b>Облёт</b> — выше, с видом вниз по курсу.
-                Точки можно поставить кликом по сцене или сгенерировать автоматически.
+                <b>Проезд</b> — Ferrari по маршруту, камера с места водителя или сзади.
+                <b>Облёт</b> — сверху по курсу. Маршрут: авто или точки кликом.
             </div>
             <div class="prop small">
                 <div class="k">Режим</div>
                 <select class="editInput" id="tourModeSelect">
-                    <option value="car">🚗 Проезд (машина)</option>
+                    <option value="car">🚗 Проезд (Ferrari)</option>
                     <option value="fly">✈️ Облёт</option>
                 </select>
+            </div>
+            <div class="prop small" id="tourCarOptions">
+                <div class="k">Камера</div>
+                <select class="editInput" id="tourCamView">
+                    <option value="chase">Вид сзади (follow)</option>
+                    <option value="driver">Из кабины (глаза водителя)</option>
+                </select>
+                <div class="k" style="margin-top:8px">Высота глаз водителя, м</div>
+                <input class="editInput" id="tourEyeHeight" type="number" min="0.8" max="2.4" step="0.05" value="1.25">
+                <div class="k" style="margin-top:8px">Отступ камеры сзади, м</div>
+                <input class="editInput" id="tourChaseDist" type="number" min="3" max="25" step="0.5" value="8">
+                <label class="bulk-note" style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-top:8px">
+                    <input type="checkbox" id="tourShowCar" checked>
+                    Показывать Ferrari на сцене
+                </label>
             </div>
             <div class="prop small">
                 <div class="k">Скорость</div>
@@ -9403,6 +9417,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             stopTourPlayback();
             tourWaypoints = [];
             clearTourVisuals();
+            removeTourCar();
             tourRecording = false;
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
@@ -10425,24 +10440,60 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         let tourProgress = 0;
         let tourSpeed = 0.12;
         let tourStyle = 'car';
+        let tourCamView = 'chase';
+        let tourEyeHeight = 1.25;
+        let tourChaseDist = 8;
+        let tourShowCar = true;
         const tourPathGroup = new THREE.Group();
         tourPathGroup.name = 'TourPath';
         scene.add(tourPathGroup);
         let tourPathLine = null;
         const tourMarkerMeshes = [];
+        let tourCar = null;
+        const _tourFwd = new THREE.Vector3();
+        const _tourUp = new THREE.Vector3(0, 0, 1);
+        const _tourRight = new THREE.Vector3();
+        const _tourCam = new THREE.Vector3();
+        const _tourLook = new THREE.Vector3();
+        const _tourQuat = new THREE.Quaternion();
+        const _tourMat = new THREE.Matrix4();
+
+        function readTourSettingsFromUi() {
+            tourStyle = $('tourModeSelect')?.value || 'car';
+            tourCamView = $('tourCamView')?.value || 'chase';
+            tourEyeHeight = Math.max(0.6, parseFloat($('tourEyeHeight')?.value) || 1.25);
+            tourChaseDist = Math.max(2, parseFloat($('tourChaseDist')?.value) || 8);
+            tourShowCar = !!$('tourShowCar')?.checked;
+            tourSpeed = parseFloat($('tourSpeed')?.value) || 0.12;
+            const carOpts = $('tourCarOptions');
+            if (carOpts) carOpts.style.display = tourStyle === 'car' ? '' : 'none';
+        }
 
         function updateTourStatus() {
             const el = $('tourStatus');
             if (!el) return;
-            const mode = tourStyle === 'fly' ? 'облёт' : 'проезд';
-            el.textContent = `Точек маршрута: ${tourWaypoints.length}` +
+            const mode = tourStyle === 'fly' ? 'облёт' : 'проезд Ferrari';
+            const cam = tourStyle === 'car'
+                ? (tourCamView === 'driver' ? ' · кабина' : ' · сзади')
+                : '';
+            el.textContent = `Точек маршрута: ${tourWaypoints.length}${cam}` +
                 (tourRecording ? ' · кликайте по модели, чтобы добавить' : '') +
                 (tourPlaying ? ` · идёт ${mode}…` : '');
+        }
+
+        function disposeTourObject(obj) {
+            if (!obj) return;
+            obj.traverse(o => {
+                o.geometry?.dispose?.();
+                const mats = Array.isArray(o.material) ? o.material : [o.material];
+                mats.forEach(m => m && m.dispose && m.dispose());
+            });
         }
 
         function clearTourVisuals() {
             const sharedMats = new Set();
             [...tourPathGroup.children].forEach(ch => {
+                if (ch === tourCar) return;
                 tourPathGroup.remove(ch);
                 ch.geometry?.dispose?.();
                 const mat = ch.material;
@@ -10455,21 +10506,118 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             tourMarkerMeshes.length = 0;
         }
 
+        /** Стилизованная low-poly Ferrari (rosso corsa) — без внешних ассетов */
+        function createFerrariMesh() {
+            const root = new THREE.Group();
+            root.name = 'TourFerrari';
+            const red = new THREE.MeshStandardMaterial({ color: 0xc40000, metalness: 0.55, roughness: 0.35 });
+            const dark = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.4, roughness: 0.5 });
+            const glass = new THREE.MeshStandardMaterial({
+                color: 0x88ccee, metalness: 0.2, roughness: 0.15, transparent: true, opacity: 0.55
+            });
+            const yellow = new THREE.MeshStandardMaterial({ color: 0xffd200, metalness: 0.3, roughness: 0.4 });
+            const chrome = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.9, roughness: 0.2 });
+
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 4.35, 0.55), red);
+            body.position.z = 0.55;
+            root.add(body);
+
+            const nose = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.1, 0.35), red);
+            nose.position.set(0, 2.35, 0.42);
+            root.add(nose);
+
+            const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.55, 1.5, 0.55), red);
+            cabin.position.set(0, -0.15, 0.95);
+            root.add(cabin);
+
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.15, 0.12), glass);
+            roof.position.set(0, -0.1, 1.28);
+            root.add(roof);
+
+            const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.08, 0.55), glass);
+            windshield.position.set(0, 0.7, 1.05);
+            windshield.rotation.x = -0.55;
+            root.add(windshield);
+
+            const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.12, 0.28), red);
+            spoiler.position.set(0, -2.15, 0.95);
+            root.add(spoiler);
+            const spoilerPostL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.35), dark);
+            spoilerPostL.position.set(-0.55, -2.05, 0.75);
+            root.add(spoilerPostL);
+            const spoilerPostR = spoilerPostL.clone();
+            spoilerPostR.position.x = 0.55;
+            root.add(spoilerPostR);
+
+            const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.04, 16), yellow);
+            badge.rotation.x = Math.PI / 2;
+            badge.position.set(0, 2.85, 0.55);
+            root.add(badge);
+
+            const lightGeo = new THREE.SphereGeometry(0.12, 10, 8);
+            [-0.55, 0.55].forEach(x => {
+                const hl = new THREE.Mesh(lightGeo, chrome);
+                hl.position.set(x, 2.7, 0.45);
+                root.add(hl);
+                const tl = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.08, 0.12), new THREE.MeshStandardMaterial({
+                    color: 0xff2200, emissive: 0x440000, metalness: 0.2, roughness: 0.5
+                }));
+                tl.position.set(x, -2.2, 0.55);
+                root.add(tl);
+            });
+
+            function wheel(x, y) {
+                const w = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.28, 18), dark);
+                w.rotation.z = Math.PI / 2;
+                w.position.set(x, y, 0.38);
+                root.add(w);
+                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.3, 12), chrome);
+                rim.rotation.z = Math.PI / 2;
+                rim.position.copy(w.position);
+                root.add(rim);
+            }
+            wheel(-0.95, 1.35);
+            wheel(0.95, 1.35);
+            wheel(-0.95, -1.45);
+            wheel(0.95, -1.45);
+
+            // Локальная система: +Y вперёд, +Z вверх (как сцена)
+            root.userData.isTourCar = true;
+            return root;
+        }
+
+        function ensureTourCar() {
+            if (tourCar) return tourCar;
+            tourCar = createFerrariMesh();
+            tourCar.visible = false;
+            scene.add(tourCar);
+            return tourCar;
+        }
+
+        function removeTourCar() {
+            if (!tourCar) return;
+            scene.remove(tourCar);
+            disposeTourObject(tourCar);
+            tourCar = null;
+        }
+
         function rebuildTourVisuals() {
             clearTourVisuals();
             if (!tourWaypoints.length) {
+                if (tourCar) tourCar.visible = false;
                 markNeedsRender();
                 return;
             }
             const markerMat = new THREE.MeshBasicMaterial({ color: 0xf06424 });
             markerMat.userData.shared = true;
             tourWaypoints.forEach((p, i) => {
-                const m = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 10), markerMat);
+                const m = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), markerMat);
                 m.position.copy(p);
+                m.position.z += 0.15;
                 m.userData.tourMarker = true;
                 tourPathGroup.add(m);
                 tourMarkerMeshes.push(m);
-                if (i === 0) m.scale.setScalar(1.35);
+                if (i === 0) m.scale.setScalar(1.4);
             });
             if (tourWaypoints.length >= 2) {
                 const curve = new THREE.CatmullRomCurve3(tourWaypoints.map(p => p.clone()), false, 'catmullrom', 0.35);
@@ -10483,7 +10631,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function addTourWaypoint(point) {
             if (!point) return;
-            tourWaypoints.push(point.clone());
+            const p = point.clone();
+            // Точки маршрута — у земли (колёса); клик по мешу часто выше
+            const box = getSceneContentBox();
+            if (!box.isEmpty()) p.z = Math.min(p.z, box.min.z + 0.2);
+            tourWaypoints.push(p);
             rebuildTourVisuals();
             updateTourStatus();
             trackUsage('tour_waypoint', { count: tourWaypoints.length });
@@ -10501,6 +10653,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         function buildAutoTourPath(style) {
+            readTourSettingsFromUi();
             const box = getSceneContentBox();
             if (box.isEmpty()) {
                 alert('Сначала загрузите модель.');
@@ -10514,11 +10667,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const groundZ = box.min.z;
             const height = style === 'fly'
                 ? groundZ + Math.max(8, size.z * 0.45 + 4)
-                : groundZ + 1.75;
+                : groundZ + 0.05;
             const side = style === 'fly' ? Math.max(size.z * 0.12, 2) : 0;
             const axis = alongX ? 'x' : 'y';
             const pts = [];
-            const steps = 6;
+            const steps = 8;
             for (let i = 0; i <= steps; i++) {
                 const t = i / steps;
                 const along = -half + t * half * 2;
@@ -10545,18 +10698,80 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             tourCurve = null;
             tourProgress = 0;
             controls.enabled = true;
+            if (tourCar) tourCar.visible = false;
             $('tourPlayBtn')?.classList.remove('on');
             updateTourStatus();
             markNeedsRender();
         }
 
+        function placeTourCarOnPath(u) {
+            if (!tourCar || !tourCurve) return;
+            const u0 = Math.max(0, Math.min(1, u));
+            const u1 = Math.min(1, u0 + 0.012);
+            const pos = tourCurve.getPointAt(u0);
+            const next = tourCurve.getPointAt(u1);
+            _tourFwd.subVectors(next, pos);
+            _tourFwd.z = 0;
+            if (_tourFwd.lengthSq() < 1e-8) _tourFwd.set(0, 1, 0);
+            _tourFwd.normalize();
+            _tourRight.crossVectors(_tourFwd, _tourUp).normalize();
+            // Базис: X = вправо, Y = вперёд (как у меша Ferrari), Z = вверх
+            _tourMat.makeBasis(_tourRight, _tourFwd, _tourUp);
+            tourCar.quaternion.setFromRotationMatrix(_tourMat);
+            tourCar.position.copy(pos);
+            tourCar.visible = tourShowCar && tourStyle === 'car';
+        }
+
+        function applyTourCamera(u) {
+            const u0 = Math.max(0, Math.min(1, u));
+            const pos = tourCurve.getPointAt(u0);
+            const lookT = Math.min(1, u0 + (tourStyle === 'fly' ? 0.035 : 0.02));
+            const ahead = tourCurve.getPointAt(lookT);
+
+            if (tourStyle === 'fly') {
+                _tourLook.copy(ahead);
+                _tourLook.z -= Math.max(1.5, (ahead.z - getSceneContentBox().min.z) * 0.08);
+                camera.position.copy(pos);
+                controls.target.copy(_tourLook);
+                camera.up.copy(_tourUp);
+                camera.lookAt(_tourLook);
+                return;
+            }
+
+            placeTourCarOnPath(u0);
+            _tourFwd.subVectors(ahead, pos);
+            _tourFwd.z = 0;
+            if (_tourFwd.lengthSq() < 1e-8) _tourFwd.set(0, 1, 0);
+            _tourFwd.normalize();
+            _tourRight.crossVectors(_tourFwd, _tourUp).normalize();
+
+            if (tourCamView === 'driver') {
+                // Глаза водителя: чуть сзади центра салона, на заданной высоте
+                _tourCam.copy(pos)
+                    .addScaledVector(_tourFwd, -0.35)
+                    .addScaledVector(_tourUp, tourEyeHeight);
+                _tourLook.copy(pos)
+                    .addScaledVector(_tourFwd, 8)
+                    .addScaledVector(_tourUp, tourEyeHeight * 0.85);
+            } else {
+                // Вид сзади / follow cam
+                _tourCam.copy(pos)
+                    .addScaledVector(_tourFwd, -tourChaseDist)
+                    .addScaledVector(_tourUp, Math.max(tourEyeHeight + 0.8, tourChaseDist * 0.28));
+                _tourLook.copy(pos).addScaledVector(_tourUp, tourEyeHeight * 0.55);
+            }
+            camera.position.copy(_tourCam);
+            controls.target.copy(_tourLook);
+            camera.up.copy(_tourUp);
+            camera.lookAt(_tourLook);
+        }
+
         function startTourPlayback() {
+            readTourSettingsFromUi();
             if (tourWaypoints.length < 2) {
                 alert('Нужны минимум 2 точки маршрута (Авто-маршрут или клики).');
                 return;
             }
-            tourStyle = $('tourModeSelect')?.value || 'car';
-            tourSpeed = parseFloat($('tourSpeed')?.value) || 0.12;
             tourCurve = new THREE.CatmullRomCurve3(
                 tourWaypoints.map(p => p.clone()),
                 false,
@@ -10568,43 +10783,36 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             tourRecording = false;
             $('tourRecordBtn')?.classList.remove('on');
             controls.enabled = false;
+            if (tourStyle === 'car' && tourShowCar) ensureTourCar();
+            else if (tourCar) tourCar.visible = false;
             $('tourModal')?.classList.remove('show');
+            applyTourCamera(0);
             updateTourStatus();
-            trackUsage('tour_play', { mode: tourStyle, points: tourWaypoints.length });
+            trackUsage('tour_play', {
+                mode: tourStyle,
+                cam: tourCamView,
+                points: tourWaypoints.length,
+                eye: tourEyeHeight
+            });
         }
 
         function updateTourPlayback(dt) {
             if (!tourPlaying || !tourCurve) return;
-            // скорость: доля кривой в секунду, чуть быстрее на коротких путях
             const len = Math.max(tourCurve.getLength(), 1);
             const uPerSec = (tourSpeed * 25) / len;
             tourProgress += dt * uPerSec;
             if (tourProgress >= 1) {
                 tourProgress = 1;
-                const end = tourCurve.getPointAt(1);
-                const look = tourCurve.getPointAt(0.98);
-                camera.position.copy(end);
-                controls.target.copy(end.clone().add(end.clone().sub(look).normalize()));
-                camera.up.set(0, 0, 1);
-                camera.lookAt(controls.target);
+                applyTourCamera(1);
                 stopTourPlayback();
                 return;
             }
-            const pos = tourCurve.getPointAt(tourProgress);
-            const lookT = Math.min(1, tourProgress + (tourStyle === 'fly' ? 0.035 : 0.025));
-            const look = tourCurve.getPointAt(lookT);
-            if (tourStyle === 'fly') {
-                look.z -= Math.max(1.5, (look.z - getSceneContentBox().min.z) * 0.08);
-            }
-            camera.position.copy(pos);
-            controls.target.copy(look);
-            camera.up.set(0, 0, 1);
-            camera.lookAt(look);
+            applyTourCamera(tourProgress);
             markNeedsRender();
         }
 
         $('btnTour')?.addEventListener('click', () => {
-            tourStyle = $('tourModeSelect')?.value || tourStyle;
+            readTourSettingsFromUi();
             updateTourStatus();
             $('tourModal')?.classList.add('show');
         });
@@ -10623,9 +10831,13 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
         });
         $('tourModeSelect')?.addEventListener('change', () => {
-            tourStyle = $('tourModeSelect').value;
+            readTourSettingsFromUi();
             updateTourStatus();
         });
+        $('tourCamView')?.addEventListener('change', readTourSettingsFromUi);
+        $('tourEyeHeight')?.addEventListener('change', readTourSettingsFromUi);
+        $('tourChaseDist')?.addEventListener('change', readTourSettingsFromUi);
+        $('tourShowCar')?.addEventListener('change', readTourSettingsFromUi);
         $('tourSpeed')?.addEventListener('input', () => {
             tourSpeed = parseFloat($('tourSpeed').value) || 0.12;
         });
@@ -10637,7 +10849,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (tourRecording) {
                 stopTourPlayback();
                 $('tourModal')?.classList.remove('show');
-                alert('Кликайте ЛКМ по модели, чтобы ставить точки маршрута. Откройте снова «Проезд / облёт», чтобы запустить.');
+                alert('Кликайте ЛКМ по модели, чтобы ставить точки маршрута. Затем снова откройте «Проезд / облёт» и нажмите Старт.');
             }
             $('tourRecordBtn')?.classList.toggle('on', tourRecording);
             updateTourStatus();
@@ -10646,11 +10858,13 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             stopTourPlayback();
             tourWaypoints = [];
             clearTourVisuals();
+            removeTourCar();
             updateTourStatus();
             markNeedsRender();
         });
         $('tourPlayBtn')?.addEventListener('click', () => startTourPlayback());
         $('tourStopBtn')?.addEventListener('click', () => stopTourPlayback());
+        readTourSettingsFromUi();
 
         // Dockable Panels + left/right swap
         const PANEL_LAYOUT_KEY = 'bimlva_panel_layout_v1';
