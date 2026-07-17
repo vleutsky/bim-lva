@@ -36,6 +36,7 @@
 - View → near-clip (Auto by zoom distance, or manual 0.01–0.05) so close zoom does not cut geometry
 - Selection outline, box select, measure distance, Z-clip
 - Perf mode / batching
+- Tour / fly-through with **profile window** (station × elevation, editable vertex Z, ΔZ / set-all / drape)
 
 ## Заметки
 
