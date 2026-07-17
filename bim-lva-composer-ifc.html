@@ -1593,6 +1593,24 @@
             margin-left: auto;
             color: var(--txt-dim);
         }
+
+        .status .coord-readout {
+            display: inline-flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            align-items: baseline;
+            min-width: 0;
+        }
+
+        .status .coord-readout b {
+            color: var(--txt);
+            font-weight: 500;
+        }
+
+        .status .coord-sep {
+            opacity: .35;
+            margin: 0 2px;
+        }
     </style>
 </head>
 <body>
@@ -2211,6 +2229,11 @@
 
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
+        <span class="coord-readout" id="coordReadout" title="Координаты в метрах. Если задан авто-origin — абсолютные (мир), иначе относительно сцены.">
+            <span>курсор <b id="coordCursor">—</b></span>
+            <span class="coord-sep">·</span>
+            <span>выделение <b id="coordSelection">—</b></span>
+        </span>
         <span id="hintControls" title="ЛКМ+drag: вращение · Колесо: зум · F: кадр · 📌 пивот · ⚡ быстро. Камера без инерции — поворот и зум однотипны.">ЛКМ+drag: вращение · Колесо: зум · F: кадр · без инерции камеры</span>
         <span class="right" id="fps">—</span>
     </footer>
@@ -4331,6 +4354,129 @@
             return true;
         }
 
+        /**
+         * Эвристика мм→м для файлов без явных единиц (DXF/FBX/STL…).
+         * Геодезия в метрах редко даёт |center| > 2e7; в мм 20 км уже 2e7.
+         */
+        function inferLengthToMetersFromExtent(center, sizeHint = 0) {
+            if (!center) return 1;
+            const mag = typeof center.length === 'function'
+                ? center.length()
+                : Math.hypot(center.x || 0, center.y || 0, center.z || 0);
+            if (mag >= 2e7) return 0.001;
+            if (sizeHint >= 2e7) return 0.001;
+            // Рядом с уже метрическим origin: если объект ~×1000 — это мм
+            if (ifcWorldOrigin) {
+                const oMag = Math.hypot(ifcWorldOrigin.x, ifcWorldOrigin.y, ifcWorldOrigin.z);
+                if (oMag >= LARGE_COORD_THRESHOLD && mag > oMag * 80) {
+                    const scaled = {
+                        x: center.x * 0.001,
+                        y: center.y * 0.001,
+                        z: center.z * 0.001
+                    };
+                    const d0 = Math.hypot(
+                        center.x - ifcWorldOrigin.x,
+                        center.y - ifcWorldOrigin.y,
+                        center.z - ifcWorldOrigin.z
+                    );
+                    const d1 = Math.hypot(
+                        scaled.x - ifcWorldOrigin.x,
+                        scaled.y - ifcWorldOrigin.y,
+                        scaled.z - ifcWorldOrigin.z
+                    );
+                    if (d1 < d0 * 0.05) return 0.001;
+                }
+            }
+            return 1;
+        }
+
+        function scaleObject3DToMeters(root, scale) {
+            if (!root || !(scale > 0) || Math.abs(scale - 1) < 1e-12) return false;
+            root.traverse(obj => {
+                if (!obj.geometry?.attributes?.position) return;
+                obj.geometry.scale(scale, scale, scale);
+                obj.geometry.computeBoundingBox();
+                obj.geometry.computeBoundingSphere();
+            });
+            root.position.multiplyScalar(scale);
+            return true;
+        }
+
+        function formatCoordTriple(v, digits = 2) {
+            if (!v) return '—';
+            return `${v.x.toFixed(digits)} · ${v.y.toFixed(digits)} · ${v.z.toFixed(digits)}`;
+        }
+
+        /** Мировая точка сцены → CAD XYZ (до поворота globalGroup), с восстановлением origin. */
+        function worldPointToAbsoluteXYZ(worldPoint) {
+            if (!worldPoint) return null;
+            const local = worldPoint.clone();
+            globalGroup.worldToLocal(local);
+            if (ifcWorldOrigin) {
+                local.x += ifcWorldOrigin.x;
+                local.y += ifcWorldOrigin.y;
+                local.z += ifcWorldOrigin.z;
+            }
+            return local;
+        }
+
+        function updateCoordCursorReadout(worldPoint) {
+            const el = $('coordCursor');
+            if (!el) return;
+            if (!worldPoint) {
+                el.textContent = '—';
+                return;
+            }
+            const abs = worldPointToAbsoluteXYZ(worldPoint);
+            el.textContent = formatCoordTriple(abs) + ' м';
+        }
+
+        function updateCoordSelectionReadout() {
+            const el = $('coordSelection');
+            if (!el) return;
+            if (!selectedItems.length) {
+                el.textContent = '—';
+                return;
+            }
+            const box = getSelectionBounds(selectedItems);
+            if (!box || box.isEmpty()) {
+                el.textContent = '—';
+                return;
+            }
+            const center = box.getCenter(new THREE.Vector3());
+            const abs = worldPointToAbsoluteXYZ(center);
+            const suffix = selectedItems.length > 1 ? ` (${selectedItems.length})` : '';
+            el.textContent = formatCoordTriple(abs) + ' м' + suffix;
+        }
+
+        let _coordCursorRaf = 0;
+        let _coordCursorPending = null;
+        function scheduleCoordCursorUpdate(clientX, clientY) {
+            _coordCursorPending = { clientX, clientY };
+            if (_coordCursorRaf) return;
+            _coordCursorRaf = requestAnimationFrame(() => {
+                _coordCursorRaf = 0;
+                const p = _coordCursorPending;
+                _coordCursorPending = null;
+                if (!p || !loadedModels.size) {
+                    updateCoordCursorReadout(null);
+                    return;
+                }
+                const hit = pickStageHit(p.clientX, p.clientY);
+                if (hit?.point) {
+                    updateCoordCursorReadout(hit.point);
+                    return;
+                }
+                // Плоскость по пивоту орбиты — чтобы координаты были и «в воздухе»
+                const planeHit = pickScenePoint?.(p.clientX, p.clientY, {
+                    forceRaycast: false,
+                    allowPlaneFallback: true,
+                    ignorePivotLock: true
+                });
+                updateCoordCursorReadout(planeHit || null);
+            });
+        }
+
         function estimateFragmentsOrigin(fragments) {
             if (!fragments?.length) return null;
             const box = new THREE.Box3();
@@ -4500,8 +4646,25 @@
          */
         function rebaseExternalObject3D(root, sourceMeta = {}) {
             if (!root) return false;
-            const center = estimateObject3DCenter(root);
+            let center = estimateObject3DCenter(root);
             if (!center) return false;
+
+            // мм без юнитов в файле (DXF/FBX/…) — в метры до origin
+            const sizeHint = (() => {
+                try {
+                    root.updateWorldMatrix(true, true);
+                    const box = new THREE.Box3().setFromObject(root);
+                    if (box.isEmpty()) return 0;
+                    return box.getSize(new THREE.Vector3()).length();
+                } catch (_) { return 0; }
+            })();
+            const unitScale = inferLengthToMetersFromExtent(center, sizeHint);
+            if (scaleObject3DToMeters(root, unitScale)) {
+                console.info(
+                    `[BIM.LVA] ${sourceMeta.format || 'модель'} единицы → метры (×${unitScale}) «${sourceMeta.filename || ''}»`
+                );
+                center = estimateObject3DCenter(root) || center;
+            }
 
             if (!ifcWorldOrigin) {
                 if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
@@ -5429,6 +5592,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const linear = (metric || imperial)?.getAttribute('linearUnit') || '';
             const u = linear.toLowerCase();
             if (!u || u.includes('meter') || u === 'm') return 1;
+            if (u.includes('millimeter') || u === 'mm') return 0.001;
+            if (u.includes('centimeter') || u === 'cm') return 0.01;
             if (u.includes('ussurvey') || u.includes('surveyfoot') || u === 'foot_us') return 1200 / 3937;
             if (u.includes('foot') || u.includes('feet') || u === 'ft') return 0.3048;
             if (u.includes('inch')) return 0.0254;
@@ -7564,6 +7729,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             
             selectedItems = items;
             $('sSelected').textContent = selectedItems.length;
+            updateCoordSelectionReadout();
 
             if (items.length === 0) {
                 treeSelectionAnchor = null;
@@ -7679,6 +7845,15 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (expressID == null || ud.modelID == null) return;
             treeSelectionAnchor = null;
             selectMultiple([{ modelID: ud.modelID, expressID }]);
+        });
+
+        // Координаты под курсором (низ экрана)
+        renderer.domElement.addEventListener('pointermove', e => {
+            if (boxSelectDrag) return;
+            scheduleCoordCursorUpdate(e.clientX, e.clientY);
+        });
+        renderer.domElement.addEventListener('pointerleave', () => {
+            updateCoordCursorReadout(null);
         });
 
         // --- BOX SELECT (Выделение рамкой на сцене) ---
