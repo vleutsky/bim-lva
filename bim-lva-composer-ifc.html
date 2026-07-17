@@ -1123,6 +1123,85 @@
             padding: 9px 0;
         }
 
+        .props-tabs {
+            display: flex;
+            gap: 4px;
+            margin: 0 0 12px;
+            padding: 0;
+            border-bottom: 1px solid var(--line);
+            flex-wrap: wrap;
+        }
+        .props-tab {
+            font-family: 'Archivo', sans-serif;
+            font-size: 12px;
+            font-weight: 800;
+            color: var(--blue);
+            background: rgba(36, 120, 181, 0.08);
+            border: 1px solid rgba(36, 120, 181, 0.28);
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            padding: 8px 12px;
+            cursor: pointer;
+            margin-bottom: -1px;
+        }
+        .props-tab:hover { background: #fff; }
+        .props-tab.on {
+            color: #fff;
+            background: linear-gradient(180deg, #2f86c7 0%, #2478b5 100%);
+            border-color: #1f6aa3;
+        }
+        .props-pane[hidden] { display: none !important; }
+
+        .prop-inline {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+            gap: 6px;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--line);
+        }
+        .prop-inline .editInput {
+            margin: 0;
+            font-size: 12px;
+            padding: 6px 7px;
+        }
+        .prop-inline .prop-name {
+            font-weight: 600;
+        }
+        .prop-inline .v {
+            margin: 0;
+            font-size: 12px;
+            padding: 6px 7px;
+        }
+        .prop-inline-head {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+            gap: 6px;
+            font-family: 'Archivo', sans-serif;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: #1f6aa3;
+            padding: 4px 0 2px;
+        }
+        .pset-toolbar {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .pset-toolbar .row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .props-save-all {
+            width: 100%;
+            margin: 8px 0 12px;
+            font-weight: 700;
+        }
+
         .props .prop .k {
             font-family: 'Archivo', sans-serif;
             font-size: 12px;
@@ -2054,7 +2133,7 @@
 
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
-        <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">ЛКМ+drag: вращение вокруг точки под курсором · Колесо: зум к курсору · F: кадр · 📌 пивот · ⚡ быстро</span>
+        <span id="hintControls" title="ЛКМ+drag: вращение · Колесо: зум · F: кадр · 📌 пивот · ⚡ быстро. Камера без инерции — поворот и зум однотипны.">ЛКМ+drag: вращение · Колесо: зум · F: кадр · без инерции камеры</span>
         <span class="right" id="fps">—</span>
     </footer>
 
@@ -2317,8 +2396,9 @@
         camera.position.set(20, -24, 16);
 
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.08;
+        // Без damping: поворот (кастомный) и зум одинаково «жёсткие», меньше усталости при долгой работе
+        controls.enableDamping = false;
+        controls.dampingFactor = 0;
         controls.zoomToCursor = false;
         controls.enableZoom = false;
         // ЛКМ-вращение вокруг точки под курсором обрабатываем сами (без скачка lookAt)
@@ -7732,7 +7812,31 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
         const escAttr = s => esc(s).replace(/"/g, '&quot;');
-        const propRow = (k, v) => `<div class="prop"><div class="k">${esc(k)}</div><div class="v">${esc(v || '—')}</div></div>`;
+        const propRow = (k, v) => `<div class="prop-inline"><div class="prop-name v" style="background:#f3f7fb">${esc(k)}</div><div class="v">${esc(v || '—')}</div></div>`;
+        let activePropsTab = 'info';
+
+        function renderPropsTabs(panes) {
+            const tabs = [];
+            const bodies = [];
+            const defs = [
+                ['info', 'Свойства', panes.info],
+                ['material', 'Материал', panes.material],
+                ['edit', 'Правка', panes.edit]
+            ];
+            defs.forEach(([id, label, body]) => {
+                if (body == null || body === '') return;
+                const on = activePropsTab === id;
+                tabs.push(`<button type="button" class="props-tab${on ? ' on' : ''}" data-props-tab="${id}">${label}</button>`);
+                bodies.push(`<div class="props-pane" data-props-pane="${id}"${on ? '' : ' hidden'}>${body}</div>`);
+            });
+            const available = defs.filter(([id, , body]) => body != null && body !== '').map(([id]) => id);
+            if (!available.includes(activePropsTab) && available.length) {
+                activePropsTab = available[0];
+                return renderPropsTabs(panes);
+            }
+            return `<div class="props-tabs">${tabs.join('')}</div>${bodies.join('')}`;
+        }
+
 
         // --- Properties View ---
         function getPsetPropertyIds(modData, psetId, batch) {
@@ -7905,14 +8009,17 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 line = ifcAPI.GetLine(modelID, expressID, true); 
             } catch(e) {}
             
-            let html = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
-            html += renderAppearancePanel(countTotal, modelID, expressID);
+            const tag = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
+            const materialHtml = renderAppearancePanel(countTotal, modelID, expressID);
+            let editHtml = '';
             if (modData && modData.ifcIndex) {
-                html += `<div class="edit-legend">Оранжевые поля можно редактировать; серые строки доступны только для чтения. После изменения нажмите 💾 или кнопку применения.</div>`;
+                editHtml += `<div class="edit-legend">Оранжевые поля редактируются. На вкладке «Свойства» имя и значение — в одной строке; сохраняйте сразу весь Pset кнопкой ниже.</div>`;
             }
-            html += renderBulkEditor();
+            editHtml += renderBulkEditor();
+
+            let infoHtml = '';
             if (countTotal > 1) {
-                html += `<div class="empty" style="padding-top:0">Свойства первого элемента:</div>`;
+                infoHtml += `<div class="empty" style="padding-top:0">Свойства первого элемента:</div>`;
             }
             
             const rawEntity = getEntityParts(modData, expressID);
@@ -7920,17 +8027,18 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 ? unquoteStepString(rawEntity.args[2])
                 : (line.Name ? readVal(line.Name) : '');
             if (countTotal === 1 && modData.ifcIndex && rawEntity && rawEntity.args.length > 2) {
-                html += `<div class="prop">
-                    <div class="k">Имя</div>
-                    <div style="display:flex;gap:6px;align-items:center">
-                        <input class="editInput" data-entity-name="${expressID}" value="${escAttr(entityName)}">
-                        <button class="btn" style="padding:6px 8px" data-act="renameEntity" data-model="${modelID}" data-id="${expressID}">💾</button>
-                    </div>
+                infoHtml += `<div class="prop-inline">
+                    <input class="editInput prop-name" data-entity-name="${expressID}" value="${escAttr(entityName)}" title="Имя элемента">
+                    <div class="v" style="opacity:.75">ExpressID ${expressID}</div>
                 </div>`;
             } else {
-                html += propRow('Имя', entityName);
+                infoHtml += propRow('Имя', entityName);
+                infoHtml += propRow('ExpressID', String(expressID));
             }
-            html += `<div class="prop"><div class="k">ExpressID · только чтение</div><div class="v">${expressID}</div></div>`;
+
+            if (countTotal === 1 && modData.ifcIndex) {
+                infoHtml += `<button type="button" class="btn load-btn props-save-all" data-act="saveAllProperties" data-model="${modelID}">💾 Сохранить все параметры</button>`;
+            }
             
             const psetIds = modData.psetIndex.get(expressID) || []; 
             let psetHtml = '';
@@ -7959,6 +8067,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     }
                 });
 
+                if (countTotal === 1 && modData.ifcIndex) {
+                    items += `<div class="prop-inline-head"><span>Параметр</span><span>Значение</span></div>`;
+                }
+
                 for (const entry of propertyEntries) {
                         const p = entry.property;
                         const propId = entry.propId;
@@ -7977,18 +8089,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                         const rawValue = canEditValue ? unwrapIfcValue(rawProperty.args[2]) : null;
                         if (!v && rawValue) v = rawValue.value;
                         if (countTotal === 1 && modData.ifcIndex && propId != null) {
-                            items += `<div class="prop">
-                                <div class="k">Имя параметра</div>
-                                <div style="display:flex;gap:6px;align-items:center">
-                                    <input class="editInput" data-property-name="${propId}" value="${escAttr(propertyName)}">
-                                    <button class="btn" style="padding:6px 8px" data-act="renameProperty" data-model="${modelID}" data-prop="${propId}">💾</button>
-                                </div>
-                                <div class="k" style="margin-top:7px">Значение</div>
+                            items += `<div class="prop-inline" data-prop-row="${propId}">
+                                <input class="editInput prop-name" data-property-name="${propId}" value="${escAttr(propertyName)}" title="Имя параметра">
                                 ${canEditValue
-                                    ? `<div style="display:flex;gap:6px;align-items:center">
-                                        <input class="editInput" data-property-value="${propId}" value="${escAttr(rawValue.value)}">
-                                        <button class="btn" style="padding:6px 8px" data-act="savePropertyValue" data-model="${modelID}" data-prop="${propId}">💾</button>
-                                    </div>`
+                                    ? `<input class="editInput" data-property-value="${propId}" value="${escAttr(rawValue.value)}" title="Значение">`
                                     : `<div class="v">${esc(v || '—')}</div>`}
                             </div>`;
                         } else {
@@ -7998,18 +8102,23 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 
                 if (items || modData.ifcIndex) {
                     const renameControl = countTotal === 1 && modData.ifcIndex
-                        ? `<div class="prop small">
-                            <div class="k">Имя Pset</div>
-                            <div style="display:flex;gap:6px;align-items:center">
-                                <input class="editInput" data-pset-name="${pid}" value="${escAttr(pname)}">
-                                <button class="btn" style="padding:6px 8px" data-act="renamePset" data-model="${modelID}" data-pset="${pid}">💾</button>
+                        ? `<div class="pset-toolbar">
+                            <div class="row">
+                                <input class="editInput" data-pset-name="${pid}" value="${escAttr(pname)}" title="Имя Pset">
+                                <button type="button" class="btn" style="padding:6px 10px;white-space:nowrap" data-act="saveAllProperties" data-model="${modelID}" data-pset="${pid}" title="Сохранить имя Pset и все параметры этого набора">💾</button>
                             </div>
                         </div>`
                         : '';
-                    psetHtml += `<div class="pgroup"><div class="pgroup-head"><span class="ar">▾</span>${esc(pname)}</div><div class="pgroup-body">${renameControl}${items || '<div class="empty">В наборе нет отображаемых свойств.</div>'}</div></div>`;
+                    psetHtml += `<div class="pgroup" data-pset-id="${pid}"><div class="pgroup-head"><span class="ar">▾</span>Pset · ${esc(pname)}</div><div class="pgroup-body">${renameControl}${items || '<div class="empty">В наборе нет отображаемых свойств.</div>'}</div></div>`;
                 }
             }
-            propsBox.innerHTML = html + (psetHtml || `<div class="empty">Доп. свойства не найдены.</div>`);
+            infoHtml += psetHtml || `<div class="empty">Доп. свойства / Pset не найдены.</div>`;
+
+            propsBox.innerHTML = tag + renderPropsTabs({
+                info: infoHtml,
+                material: materialHtml,
+                edit: editHtml || null
+            });
         }
 
         function applyBulkClassChange() {
@@ -8293,6 +8402,79 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             alert(`Изменено: Pset — ${changedPsets}, имён параметров — ${changedNames}, значений — ${changedValues}.${skipped ? ` Пропущено: ${skipped}.` : ''}`);
         }
 
+        function saveAllPropertyEdits(button) {
+            const rawModelID = button.dataset.model;
+            const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
+            const modData = loadedModels.get(modelID);
+            if (!modData || !modData.ifcIndex) {
+                alert('Нет IFC-индекса для записи параметров.');
+                return;
+            }
+            const psetFilter = button.dataset.pset ? String(button.dataset.pset) : null;
+            const infoPane = propsBox.querySelector('[data-props-pane="info"]') || propsBox;
+            const scope = psetFilter
+                ? (infoPane.querySelector(`.pgroup[data-pset-id="${psetFilter}"]`) || infoPane)
+                : infoPane;
+
+            const batch = createIfcEditBatch(modData);
+            let renamedProps = 0;
+            let savedValues = 0;
+            let renamedPsets = 0;
+            let renamedEntity = 0;
+            const errors = [];
+
+            const entityInput = !psetFilter ? scope.querySelector('[data-entity-name]') : null;
+            if (entityInput) {
+                const expressID = parseInt(entityInput.getAttribute('data-entity-name'), 10);
+                const newName = entityInput.value.trim();
+                if (newName && batch.setAttr(expressID, 2, `'${encodeStepString(newName)}'`)) {
+                    renamedEntity++;
+                    document.querySelectorAll(`.trow[data-mid="${modelID}"][data-eid="${expressID}"] .tlabel`)
+                        .forEach(label => { label.textContent = newName; });
+                    const search = modData.searchCache.get(expressID) || '';
+                    modData.searchCache.set(expressID, `${search} ${newName}`.toLowerCase());
+                }
+            }
+
+            scope.querySelectorAll('[data-pset-name]').forEach(input => {
+                const psetId = parseInt(input.getAttribute('data-pset-name'), 10);
+                const newName = input.value.trim();
+                if (!newName) {
+                    errors.push(`Pset #${psetId}: пустое имя`);
+                    return;
+                }
+                if (batch.setAttr(psetId, 2, `'${encodeStepString(newName)}'`)) renamedPsets++;
+            });
+
+            scope.querySelectorAll('[data-property-name]').forEach(input => {
+                const propId = parseInt(input.getAttribute('data-property-name'), 10);
+                const newName = input.value.trim();
+                if (!newName) {
+                    errors.push(`Параметр #${propId}: пустое имя`);
+                    return;
+                }
+                if (batch.setAttr(propId, 0, `'${encodeStepString(newName)}'`)) renamedProps++;
+            });
+
+            scope.querySelectorAll('[data-property-value]').forEach(input => {
+                const propId = parseInt(input.getAttribute('data-property-value'), 10);
+                const property = getEntityParts(modData, propId);
+                if (!property || property.className !== 'IFCPROPERTYSINGLEVALUE') return;
+                const currentValue = unwrapIfcValue(property.args[2]);
+                batch.setAttr(propId, 2, wrapIfcValueLike(currentValue.type, input.value));
+                savedValues++;
+            });
+
+            batch.commit();
+            trackUsage('ifc_edit_property', { batch: 1, props: renamedProps, values: savedValues });
+            const first = selectedItems[0];
+            if (first) showProps(first.modelID, first.expressID, selectedItems.length);
+            const msg = `Сохранено: имён Pset ${renamedPsets}, параметров ${renamedProps}, значений ${savedValues}` +
+                (renamedEntity ? `, имя элемента ${renamedEntity}` : '') + '.';
+            if (errors.length) alert(msg + '\n\nЗамечания:\n' + errors.slice(0, 6).join('\n'));
+            else console.info('[BIM.LVA]', msg);
+        }
+
         function renameSinglePset(button) {
             const rawModelID = button.dataset.model;
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
@@ -8479,8 +8661,24 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 return;
             }
 
+            const tabBtn = e.target.closest('[data-props-tab]');
+            if (tabBtn) {
+                activePropsTab = tabBtn.dataset.propsTab || 'info';
+                propsBox.querySelectorAll('[data-props-tab]').forEach(btn => {
+                    btn.classList.toggle('on', btn === tabBtn);
+                });
+                propsBox.querySelectorAll('[data-props-pane]').forEach(pane => {
+                    pane.hidden = pane.dataset.propsPane !== activePropsTab;
+                });
+                return;
+            }
+
             const action = e.target.closest('[data-act]');
             if (!action) return;
+            if (action.dataset.act === 'saveAllProperties') {
+                saveAllPropertyEdits(action);
+                return;
+            }
             if (action.dataset.act === 'applyAppearance') {
                 applyAppearanceFromPanel();
                 trackUsage('appearance_apply');
@@ -8543,20 +8741,24 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const meshes = modData ? modData.meshesByID.get(expressID) : null;
             const obj = meshes && meshes[0];
 
-            let html = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
-            html += renderAppearancePanel(countTotal, modelID, expressID);
-            html += propRow('Формат', modData ? modData.format : '');
+            const tag = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
+            const materialHtml = renderAppearancePanel(countTotal, modelID, expressID);
+            let infoHtml = propRow('Формат', modData ? modData.format : '');
             if (obj) {
-                html += propRow('Имя', obj.name || '');
-                html += propRow('Тип', typeLabelFBX(obj));
+                infoHtml += propRow('Имя', obj.name || '');
+                infoHtml += propRow('Тип', typeLabelFBX(obj));
                 const geom = obj.geometry;
                 const vcount = geom && geom.attributes && geom.attributes.position ? geom.attributes.position.count : 0;
-                html += propRow('Вершин', vcount.toLocaleString('ru-RU'));
+                infoHtml += propRow('Вершин', vcount.toLocaleString('ru-RU'));
                 const pos = new THREE.Vector3(); obj.getWorldPosition(pos);
-                html += propRow('Позиция (мир)', `${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}`);
+                infoHtml += propRow('Позиция (мир)', `${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}`);
             }
-            html += `<div class="empty" style="padding-top:10px">${esc(modData ? modData.format : 'Внешний формат')}: BIM-семантики и IFC Pset здесь нет — отображаются геометрия, слои/узлы и трансформации.</div>`;
-            propsBox.innerHTML = html;
+            infoHtml += `<div class="empty" style="padding-top:10px">${esc(modData ? modData.format : 'Внешний формат')}: BIM-семантики и IFC Pset здесь нет — геометрия и трансформации.</div>`;
+            propsBox.innerHTML = tag + renderPropsTabs({
+                info: infoHtml,
+                material: materialHtml,
+                edit: null
+            });
         }
 
         function disposeModelObject(root) {
@@ -9029,8 +9231,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         $('btnPerfMode').addEventListener('click', () => {
             perfMode = $('btnPerfMode').classList.toggle('on');
-            controls.enableDamping = !perfMode;
-            controls.dampingFactor = perfMode ? 0 : 0.08;
+            controls.enableDamping = false;
+            controls.dampingFactor = 0;
             if (perfMode) {
                 zoomToCursorEnabled = false;
                 $('btnZoomCursor').classList.remove('on');
