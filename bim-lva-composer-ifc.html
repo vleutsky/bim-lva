@@ -8658,12 +8658,70 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         async function yaFetchJson(url) {
-            const res = await fetch(url);
+            const res = await fetch(url, { credentials: 'omit', cache: 'no-store', mode: 'cors' });
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 throw new Error(`Яндекс.Диск API ${res.status}${text ? ': ' + text.slice(0, 120) : ''}`);
             }
             return res.json();
+        }
+
+        function yaSleep(ms) {
+            return new Promise(r => setTimeout(r, ms));
+        }
+
+        async function yaFetchArrayBufferOnce(url) {
+            const res = await fetch(url, {
+                method: 'GET',
+                credentials: 'omit',
+                cache: 'no-store',
+                mode: 'cors',
+                redirect: 'follow'
+            });
+            if (!res.ok) throw new Error(`Ошибка скачивания HTTP ${res.status}`);
+            return res.arrayBuffer();
+        }
+
+        async function yaFetchFileBlob(fileInfo) {
+            const path = fileInfo.path === '/' ? '' : fileInfo.path;
+            showLoader('СКАЧИВАНИЕ', `${fileInfo.name} (${formatBytes(fileInfo.size)})…`);
+
+            let lastError = null;
+            for (let attempt = 1; attempt <= 4; attempt++) {
+                try {
+                    // Каждый раз берём свежую ссылку — старые downloader URL быстро протухают
+                    const href = await yaGetDownloadHref(yaPublicKey, path);
+                    const buffer = await yaFetchArrayBufferOnce(href);
+                    if (!buffer || buffer.byteLength === 0) {
+                        throw new Error('Пустой ответ от Яндекс.Диска');
+                    }
+                    return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
+                } catch (err) {
+                    lastError = err;
+                    console.warn(`Я.Диск попытка ${attempt}/4:`, fileInfo.name, err);
+                    // запасной прямой file URL из листинга
+                    if (fileInfo.fileUrl && attempt === 2) {
+                        try {
+                            const buffer = await yaFetchArrayBufferOnce(fileInfo.fileUrl);
+                            if (buffer?.byteLength) {
+                                return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
+                            }
+                        } catch (err2) {
+                            lastError = err2;
+                        }
+                    }
+                    await yaSleep(600 * attempt);
+                }
+            }
+
+            const msg = lastError?.message || String(lastError);
+            if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+                throw new Error(
+                    'Failed to fetch — Яндекс оборвал скачивание (сеть/лимит). ' +
+                    'Откройте файлы по одному кнопкой «Открыть», не пакетом.'
+                );
+            }
+            throw lastError || new Error('Не удалось скачать файл');
         }
 
         async function yaListPublicResource(publicKey, path = '') {
@@ -8672,7 +8730,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 limit: '200',
                 offset: '0',
                 preview_size: 'S',
-                fields: '_embedded.items.name,_embedded.items.type,_embedded.items.path,_embedded.items.size,_embedded.items.mime_type,name,type,path,size'
+                fields: '_embedded.items.name,_embedded.items.type,_embedded.items.path,_embedded.items.size,_embedded.items.mime_type,_embedded.items.file,name,type,path,size,file'
             });
             if (path) params.set('path', path);
             return yaFetchJson(`https://cloud-api.yandex.net/v1/disk/public/resources?${params}`);
@@ -8693,6 +8751,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                         name: meta.name,
                         path: meta.path || path || '/',
                         size: meta.size || 0,
+                        fileUrl: meta.file || '',
                         loaded: false
                     }];
                 }
@@ -8707,6 +8766,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                         name: item.name,
                         path: item.path,
                         size: item.size || 0,
+                        fileUrl: item.file || '',
                         loaded: false
                     });
                 } else if (item.type === 'dir') {
@@ -8761,15 +8821,6 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function yaBaseName(name) {
             return String(name || '').replace(/\.[^.]+$/, '').toLowerCase();
-        }
-
-        async function yaFetchFileBlob(fileInfo) {
-            const href = await yaGetDownloadHref(yaPublicKey, fileInfo.path === '/' ? '' : fileInfo.path);
-            showLoader('СКАЧИВАНИЕ', `${fileInfo.name} (${formatBytes(fileInfo.size)})…`);
-            const fileRes = await fetch(href);
-            if (!fileRes.ok) throw new Error(`Ошибка скачивания ${fileRes.status}`);
-            const buffer = await fileRes.arrayBuffer();
-            return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
         }
 
         async function yaDownloadAndOpen(fileInfo) {
