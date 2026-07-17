@@ -1615,6 +1615,7 @@
                     <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ Сохранённые виды</button>
                     <button class="btn" id="btnShareView" disabled title="Скопировать ссылку на текущий вид">🔗 Ссылка на вид</button>
                     <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
+                    <button class="btn" id="btnTour" disabled title="Проезд «как на машине» или облёт по траектории">🚗 Проезд / облёт</button>
                     <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
                     <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
                 </div>
@@ -1909,6 +1910,39 @@
             <div class="modal-actions">
                 <button class="btn" id="cancelCompare">Закрыть</button>
                 <button class="btn load-btn" id="runCompare">Сравнить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="tourModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(460px,100%)">
+            <h3>Проезд / облёт</h3>
+            <div class="bulk-note">
+                <b>Проезд</b> — камера на высоте «водителя» вдоль модели.
+                <b>Облёт</b> — выше, с видом вниз по курсу.
+                Точки можно поставить кликом по сцене или сгенерировать автоматически.
+            </div>
+            <div class="prop small">
+                <div class="k">Режим</div>
+                <select class="editInput" id="tourModeSelect">
+                    <option value="car">🚗 Проезд (машина)</option>
+                    <option value="fly">✈️ Облёт</option>
+                </select>
+            </div>
+            <div class="prop small">
+                <div class="k">Скорость</div>
+                <input class="editInput" id="tourSpeed" type="range" min="0.04" max="0.35" step="0.01" value="0.12">
+            </div>
+            <div class="bulk-note" id="tourStatus">Точек маршрута: 0</div>
+            <div class="modal-actions" style="flex-wrap:wrap;justify-content:stretch">
+                <button class="btn" id="tourAutoBtn" style="flex:1">Авто-маршрут</button>
+                <button class="btn" id="tourRecordBtn" style="flex:1">＋ Точки кликом</button>
+                <button class="btn" id="tourClearBtn" style="flex:1">Очистить</button>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="tourCloseBtn">Закрыть</button>
+                <button class="btn" id="tourStopBtn">⏹ Стоп</button>
+                <button class="btn load-btn" id="tourPlayBtn">▶ Старт</button>
             </div>
         </div>
     </div>
@@ -3182,6 +3216,9 @@
         
         function tick(now) {
             requestAnimationFrame(tick);
+            const dt = Math.min(0.05, ((now - (tick._lastNow || now)) || 16) / 1000);
+            tick._lastNow = now;
+            if (typeof updateTourPlayback === 'function') updateTourPlayback(dt);
             if (!suppressControlsUpdate) controls.update();
             if (sceneNeedsRender) {
                 renderer.render(scene, camera);
@@ -3863,7 +3900,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -6193,18 +6230,33 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return [...unique.values()];
         }
 
-        function syncTreeSelectionHighlight() {
-            document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
-            if (!selectedItems.length) return;
+        function expandTreeAncestors(row) {
+            if (!row) return;
+            let node = row.closest('.tnode');
+            while (node) {
+                node.classList.remove('collapsed');
+                const parentChildren = node.parentElement && node.parentElement.closest
+                    ? node.parentElement.closest('.children')
+                    : null;
+                node = parentChildren ? parentChildren.closest('.tnode') : null;
+            }
+        }
 
-            const selectedKeys = new Set(selectedItems.map(selectionKey));
-
-            // Строки с прямым eid из выделения
+        function findTreeRowsForSelection(items) {
+            const selectedKeys = new Set(items.map(selectionKey));
+            const matched = [];
             document.querySelectorAll('.trow[data-mid][data-eid]').forEach(row => {
-                if (selectedKeys.has(`${row.dataset.mid}::${row.dataset.eid}`)) {
-                    row.classList.add('sel');
-                }
+                if (selectedKeys.has(`${row.dataset.mid}::${row.dataset.eid}`)) matched.push(row);
             });
+            return { selectedKeys, matched };
+        }
+
+        function syncTreeSelectionHighlight(options = {}) {
+            document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
+            if (!selectedItems.length) return null;
+
+            const { selectedKeys, matched } = findTreeRowsForSelection(selectedItems);
+            matched.forEach(row => row.classList.add('sel'));
 
             // Ветки / группы / корень файла: если все их _selectionItems выделены
             document.querySelectorAll('.trow').forEach(row => {
@@ -6214,6 +6266,17 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     row.classList.add('sel');
                 }
             });
+
+            const primary = matched[0] || null;
+            if (primary && options.reveal !== false) {
+                expandTreeAncestors(primary);
+                try {
+                    primary.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+                } catch (_) {
+                    primary.scrollIntoView({ block: 'nearest' });
+                }
+            }
+            return primary;
         }
 
         function handleTreeSelection(row, rowItems, event) {
@@ -6313,12 +6376,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
             else showProps(items[0].modelID, items[0].expressID, items.length);
             
-            syncTreeSelectionHighlight();
-            const firstRow = document.querySelector(`.trow[data-mid="${items[0].modelID}"][data-eid="${items[0].expressID}"]`)
-                || treeSelectionAnchor;
-            if (firstRow) {
-                firstRow.scrollIntoView({ block: 'nearest' });
-            }
+            const revealed = syncTreeSelectionHighlight({ reveal: true });
+            if (revealed && !treeSelectionAnchor) treeSelectionAnchor = revealed;
 
             if (pivotLockToSelection && items.length) {
                 setOrbitPivotToSelection(false);
@@ -6390,6 +6449,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (attr && face) expressID = Math.round(attr.getX(face.a));
             }
             if (expressID == null || ud.modelID == null) return;
+            if (typeof tourRecording !== 'undefined' && tourRecording) {
+                addTourWaypoint(validHits[0].point.clone());
+                return;
+            }
             treeSelectionAnchor = null;
             selectMultiple([{ modelID: ud.modelID, expressID }]);
         });
@@ -8813,7 +8876,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -9337,10 +9400,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             resetIfcWorldOrigin();
             crsOffsets = { x: 0, y: 0, z: 0 };
             applyCrsOffsets();
+            stopTourPlayback();
+            tourWaypoints = [];
+            clearTourVisuals();
+            tourRecording = false;
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -10349,6 +10416,241 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             grid.visible = $('gridBtn').classList.contains('on'); 
             scene.add(grid);
         });
+
+        // ---- Tour: car drive / fly-through ----
+        let tourWaypoints = [];
+        let tourRecording = false;
+        let tourPlaying = false;
+        let tourCurve = null;
+        let tourProgress = 0;
+        let tourSpeed = 0.12;
+        let tourStyle = 'car';
+        const tourPathGroup = new THREE.Group();
+        tourPathGroup.name = 'TourPath';
+        scene.add(tourPathGroup);
+        let tourPathLine = null;
+        const tourMarkerMeshes = [];
+
+        function updateTourStatus() {
+            const el = $('tourStatus');
+            if (!el) return;
+            const mode = tourStyle === 'fly' ? 'облёт' : 'проезд';
+            el.textContent = `Точек маршрута: ${tourWaypoints.length}` +
+                (tourRecording ? ' · кликайте по модели, чтобы добавить' : '') +
+                (tourPlaying ? ` · идёт ${mode}…` : '');
+        }
+
+        function clearTourVisuals() {
+            const sharedMats = new Set();
+            [...tourPathGroup.children].forEach(ch => {
+                tourPathGroup.remove(ch);
+                ch.geometry?.dispose?.();
+                const mat = ch.material;
+                if (!mat) return;
+                if (mat.userData?.shared) sharedMats.add(mat);
+                else if (!Array.isArray(mat)) mat.dispose?.();
+            });
+            sharedMats.forEach(mat => mat.dispose?.());
+            tourPathLine = null;
+            tourMarkerMeshes.length = 0;
+        }
+
+        function rebuildTourVisuals() {
+            clearTourVisuals();
+            if (!tourWaypoints.length) {
+                markNeedsRender();
+                return;
+            }
+            const markerMat = new THREE.MeshBasicMaterial({ color: 0xf06424 });
+            markerMat.userData.shared = true;
+            tourWaypoints.forEach((p, i) => {
+                const m = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 10), markerMat);
+                m.position.copy(p);
+                m.userData.tourMarker = true;
+                tourPathGroup.add(m);
+                tourMarkerMeshes.push(m);
+                if (i === 0) m.scale.setScalar(1.35);
+            });
+            if (tourWaypoints.length >= 2) {
+                const curve = new THREE.CatmullRomCurve3(tourWaypoints.map(p => p.clone()), false, 'catmullrom', 0.35);
+                const pts = curve.getPoints(Math.min(200, tourWaypoints.length * 24));
+                const geo = new THREE.BufferGeometry().setFromPoints(pts);
+                tourPathLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x2478b5 }));
+                tourPathGroup.add(tourPathLine);
+            }
+            markNeedsRender();
+        }
+
+        function addTourWaypoint(point) {
+            if (!point) return;
+            tourWaypoints.push(point.clone());
+            rebuildTourVisuals();
+            updateTourStatus();
+            trackUsage('tour_waypoint', { count: tourWaypoints.length });
+        }
+
+        function getSceneContentBox() {
+            const box = new THREE.Box3();
+            const a = new THREE.Box3().setFromObject(globalGroup);
+            const b = new THREE.Box3().setFromObject(externalGroup);
+            const c = new THREE.Box3().setFromObject(geoRasterGroup);
+            if (!a.isEmpty()) box.union(a);
+            if (!b.isEmpty()) box.union(b);
+            if (!c.isEmpty()) box.union(c);
+            return box;
+        }
+
+        function buildAutoTourPath(style) {
+            const box = getSceneContentBox();
+            if (box.isEmpty()) {
+                alert('Сначала загрузите модель.');
+                return;
+            }
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+            const alongX = size.x >= size.y;
+            const span = Math.max(alongX ? size.x : size.y, 8);
+            const half = span * 0.42;
+            const groundZ = box.min.z;
+            const height = style === 'fly'
+                ? groundZ + Math.max(8, size.z * 0.45 + 4)
+                : groundZ + 1.75;
+            const side = style === 'fly' ? Math.max(size.z * 0.12, 2) : 0;
+            const axis = alongX ? 'x' : 'y';
+            const pts = [];
+            const steps = 6;
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const along = -half + t * half * 2;
+                const p = center.clone();
+                if (axis === 'x') {
+                    p.x = center.x + along;
+                    p.y = center.y + side * Math.sin(t * Math.PI);
+                } else {
+                    p.y = center.y + along;
+                    p.x = center.x + side * Math.sin(t * Math.PI);
+                }
+                p.z = height;
+                pts.push(p);
+            }
+            tourWaypoints = pts;
+            tourStyle = style;
+            rebuildTourVisuals();
+            updateTourStatus();
+            trackUsage('tour_auto', { mode: style, points: pts.length });
+        }
+
+        function stopTourPlayback() {
+            tourPlaying = false;
+            tourCurve = null;
+            tourProgress = 0;
+            controls.enabled = true;
+            $('tourPlayBtn')?.classList.remove('on');
+            updateTourStatus();
+            markNeedsRender();
+        }
+
+        function startTourPlayback() {
+            if (tourWaypoints.length < 2) {
+                alert('Нужны минимум 2 точки маршрута (Авто-маршрут или клики).');
+                return;
+            }
+            tourStyle = $('tourModeSelect')?.value || 'car';
+            tourSpeed = parseFloat($('tourSpeed')?.value) || 0.12;
+            tourCurve = new THREE.CatmullRomCurve3(
+                tourWaypoints.map(p => p.clone()),
+                false,
+                'catmullrom',
+                0.35
+            );
+            tourProgress = 0;
+            tourPlaying = true;
+            tourRecording = false;
+            $('tourRecordBtn')?.classList.remove('on');
+            controls.enabled = false;
+            $('tourModal')?.classList.remove('show');
+            updateTourStatus();
+            trackUsage('tour_play', { mode: tourStyle, points: tourWaypoints.length });
+        }
+
+        function updateTourPlayback(dt) {
+            if (!tourPlaying || !tourCurve) return;
+            // скорость: доля кривой в секунду, чуть быстрее на коротких путях
+            const len = Math.max(tourCurve.getLength(), 1);
+            const uPerSec = (tourSpeed * 25) / len;
+            tourProgress += dt * uPerSec;
+            if (tourProgress >= 1) {
+                tourProgress = 1;
+                const end = tourCurve.getPointAt(1);
+                const look = tourCurve.getPointAt(0.98);
+                camera.position.copy(end);
+                controls.target.copy(end.clone().add(end.clone().sub(look).normalize()));
+                camera.up.set(0, 0, 1);
+                camera.lookAt(controls.target);
+                stopTourPlayback();
+                return;
+            }
+            const pos = tourCurve.getPointAt(tourProgress);
+            const lookT = Math.min(1, tourProgress + (tourStyle === 'fly' ? 0.035 : 0.025));
+            const look = tourCurve.getPointAt(lookT);
+            if (tourStyle === 'fly') {
+                look.z -= Math.max(1.5, (look.z - getSceneContentBox().min.z) * 0.08);
+            }
+            camera.position.copy(pos);
+            controls.target.copy(look);
+            camera.up.set(0, 0, 1);
+            camera.lookAt(look);
+            markNeedsRender();
+        }
+
+        $('btnTour')?.addEventListener('click', () => {
+            tourStyle = $('tourModeSelect')?.value || tourStyle;
+            updateTourStatus();
+            $('tourModal')?.classList.add('show');
+        });
+        $('tourCloseBtn')?.addEventListener('click', () => {
+            tourRecording = false;
+            $('tourRecordBtn')?.classList.remove('on');
+            $('tourModal')?.classList.remove('show');
+            updateTourStatus();
+        });
+        $('tourModal')?.addEventListener('click', e => {
+            if (e.target === $('tourModal')) {
+                tourRecording = false;
+                $('tourRecordBtn')?.classList.remove('on');
+                $('tourModal').classList.remove('show');
+                updateTourStatus();
+            }
+        });
+        $('tourModeSelect')?.addEventListener('change', () => {
+            tourStyle = $('tourModeSelect').value;
+            updateTourStatus();
+        });
+        $('tourSpeed')?.addEventListener('input', () => {
+            tourSpeed = parseFloat($('tourSpeed').value) || 0.12;
+        });
+        $('tourAutoBtn')?.addEventListener('click', () => {
+            buildAutoTourPath($('tourModeSelect')?.value || 'car');
+        });
+        $('tourRecordBtn')?.addEventListener('click', () => {
+            tourRecording = !tourRecording;
+            if (tourRecording) {
+                stopTourPlayback();
+                $('tourModal')?.classList.remove('show');
+                alert('Кликайте ЛКМ по модели, чтобы ставить точки маршрута. Откройте снова «Проезд / облёт», чтобы запустить.');
+            }
+            $('tourRecordBtn')?.classList.toggle('on', tourRecording);
+            updateTourStatus();
+        });
+        $('tourClearBtn')?.addEventListener('click', () => {
+            stopTourPlayback();
+            tourWaypoints = [];
+            clearTourVisuals();
+            updateTourStatus();
+            markNeedsRender();
+        });
+        $('tourPlayBtn')?.addEventListener('click', () => startTourPlayback());
+        $('tourStopBtn')?.addEventListener('click', () => stopTourPlayback());
 
         // Dockable Panels + left/right swap
         const PANEL_LAYOUT_KEY = 'bimlva_panel_layout_v1';
