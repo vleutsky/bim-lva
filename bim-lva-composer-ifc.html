@@ -5162,7 +5162,16 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         // ---- LandXML / Civil 3D XML ----
         // Координаты LandXML: "northing easting [elev]" → CAD XYZ: X=E, Y=N, Z=elev
         // (как в Civil 3D World CS; дальше тот же globalGroup.rotation.x = π/2).
+        // Иногда IFC уже задал ifcWorldOrigin в другой ориентации осей (X↔Y) —
+        // тогда для файла включаем swapXY. Поверхности в «локальном» кластере
+        // (< LARGE_COORD_THRESHOLD) не вычитаем из геодезического origin.
         const LANDXML_SURFACE_COLORS = [0x5a8f6a, 0x6b8cae, 0xa67c52, 0x7a6b8a, 0x8a6b5a, 0x4a7c8a];
+        let landXmlCoordCtx = {
+            scale: 1,
+            swapXY: false,
+            origin: null,
+            fileHints: []
+        };
 
         function landXmlLocalName(node) {
             if (!node) return '';
@@ -5196,6 +5205,30 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return landXmlChildren(parent, name)[0] || null;
         }
 
+        function landXmlUnitScale(rootEl) {
+            const metric = landXmlDescendants(rootEl, 'Metric')[0];
+            const imperial = landXmlDescendants(rootEl, 'Imperial')[0];
+            const linear = (metric || imperial)?.getAttribute('linearUnit') || '';
+            const u = linear.toLowerCase();
+            if (!u || u.includes('meter') || u === 'm') return 1;
+            if (u.includes('ussurvey') || u.includes('surveyfoot') || u === 'foot_us') return 1200 / 3937;
+            if (u.includes('foot') || u.includes('feet') || u === 'ft') return 0.3048;
+            if (u.includes('inch')) return 0.0254;
+            return 1;
+        }
+
+        function landXmlMapRawNEZ(northing, easting, elev) {
+            const s = landXmlCoordCtx.scale || 1;
+            const n = northing * s;
+            const e = easting * s;
+            const z = elev * s;
+            if (landXmlCoordCtx.swapXY) {
+                // X=Northing, Y=Easting — если IFC/сцена уже в такой схеме
+                return { n, e, z, x: n, y: e, elev: z };
+            }
+            return { n, e, z, x: e, y: n, elev: z };
+        }
+
         function landXmlParseNEZ(text) {
             if (!text) return null;
             const parts = String(text).trim().split(/[\s,]+/).filter(Boolean).map(Number);
@@ -5203,31 +5236,195 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const northing = parts[0];
             const easting = parts[1];
             const elev = parts.length >= 3 ? parts[2] : 0;
-            return { n: northing, e: easting, z: elev, x: easting, y: northing, elev };
+            return landXmlMapRawNEZ(northing, easting, elev);
         }
 
-        function landXmlEnsureOrigin(x, y, z) {
-            const mag = Math.hypot(x, y, z);
-            if (!ifcWorldOrigin && mag >= LARGE_COORD_THRESHOLD) {
-                ifcWorldOrigin = { x, y, z };
-                ifcOriginAutoApplied = true;
-                updateCrsAutoUi();
-                syncGeoRasterToIfcOrigin();
-                trackUsage('coord_rebase', { magnitude: Math.round(mag), source: 'landxml' });
-            }
-        }
-
-        function landXmlToSceneXYZ(nez) {
+        function landXmlToSceneXYZ(nez, opts = {}) {
             if (!nez) return null;
-            landXmlEnsureOrigin(nez.x, nez.y, nez.elev);
-            if (ifcWorldOrigin) {
+            const origin = landXmlCoordCtx.origin || ifcWorldOrigin;
+            const noRebase = opts.noRebase || opts.localCluster;
+            if (origin && !noRebase) {
                 return [
-                    nez.x - ifcWorldOrigin.x,
-                    nez.y - ifcWorldOrigin.y,
-                    nez.elev - ifcWorldOrigin.z
+                    nez.x - origin.x,
+                    nez.y - origin.y,
+                    nez.elev - origin.z
                 ];
             }
             return [nez.x, nez.y, nez.elev];
+        }
+
+        function landXmlIsLocalClusterCenter(center) {
+            if (!center) return true;
+            return Math.hypot(center.x, center.y, center.z) < LARGE_COORD_THRESHOLD;
+        }
+
+        function landXmlSurfaceRawCenter(surfaceEl) {
+            const definition = landXmlFirst(surfaceEl, 'Definition');
+            const pntsEl = definition ? landXmlFirst(definition, 'Pnts') : null;
+            if (!pntsEl) return null;
+            let sx = 0, sy = 0, sz = 0, n = 0;
+            landXmlChildren(pntsEl, 'P').forEach(pEl => {
+                const nez = landXmlParseNEZ(pEl.textContent);
+                if (!nez) return;
+                sx += nez.x; sy += nez.y; sz += nez.elev; n++;
+            });
+            if (!n) return null;
+            return { x: sx / n, y: sy / n, z: sz / n, count: n };
+        }
+
+        function landXmlPrepareCoordContext(rootEl) {
+            landXmlCoordCtx = {
+                scale: landXmlUnitScale(rootEl),
+                swapXY: false,
+                origin: ifcWorldOrigin ? { ...ifcWorldOrigin } : null,
+                fileHints: []
+            };
+
+            const surfaces = landXmlDescendants(rootEl, 'Surface');
+            const centers = [];
+            surfaces.forEach(surfaceEl => {
+                // временно без swap — оценим оба варианта ниже по сумме точек
+                const definition = landXmlFirst(surfaceEl, 'Definition');
+                const pntsEl = definition ? landXmlFirst(definition, 'Pnts') : null;
+                if (!pntsEl) return;
+                let sN = 0, sE = 0, sZ = 0, n = 0;
+                landXmlChildren(pntsEl, 'P').forEach(pEl => {
+                    const parts = String(pEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+                    if (parts.length < 2 || parts.some(v => !Number.isFinite(v))) return;
+                    const scale = landXmlCoordCtx.scale;
+                    sN += parts[0] * scale;
+                    sE += parts[1] * scale;
+                    sZ += (parts[2] || 0) * scale;
+                    n++;
+                });
+                if (!n) return;
+                centers.push({
+                    name: surfaceEl.getAttribute('name') || 'Surface',
+                    n: sN / n,
+                    e: sE / n,
+                    z: sZ / n,
+                    count: n
+                });
+            });
+
+            // Добираем CgPoints, если поверхностей нет
+            if (!centers.length) {
+                let sN = 0, sE = 0, sZ = 0, n = 0;
+                landXmlDescendants(rootEl, 'CgPoint').forEach(pEl => {
+                    const parts = String(pEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+                    if (parts.length < 2 || parts.some(v => !Number.isFinite(v))) return;
+                    const scale = landXmlCoordCtx.scale;
+                    sN += parts[0] * scale;
+                    sE += parts[1] * scale;
+                    sZ += (parts[2] || 0) * scale;
+                    n++;
+                });
+                if (n) centers.push({ name: 'CgPoints', n: sN / n, e: sE / n, z: sZ / n, count: n });
+            }
+
+            const weighted = (pick) => {
+                let sx = 0, sy = 0, sz = 0, w = 0;
+                centers.forEach(c => {
+                    const p = pick(c);
+                    const mag = Math.hypot(p.x, p.y, p.z);
+                    if (mag < LARGE_COORD_THRESHOLD) return; // только геодезический кластер
+                    sx += p.x * c.count;
+                    sy += p.y * c.count;
+                    sz += p.z * c.count;
+                    w += c.count;
+                });
+                if (!w) return null;
+                return { x: sx / w, y: sy / w, z: sz / w };
+            };
+
+            const centerStd = weighted(c => ({ x: c.e, y: c.n, z: c.z })); // X=E Y=N
+            const centerSwap = weighted(c => ({ x: c.n, y: c.e, z: c.z })); // X=N Y=E
+
+            if (ifcWorldOrigin && centerStd && centerSwap) {
+                const dStd = Math.hypot(
+                    centerStd.x - ifcWorldOrigin.x,
+                    centerStd.y - ifcWorldOrigin.y,
+                    centerStd.z - ifcWorldOrigin.z
+                );
+                const dSwap = Math.hypot(
+                    centerSwap.x - ifcWorldOrigin.x,
+                    centerSwap.y - ifcWorldOrigin.y,
+                    centerSwap.z - ifcWorldOrigin.z
+                );
+                if (dSwap < dStd * 0.85) {
+                    landXmlCoordCtx.swapXY = true;
+                    landXmlCoordCtx.fileHints.push(
+                        `Авто: оси LandXML X↔Y под IFC (Δ ${Math.round(dSwap)} м vs ${Math.round(dStd)} м)`
+                    );
+                } else if (dStd > 50000 && dSwap > 50000) {
+                    landXmlCoordCtx.fileHints.push(
+                        `LandXML далеко от IFC origin (Δ ${Math.round(Math.min(dStd, dSwap))} м) — проверьте CRS`
+                    );
+                }
+            } else if (!ifcWorldOrigin) {
+                // Нет IFC origin: если «стандарт» даёт мелкий центр, а swap — крупный, не меняем (Civil = NEZ→X=E,Y=N)
+                landXmlCoordCtx.swapXY = false;
+            }
+
+            const fileOrigin = landXmlCoordCtx.swapXY ? centerSwap : centerStd;
+            if (!landXmlCoordCtx.origin && fileOrigin && Math.hypot(fileOrigin.x, fileOrigin.y, fileOrigin.z) >= LARGE_COORD_THRESHOLD) {
+                ifcWorldOrigin = { ...fileOrigin };
+                ifcOriginAutoApplied = true;
+                landXmlCoordCtx.origin = { ...fileOrigin };
+                updateCrsAutoUi();
+                syncGeoRasterToIfcOrigin();
+                trackUsage('coord_rebase', {
+                    magnitude: Math.round(Math.hypot(fileOrigin.x, fileOrigin.y, fileOrigin.z)),
+                    source: 'landxml'
+                });
+            } else if (landXmlCoordCtx.origin) {
+                // already from IFC
+            } else if (fileOrigin) {
+                landXmlCoordCtx.origin = { ...fileOrigin };
+            }
+
+            const localCount = centers.filter(c => {
+                const p = landXmlCoordCtx.swapXY
+                    ? { x: c.n, y: c.e, z: c.z }
+                    : { x: c.e, y: c.n, z: c.z };
+                return landXmlIsLocalClusterCenter(p);
+            }).length;
+            const geoCount = centers.length - localCount;
+            if (localCount && geoCount) {
+                landXmlCoordCtx.fileHints.push(
+                    `Смешанные координаты: ${geoCount} поверхностей в геодезии, ${localCount} локально (<${LARGE_COORD_THRESHOLD} м). Локальные не сдвигаем общим origin.`
+                );
+            }
+            if (landXmlCoordCtx.scale !== 1) {
+                landXmlCoordCtx.fileHints.push(`Единицы LandXML → метры (×${landXmlCoordCtx.scale.toFixed(6)})`);
+            }
+
+            landXmlCoordCtx.surfaceCenters = centers;
+            return landXmlCoordCtx;
+        }
+
+        function landXmlLocalizeObject3D(obj, minDistance = 500) {
+            if (!obj) return;
+            const targets = [];
+            if (obj.isMesh || obj.isLine || obj.isLineSegments || obj.isPoints) targets.push(obj);
+            else obj.traverse?.(child => {
+                if (child.isMesh || child.isLine || child.isLineSegments || child.isPoints) targets.push(child);
+            });
+            targets.forEach(mesh => {
+                const geom = mesh.geometry;
+                if (!geom?.attributes?.position) return;
+                if (!geom.boundingBox) geom.computeBoundingBox();
+                if (!geom.boundingBox || geom.boundingBox.isEmpty()) return;
+                const c = new THREE.Vector3();
+                geom.boundingBox.getCenter(c);
+                if (c.length() < minDistance) return;
+                geom.translate(-c.x, -c.y, -c.z);
+                geom.computeBoundingBox();
+                geom.computeBoundingSphere();
+                mesh.position.x += c.x;
+                mesh.position.y += c.y;
+                mesh.position.z += c.z;
+            });
         }
 
         function landXmlAddSegment(bucket, a, b) {
@@ -5263,7 +5460,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return pts;
         }
 
-        function landXmlParsePntList(listEl, as3d) {
+        function landXmlParsePntList(listEl, as3d, xyzOpts = {}) {
             if (!listEl) return [];
             const nums = String(listEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
             const step = as3d ? 3 : 2;
@@ -5273,7 +5470,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const e = nums[i + 1];
                 const z = as3d ? nums[i + 2] : 0;
                 if (![n, e, z].every(Number.isFinite)) continue;
-                const xyz = landXmlToSceneXYZ({ n, e, z, x: e, y: n, elev: z });
+                const nez = landXmlMapRawNEZ(n, e, z);
+                const xyz = landXmlToSceneXYZ(nez, xyzOpts);
                 if (xyz) out.push(xyz);
             }
             return out;
@@ -5292,7 +5490,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return inside;
         }
 
-        function landXmlCollectSurfaceBoundaries(surfaceEl) {
+        function landXmlCollectSurfaceBoundaries(surfaceEl, xyzOpts = {}) {
             const source = landXmlFirst(surfaceEl, 'SourceData');
             if (!source) return { outer: [], hide: [], linePositions: [] };
             const outer = [];
@@ -5304,8 +5502,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (!bndType) return;
                 const list3 = landXmlFirst(bnd, 'PntList3D');
                 const list2 = landXmlFirst(bnd, 'PntList2D');
-                const ring = list3 ? landXmlParsePntList(list3, true)
-                    : (list2 ? landXmlParsePntList(list2, false) : []);
+                const ring = list3 ? landXmlParsePntList(list3, true, xyzOpts)
+                    : (list2 ? landXmlParsePntList(list2, false, xyzOpts) : []);
                 if (ring.length < 3) return;
                 for (let i = 0; i < ring.length; i++) {
                     landXmlAddSegment(linePositions, ring[i], ring[(i + 1) % ring.length]);
@@ -5343,16 +5541,22 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const facesEl = landXmlFirst(definition, 'Faces');
             if (!pntsEl || !facesEl) return null;
 
+            const rawCenter = landXmlSurfaceRawCenter(surfaceEl);
+            const localCluster = landXmlIsLocalClusterCenter(rawCenter) &&
+                !!(landXmlCoordCtx.origin || ifcWorldOrigin) &&
+                !landXmlIsLocalClusterCenter(landXmlCoordCtx.origin || ifcWorldOrigin);
+            const xyzOpts = { localCluster };
+
             const idToXyz = new Map();
             landXmlChildren(pntsEl, 'P').forEach(pEl => {
                 const id = pEl.getAttribute('id');
                 const nez = landXmlParseNEZ(pEl.textContent);
-                const xyz = landXmlToSceneXYZ(nez);
+                const xyz = landXmlToSceneXYZ(nez, xyzOpts);
                 if (id != null && xyz) idToXyz.set(String(id), xyz);
             });
             if (idToXyz.size < 3) return null;
 
-            const boundaries = landXmlCollectSurfaceBoundaries(surfaceEl);
+            const boundaries = landXmlCollectSurfaceBoundaries(surfaceEl, xyzOpts);
             const positions = [];
             let faceCount = 0;
             let skippedInvisible = 0;
@@ -5401,9 +5605,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 faces: faceCount,
                 skippedInvisible,
                 skippedBoundary,
+                localCluster: !!localCluster,
+                swapXY: !!landXmlCoordCtx.swapXY,
                 elevMin: definition.getAttribute('elevMin') || '',
                 elevMax: definition.getAttribute('elevMax') || ''
             };
+            landXmlLocalizeObject3D(mesh);
             return { mesh, boundaries };
         }
 
@@ -5761,38 +5968,15 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 throw new Error('Ожидается корневой элемент LandXML (Civil 3D → Export to LandXML).');
             }
 
-            // Предварительно задаём общий origin по центру TIN/точек (как у IFC),
-            // чтобы большие геодезические координаты не «ломали» float32.
-            if (!ifcWorldOrigin) {
-                let sx = 0, sy = 0, sz = 0, n = 0;
-                landXmlDescendants(rootEl, 'P').forEach(pEl => {
-                    const nez = landXmlParseNEZ(pEl.textContent);
-                    if (!nez) return;
-                    sx += nez.x; sy += nez.y; sz += nez.elev; n++;
-                });
-                landXmlDescendants(rootEl, 'CgPoint').forEach(pEl => {
-                    const nez = landXmlParseNEZ(pEl.textContent);
-                    if (!nez) return;
-                    sx += nez.x; sy += nez.y; sz += nez.elev; n++;
-                });
-                if (n > 0) {
-                    const cx = sx / n, cy = sy / n, cz = sz / n;
-                    if (Math.hypot(cx, cy, cz) >= LARGE_COORD_THRESHOLD) {
-                        ifcWorldOrigin = { x: cx, y: cy, z: cz };
-                        ifcOriginAutoApplied = true;
-                        updateCrsAutoUi();
-                        syncGeoRasterToIfcOrigin();
-                        trackUsage('coord_rebase', {
-                            magnitude: Math.round(Math.hypot(cx, cy, cz)),
-                            source: 'landxml'
-                        });
-                    }
-                }
-            }
+            const coordCtx = landXmlPrepareCoordContext(rootEl);
 
             const root = new THREE.Group();
             root.name = filename;
             const summary = [];
+            if (coordCtx.fileHints?.length) {
+                summary.push(...coordCtx.fileHints);
+                console.info('[LandXML]', filename, coordCtx.fileHints.join(' | '));
+            }
 
             const surfaces = landXmlDescendants(rootEl, 'Surface');
             surfaces.forEach((surfaceEl, idx) => {
@@ -5800,17 +5984,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (built?.mesh) {
                     root.add(built.mesh);
                     summary.push(built.mesh.name);
-                    const skipped = built.mesh.userData.landXml?.skippedInvisible || 0;
-                    if (skipped) summary.push(`−${skipped} вне границы`);
+                    const meta = built.mesh.userData.landXml || {};
+                    if (meta.skippedInvisible) summary.push(`−${meta.skippedInvisible} вне границы`);
+                    if (meta.localCluster) summary.push(`${meta.name}: локальный кластер`);
                 }
                 const boundaries = built?.boundaries;
                 const bndLines = landXmlBuildBoundaryLines(surfaceEl, boundaries);
                 if (bndLines) {
+                    landXmlLocalizeObject3D(bndLines);
                     root.add(bndLines);
                     summary.push(bndLines.name);
                 }
                 const contours = landXmlBuildContours(surfaceEl);
                 if (contours) {
+                    landXmlLocalizeObject3D(contours);
                     root.add(contours);
                     summary.push(contours.name);
                 }
@@ -5818,31 +6005,37 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             const cg = landXmlBuildCgPoints(rootEl);
             if (cg) {
+                landXmlLocalizeObject3D(cg);
                 root.add(cg);
                 summary.push(cg.name);
             }
             const alignments = landXmlBuildAlignments(rootEl);
             if (alignments) {
+                landXmlLocalizeObject3D(alignments);
                 root.add(alignments);
                 summary.push(`${alignments.children.length} трасс`);
             }
             const parcels = landXmlBuildParcels(rootEl);
             if (parcels) {
+                landXmlLocalizeObject3D(parcels);
                 root.add(parcels);
                 summary.push(`${parcels.children.length} участков`);
             }
             const pipes = landXmlBuildPipeNetworks(rootEl);
             if (pipes) {
+                landXmlLocalizeObject3D(pipes);
                 root.add(pipes);
                 summary.push(`${pipes.children.length} сетей труб`);
             }
             const planFeatures = landXmlBuildPlanFeatures(rootEl);
             if (planFeatures) {
+                landXmlLocalizeObject3D(planFeatures);
                 root.add(planFeatures);
                 summary.push(`${planFeatures.children.length} PlanFeature`);
             }
             const roadways = landXmlBuildRoadways(rootEl);
             if (roadways) {
+                landXmlLocalizeObject3D(roadways);
                 root.add(roadways);
                 summary.push(`${roadways.children.length} коридоров`);
             }
@@ -5853,6 +6046,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 );
             }
             root.userData.landXmlSummary = summary;
+            root.userData.landXmlCoord = {
+                swapXY: !!coordCtx.swapXY,
+                scale: coordCtx.scale,
+                origin: coordCtx.origin ? { ...coordCtx.origin } : null,
+                hints: coordCtx.fileHints || []
+            };
             if (ifcWorldOrigin) root.userData.coordOrigin = { ...ifcWorldOrigin };
             return root;
         }
@@ -5867,7 +6066,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 await addExternalModel(file, 'LandXML', root);
                 if (ifcWorldOrigin) {
                     const mod = [...loadedModels.values()].find(m => m.filename === file.name && m.format === 'LandXML');
-                    if (mod) mod.coordOrigin = { ...ifcWorldOrigin };
+                    if (mod) {
+                        mod.coordOrigin = { ...ifcWorldOrigin };
+                        mod.landXmlCoord = root.userData.landXmlCoord || null;
+                    }
+                }
+                const hints = root.userData.landXmlCoord?.hints || [];
+                if (hints.length) {
+                    console.info('[LandXML coords]', file.name, hints);
                 }
                 hideLoader();
             } catch (error) {
@@ -9600,6 +9806,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (lx.faces != null) infoHtml += propRow('Грани TIN', String(lx.faces));
                     if (lx.skippedInvisible) infoHtml += propRow('Вне границы (i=1)', String(lx.skippedInvisible));
                     if (lx.skippedBoundary) infoHtml += propRow('Обрезано Boundary', String(lx.skippedBoundary));
+                    if (lx.localCluster) infoHtml += propRow('Координаты', 'локальный кластер (без вычитания origin)');
+                    if (lx.swapXY) infoHtml += propRow('Оси', 'X↔Y под IFC');
                     if (lx.surfaceRefs) infoHtml += propRow('Поверхности', lx.surfaceRefs);
                     if (lx.alignmentRefs) infoHtml += propRow('Трассы', lx.alignmentRefs);
                     if (lx.elevMin || lx.elevMax) {
