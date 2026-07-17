@@ -687,16 +687,16 @@
         }
 
         .loader {
-            position: absolute;
+            position: fixed;
             inset: 0;
             display: none;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             gap: 14px;
-            background: rgba(241, 244, 247, .9);
-            backdrop-filter: blur(2px);
-            z-index: 50;
+            background: rgba(241, 244, 247, .92);
+            backdrop-filter: blur(3px);
+            z-index: 10050;
             padding: 24px;
         }
 
@@ -1478,31 +1478,7 @@
             <span style="opacity:.85">Revit (.rvt), Plant 3D и Tekla — только через экспорт в IFC (или будущий облачный конвертер).</span><br>
             <span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
         </div>
-        <div id="labels-container"></div> <div id="boxSelectRect"></div> <div class="loader is-indeterminate" id="loader">
-            <b id="loadTitle">ОБРАБОТКА</b>
-            <div class="load-progress" id="loadProgressWrap" aria-live="polite">
-                <div class="load-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="loadTrack">
-                    <div class="load-fill" id="loadFill"></div>
-                    <div class="load-runner" id="loadRunner" aria-hidden="true" title="бежит…">
-                        <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-                            <g class="body-bob" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)">
-                                <circle cx="16" cy="7.2" r="3.1" fill="currentColor" stroke="none"></circle>
-                                <path d="M16 10.4v8.2"></path>
-                                <path class="arm-l" d="M16 13.2l-5.2 3.2"></path>
-                                <path class="arm-r" d="M16 13.2l5.4 2.8"></path>
-                                <path class="leg-l" d="M16 18.6l-4.8 7.2"></path>
-                                <path class="leg-r" d="M16 18.6l5.2 7"></path>
-                            </g>
-                        </svg>
-                    </div>
-                </div>
-                <div class="load-meta">
-                    <span id="loadPct">загрузка…</span>
-                    <span id="loadBytes"></span>
-                </div>
-            </div>
-            <small id="loadSub">инициализация...</small>
-        </div>
+        <div id="labels-container"></div> <div id="boxSelectRect"></div>
     </main>
 
     <div class="resizer" id="dragRight"></div>
@@ -8807,6 +8783,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         const YA_WORLD_EXT = /\.(jgw|pgw|tfw|wld|eww)$/i;
         const YA_STORAGE_KEY = 'bimlva_yandex_public_link';
         const YA_DOKPUB_BASE = 'https://getfile.dokpub.com/yandex/get/';
+        const YA_CORS_EU_BASE = 'https://cors.eu.org/';
         let yaPublicKey = '';
         let yaListedFiles = [];
         let yaFolderName = '';
@@ -8892,7 +8869,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return path.startsWith('/') ? path : `/${path}`;
         }
 
-        /** CORS-прокси dokpub: браузер не может читать downloader.disk.yandex.ru (403 + нет ACAO). */
+        /** CORS body-прокси: браузер не может читать storage.yandex.net (403 + нет ACAO при Sec-Fetch). */
+        function yaBuildCorsEuUrl(fileUrl) {
+            if (!fileUrl) return '';
+            return YA_CORS_EU_BASE + fileUrl;
+        }
+
         function yaBuildDokpubUrl(publicKey, filePath) {
             const combined = yaNormalizePublicKey(publicKey) + yaNormalizeResourcePath(filePath);
             return YA_DOKPUB_BASE + encodeURIComponent(combined);
@@ -8918,10 +8900,15 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     cache: 'no-store',
                     mode: 'cors',
                     redirect: 'follow',
+                    // cors.eu.org и аналоги режут запросы с Referer GitHub Pages
+                    referrerPolicy: 'no-referrer',
                     signal: ctrl.signal,
                     headers
                 });
-                if (!res.ok) throw new Error(`Ошибка скачивания HTTP ${res.status}`);
+                if (!res.ok) {
+                    const tip = await res.text().catch(() => '');
+                    throw new Error(`Ошибка скачивания HTTP ${res.status}${tip ? ': ' + tip.slice(0, 80) : ''}`);
+                }
 
                 const totalHeader = Number(res.headers.get('Content-Length')) || 0;
                 const total = totalHeader || expectedSize || 0;
@@ -8957,6 +8944,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             } finally {
                 clearTimeout(timer);
             }
+        }
+
+        async function yaResolveDownloadUrl(fileInfo, path) {
+            if (fileInfo.fileUrl) return fileInfo.fileUrl;
+            return yaGetDownloadHref(yaPublicKey, path);
         }
 
         async function yaFetchFileBlob(fileInfo) {
@@ -8999,8 +8991,22 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             };
 
             const cfg = yaAuthCfg();
-            const mode = String(cfg.yaDownloadProxy || 'dokpub').toLowerCase();
+            const mode = String(cfg.yaDownloadProxy || 'cors-eu').toLowerCase();
             const attempts = [];
+
+            const pushCorsEu = async () => {
+                try {
+                    const fileUrl = await yaResolveDownloadUrl(fileInfo, path);
+                    const proxyUrl = yaBuildCorsEuUrl(fileUrl);
+                    if (!proxyUrl) return;
+                    attempts.push({
+                        label: 'cors-eu',
+                        run: () => yaFetchArrayBufferOnce(proxyUrl, 120000, null, onProgress, expected)
+                    });
+                } catch (err) {
+                    console.warn('cors-eu: не удалось получить ссылку', err);
+                }
+            };
 
             const pushDokpub = () => {
                 if (!yaPublicKey) return;
@@ -9008,7 +9014,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     label: 'dokpub',
                     run: () => yaFetchArrayBufferOnce(
                         yaBuildDokpubUrl(yaPublicKey, path),
-                        120000,
+                        90000,
                         null,
                         onProgress,
                         expected
@@ -9017,10 +9023,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             };
 
             const pushSupabase = async () => {
-                let fileUrl = fileInfo.fileUrl || '';
-                if (!fileUrl) {
-                    try { fileUrl = await yaGetDownloadHref(yaPublicKey, path); } catch (_) { /* ignore */ }
-                }
+                let fileUrl = '';
+                try { fileUrl = await yaResolveDownloadUrl(fileInfo, path); } catch (_) { /* ignore */ }
                 const proxyUrl = yaBuildSupabaseProxyUrl(fileUrl);
                 if (!proxyUrl) return;
                 const key = cfg.supabaseAnonKey || '';
@@ -9031,33 +9035,22 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 });
             };
 
-            // Порядок: CORS-прокси раньше прямого downloader (тот в браузере почти всегда падает)
+            // Только body-прокси (без редиректа браузера на storage.yandex.net)
             if (mode === 'supabase') {
                 await pushSupabase();
+                await pushCorsEu();
                 pushDokpub();
+            } else if (mode === 'dokpub') {
+                pushDokpub();
+                await pushCorsEu();
             } else if (mode === 'auto') {
+                await pushCorsEu();
                 await pushSupabase();
                 pushDokpub();
             } else if (mode !== 'none') {
-                // dokpub (по умолчанию) — сразу рабочий CORS-путь, без ожидания незадеплоенного Edge Function
+                await pushCorsEu();
                 pushDokpub();
             }
-
-            // Прямые URL Яндекса — только после прокси и без предварительного API-запроса
-            // (раньше href тянули ДО старта скачивания → лишняя задержка).
-            if (fileInfo.fileUrl) {
-                attempts.push({
-                    label: 'yandex-direct',
-                    run: () => yaFetchArrayBufferOnce(fileInfo.fileUrl, 45000, null, onProgress, expected)
-                });
-            }
-            attempts.push({
-                label: 'yandex-href',
-                run: async () => {
-                    const href = await yaGetDownloadHref(yaPublicKey, path);
-                    return yaFetchArrayBufferOnce(href, 45000, null, onProgress, expected);
-                }
-            });
 
             let lastError = null;
             for (let i = 0; i < attempts.length; i++) {
@@ -9073,6 +9066,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (fileInfo.size > 0 && buffer.byteLength < Math.min(64, fileInfo.size)) {
                         throw new Error(`Слишком короткий ответ (${buffer.byteLength} байт)`);
                     }
+                    // Отсекаем HTML/ошибки прокси
+                    const head = new TextDecoder().decode(buffer.slice(0, 64)).trim().toLowerCase();
+                    if (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('invalid referer')) {
+                        throw new Error('Прокси вернул не файл');
+                    }
                     setLoaderProgress(1, { loaded: buffer.byteLength, total: buffer.byteLength });
                     onProgress.flush?.();
                     return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
@@ -9083,7 +9081,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
 
             const msg = lastError?.message || String(lastError);
-            if (/Failed to fetch|NetworkError|Load failed|Таймаут|HTTP 403|HTTP 502/i.test(msg)) {
+            if (/Failed to fetch|NetworkError|Load failed|Таймаут|HTTP 403|HTTP 502|Invalid Referer/i.test(msg)) {
                 throw new Error(
                     'Не удалось скачать с Яндекс.Диска (CORS/прокси). Обновите страницу Ctrl+F5 и откройте файл ещё раз.'
                 );

@@ -25,12 +25,12 @@ window.BIMLVA_AUTH_CONFIG = {
   // Пароль к stats.html (по умолчанию: bimlva-stats)
   statsPasswordSha256: 'be2b5a8ec87fc9b08f7e30554f56993b1636267ec66cda921886134aafa4e94b',
 
-  // Скачивание с Яндекс.Диска: браузер получает 403/CORS на downloader.disk.yandex.ru,
-  // поэтому бинарники идут через CORS-прокси.
-  // 'dokpub' — публичный getfile.dokpub.com (работает сразу)
+  // Скачивание с Яндекс.Диска: браузер не может читать storage.yandex.net (403 при CORS),
+  // поэтому бинарники идут через body-прокси без редиректа в браузере.
+  // 'cors-eu' — https://cors.eu.org (работает сразу; fetch с referrerPolicy: no-referrer)
   // 'supabase' — свой Edge Function ya-proxy (см. supabase/functions/ya-proxy)
-  // 'auto' — сначала supabase (если задан), иначе dokpub
-  yaDownloadProxy: 'dokpub',
+  // 'dokpub' / 'auto' — запасные варианты
+  yaDownloadProxy: 'cors-eu',
   // yaProxyUrl: 'https://lgpzlvdviwieqkzkhebt.supabase.co/functions/v1/ya-proxy',
 
   siteName: 'BIM.LVA'
