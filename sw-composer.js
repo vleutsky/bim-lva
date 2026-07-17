@@ -1,10 +1,11 @@
 /* BIM.LVA Composer — lightweight offline shell cache */
-const CACHE = 'bimlva-composer-shell-v2';
+const CACHE = 'bimlva-composer-shell-v4';
 const SHELL = [
   './',
   './index.html',
   './bim-lva-composer-ifc.html',
-  './manifest.webmanifest'
+  './manifest.webmanifest',
+  './stats.js'
 ];
 
 self.addEventListener('install', event => {
