@@ -32,8 +32,12 @@
   function mode() {
     const m = cfg.mode || 'auto';
     if (m === 'local' || m === 'supabase') return m;
-    if (cfg.supabaseUrl && cfg.supabaseAnonKey) return 'supabase';
+    if (cfg.supabaseUrl && supabaseKey()) return 'supabase';
     return 'local';
+  }
+
+  function supabaseKey() {
+    return cfg.supabaseAnonKey || cfg.supabasePublishableKey || '';
   }
 
   function isAdminEmail(email) {
@@ -102,17 +106,29 @@
   async function ensureSupabase() {
     if (supabaseClient) return supabaseClient;
     if (mode() !== 'supabase') return null;
+    const key = supabaseKey();
+    if (!cfg.supabaseUrl || !key) {
+      throw new Error('Supabase не настроен: укажите URL и ключ в auth-config.js');
+    }
     if (!global.supabase?.createClient) {
       await new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js';
+        // Актуальный SDK лучше понимает sb_publishable_ ключи
+        s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.min.js';
         s.async = true;
         s.onload = resolve;
         s.onerror = () => reject(new Error('Не удалось загрузить Supabase SDK'));
         document.head.appendChild(s);
       });
     }
-    supabaseClient = global.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    supabaseClient = global.supabase.createClient(cfg.supabaseUrl, key, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        flowType: 'pkce'
+      }
+    });
     return supabaseClient;
   }
 
@@ -173,9 +189,12 @@
       const { data, error } = await client.auth.signUp({
         email,
         password,
-        options: { data: { name, telegram } }
+        options: {
+          data: { name, telegram },
+          emailRedirectTo: 'https://vleutsky.github.io/bim-lva/'
+        }
       });
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(mapAuthError(error.message));
       const u = data.user;
       if (data.session && u) {
         writeSession({
@@ -234,7 +253,7 @@
     if (mode() === 'supabase') {
       const client = await ensureSupabase();
       const { data, error } = await client.auth.signInWithPassword({ email, password });
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(mapAuthError(error.message));
       const u = data.user;
       writeSession({
         id: u.id,
