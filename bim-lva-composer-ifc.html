@@ -1814,6 +1814,7 @@
                     <li>Вставьте ссылку ниже и нажмите <b>Открыть папку</b> — выберите файл и загрузите <b>по одному</b> (так экономится память).</li>
                 </ol>
                 OAuth-токен не нужен: Composer работает через публичный API Яндекс.Диска.
+                <br><span style="opacity:.9">Скачивание идёт через CORS-прокси (браузер не может качать напрямую с Яндекса) — первые секунды прогресс может «ползти» по оценке, это нормально.</span>
             </div>
             <div class="prop small">
                 <div class="k">Публичная ссылка на папку или файл</div>
@@ -8842,6 +8843,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (saved && !$('yaLink').value.trim()) $('yaLink').value = saved;
             $('yandexModal').classList.add('show');
             updateYaLoadSelectedState();
+            // Фоновая проверка своего прокси — не тормозит первую загрузку
+            yaIsSupabaseProxyAlive().catch(() => {});
         }
 
         function closeYandexModal() {
@@ -8956,19 +8959,21 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
                 if (!res.body || !onProgress) {
                     const buffer = await res.arrayBuffer();
-                    if (onProgress) onProgress(buffer.byteLength, total || buffer.byteLength);
+                    if (onProgress) onProgress(buffer.byteLength, total || buffer.byteLength, { phase: 'done' });
                     return buffer;
                 }
 
                 const reader = res.body.getReader();
                 const chunks = [];
                 let loaded = 0;
+                let first = true;
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     chunks.push(value);
                     loaded += value.byteLength;
-                    onProgress(loaded, total);
+                    onProgress(loaded, total, { phase: first ? 'first-byte' : 'stream' });
+                    first = false;
                 }
 
                 const out = new Uint8Array(loaded);
@@ -8977,7 +8982,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     out.set(chunk, offset);
                     offset += chunk.byteLength;
                 }
-                if (onProgress) onProgress(loaded, total || loaded);
+                if (onProgress) onProgress(loaded, total || loaded, { phase: 'done' });
                 return out.buffer;
             } catch (err) {
                 if (err?.name === 'AbortError') throw new Error('Таймаут скачивания с Яндекс.Диска');
@@ -8987,23 +8992,94 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
         }
 
-        async function yaResolveDownloadUrl(fileInfo, path) {
+        async function yaResolveDownloadUrl(fileInfo, path, { preferListing = true } = {}) {
+            // listing.file обычно лучше проходит через публичные CORS-прокси, чем /download href
+            if (preferListing && fileInfo.fileUrl) return fileInfo.fileUrl;
+            const href = await yaGetDownloadHref(yaPublicKey, path);
+            if (href) return href;
             if (fileInfo.fileUrl) return fileInfo.fileUrl;
-            return yaGetDownloadHref(yaPublicKey, path);
+            throw new Error('Нет ссылки на скачивание');
+        }
+
+        let yaProxyAliveCache = null; // null | boolean
+        async function yaIsSupabaseProxyAlive() {
+            if (yaProxyAliveCache != null) return yaProxyAliveCache;
+            const probe = yaBuildSupabaseProxyUrl('https://downloader.disk.yandex.ru/disk/probe');
+            if (!probe) {
+                yaProxyAliveCache = false;
+                return false;
+            }
+            try {
+                const cfg = yaAuthCfg();
+                const key = cfg.supabaseAnonKey || '';
+                const ctrl = new AbortController();
+                const t = setTimeout(() => ctrl.abort(), 2000);
+                const res = await fetch(probe, {
+                    method: 'GET',
+                    mode: 'cors',
+                    credentials: 'omit',
+                    referrerPolicy: 'no-referrer',
+                    cache: 'no-store',
+                    signal: ctrl.signal,
+                    headers: key ? { apikey: key, Authorization: `Bearer ${key}` } : undefined
+                });
+                clearTimeout(t);
+                // 404 NOT_FOUND = функция не задеплоена; иначе endpoint жив
+                yaProxyAliveCache = res.status !== 404;
+            } catch (_) {
+                yaProxyAliveCache = false;
+            }
+            return yaProxyAliveCache;
         }
 
         async function yaFetchFileBlob(fileInfo) {
             const path = yaNormalizeResourcePath(fileInfo.path === '/' ? '' : fileInfo.path);
             const expected = Number(fileInfo.size) || 0;
+            const startedAt = performance.now();
+
+            // Пока прокси буферизует ответ, реальных байт нет — не зависаем на «0%»
             showLoader('СКАЧИВАНИЕ', `${fileInfo.name}${expected ? ` (${formatBytes(expected)})` : ''}…`, {
-                loaded: 0,
-                total: expected || undefined,
-                ratio: expected > 0 ? 0 : null,
-                label: expected > 0 ? '0%' : 'скачивание…'
+                label: 'подключение…'
             });
 
-            const onProgress = (loaded, total) => {
+            let waitTimer = 0;
+            let gotBytes = false;
+            const stopWaitUi = () => {
+                if (waitTimer) {
+                    clearInterval(waitTimer);
+                    waitTimer = 0;
+                }
+            };
+            waitTimer = setInterval(() => {
+                if (gotBytes) return;
+                const sec = Math.max(0, Math.floor((performance.now() - startedAt) / 1000));
+                // Мягкая оценка: публичный прокси часто молчит до первого байта 5–30с
+                const soft = expected > 0
+                    ? Math.min(0.82, (performance.now() - startedAt) / Math.max(8000, expected / 35))
+                    : null;
+                if (soft != null) {
+                    setLoaderProgress(soft, {
+                        loaded: Math.round(soft * expected),
+                        total: expected,
+                        label: undefined
+                    });
+                    const pctEl = $('loadPct');
+                    if (pctEl) pctEl.textContent = `~${Math.round(soft * 100)}% · ${sec}с`;
+                } else {
+                    setLoaderProgress(null, { label: `подключение… ${sec}с` });
+                }
+                const sub = $('loadSub');
+                if (sub) {
+                    sub.textContent = `${fileInfo.name} · облако отвечает… (${sec}с)`;
+                }
+            }, 200);
+
+            const onProgress = (loaded, total, meta = {}) => {
                 const t = total || expected;
+                if (loaded > 0) {
+                    gotBytes = true;
+                    stopWaitUi();
+                }
                 onProgress._loaded = loaded;
                 onProgress._total = t;
                 if (onProgress._raf) return;
@@ -9016,10 +9092,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                         total: T,
                         label: T > 0 ? undefined : 'скачивание…'
                     });
-                    $('loadSub').textContent = `${fileInfo.name}${T ? ` · ${formatBytes(Math.min(L, T || L))} / ${formatBytes(T)}` : ` · ${formatBytes(L)}`}`;
+                    const sub = $('loadSub');
+                    if (sub) {
+                        sub.textContent = `${fileInfo.name}${T ? ` · ${formatBytes(Math.min(L, T || L))} / ${formatBytes(T)}` : ` · ${formatBytes(L)}`}`;
+                    }
                 });
             };
             onProgress.flush = () => {
+                stopWaitUi();
                 if (onProgress._raf) {
                     cancelAnimationFrame(onProgress._raf);
                     onProgress._raf = 0;
@@ -9027,7 +9107,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const L = onProgress._loaded || 0;
                 const T = onProgress._total || 0;
                 if (L || T) {
-                    setLoaderProgress(T > 0 ? L / T : null, { loaded: L, total: T });
+                    setLoaderProgress(T > 0 ? Math.min(1, L / T) : null, { loaded: L, total: T });
                 }
             };
 
@@ -9035,18 +9115,16 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const mode = String(cfg.yaDownloadProxy || 'cors-eu').toLowerCase();
             const attempts = [];
 
-            const pushCorsEu = async () => {
-                try {
-                    const fileUrl = await yaResolveDownloadUrl(fileInfo, path);
-                    const proxyUrl = yaBuildCorsEuUrl(fileUrl);
-                    if (!proxyUrl) return;
-                    attempts.push({
-                        label: 'cors-eu',
-                        run: () => yaFetchArrayBufferOnce(proxyUrl, 120000, null, onProgress, expected)
-                    });
-                } catch (err) {
-                    console.warn('cors-eu: не удалось получить ссылку', err);
-                }
+            const pushCorsEu = async (preferListing = true) => {
+                attempts.push({
+                    label: preferListing ? 'cors-eu' : 'cors-eu-fresh',
+                    run: async () => {
+                        const fileUrl = await yaResolveDownloadUrl(fileInfo, path, { preferListing });
+                        const proxyUrl = yaBuildCorsEuUrl(fileUrl);
+                        if (!proxyUrl) throw new Error('Нет URL для прокси');
+                        return yaFetchArrayBufferOnce(proxyUrl, 120000, null, onProgress, expected);
+                    }
+                });
             };
 
             const pushDokpub = () => {
@@ -9055,7 +9133,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     label: 'dokpub',
                     run: () => yaFetchArrayBufferOnce(
                         yaBuildDokpubUrl(yaPublicKey, path),
-                        90000,
+                        60000,
                         null,
                         onProgress,
                         expected
@@ -9064,61 +9142,56 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             };
 
             const pushSupabase = async () => {
-                let fileUrl = '';
-                try { fileUrl = await yaResolveDownloadUrl(fileInfo, path); } catch (_) { /* ignore */ }
-                const proxyUrl = yaBuildSupabaseProxyUrl(fileUrl);
-                if (!proxyUrl) return;
-                const key = cfg.supabaseAnonKey || '';
-                const headers = key ? { apikey: key, Authorization: `Bearer ${key}` } : null;
                 attempts.push({
                     label: 'supabase-proxy',
-                    run: () => yaFetchArrayBufferOnce(proxyUrl, 120000, headers, onProgress, expected)
+                    run: async () => {
+                        const fileUrl = await yaResolveDownloadUrl(fileInfo, path, { preferListing: true });
+                        const proxyUrl = yaBuildSupabaseProxyUrl(fileUrl);
+                        if (!proxyUrl) throw new Error('Прокси Supabase не настроен');
+                        const key = cfg.supabaseAnonKey || '';
+                        const headers = key ? { apikey: key, Authorization: `Bearer ${key}` } : null;
+                        return yaFetchArrayBufferOnce(proxyUrl, 120000, headers, onProgress, expected);
+                    }
                 });
             };
 
-            // Только body-прокси (без редиректа браузера на storage.yandex.net)
-            if (mode === 'supabase') {
-                await pushSupabase();
-                await pushCorsEu();
+            // Порядок: свой Edge Function (если задеплоен) → cors.eu (listing) → cors.eu (fresh) → dokpub
+            const preferSupabase = mode === 'supabase' || mode === 'auto' || (mode === 'cors-eu' && await yaIsSupabaseProxyAlive());
+            if (preferSupabase) await pushSupabase();
+            if (mode === 'dokpub') {
                 pushDokpub();
-            } else if (mode === 'dokpub') {
-                pushDokpub();
-                await pushCorsEu();
-            } else if (mode === 'auto') {
-                await pushCorsEu();
-                await pushSupabase();
-                pushDokpub();
+                await pushCorsEu(true);
             } else if (mode !== 'none') {
-                await pushCorsEu();
-                pushDokpub();
+                await pushCorsEu(true);
+                await pushCorsEu(false);
+                if (!preferSupabase) pushDokpub();
             }
 
             let lastError = null;
-            for (let i = 0; i < attempts.length; i++) {
-                const step = attempts[i];
-                try {
-                    setLoaderProgress(expected > 0 ? 0 : null, {
-                        loaded: 0,
-                        total: expected || undefined,
-                        label: expected > 0 ? '0%' : `попытка ${i + 1}…`
-                    });
-                    const buffer = await step.run();
-                    if (!buffer || buffer.byteLength === 0) throw new Error('Пустой ответ при скачивании');
-                    if (fileInfo.size > 0 && buffer.byteLength < Math.min(64, fileInfo.size)) {
-                        throw new Error(`Слишком короткий ответ (${buffer.byteLength} байт)`);
+            try {
+                for (let i = 0; i < attempts.length; i++) {
+                    const step = attempts[i];
+                    try {
+                        gotBytes = false;
+                        const buffer = await step.run();
+                        if (!buffer || buffer.byteLength === 0) throw new Error('Пустой ответ при скачивании');
+                        if (fileInfo.size > 0 && buffer.byteLength < Math.min(64, fileInfo.size)) {
+                            throw new Error(`Слишком короткий ответ (${buffer.byteLength} байт)`);
+                        }
+                        const head = new TextDecoder().decode(buffer.slice(0, 64)).trim().toLowerCase();
+                        if (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('invalid referer')) {
+                            throw new Error('Прокси вернул не файл');
+                        }
+                        setLoaderProgress(1, { loaded: buffer.byteLength, total: buffer.byteLength });
+                        onProgress.flush?.();
+                        return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
+                    } catch (err) {
+                        lastError = err;
+                        console.warn(`Я.Диск ${step.label} ${i + 1}/${attempts.length}:`, fileInfo.name, err);
                     }
-                    // Отсекаем HTML/ошибки прокси
-                    const head = new TextDecoder().decode(buffer.slice(0, 64)).trim().toLowerCase();
-                    if (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('invalid referer')) {
-                        throw new Error('Прокси вернул не файл');
-                    }
-                    setLoaderProgress(1, { loaded: buffer.byteLength, total: buffer.byteLength });
-                    onProgress.flush?.();
-                    return new File([buffer], fileInfo.name, { type: 'application/octet-stream' });
-                } catch (err) {
-                    lastError = err;
-                    console.warn(`Я.Диск ${step.label} ${i + 1}/${attempts.length}:`, fileInfo.name, err);
                 }
+            } finally {
+                stopWaitUi();
             }
 
             const msg = lastError?.message || String(lastError);
