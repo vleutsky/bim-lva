@@ -1683,7 +1683,7 @@
                 <button type="button" class="tb-menu-btn" aria-haspopup="true" aria-expanded="false">Вид</button>
                 <div class="tb-menu-panel">
                     <div class="tb-menu-label">Камера и сцена</div>
-                    <button class="btn on" id="btnZoomCursor" title="Зум к точке под курсором (как в Navisworks / BIMvision). Выкл — зум к центру орбиты">🎯 Зум к курсору</button>
+                    <button class="btn on" id="btnZoomCursor" title="Зум к точке под курсором (как в Navisworks / BIMvision). При близком приближении камера проходит сквозь поверхность — можно залететь внутрь. Выкл — зум к центру орбиты">🎯 Зум к курсору</button>
                     <button class="btn" id="btnPivotLock" disabled title="Фиксировать центр вращения/зума на выделенных элементах. Вкл после выделения — орбита крутится вокруг них">📌 На выделении</button>
                     <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ Сохранённые виды</button>
                     <button class="btn" id="btnShareView" disabled title="Скопировать ссылку на текущий вид">🔗 Ссылка на вид</button>
@@ -2572,11 +2572,11 @@
             if (Number.isFinite(maxDim) && maxDim > 0) lastSceneMaxDim = maxDim;
             const dist = camera.position.distanceTo(controls?.target || camera.position) || lastSceneMaxDim || 10;
             if (cameraNearAuto) {
-                // Раньше near = maxDim/200 на больших моделях давал метры и «съедал» геометрию при зуме.
-                // Авто: near уменьшается при приближении к цели орбиты.
-                const byDist = Math.max(0.01, dist / 500);
-                const byScene = Math.max(0.01, (lastSceneMaxDim || 10) / 1000);
-                camera.near = Math.max(0.01, Math.min(byDist, byScene, dist * 0.25));
+                // Авто: near уменьшается при приближении; низкий пол (1 мм) — чтобы внутри помещений
+                // не обрезало близкие стены/мебель.
+                const byDist = Math.max(0.001, dist / 800);
+                const byScene = Math.max(0.001, (lastSceneMaxDim || 10) / 2000);
+                camera.near = Math.max(0.001, Math.min(byDist, byScene, dist * 0.2));
             } else {
                 camera.near = Math.max(0.001, Number(cameraNearManual) || 0.05);
             }
@@ -10767,16 +10767,41 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function zoomCameraTowardPoint(point, deltaY) {
             // Как в OrbitControls: прокрутка вверх (deltaY < 0) — приближение
-            const factor = Math.exp(Math.sign(deltaY || 1) * ZOOM_FACTOR * Math.min(Math.abs(deltaY || 100) / 100, 3));
-            const camOffset = camera.position.clone().sub(point);
-            const targetOffset = controls.target.clone().sub(point);
-            camera.position.copy(point).add(camOffset.multiplyScalar(factor));
-            controls.target.copy(point).add(targetOffset.multiplyScalar(factor));
+            const intensity = Math.min(Math.abs(deltaY || 100) / 100, 3);
+            const factor = Math.exp(Math.sign(deltaY || 1) * ZOOM_FACTOR * intensity);
+            const zoomingIn = factor < 1;
+
+            const _zoomCamOff = camera.position.clone().sub(point);
+            const _zoomTargetOff = controls.target.clone().sub(point);
+            let newCam = point.clone().add(_zoomCamOff.clone().multiplyScalar(factor));
+            let newTarget = point.clone().add(_zoomTargetOff.clone().multiplyScalar(factor));
+
+            // Зум к курсору упирался в стену и не пускал внутрь здания.
+            // Если приближение достигло / пересекло якорь — продолжаем вдоль луча сквозь поверхность.
+            if (zoomingIn && zoomToCursorEnabled) {
+                const before = _zoomCamOff.length();
+                const afterVec = newCam.clone().sub(point);
+                const crossed = before > 1e-6 && _zoomCamOff.dot(afterVec) <= 0;
+                const stuckClose = before < 2.5 && afterVec.length() < 0.4;
+                if (crossed || stuckClose) {
+                    const forward = before > 1e-6
+                        ? _zoomCamOff.clone().multiplyScalar(-1).normalize()
+                        : camera.getWorldDirection(new THREE.Vector3());
+                    const step = Math.max(0.35, before * (1 - factor), 0.25 * intensity);
+                    newCam = camera.position.clone().addScaledVector(forward, step);
+                    const lookDist = Math.max(2.5, camera.position.distanceTo(controls.target) * 0.85, 1.5);
+                    newTarget = newCam.clone().addScaledVector(forward, lookDist);
+                }
+            }
+
+            camera.position.copy(newCam);
+            controls.target.copy(newTarget);
 
             const dist = camera.position.distanceTo(controls.target);
-            if (dist < 0.05) {
-                const dir = camOffset.lengthSq() > 0 ? camOffset.normalize() : new THREE.Vector3(0, -1, 0);
-                camera.position.copy(controls.target).add(dir.multiplyScalar(0.05));
+            if (dist < 0.15) {
+                const dir = camera.getWorldDirection(new THREE.Vector3());
+                if (dir.lengthSq() < 1e-8) dir.set(0, -1, 0);
+                controls.target.copy(camera.position).addScaledVector(dir, 2.5);
             }
             if (cameraNearAuto) applyCameraNear();
             controls.update();
