@@ -233,24 +233,40 @@
           emailRedirectTo: 'https://vleutsky.github.io/bim-lva/'
         }
       });
-      if (error) throw new Error(mapAuthError(error.message));
+      if (error) {
+        // Уже есть аккаунт — сразу пробуем войти тем же паролем
+        if (/already registered|User already registered/i.test(error.message || '')) {
+          return login({ email, password });
+        }
+        throw new Error(mapAuthError(error.message, { isAdmin: isAdminEmail(email) }));
+      }
       const u = data.user;
       if (data.session && u) {
-        writeSession({
-          id: u.id,
-          email: u.email,
-          name,
-          telegram,
-          createdAt: u.created_at,
-          provider: 'supabase'
-        });
+        writeSession(sessionFromUser(u));
+        // имя/telegram из формы приоритетнее пустых metadata
+        const cur = readSession();
+        if (cur) {
+          writeSession({
+            ...cur,
+            name: name || cur.name,
+            telegram: telegram || cur.telegram
+          });
+        }
+        try { global.BimLvaStats?.track?.('user_register', { provider: 'supabase' }); } catch (_) {}
+        emit();
+        return { user: getUser(), needsEmailConfirm: false };
       }
       try { global.BimLvaStats?.track?.('user_register', { provider: 'supabase' }); } catch (_) {}
       emit();
-      return {
-        user: getUser(),
-        needsEmailConfirm: !data.session
-      };
+      // Если confirm email включён в Supabase — сессии не будет
+      if (isAdminEmail(email)) {
+        return {
+          user: null,
+          needsEmailConfirm: true,
+          adminHint: true
+        };
+      }
+      return { user: getUser(), needsEmailConfirm: true };
     }
 
     const users = readUsers();
@@ -292,16 +308,9 @@
     if (mode() === 'supabase') {
       const client = await ensureSupabase();
       const { data, error } = await client.auth.signInWithPassword({ email, password });
-      if (error) throw new Error(mapAuthError(error.message));
+      if (error) throw new Error(mapAuthError(error.message, { isAdmin: isAdminEmail(email) }));
       const u = data.user;
-      writeSession({
-        id: u.id,
-        email: u.email,
-        name: u.user_metadata?.name || '',
-        telegram: u.user_metadata?.telegram || '',
-        createdAt: u.created_at,
-        provider: 'supabase'
-      });
+      writeSession(sessionFromUser(u));
       try { global.BimLvaStats?.track?.('user_login', { provider: 'supabase' }); } catch (_) {}
       emit();
       return getUser();
@@ -365,14 +374,22 @@
     return () => listeners.delete(fn);
   }
 
-  function mapAuthError(msg) {
+  function mapAuthError(msg, opts = {}) {
     const m = String(msg || '');
-    if (/Invalid login credentials/i.test(m)) return 'Неверный email или пароль';
-    if (/Email not confirmed/i.test(m)) return 'Подтвердите email — письмо уже отправлено';
+    const admin = !!opts.isAdmin;
+    if (/Invalid login credentials/i.test(m)) {
+      return admin
+        ? 'Неверный пароль или аккаунт ещё не создан. Если регистрировались с Confirm email — в Supabase: Authentication → Users → Confirm user, либо отключите Confirm email.'
+        : 'Неверный email или пароль';
+    }
+    if (/Email not confirmed/i.test(m)) {
+      return 'Email не подтверждён. В Supabase: Authentication → Providers → Email → выключите Confirm email (или Confirm user в Users).';
+    }
     if (/User already registered/i.test(m)) return 'Этот email уже зарегистрирован — войдите';
-    if (/rate limit/i.test(m)) return 'Слишком много попыток. Подождите минуту';
+    if (/rate limit|over_email_send_rate_limit/i.test(m)) {
+      return 'Лимит писем Supabase. Отключите Confirm email: Authentication → Providers → Email → Confirm email = OFF, подождите 1–2 мин.';
+    }
     if (/Password/i.test(m) && /least/i.test(m)) return 'Пароль слишком короткий';
-    if (/mapAuthError is not defined/i.test(m)) return 'Ошибка авторизации';
     return m || 'Ошибка авторизации';
   }
 

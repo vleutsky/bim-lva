@@ -154,8 +154,8 @@
     if (!auth) return;
     const m = auth.mode();
     noteEl.textContent = m === 'supabase'
-      ? 'Облачный аккаунт (Supabase). Если включено подтверждение email — проверьте почту после регистрации, затем войдите.'
-      : 'Локальный режим: аккаунт хранится в этом браузере. Для общей базы пользователей укажите Supabase в auth-config.js.';
+      ? 'Облачный аккаунт (Supabase). Админ: vladimirl1985@gmail.com. Если «лимит писем» / confirm — в Supabase выключите Confirm email.'
+      : 'Локальный режим: аккаунт хранится в этом браузере.';
   }
 
   function openAuth(initialTab) {
@@ -193,9 +193,14 @@
     try {
       if (tab === 'register') {
         const res = await auth.register(payload);
-        if (res.needsEmailConfirm) {
+        // register может вернуть user напрямую (после auto-login)
+        if (res && res.email && !('needsEmailConfirm' in res)) {
+          closeAuth();
+        } else if (res?.needsEmailConfirm) {
           errEl.className = 'bimlva-auth-ok';
-          errEl.textContent = 'Аккаунт создан. Подтвердите email, затем войдите.';
+          errEl.textContent = res.adminHint
+            ? 'Аккаунт создан, но в Supabase включено Confirm email. Выключите его: Authentication → Providers → Email → Confirm email OFF — затем войдите.'
+            : 'Аккаунт создан. Подтвердите email, затем войдите.';
           setTab('login');
         } else {
           closeAuth();
@@ -219,7 +224,7 @@
 
     const html = user
       ? `<button type="button" class="${btnClass}" data-auth-menu title="${escapeHtml(user.email)}">
-           <span class="bimlva-auth-user">${escapeHtml(user.name || user.email)}</span>
+           <span class="bimlva-auth-user">${escapeHtml(user.name || user.email)}${user.isAdmin ? ' · admin' : ''}</span>
            <span aria-hidden="true">▾</span>
          </button>`
       : `<button type="button" class="${btnClass}" data-auth-open>Войти</button>
