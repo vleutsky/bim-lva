@@ -4268,10 +4268,68 @@
         // Правило: первая модель с |center| ≥ LARGE_COORD_THRESHOLD задаёт общий origin
         // (ноль сцены = центр этой модели). Остальные геодезические модели вычитают его.
         // Локальные модели (|center| < порога) не сдвигаем — они уже у нуля.
+        // Важно: IFC часто в мм, LandXML в метрах — перед origin приводим IFC к метрам.
         const LARGE_COORD_THRESHOLD = 5000; // м от (0,0,0)
-        let ifcWorldOrigin = null; // {x,y,z} в пространстве модели (до поворота globalGroup)
+        let ifcWorldOrigin = null; // {x,y,z} в метрах (до поворота globalGroup)
         let ifcOriginAutoApplied = false;
         let worldOriginSource = null; // { filename, format }
+        let worldOriginLengthUnit = 'm';
+
+        function detectIfcLengthToMetersFromText(text) {
+            if (!text) return 1;
+            const head = text.slice(0, Math.min(text.length, 2_500_000));
+            // IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.) или с другим порядком enum
+            const si = [...head.matchAll(/IFCSIUNIT\s*\(([^;]*)\)/gi)];
+            for (const m of si) {
+                const body = m[1].toUpperCase();
+                if (!body.includes('LENGTHUNIT')) continue;
+                if (body.includes('.MILLI.')) return 0.001;
+                if (body.includes('.CENTI.')) return 0.01;
+                if (body.includes('.DECI.')) return 0.1;
+                if (body.includes('.KILO.')) return 1000;
+                if (body.includes('.METRE.') || body.includes('.METER.')) return 1;
+            }
+            if (/IFCCONVERSIONBASEDUNIT\s*\([^;]*LENGTHUNIT[^;]*'(")?inch\1?/i.test(head)) return 0.0254;
+            if (/IFCCONVERSIONBASEDUNIT\s*\([^;]*LENGTHUNIT[^;]*'(")?foot\1?/i.test(head)) return 0.3048;
+            if (/IFCCONVERSIONBASEDUNIT\s*\([^;]*LENGTHUNIT[^;]*FOOT/i.test(head)) return 0.3048;
+            return 1;
+        }
+
+        function detectIfcLengthToMeters(modelID, rawText) {
+            // 1) По сущностям IFC через web-ifc
+            try {
+                const typeId = WebIFC.IFCSIUNIT;
+                if (typeId != null && ifcAPI) {
+                    const ids = ifcAPI.GetLineIDsWithType(modelID, typeId);
+                    for (let i = 0; i < ids.size(); i++) {
+                        const line = ifcAPI.GetLine(modelID, ids.get(i), false);
+                        const unitType = String(line?.UnitType?.value || line?.UnitType || '').toUpperCase();
+                        const prefix = String(line?.Prefix?.value || line?.Prefix || '').toUpperCase();
+                        const name = String(line?.Name?.value || line?.Name || '').toUpperCase();
+                        if (unitType && unitType !== 'LENGTHUNIT') continue;
+                        if (!unitType && name !== 'METRE' && name !== 'METER') continue;
+                        if (prefix === 'MILLI') return 0.001;
+                        if (prefix === 'CENTI') return 0.01;
+                        if (prefix === 'DECI') return 0.1;
+                        if (prefix === 'KILO') return 1000;
+                        if (!prefix || prefix === 'NULL' || prefix === '') return 1;
+                    }
+                }
+            } catch (e) {
+                console.warn('IFC unit detect (API):', e);
+            }
+            // 2) Fallback по тексту STEP
+            return detectIfcLengthToMetersFromText(rawText || '');
+        }
+
+        function scaleIfcFragmentsToMeters(fragments, scale) {
+            if (!fragments?.length || !(scale > 0) || Math.abs(scale - 1) < 1e-12) return false;
+            const S = new THREE.Matrix4().makeScale(scale, scale, scale);
+            for (let i = 0; i < fragments.length; i++) {
+                fragments[i].matrix = S.clone().multiply(fragments[i].matrix);
+            }
+            return true;
+        }
 
         function estimateFragmentsOrigin(fragments) {
             if (!fragments?.length) return null;
@@ -4317,6 +4375,7 @@
                 filename: sourceMeta.filename || sourceMeta.name || '',
                 format: sourceMeta.format || ''
             };
+            worldOriginLengthUnit = 'm';
             updateCrsAutoUi();
             syncGeoRasterToIfcOrigin();
             trackUsage('coord_rebase', {
@@ -4325,6 +4384,61 @@
                 first: true
             });
             return true;
+        }
+
+        /**
+         * После загрузки второй модели: если она «улетела» от уже лежащих,
+         * пробуем типичные поправки (origin был в мм; оси X↔Y).
+         */
+        function reconcileModelAgainstFederation(modData) {
+            if (!modData?.group || loadedModels.size < 2 || !ifcWorldOrigin) return null;
+            const others = [...loadedModels.values()].filter(m => m !== modData && m.group);
+            if (!others.length) return null;
+
+            const newBox = new THREE.Box3().setFromObject(modData.group);
+            const oldBox = new THREE.Box3();
+            others.forEach(m => {
+                try { oldBox.expandByObject(m.group); } catch (_) {}
+            });
+            if (newBox.isEmpty() || oldBox.isEmpty()) return null;
+
+            const newC = newBox.getCenter(new THREE.Vector3());
+            const oldC = oldBox.getCenter(new THREE.Vector3());
+            const dist = newC.distanceTo(oldC);
+            if (dist < 250) return null; // уже собралось
+
+            const hint = {
+                dist: Math.round(dist),
+                fixed: false,
+                reason: ''
+            };
+
+            // Если новый центр ≈ старый + огромный сдвиг из‑за мм/м в origin —
+            // двигаем группу нового файла к центру сводки (мягкий safety-net).
+            // Не трогаем геометрию IFC задним числом — только внешние / LandXML.
+            if (modData.isFBX || modData.format === 'LandXML' || modData.format === 'DXF') {
+                const delta = oldC.clone().sub(newC);
+                // Не склеиваем разные площадки: сдвиг только если похож на ошибку единиц/осей
+                const o = ifcWorldOrigin;
+                const oMag = Math.hypot(o.x, o.y, o.z);
+                const looksLikeMmOrigin = oMag > 1e6 && dist > 1000;
+                const looksLikeAxisOrUnit = dist > 1000 && dist < oMag * 2;
+                if (looksLikeMmOrigin || looksLikeAxisOrUnit) {
+                    modData.group.position.x += delta.x;
+                    modData.group.position.y += delta.y;
+                    modData.group.position.z += delta.z;
+                    hint.fixed = true;
+                    hint.reason = looksLikeMmOrigin
+                        ? 'поправка стыковки (вероятны мм IFC vs м LandXML)'
+                        : 'поправка стыковки сводки';
+                    console.warn(
+                        `[BIM.LVA] Модели были в ${Math.round(dist)} м друг от друга — ` +
+                        `сдвинул «${modData.filename}» к сводке (${hint.reason}).`
+                    );
+                    markNeedsRender();
+                }
+            }
+            return hint;
         }
 
         function syncGeoRasterToIfcOrigin() {
@@ -4415,6 +4529,7 @@
             ifcWorldOrigin = null;
             ifcOriginAutoApplied = false;
             worldOriginSource = null;
+            worldOriginLengthUnit = 'm';
             syncGeoRasterToIfcOrigin();
             updateCrsAutoUi();
         }
@@ -4485,6 +4600,20 @@
 
                 showLoader('ОПТИМИЗАЦИЯ', `${fragments.length.toLocaleString('ru-RU')} фрагментов…`);
                 await new Promise(r => setTimeout(r, 10));
+
+                // IFC часто в мм, LandXML/Civil — в метрах. Приводим к метрам до origin.
+                const rawPreview = new TextDecoder('utf-8').decode(
+                    data.subarray(0, Math.min(data.length, 2_500_000))
+                );
+                const lengthToMeters = detectIfcLengthToMeters(modelID, rawPreview);
+                if (scaleIfcFragmentsToMeters(fragments, lengthToMeters)) {
+                    modData.lengthToMeters = lengthToMeters;
+                    console.info(
+                        `[BIM.LVA] IFC единицы → метры (×${lengthToMeters}). Иначе сводка с LandXML разъезжается.`
+                    );
+                    showLoader('ЕДИНИЦЫ', `IFC → метры (×${lengthToMeters})…`);
+                    await new Promise(r => setTimeout(r, 10));
+                }
 
                 const rebased = rebaseLargeCoordinateFragments(fragments, {
                     filename: file.name,
@@ -5440,15 +5569,34 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     centerSwap.y - ifcWorldOrigin.y,
                     centerSwap.z - ifcWorldOrigin.z
                 );
-                if (dSwap < dStd * 0.85) {
+                // Меняем оси только при явном выигрыше (иначе ломаем стыковку IFC+LandXML)
+                if (dStd > 2000 && dSwap < dStd * 0.5) {
                     landXmlCoordCtx.swapXY = true;
                     landXmlCoordCtx.fileHints.push(
                         `Авто: оси LandXML X↔Y под IFC (Δ ${Math.round(dSwap)} м vs ${Math.round(dStd)} м)`
                     );
                 } else if (dStd > 50000 && dSwap > 50000) {
-                    landXmlCoordCtx.fileHints.push(
-                        `LandXML далеко от IFC origin (Δ ${Math.round(Math.min(dStd, dSwap))} м) — проверьте CRS`
+                    // Origin мог остаться в мм от старого IFC — пробуем /1000
+                    const scaled = {
+                        x: ifcWorldOrigin.x * 0.001,
+                        y: ifcWorldOrigin.y * 0.001,
+                        z: ifcWorldOrigin.z * 0.001
+                    };
+                    const dScaled = Math.hypot(
+                        centerStd.x - scaled.x,
+                        centerStd.y - scaled.y,
+                        centerStd.z - scaled.z
                     );
+                    if (dScaled < Math.min(dStd, dSwap) * 0.1) {
+                        landXmlCoordCtx.origin = scaled;
+                        landXmlCoordCtx.fileHints.push(
+                            `IFC-origin похож на миллиметры — для LandXML взят /1000 (Δ ${Math.round(dScaled)} м). Лучше перезагрузить IFC.`
+                        );
+                    } else {
+                        landXmlCoordCtx.fileHints.push(
+                            `LandXML далеко от IFC origin (Δ ${Math.round(Math.min(dStd, dSwap))} м) — проверьте CRS/единицы`
+                        );
+                    }
                 }
             } else if (!ifcWorldOrigin) {
                 // Нет IFC origin: если «стандарт» даёт мелкий центр, а swap — крупный, не меняем (Civil = NEZ→X=E,Y=N)
@@ -6154,6 +6302,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (mod) {
                         mod.coordOrigin = { ...ifcWorldOrigin };
                         mod.landXmlCoord = root.userData.landXmlCoord || null;
+                        const gap = reconcileModelAgainstFederation(mod);
+                        if (gap?.fixed) {
+                            const hint = $('hintControls');
+                            if (hint) {
+                                hint.textContent =
+                                    `Сводка: сдвинул LandXML к IFC (было ~${gap.dist.toLocaleString('ru-RU')} м) · CRS`;
+                            }
+                        }
                     }
                 }
                 const hints = root.userData.landXmlCoord?.hints || [];

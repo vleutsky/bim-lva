@@ -30,6 +30,7 @@
 - DXF 3DFACE/MESH/3DSOLID→mesh
 - LandXML / Civil 3D XML (TIN Surfaces + boundary/invisible faces, Contours, CgPoints, Alignments, Parcels, PipeNetworks, Roadways/Corridors, PlanFeatures; smart geo origin / axis swap vs IFC)
 - First large model sets scene world origin; later georeferenced IFC/DXF/FBX/LandXML share it (WebGL float precision)
+- IFC length units normalized to meters before origin (fixes IFC mm vs LandXML m fly-apart)
 - Selection outline, box select, measure distance, Z-clip
 - Perf mode / batching
 
