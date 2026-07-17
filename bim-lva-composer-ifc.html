@@ -745,6 +745,138 @@
             font-weight: 700;
         }
 
+        /* Профиль трассы облёта (как InfraWorks: станция ↔ высота) */
+        .tour-profile {
+            position: absolute;
+            left: 12px;
+            right: 12px;
+            bottom: 12px;
+            z-index: 28;
+            max-height: min(42vh, 380px);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px 12px 12px;
+            background: color-mix(in srgb, var(--panel) 94%, transparent);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            box-shadow: 0 12px 36px rgba(28, 39, 51, 0.22);
+            backdrop-filter: blur(8px);
+            font-family: 'Archivo', sans-serif;
+        }
+        .tour-profile[hidden] { display: none !important; }
+        .tour-profile-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .tour-profile-head h4 {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            color: var(--txt);
+        }
+        .tour-profile-tools {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .tour-profile-tools label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--txt-dim);
+            font-weight: 600;
+        }
+        .tour-profile-tools input[type="number"] {
+            width: 72px;
+            padding: 4px 6px;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 11px;
+        }
+        .tour-profile-body {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.9fr);
+            gap: 10px;
+            min-height: 0;
+            flex: 1;
+        }
+        @media (max-width: 900px) {
+            .tour-profile-body { grid-template-columns: 1fr; max-height: 50vh; overflow: auto; }
+        }
+        .tour-profile-chart-wrap {
+            position: relative;
+            min-height: 140px;
+            background: #f7f9fb;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .tour-profile-chart-wrap svg {
+            display: block;
+            width: 100%;
+            height: 160px;
+        }
+        .tour-profile-table-wrap {
+            overflow: auto;
+            max-height: 200px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #fff;
+        }
+        .tour-profile-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+            font-family: 'IBM Plex Mono', monospace;
+        }
+        .tour-profile-table th,
+        .tour-profile-table td {
+            padding: 5px 6px;
+            border-bottom: 1px solid var(--line);
+            text-align: right;
+            white-space: nowrap;
+        }
+        .tour-profile-table th:first-child,
+        .tour-profile-table td:first-child { text-align: center; }
+        .tour-profile-table th {
+            position: sticky;
+            top: 0;
+            background: var(--panel-2);
+            font-family: 'Archivo', sans-serif;
+            font-weight: 700;
+            color: var(--txt-dim);
+            z-index: 1;
+        }
+        .tour-profile-table tr.is-active td {
+            background: color-mix(in srgb, var(--accent) 14%, #fff);
+        }
+        .tour-profile-table input {
+            width: 78px;
+            padding: 2px 4px;
+            border: 1px solid var(--line);
+            border-radius: 3px;
+            font: inherit;
+            text-align: right;
+        }
+        .tour-profile-table .btn-icon {
+            padding: 2px 6px;
+            font-size: 11px;
+            min-width: 0;
+        }
+        .tour-profile-hint {
+            font-size: 11px;
+            color: var(--txt-dim);
+            margin: 0;
+        }
+
         .measure-label {
             position: absolute;
             top: 0;
@@ -1773,6 +1905,47 @@
             <span id="tourHudText">Проезд…</span>
             <button type="button" class="btn load-btn" id="tourHudCancel">⏹ Отменить</button>
         </div>
+        <div class="tour-profile" id="tourProfilePanel" hidden>
+            <div class="tour-profile-head">
+                <h4>Профиль трассы · высота линии</h4>
+                <div class="tour-profile-tools">
+                    <label title="Прибавить ко всем вершинам">ΔZ
+                        <input type="number" id="tourProfileDeltaZ" step="0.1" value="0">
+                    </label>
+                    <button type="button" class="btn" id="tourProfileApplyDelta" title="Применить ΔZ ко всем точкам">Применить ΔZ</button>
+                    <label title="Задать одну высоту всем вершинам">Z=
+                        <input type="number" id="tourProfileSetZ" step="0.1" value="10">
+                    </label>
+                    <button type="button" class="btn" id="tourProfileSetAllZ" title="Установить Z всем вершинам">Всем</button>
+                    <button type="button" class="btn" id="tourProfileDrape" title="Опустить точки на поверхность модели (+ зазор)">На рельеф</button>
+                    <label title="Зазор над рельефом при «На рельеф»">+м
+                        <input type="number" id="tourProfileClearance" step="0.1" min="0" value="1.5">
+                    </label>
+                    <button type="button" class="btn" id="tourProfileClose">✕</button>
+                </div>
+            </div>
+            <p class="tour-profile-hint">Станция — длина по плану (XY). Правите Z у вершин — линия облёта/проезда поднимается. Как профиль трассы в InfraWorks.</p>
+            <div class="tour-profile-body">
+                <div class="tour-profile-chart-wrap">
+                    <svg id="tourProfileSvg" viewBox="0 0 640 160" preserveAspectRatio="none" aria-label="Профиль высот"></svg>
+                </div>
+                <div class="tour-profile-table-wrap">
+                    <table class="tour-profile-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Станция, м</th>
+                                <th>X</th>
+                                <th>Y</th>
+                                <th>Z (высота)</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="tourProfileTbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </main>
 
     <div class="resizer" id="dragRight"></div>
@@ -2002,7 +2175,7 @@
             <h3>Проезд / облёт</h3>
             <div class="bulk-note">
                 <b>Проезд</b> — Ferrari по маршруту, камера с места водителя или сзади.
-                <b>Облёт</b> — сверху по курсу. Маршрут: авто или точки кликом.
+                <b>Облёт</b> — сверху по курсу. Высоту линии задайте в окне <b>Профиль</b> (вершины + график, как в InfraWorks).
             </div>
             <div class="prop small">
                 <div class="k">Режим</div>
@@ -2034,6 +2207,7 @@
             <div class="modal-actions" style="flex-wrap:wrap;justify-content:stretch">
                 <button class="btn" id="tourAutoBtn" style="flex:1">Авто-маршрут</button>
                 <button class="btn" id="tourRecordBtn" style="flex:1">＋ Точки кликом</button>
+                <button class="btn" id="tourProfileBtn" style="flex:1" title="Окно профиля: станция и высота вершин">📐 Профиль</button>
                 <button class="btn" id="tourClearBtn" style="flex:1">Очистить</button>
             </div>
             <div class="modal-actions">
@@ -10947,8 +11121,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             applyCrsOffsets();
             stopTourPlayback();
             tourWaypoints = [];
+            tourProfileActiveIndex = -1;
             clearTourVisuals();
             removeTourCar();
+            closeTourProfilePanel();
             tourRecording = false;
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
@@ -11975,11 +12151,16 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         let tourEyeHeight = 1.25;
         let tourChaseDist = 8;
         let tourShowCar = true;
+        let tourProfileActiveIndex = -1;
         const tourPathGroup = new THREE.Group();
         tourPathGroup.name = 'TourPath';
         scene.add(tourPathGroup);
         let tourPathLine = null;
         const tourMarkerMeshes = [];
+        const tourMarkerMat = new THREE.MeshBasicMaterial({ color: 0xf06424 });
+        tourMarkerMat.userData.shared = true;
+        const tourMarkerActiveMat = new THREE.MeshBasicMaterial({ color: 0x2478b5 });
+        tourMarkerActiveMat.userData.shared = true;
         let tourCar = null;
         const _tourFwd = new THREE.Vector3();
         const _tourUp = new THREE.Vector3(0, 0, 1);
@@ -12022,17 +12203,17 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         function clearTourVisuals() {
-            const sharedMats = new Set();
             [...tourPathGroup.children].forEach(ch => {
                 if (ch === tourCar) return;
                 tourPathGroup.remove(ch);
                 ch.geometry?.dispose?.();
                 const mat = ch.material;
                 if (!mat) return;
-                if (mat.userData?.shared) sharedMats.add(mat);
-                else if (!Array.isArray(mat)) mat.dispose?.();
+                // Общие материалы маркеров не dispose — живут весь сеанс
+                if (mat === tourMarkerMat || mat === tourMarkerActiveMat || mat.userData?.sharedKeep) return;
+                if (mat.userData?.shared) return; // line materials etc. recreated; avoid double-free of globals
+                if (!Array.isArray(mat)) mat.dispose?.();
             });
-            sharedMats.forEach(mat => mat.dispose?.());
             tourPathLine = null;
             tourMarkerMeshes.length = 0;
         }
@@ -12136,19 +12317,21 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             clearTourVisuals();
             if (!tourWaypoints.length) {
                 if (tourCar) tourCar.visible = false;
+                refreshTourProfileUi();
                 markNeedsRender();
                 return;
             }
-            const markerMat = new THREE.MeshBasicMaterial({ color: 0xf06424 });
-            markerMat.userData.shared = true;
+            const markerMat = tourMarkerMat;
             tourWaypoints.forEach((p, i) => {
-                const m = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), markerMat);
+                const active = i === tourProfileActiveIndex;
+                const m = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), active ? tourMarkerActiveMat : markerMat);
                 m.position.copy(p);
                 m.position.z += 0.15;
                 m.userData.tourMarker = true;
+                m.userData.tourIndex = i;
                 tourPathGroup.add(m);
                 tourMarkerMeshes.push(m);
-                if (i === 0) m.scale.setScalar(1.4);
+                if (i === 0 || active) m.scale.setScalar(active ? 1.55 : 1.4);
             });
             if (tourWaypoints.length >= 2) {
                 const curve = new THREE.CatmullRomCurve3(tourWaypoints.map(p => p.clone()), false, 'catmullrom', 0.35);
@@ -12157,7 +12340,193 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 tourPathLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x2478b5 }));
                 tourPathGroup.add(tourPathLine);
             }
+            refreshTourProfileUi();
             markNeedsRender();
+        }
+
+        function getTourStations() {
+            const stations = [0];
+            let acc = 0;
+            for (let i = 1; i < tourWaypoints.length; i++) {
+                const a = tourWaypoints[i - 1];
+                const b = tourWaypoints[i];
+                acc += Math.hypot(b.x - a.x, b.y - a.y);
+                stations.push(acc);
+            }
+            return stations;
+        }
+
+        function openTourProfilePanel() {
+            const panel = $('tourProfilePanel');
+            if (!panel) return;
+            panel.hidden = false;
+            refreshTourProfileUi();
+            trackUsage('tour_profile_open', { points: tourWaypoints.length });
+        }
+
+        function closeTourProfilePanel() {
+            const panel = $('tourProfilePanel');
+            if (panel) panel.hidden = true;
+            tourProfileActiveIndex = -1;
+        }
+
+        function refreshTourProfileUi() {
+            const panel = $('tourProfilePanel');
+            if (!panel || panel.hidden) return;
+            const tbody = $('tourProfileTbody');
+            const svg = $('tourProfileSvg');
+            if (!tbody || !svg) return;
+
+            const stations = getTourStations();
+            tbody.innerHTML = '';
+            if (!tourWaypoints.length) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt-dim)">Нет вершин — добавьте авто-маршрут или точки кликом</td></tr>';
+                svg.innerHTML = '';
+                return;
+            }
+
+            tourWaypoints.forEach((p, i) => {
+                const tr = document.createElement('tr');
+                if (i === tourProfileActiveIndex) tr.classList.add('is-active');
+                tr.dataset.index = String(i);
+                tr.innerHTML =
+                    `<td>${i + 1}</td>` +
+                    `<td>${stations[i].toFixed(2)}</td>` +
+                    `<td>${p.x.toFixed(2)}</td>` +
+                    `<td>${p.y.toFixed(2)}</td>` +
+                    `<td><input type="number" step="0.01" value="${Number(p.z.toFixed(3))}" data-tour-z="${i}" aria-label="Z вершины ${i + 1}"></td>` +
+                    `<td><button type="button" class="btn btn-icon" data-tour-del="${i}" title="Удалить вершину">✕</button></td>`;
+                tr.addEventListener('click', e => {
+                    if (e.target.closest('input,button')) return;
+                    tourProfileActiveIndex = i;
+                    rebuildTourVisuals();
+                });
+                tbody.appendChild(tr);
+            });
+
+            drawTourProfileChart(stations);
+        }
+
+        function drawTourProfileChart(stations) {
+            const svg = $('tourProfileSvg');
+            if (!svg) return;
+            const W = 640, H = 160;
+            const padL = 44, padR = 12, padT = 14, padB = 28;
+            svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+            if (tourWaypoints.length < 1) {
+                svg.innerHTML = '';
+                return;
+            }
+
+            const zs = tourWaypoints.map(p => p.z);
+            let zMin = Math.min(...zs);
+            let zMax = Math.max(...zs);
+            if (!Number.isFinite(zMin) || !Number.isFinite(zMax)) {
+                svg.innerHTML = '';
+                return;
+            }
+            if (Math.abs(zMax - zMin) < 0.2) {
+                zMin -= 1;
+                zMax += 1;
+            }
+            const sMax = Math.max(stations[stations.length - 1] || 0, 1e-6);
+            const xOf = s => padL + ((s / sMax) * (W - padL - padR));
+            const yOf = z => padT + (1 - (z - zMin) / (zMax - zMin)) * (H - padT - padB);
+
+            const gridLines = [];
+            for (let g = 0; g <= 4; g++) {
+                const z = zMin + (zMax - zMin) * (g / 4);
+                const y = yOf(z);
+                gridLines.push(
+                    `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="#d2d9e2" stroke-width="1"/>` +
+                    `<text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="10" fill="#6b7684" font-family="IBM Plex Mono,monospace">${z.toFixed(1)}</text>`
+                );
+            }
+
+            const poly = tourWaypoints.map((p, i) => `${xOf(stations[i]).toFixed(1)},${yOf(p.z).toFixed(1)}`).join(' ');
+            const dots = tourWaypoints.map((p, i) => {
+                const cx = xOf(stations[i]);
+                const cy = yOf(p.z);
+                const active = i === tourProfileActiveIndex;
+                return `<circle data-tour-vertex="${i}" cx="${cx}" cy="${cy}" r="${active ? 6 : 4.5}" ` +
+                    `fill="${active ? '#2478b5' : '#f06424'}" stroke="#fff" stroke-width="1.5" style="cursor:pointer"/>`;
+            }).join('');
+
+            svg.innerHTML =
+                `<rect x="0" y="0" width="${W}" height="${H}" fill="#f7f9fb"/>` +
+                gridLines.join('') +
+                `<polyline fill="none" stroke="#2478b5" stroke-width="2.2" points="${poly}"/>` +
+                dots +
+                `<text x="${padL}" y="${H - 8}" font-size="10" fill="#6b7684" font-family="Archivo,sans-serif">0</text>` +
+                `<text x="${W - padR}" y="${H - 8}" text-anchor="end" font-size="10" fill="#6b7684" font-family="Archivo,sans-serif">${sMax.toFixed(1)} м</text>` +
+                `<text x="${padL}" y="11" font-size="10" fill="#6b7684" font-family="Archivo,sans-serif">Z, м</text>`;
+        }
+
+        function setTourWaypointZ(index, z) {
+            if (index < 0 || index >= tourWaypoints.length) return;
+            if (!Number.isFinite(z)) return;
+            tourWaypoints[index].z = z;
+            if (tourPlaying && tourCurve) {
+                tourCurve = new THREE.CatmullRomCurve3(
+                    tourWaypoints.map(p => p.clone()),
+                    false,
+                    'catmullrom',
+                    0.35
+                );
+            }
+            rebuildTourVisuals();
+            updateTourStatus();
+        }
+
+        function deleteTourWaypoint(index) {
+            if (index < 0 || index >= tourWaypoints.length) return;
+            tourWaypoints.splice(index, 1);
+            if (tourProfileActiveIndex >= tourWaypoints.length) tourProfileActiveIndex = tourWaypoints.length - 1;
+            rebuildTourVisuals();
+            updateTourStatus();
+        }
+
+        function applyTourProfileDeltaZ(delta) {
+            if (!Number.isFinite(delta) || !delta) return;
+            tourWaypoints.forEach(p => { p.z += delta; });
+            rebuildTourVisuals();
+            updateTourStatus();
+            trackUsage('tour_profile_delta', { delta, points: tourWaypoints.length });
+        }
+
+        function setAllTourWaypointZ(z) {
+            if (!Number.isFinite(z)) return;
+            tourWaypoints.forEach(p => { p.z = z; });
+            rebuildTourVisuals();
+            updateTourStatus();
+            trackUsage('tour_profile_set_all', { z, points: tourWaypoints.length });
+        }
+
+        function drapeTourWaypointsToTerrain() {
+            if (!tourWaypoints.length) {
+                alert('Сначала добавьте точки маршрута.');
+                return;
+            }
+            const clearance = Math.max(0, parseFloat($('tourProfileClearance')?.value) || 0);
+            const raycaster = new THREE.Raycaster();
+            const down = new THREE.Vector3(0, 0, -1);
+            const meshes = allMeshes.filter(m => m.visible && !m.userData?.isOverlay && !m.userData?.isTourCar);
+            let hitCount = 0;
+            tourWaypoints.forEach(p => {
+                const origin = new THREE.Vector3(p.x, p.y, p.z + 5000);
+                raycaster.set(origin, down);
+                const hits = raycaster.intersectObjects(meshes, false);
+                if (hits.length) {
+                    p.z = hits[0].point.z + clearance;
+                    hitCount++;
+                } else {
+                    p.z = (getSceneContentBox().min.z || 0) + clearance;
+                }
+            });
+            rebuildTourVisuals();
+            updateTourStatus();
+            trackUsage('tour_profile_drape', { hits: hitCount, clearance, points: tourWaypoints.length });
         }
 
         function addTourWaypoint(point, hit) {
@@ -12165,11 +12534,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             // Точка ровно в месте клика по элементу (без сброса на «землю»)
             const p = point.clone();
             tourWaypoints.push(p);
+            tourProfileActiveIndex = tourWaypoints.length - 1;
             rebuildTourVisuals();
             updateTourStatus();
             const hint = $('hintControls');
             if (hint) {
-                hint.textContent = `Точка маршрута #${tourWaypoints.length} · кликните ещё или откройте Проезд → Старт`;
+                hint.textContent = `Точка маршрута #${tourWaypoints.length} · Профиль → правка Z · или Старт`;
             }
             trackUsage('tour_waypoint', { count: tourWaypoints.length });
             markNeedsRender();
@@ -12387,28 +12757,108 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
         $('tourAutoBtn')?.addEventListener('click', () => {
             buildAutoTourPath($('tourModeSelect')?.value || 'car');
+            openTourProfilePanel();
         });
         $('tourRecordBtn')?.addEventListener('click', () => {
             tourRecording = !tourRecording;
             if (tourRecording) {
                 stopTourPlayback();
                 $('tourModal')?.classList.remove('show');
-                alert('Кликайте ЛКМ по модели, чтобы ставить точки маршрута. Затем снова откройте «Проезд / облёт» и нажмите Старт.');
+                openTourProfilePanel();
+                alert('Кликайте ЛКМ по модели, чтобы ставить точки. Высоту каждой вершины правьте в окне «Профиль». Затем Старт.');
             }
             $('tourRecordBtn')?.classList.toggle('on', tourRecording);
             updateTourStatus();
         });
+        $('tourProfileBtn')?.addEventListener('click', () => {
+            $('tourModal')?.classList.remove('show');
+            openTourProfilePanel();
+        });
         $('tourClearBtn')?.addEventListener('click', () => {
             stopTourPlayback();
             tourWaypoints = [];
+            tourProfileActiveIndex = -1;
             clearTourVisuals();
             removeTourCar();
+            refreshTourProfileUi();
             updateTourStatus();
             markNeedsRender();
         });
         $('tourPlayBtn')?.addEventListener('click', () => startTourPlayback());
         $('tourStopBtn')?.addEventListener('click', () => stopTourPlayback());
         $('tourHudCancel')?.addEventListener('click', () => stopTourPlayback());
+
+        $('tourProfileClose')?.addEventListener('click', () => closeTourProfilePanel());
+        $('tourProfileApplyDelta')?.addEventListener('click', () => {
+            const d = parseFloat($('tourProfileDeltaZ')?.value);
+            applyTourProfileDeltaZ(d);
+        });
+        $('tourProfileSetAllZ')?.addEventListener('click', () => {
+            const z = parseFloat($('tourProfileSetZ')?.value);
+            setAllTourWaypointZ(z);
+        });
+        $('tourProfileDrape')?.addEventListener('click', () => drapeTourWaypointsToTerrain());
+        $('tourProfileTbody')?.addEventListener('change', e => {
+            const input = e.target.closest('input[data-tour-z]');
+            if (!input) return;
+            const idx = Number(input.getAttribute('data-tour-z'));
+            setTourWaypointZ(idx, parseFloat(input.value));
+        });
+        $('tourProfileTbody')?.addEventListener('click', e => {
+            const del = e.target.closest('[data-tour-del]');
+            if (!del) return;
+            e.preventDefault();
+            deleteTourWaypoint(Number(del.getAttribute('data-tour-del')));
+        });
+        $('tourProfileSvg')?.addEventListener('click', e => {
+            const dot = e.target.closest('[data-tour-vertex]');
+            if (!dot) return;
+            tourProfileActiveIndex = Number(dot.getAttribute('data-tour-vertex'));
+            rebuildTourVisuals();
+            const row = $('tourProfileTbody')?.querySelector(`tr[data-index="${tourProfileActiveIndex}"] input`);
+            row?.focus();
+            row?.select();
+        });
+        // Drag Z on profile chart
+        let _profileDrag = null;
+        $('tourProfileSvg')?.addEventListener('pointerdown', e => {
+            const dot = e.target.closest('[data-tour-vertex]');
+            if (!dot) return;
+            e.preventDefault();
+            const idx = Number(dot.getAttribute('data-tour-vertex'));
+            tourProfileActiveIndex = idx;
+            const svg = $('tourProfileSvg');
+            const rect = svg.getBoundingClientRect();
+            _profileDrag = { idx, rect, pointerId: e.pointerId };
+            try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+        });
+        $('tourProfileSvg')?.addEventListener('pointermove', e => {
+            if (!_profileDrag || e.pointerId !== _profileDrag.pointerId) return;
+            const zs = tourWaypoints.map(p => p.z);
+            let zMin = Math.min(...zs);
+            let zMax = Math.max(...zs);
+            if (Math.abs(zMax - zMin) < 0.5) {
+                const mid = (zMin + zMax) / 2;
+                zMin = mid - 2;
+                zMax = mid + 2;
+            }
+            // Запас сверху/снизу, чтобы тянуть за пределы текущего диапазона
+            const margin = Math.max(2, (zMax - zMin) * 0.35);
+            zMin -= margin;
+            zMax += margin;
+            const padT = 14, padB = 28, H = 160;
+            const y = ((e.clientY - _profileDrag.rect.top) / Math.max(_profileDrag.rect.height, 1)) * H;
+            const t = 1 - (y - padT) / (H - padT - padB);
+            const newZ = zMin + Math.max(0, Math.min(1, t)) * (zMax - zMin);
+            setTourWaypointZ(_profileDrag.idx, newZ);
+        });
+        $('tourProfileSvg')?.addEventListener('pointerup', e => {
+            if (!_profileDrag || e.pointerId !== _profileDrag.pointerId) return;
+            try { $('tourProfileSvg')?.releasePointerCapture(e.pointerId); } catch (_) {}
+            _profileDrag = null;
+        });
+        $('tourProfileSvg')?.addEventListener('pointercancel', () => { _profileDrag = null; });
+
         window.addEventListener('keydown', (event) => {
             if (event.key === 'Escape' && tourPlaying) {
                 event.preventDefault();
