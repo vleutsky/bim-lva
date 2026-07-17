@@ -1,13 +1,13 @@
 /**
  * BIM.LVA — настройки авторизации (Supabase).
  *
- * В панели Supabase проверьте:
- * Authentication → URL Configuration
- *   Site URL: https://vleutsky.github.io/bim-lva
- *   Redirect URLs: https://vleutsky.github.io/bim-lva/**
- *
- * Authentication → Providers → Email — включён.
- * Для теста можно отключить «Confirm email».
+ * ОБЯЗАТЕЛЬНО в панели Supabase (иначе лимиты писем / «confirm email»):
+ * 1) Authentication → Providers → Email
+ *    - Confirm email → ВЫКЛЮЧИТЬ
+ * 2) Authentication → URL Configuration
+ *    - Site URL: https://vleutsky.github.io/bim-lva
+ *    - Redirect URLs: https://vleutsky.github.io/bim-lva/**
+ * 3) Authentication → Users → ваш пользователь → Confirm / Ban: none
  */
 window.BIMLVA_AUTH_CONFIG = {
   // 'auto' | 'local' | 'supabase'
@@ -17,7 +17,7 @@ window.BIMLVA_AUTH_CONFIG = {
   // Publishable key (новый формат) — безопасен для клиента
   supabaseAnonKey: 'sb_publishable_mg64FytgDS0ZnIBYcZDmkQ_03C5Ahco',
 
-  // Email админов (доступ к stats после входа)
+  // Email админов (stats без пароля после входа, пометки в UI)
   adminEmails: [
     'vladimirl1985@gmail.com'
   ],
