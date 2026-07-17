@@ -33,6 +33,7 @@
 - IFC length units normalized to meters before origin (fixes IFC mm vs LandXML m fly-apart)
 - Status bar: cursor + selection coordinates (absolute meters when origin set)
 - Generic mm→m heuristic for DXF/FBX/etc. and LandXML millimeter units
+- View → near-clip (Auto by zoom distance, or manual 0.01–0.05) so close zoom does not cut geometry
 - Selection outline, box select, measure distance, Z-clip
 - Perf mode / batching
 
