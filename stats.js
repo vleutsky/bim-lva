@@ -14,7 +14,8 @@
   const COUNTER_API = 'https://api.counterapi.dev/v1';
   const NAMESPACE = 'bimlva';
   const EVENT_LOG_KEY = 'bimlva_stats_event_log_v1';
-  const EVENT_LOG_MAX = 80;
+  const EVENT_LOG_MAX = 200;
+  const SESSION_STARTED_KEY = 'bimlva_stats_session_started_v1';
 
   const BUCKETS = {
     site: 'page_site',
@@ -149,6 +150,67 @@
     try { localStorage.removeItem(EVENT_LOG_KEY); } catch (_) {}
   }
 
+  function getLocalSummary(limit) {
+    const events = getRecentEvents(limit || EVENT_LOG_MAX);
+    const byName = {};
+    let loadsOk = 0;
+    let loadsFail = 0;
+    let loadsAttempt = 0;
+    let yandexOk = 0;
+    let yandexFail = 0;
+    let pages = 0;
+    let features = 0;
+    let lastAt = null;
+    events.forEach((r) => {
+      const name = String(r?.e || 'unknown');
+      byName[name] = (byName[name] || 0) + 1;
+      if (r?.t && (lastAt == null || r.t > lastAt)) lastAt = r.t;
+      if (name === 'model_load') loadsOk += 1;
+      if (name === 'load_failed' || name === 'load_georaster_failed' || name === 'yandex_load_failed') loadsFail += 1;
+      if (name === 'load_attempt' || name === 'yandex_load_attempt') loadsAttempt += 1;
+      if (name === 'yandex_load_ok' || name === 'yandex_browse_success') yandexOk += 1;
+      if (name === 'yandex_load_failed' || name === 'yandex_browse_failed') yandexFail += 1;
+      if (name.startsWith('page_')) pages += 1;
+      else if (resolveBucket(name) === BUCKETS.feature) features += 1;
+    });
+    const top = Object.entries(byName)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 20)
+      .map(([name, count]) => ({ name, count }));
+    const loadDenom = loadsOk + loadsFail;
+    return {
+      total: events.length,
+      byName,
+      top,
+      loadsOk,
+      loadsFail,
+      loadsAttempt,
+      loadSuccessPct: loadDenom > 0 ? Math.round((loadsOk / loadDenom) * 1000) / 10 : null,
+      yandexOk,
+      yandexFail,
+      pages,
+      features,
+      lastAt,
+      sessionStartedAt: Number(safeSessionGet(SESSION_STARTED_KEY) || 0) || null
+    };
+  }
+
+  function markSessionStart() {
+    if (!safeSessionGet(SESSION_STARTED_KEY)) {
+      safeSessionSet(SESSION_STARTED_KEY, String(Date.now()));
+      pushEventLog('session_start', {
+        path: String(location.pathname || '').slice(-60)
+      });
+    }
+  }
+
+  function flushSessionDuration() {
+    const started = Number(safeSessionGet(SESSION_STARTED_KEY) || 0);
+    if (!started) return;
+    const sec = Math.max(1, Math.round((Date.now() - started) / 1000));
+    pushEventLog('session_ping', { sec });
+  }
+
   function resolveBucket(name) {
     if (
       name === 'model_load' ||
@@ -173,6 +235,7 @@
    * @param {'site'|'composer'|'case'|'plugin_ksi'|string} page
    */
   function trackPage(page) {
+    markSessionStart();
     const p = String(page || 'site');
     if (p === 'composer') {
       oncePerSession('page_composer', BUCKETS.composer);
@@ -188,6 +251,7 @@
    * @param {Record<string, string|number|boolean>=} props
    */
   function track(event, props) {
+    markSessionStart();
     const name = String(event || 'unknown');
     const bucket = resolveBucket(name);
     const safe = sanitizeProps(props);
@@ -250,6 +314,17 @@
 
   if (YANDEX_METRIKA_ID) ensureMetrika();
 
+  try {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushSessionDuration();
+      });
+      if (typeof window !== 'undefined') {
+        window.addEventListener('pagehide', flushSessionDuration);
+      }
+    }
+  } catch (_) {}
+
   global.BimLvaStats = {
     trackPage,
     track,
@@ -257,6 +332,7 @@
     getAllCounts,
     getDerived,
     getRecentEvents,
+    getLocalSummary,
     clearRecentEvents,
     BUCKETS,
     NAMESPACE,

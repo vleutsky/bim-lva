@@ -218,15 +218,16 @@
     <div id="gate" class="gate">
       <h2>Доступ к статистике</h2>
       <p>
-        Введите пароль администратора
-        (по умолчанию <code>bimlva-stats</code>, смените в <code>auth-config.js</code>)
-        или войдите админ-аккаунтом.
+        Статистика только для админ-аккаунта
+        (<code id="adminEmailHint">adminEmails</code> в <code>auth-config.js</code>).
+        Войдите под своей УЗ или введите пароль администратора.
       </p>
       <form id="gateForm">
-        <input type="password" id="gatePassword" placeholder="Пароль" autocomplete="current-password" required>
+        <input type="password" id="gatePassword" placeholder="Пароль (запасной доступ)" autocomplete="current-password">
         <div class="err" id="gateErr"></div>
-        <button class="primary" type="submit" style="width:100%;justify-content:center">Открыть</button>
+        <button class="primary" type="submit" style="width:100%;justify-content:center;margin-bottom:8px">Открыть по паролю</button>
       </form>
+      <button type="button" id="gateLoginBtn" style="width:100%;justify-content:center">Войти админ-аккаунтом</button>
     </div>
 
     <div id="dashboard" class="hidden">
@@ -252,6 +253,15 @@
           <div class="conv-item"><span>сайт → лид</span>—</div>
           <div class="conv-item"><span>функции / Composer</span>—</div>
         </div>
+      </div>
+
+      <div class="panel">
+        <h2>Локальная сводка (этот браузер)</h2>
+        <p style="margin-bottom:10px">Разбор журнала событий на этом устройстве — без имён файлов. Видно только после входа админа / пароля.</p>
+        <div class="conv-row" id="localSummaryStats">
+          <div class="conv-item"><span>событий в журнале</span>—</div>
+        </div>
+        <div id="localTopBox" style="margin-top:14px"><p class="empty-users">Пока пусто</p></div>
       </div>
 
       <p class="status" id="status">Загрузка…</p>
@@ -294,6 +304,7 @@
       refresh();
       renderUsers();
       renderEvents();
+      renderLocalSummary();
     }
 
     function showGate() {
@@ -309,6 +320,38 @@
 
     function fmtPct(v) {
       return v == null ? '—' : (v + '%');
+    }
+
+    function renderLocalSummary() {
+      const box = document.getElementById('localSummaryStats');
+      const topBox = document.getElementById('localTopBox');
+      const s = BimLvaStats.getLocalSummary(200);
+      const sessionSec = s.sessionStartedAt
+        ? Math.max(1, Math.round((Date.now() - s.sessionStartedAt) / 1000))
+        : null;
+      box.innerHTML = `
+        <div class="conv-item"><span>событий в журнале</span>${s.total}</div>
+        <div class="conv-item"><span>успешные загрузки</span>${s.loadsOk}</div>
+        <div class="conv-item"><span>ошибки загрузки</span>${s.loadsFail}</div>
+        <div class="conv-item"><span>успех загрузок</span>${fmtPct(s.loadSuccessPct)}</div>
+        <div class="conv-item"><span>Я.Диск ok / fail</span>${s.yandexOk} / ${s.yandexFail}</div>
+        <div class="conv-item"><span>функции (локально)</span>${s.features}</div>
+        <div class="conv-item"><span>сессия сейчас</span>${sessionSec == null ? '—' : (sessionSec + ' с')}</div>
+        <div class="conv-item"><span>последнее событие</span>${s.lastAt ? new Date(s.lastAt).toLocaleString('ru-RU') : '—'}</div>
+      `;
+      if (!s.top.length) {
+        topBox.innerHTML = '<p class="empty-users">Пока нет локальных событий в этом браузере.</p>';
+        return;
+      }
+      topBox.innerHTML = `<table class="events">
+        <thead><tr><th>Событие</th><th>Раз</th></tr></thead>
+        <tbody>
+          ${s.top.map((row) => `<tr>
+            <td><code>${escapeHtml(row.name)}</code></td>
+            <td class="mono">${row.count}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
     }
 
     async function refresh() {
@@ -334,9 +377,11 @@
         status.textContent = 'Обновлено ' + new Date().toLocaleString('ru-RU') +
           ' · ns ' + BimLvaStats.NAMESPACE;
         renderEvents();
+        renderLocalSummary();
       } catch (e) {
         status.className = 'status err';
         status.textContent = 'Не удалось прочитать счётчики: ' + (e.message || e);
+        renderLocalSummary();
       }
     }
 
@@ -400,12 +445,21 @@
       e.preventDefault();
       const err = document.getElementById('gateErr');
       err.textContent = '';
+      const pwd = document.getElementById('gatePassword').value;
+      if (!pwd) {
+        err.textContent = 'Введите пароль или войдите админ-аккаунтом.';
+        return;
+      }
       try {
-        await BimLvaAuth.unlockStats(document.getElementById('gatePassword').value);
+        await BimLvaAuth.unlockStats(pwd);
         showDashboard();
       } catch (ex) {
         err.textContent = ex.message || String(ex);
       }
+    });
+
+    document.getElementById('gateLoginBtn')?.addEventListener('click', () => {
+      window.BimLvaAuthUI?.open?.('login');
     });
 
     document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -415,16 +469,26 @@
     document.getElementById('clearLogBtn').addEventListener('click', () => {
       BimLvaStats.clearRecentEvents();
       renderEvents();
+      renderLocalSummary();
     });
     document.getElementById('lockBtn').addEventListener('click', () => {
       BimLvaAuth.lockStats();
+      if (BimLvaAuth.getUser()?.isAdmin) {
+        // админ остаётся разблокированным, пока в аккаунте — просто обновим UI
+        showDashboard();
+        return;
+      }
       showGate();
     });
 
     BimLvaAuth.init().then(() => {
+      const admins = (window.BIMLVA_AUTH_CONFIG?.adminEmails || []).join(', ');
+      const hint = document.getElementById('adminEmailHint');
+      if (hint && admins) hint.textContent = admins;
       if (BimLvaAuth.isStatsUnlocked()) showDashboard();
       BimLvaAuth.onChange((user) => {
         if (user?.isAdmin) showDashboard();
+        else if (!BimLvaAuth.isStatsUnlocked()) showGate();
       });
     });
   </script>
