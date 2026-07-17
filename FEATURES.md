@@ -28,7 +28,7 @@
 - Navis-like orbit (pivot under cursor), zoom-to-cursor
 - GeoTIFF/ECW локально, Yandex Disk (модели + GeoTIFF)
 - DXF 3DFACE/MESH/3DSOLID→mesh
-- LandXML / Civil 3D XML (TIN Surfaces, Contours, CgPoints, Alignments, Parcels, PipeNetworks)
+- LandXML / Civil 3D XML (TIN Surfaces + boundary/invisible faces, Contours, CgPoints, Alignments, Parcels, PipeNetworks, Roadways/Corridors, PlanFeatures)
 - Selection outline, box select, measure distance, Z-clip
 - Perf mode / batching
 

@@ -1711,7 +1711,7 @@
         <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
             <h2>BIM.LVA Composer IFC</h2>
-            <p>IFC, FBX, ASCII DXF (3DFACE/MESH/TIN и 3DSOLID→mesh), LandXML/Civil 3D (.xml: поверхности TIN, трассы, точки, сети труб), GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG → DXF.<br>
+            <p>IFC, FBX, ASCII DXF (3DFACE/MESH/TIN и 3DSOLID→mesh), LandXML/Civil 3D (.xml: TIN с границей i=1, коридоры/Roadways, трассы, точки, сети труб), GLB/GLTF, OBJ, STL, PLY, DAE, 3DS. DWG → DXF.<br>
             <span style="opacity:.85">Revit (.rvt), Plant 3D и Tekla — только через экспорт в IFC (или будущий облачный конвертер).</span><br>
             <span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span></p>
         </div>
@@ -5263,6 +5263,79 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return pts;
         }
 
+        function landXmlParsePntList(listEl, as3d) {
+            if (!listEl) return [];
+            const nums = String(listEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+            const step = as3d ? 3 : 2;
+            const out = [];
+            for (let i = 0; i + step - 1 < nums.length; i += step) {
+                const n = nums[i];
+                const e = nums[i + 1];
+                const z = as3d ? nums[i + 2] : 0;
+                if (![n, e, z].every(Number.isFinite)) continue;
+                const xyz = landXmlToSceneXYZ({ n, e, z, x: e, y: n, elev: z });
+                if (xyz) out.push(xyz);
+            }
+            return out;
+        }
+
+        function landXmlPointInPolygon2D(x, y, ring) {
+            // ray cast in XY (Easting/Northing after rebase)
+            let inside = false;
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                const xi = ring[i][0], yi = ring[i][1];
+                const xj = ring[j][0], yj = ring[j][1];
+                const intersect = ((yi > y) !== (yj > y)) &&
+                    (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-30) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        function landXmlCollectSurfaceBoundaries(surfaceEl) {
+            const source = landXmlFirst(surfaceEl, 'SourceData');
+            if (!source) return { outer: [], hide: [], linePositions: [] };
+            const outer = [];
+            const hide = [];
+            const linePositions = [];
+            landXmlDescendants(source, 'Boundary').forEach(bnd => {
+                // Alignment station-equation also uses <Boundary> — surface ones have bndType
+                const bndType = (bnd.getAttribute('bndType') || '').toLowerCase();
+                if (!bndType) return;
+                const list3 = landXmlFirst(bnd, 'PntList3D');
+                const list2 = landXmlFirst(bnd, 'PntList2D');
+                const ring = list3 ? landXmlParsePntList(list3, true)
+                    : (list2 ? landXmlParsePntList(list2, false) : []);
+                if (ring.length < 3) return;
+                for (let i = 0; i < ring.length; i++) {
+                    landXmlAddSegment(linePositions, ring[i], ring[(i + 1) % ring.length]);
+                }
+                if (bndType === 'outer' || bndType === 'island') outer.push(ring);
+                else if (bndType === 'hide' || bndType === 'hole') hide.push(ring);
+            });
+            return { outer, hide, linePositions };
+        }
+
+        function landXmlFaceAcceptedByBoundary(pts, boundaries) {
+            if (!boundaries || (!boundaries.outer.length && !boundaries.hide.length)) return true;
+            const cx = (pts[0][0] + pts[1][0] + pts[2][0]) / 3;
+            const cy = (pts[0][1] + pts[1][1] + pts[2][1]) / 3;
+            if (boundaries.outer.length) {
+                const inOuter = boundaries.outer.some(ring => landXmlPointInPolygon2D(cx, cy, ring));
+                if (!inOuter) return false;
+            }
+            if (boundaries.hide.some(ring => landXmlPointInPolygon2D(cx, cy, ring))) return false;
+            return true;
+        }
+
+        function landXmlIsInvisibleFace(fEl) {
+            // Civil 3D: i="1" — треугольник в триангуляции, но вне границы / удалён
+            const iAttr = fEl.getAttribute('i');
+            if (iAttr == null || iAttr === '') return false;
+            const n = Number(iAttr);
+            return Number.isFinite(n) ? n !== 0 : true;
+        }
+
         function landXmlBuildSurfaceMesh(surfaceEl, colorIndex) {
             const definition = landXmlFirst(surfaceEl, 'Definition');
             if (!definition) return null;
@@ -5279,22 +5352,32 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             });
             if (idToXyz.size < 3) return null;
 
+            const boundaries = landXmlCollectSurfaceBoundaries(surfaceEl);
             const positions = [];
             let faceCount = 0;
+            let skippedInvisible = 0;
+            let skippedBoundary = 0;
             landXmlChildren(facesEl, 'F').forEach(fEl => {
+                if (landXmlIsInvisibleFace(fEl)) {
+                    skippedInvisible++;
+                    return;
+                }
                 const ids = String(fEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean);
                 if (ids.length < 3) return;
                 const pts = ids.map(id => idToXyz.get(String(id))).filter(Boolean);
                 if (pts.length < 3) return;
                 for (let i = 1; i < pts.length - 1; i++) {
-                    const a = pts[0];
-                    const b = pts[i];
-                    const c = pts[i + 1];
+                    const tri = [pts[0], pts[i], pts[i + 1]];
+                    if (!landXmlFaceAcceptedByBoundary(tri, boundaries)) {
+                        skippedBoundary++;
+                        continue;
+                    }
+                    const a = tri[0], b = tri[1], c = tri[2];
                     positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
                     faceCount++;
                 }
             });
-            if (positions.length < 9) return null;
+            if (positions.length < 9) return { mesh: null, boundaries };
 
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -5316,10 +5399,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 surfType: definition.getAttribute('surfType') || 'TIN',
                 points: idToXyz.size,
                 faces: faceCount,
+                skippedInvisible,
+                skippedBoundary,
                 elevMin: definition.getAttribute('elevMin') || '',
                 elevMax: definition.getAttribute('elevMax') || ''
             };
-            return mesh;
+            return { mesh, boundaries };
+        }
+
+        function landXmlBuildBoundaryLines(surfaceEl, boundaries) {
+            const positions = boundaries?.linePositions || [];
+            if (positions.length < 6) return null;
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            const lines = new THREE.LineSegments(
+                geometry,
+                new THREE.LineBasicMaterial({ color: 0x1a5f3a })
+            );
+            const name = surfaceEl.getAttribute('name') || 'Surface';
+            lines.name = `${name} · граница`;
+            return lines;
         }
 
         function landXmlBuildContours(surfaceEl) {
@@ -5332,17 +5431,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const pts = landXmlChildren(contour, 'PntList3D');
                 const lists = pts.length ? pts : [contour];
                 lists.forEach(listEl => {
-                    const nums = String(listEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
-                    const xyzList = [];
-                    for (let i = 0; i + 2 < nums.length; i += 3) {
-                        const xyz = landXmlToSceneXYZ({
-                            n: nums[i], e: nums[i + 1], z: nums[i + 2],
-                            x: nums[i + 1], y: nums[i], elev: nums[i + 2]
-                        });
-                        if (xyz) xyzList.push(xyz);
-                    }
-                    for (let i = 0; i < xyzList.length - 1; i++) {
-                        landXmlAddSegment(positions, xyzList[i], xyzList[i + 1]);
+                    const xyzList = landXmlLocalName(listEl) === 'PntList3D' || landXmlLocalName(listEl) === 'Contour'
+                        ? landXmlParsePntList(listEl, true)
+                        : [];
+                    // Contour text may be direct NEZ list without PntList3D wrapper
+                    const fallback = xyzList.length ? xyzList : landXmlParsePntList(contour, true);
+                    const chain = xyzList.length ? xyzList : fallback;
+                    for (let i = 0; i < chain.length - 1; i++) {
+                        landXmlAddSegment(positions, chain[i], chain[i + 1]);
                     }
                 });
             });
@@ -5378,6 +5474,40 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return points;
         }
 
+        function landXmlAppendCoordGeom(geomEl, positions) {
+            if (!geomEl) return;
+            [...geomEl.children].forEach(seg => {
+                const kind = landXmlLocalName(seg);
+                if (kind === 'Line') {
+                    const a = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'Start')?.textContent));
+                    const b = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'End')?.textContent));
+                    landXmlAddSegment(positions, a, b);
+                } else if (kind === 'Curve' || kind === 'Spiral') {
+                    const start = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'Start')?.textContent));
+                    const end = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'End')?.textContent));
+                    const center = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'Center')?.textContent));
+                    const radius = parseFloat(landXmlFirst(seg, 'Radius')?.textContent || seg.getAttribute('radius') || '');
+                    const rot = (seg.getAttribute('rot') || '').toLowerCase();
+                    const clockwise = rot === 'cw' || rot === 'clockwise';
+                    if (center && Number.isFinite(radius) && radius > 0 && start && end) {
+                        const samples = landXmlSampleArc(start, center, end, radius, clockwise);
+                        for (let i = 0; i < samples.length - 1; i++) {
+                            landXmlAddSegment(positions, samples[i], samples[i + 1]);
+                        }
+                    } else if (start && end) {
+                        landXmlAddSegment(positions, start, end);
+                    }
+                } else if (kind === 'IrregularLine' || kind === 'Chain') {
+                    const listEl = landXmlFirst(seg, 'PntList3D') || landXmlFirst(seg, 'PntList2D') || seg;
+                    const as3d = landXmlLocalName(listEl) !== 'PntList2D';
+                    const xyzList = landXmlParsePntList(listEl, as3d);
+                    for (let i = 0; i < xyzList.length - 1; i++) {
+                        landXmlAddSegment(positions, xyzList[i], xyzList[i + 1]);
+                    }
+                }
+            });
+        }
+
         function landXmlBuildAlignments(docRoot) {
             const alignments = landXmlDescendants(docRoot, 'Alignment');
             if (!alignments.length) return null;
@@ -5387,44 +5517,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             alignments.forEach(alignEl => {
                 const positions = [];
                 const geom = landXmlFirst(alignEl, 'CoordGeom') || alignEl;
-                [...geom.children].forEach(seg => {
-                    const kind = landXmlLocalName(seg);
-                    if (kind === 'Line') {
-                        const a = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'Start')?.textContent));
-                        const b = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'End')?.textContent));
-                        landXmlAddSegment(positions, a, b);
-                    } else if (kind === 'Curve' || kind === 'Spiral') {
-                        const start = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'Start')?.textContent));
-                        const end = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'End')?.textContent));
-                        const center = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(seg, 'Center')?.textContent));
-                        const radius = parseFloat(landXmlFirst(seg, 'Radius')?.textContent || seg.getAttribute('radius') || '');
-                        const rot = (seg.getAttribute('rot') || '').toLowerCase();
-                        const clockwise = rot === 'cw' || rot === 'clockwise';
-                        if (center && Number.isFinite(radius) && radius > 0 && start && end) {
-                            const samples = landXmlSampleArc(start, center, end, radius, clockwise);
-                            for (let i = 0; i < samples.length - 1; i++) {
-                                landXmlAddSegment(positions, samples[i], samples[i + 1]);
-                            }
-                        } else if (start && end) {
-                            landXmlAddSegment(positions, start, end);
-                        }
-                    } else if (kind === 'IrregularLine' || kind === 'Chain') {
-                        const listEl = landXmlFirst(seg, 'PntList3D') || seg;
-                        const nums = String(listEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
-                        const xyzList = [];
-                        for (let i = 0; i + 2 < nums.length; i += 3) {
-                            const xyz = landXmlToSceneXYZ({
-                                n: nums[i], e: nums[i + 1], z: nums[i + 2],
-                                x: nums[i + 1], y: nums[i], elev: nums[i + 2]
-                            });
-                            if (xyz) xyzList.push(xyz);
-                        }
-                        for (let i = 0; i < xyzList.length - 1; i++) {
-                            landXmlAddSegment(positions, xyzList[i], xyzList[i + 1]);
-                        }
-                    }
-                });
-                // Profile / ProfileSurf sometimes only have stations — skip if empty
+                landXmlAppendCoordGeom(geom, positions);
                 if (positions.length < 6) return;
                 const geometry = new THREE.BufferGeometry();
                 geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -5448,34 +5541,21 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             parcels.forEach(parcel => {
                 const positions = [];
                 const geom = landXmlFirst(parcel, 'CoordGeom') || parcel;
-                const lines = landXmlChildren(geom, 'Line');
-                const chain = [];
-                if (lines.length) {
-                    lines.forEach(lineEl => {
-                        const a = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(lineEl, 'Start')?.textContent));
-                        const b = landXmlToSceneXYZ(landXmlParseNEZ(landXmlFirst(lineEl, 'End')?.textContent));
-                        if (a) chain.push(a);
-                        if (b) chain.push(b);
-                    });
-                } else {
-                    const listEl = landXmlFirst(geom, 'PntList2D') || landXmlFirst(geom, 'PntList3D');
-                    if (listEl) {
-                        const nums = String(listEl.textContent || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
-                        const step = landXmlLocalName(listEl) === 'PntList2D' ? 2 : 3;
-                        for (let i = 0; i + step - 1 < nums.length; i += step) {
-                            const n = nums[i];
-                            const e = nums[i + 1];
-                            const z = step === 3 ? nums[i + 2] : 0;
-                            const xyz = landXmlToSceneXYZ({ n, e, z, x: e, y: n, elev: z });
-                            if (xyz) chain.push(xyz);
-                        }
+                landXmlAppendCoordGeom(geom, positions);
+                // close if looks open polyline of Line starts
+                if (positions.length >= 12) {
+                    const n = positions.length;
+                    const same =
+                        Math.abs(positions[0] - positions[n - 3]) < 1e-6 &&
+                        Math.abs(positions[1] - positions[n - 2]) < 1e-6 &&
+                        Math.abs(positions[2] - positions[n - 1]) < 1e-6;
+                    if (!same) {
+                        landXmlAddSegment(
+                            positions,
+                            [positions[n - 3], positions[n - 2], positions[n - 1]],
+                            [positions[0], positions[1], positions[2]]
+                        );
                     }
-                }
-                for (let i = 0; i < chain.length - 1; i++) {
-                    landXmlAddSegment(positions, chain[i], chain[i + 1]);
-                }
-                if (chain.length > 2) {
-                    landXmlAddSegment(positions, chain[chain.length - 1], chain[0]);
                 }
                 if (positions.length < 6) return;
                 const geometry = new THREE.BufferGeometry();
@@ -5530,6 +5610,146 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return any ? group : null;
         }
 
+        function landXmlBuildPlanFeatureObject(pfEl, color = 0xb33939) {
+            const positions = [];
+            landXmlChildren(pfEl, 'CoordGeom').forEach(geom => landXmlAppendCoordGeom(geom, positions));
+            // Location points
+            const locPositions = [];
+            landXmlChildren(pfEl, 'Location').forEach(loc => {
+                const xyz = landXmlToSceneXYZ(landXmlParseNEZ(loc.textContent));
+                if (xyz) locPositions.push(xyz[0], xyz[1], xyz[2]);
+            });
+            if (positions.length < 6 && locPositions.length < 3) return null;
+            const wrap = new THREE.Group();
+            wrap.name = pfEl.getAttribute('name') || pfEl.getAttribute('desc') || 'PlanFeature';
+            if (positions.length >= 6) {
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                wrap.add(new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color })));
+            }
+            if (locPositions.length >= 3) {
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(locPositions, 3));
+                wrap.add(new THREE.Points(geometry, new THREE.PointsMaterial({ color, size: 0.25 })));
+            }
+            // Flatten single child
+            if (wrap.children.length === 1) {
+                const only = wrap.children[0];
+                only.name = wrap.name;
+                return only;
+            }
+            return wrap;
+        }
+
+        function landXmlBuildPlanFeatures(docRoot) {
+            // Top-level PlanFeatures collections (не внутри Roadway — те отдельно)
+            const collections = landXmlChildren(docRoot, 'PlanFeatures');
+            const loose = [];
+            collections.forEach(col => {
+                landXmlChildren(col, 'PlanFeature').forEach(pf => loose.push(pf));
+            });
+            // Also any PlanFeature not under Roadway (descendants of root PlanFeatures already covered)
+            if (!loose.length) return null;
+            const group = new THREE.Group();
+            group.name = 'PlanFeatures';
+            let any = false;
+            loose.forEach(pf => {
+                const obj = landXmlBuildPlanFeatureObject(pf, 0xb33939);
+                if (obj) {
+                    group.add(obj);
+                    any = true;
+                }
+            });
+            return any ? group : null;
+        }
+
+        function landXmlBuildRoadways(docRoot) {
+            // Civil 3D коридоры → LandXML <Roadways>/<Roadway>
+            const roadways = landXmlDescendants(docRoot, 'Roadway');
+            if (!roadways.length) return null;
+            const group = new THREE.Group();
+            group.name = 'Corridors / Roadways';
+            let any = false;
+            roadways.forEach(rw => {
+                const rwGroup = new THREE.Group();
+                const name = rw.getAttribute('name') || 'Corridor';
+                const surfRefs = (rw.getAttribute('surfaceRefs') || '').trim();
+                const alignRefs = (rw.getAttribute('alignmentRefs') || '').trim();
+                rwGroup.name = surfRefs
+                    ? `${name} · surfaces: ${surfRefs}`
+                    : name;
+                rwGroup.userData.landXml = {
+                    kind: 'Roadway',
+                    name,
+                    surfaceRefs: surfRefs,
+                    alignmentRefs: alignRefs,
+                    staStart: rw.getAttribute('staStart') || '',
+                    staEnd: rw.getAttribute('staEnd') || ''
+                };
+
+                let childGeom = 0;
+                landXmlChildren(rw, 'PlanFeature').forEach(pf => {
+                    const obj = landXmlBuildPlanFeatureObject(pf, 0xc0392b);
+                    if (obj) {
+                        rwGroup.add(obj);
+                        childGeom++;
+                    }
+                });
+                // Nested features under Lanes/Roadside sometimes hold geometry via PlanFeature
+                landXmlDescendants(rw, 'PlanFeature').forEach(pf => {
+                    if (landXmlChildren(rw, 'PlanFeature').includes(pf)) return;
+                    const obj = landXmlBuildPlanFeatureObject(pf, 0xe67e22);
+                    if (obj) {
+                        rwGroup.add(obj);
+                        childGeom++;
+                    }
+                });
+
+                // Placeholder point so corridor appears in tree even when only surfaceRefs exist
+                if (!childGeom && (surfRefs || alignRefs)) {
+                    const positions = [];
+                    // Try pick a point from first referenced alignment if already built? Skip —
+                    // use empty group with a tiny marker at origin offset 0 is useless.
+                    // Instead attach a Points object only if we find Location/Start under roadway.
+                    landXmlDescendants(rw, 'Start').forEach(st => {
+                        const xyz = landXmlToSceneXYZ(landXmlParseNEZ(st.textContent));
+                        if (xyz) positions.push(xyz[0], xyz[1], xyz[2]);
+                    });
+                    if (positions.length >= 3) {
+                        const geometry = new THREE.BufferGeometry();
+                        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                        const pts = new THREE.Points(
+                            geometry,
+                            new THREE.PointsMaterial({ color: 0xc0392b, size: 0.4 })
+                        );
+                        pts.name = `${name} · refs`;
+                        rwGroup.add(pts);
+                        childGeom++;
+                    }
+                }
+
+                if (rwGroup.children.length) {
+                    group.add(rwGroup);
+                    any = true;
+                } else {
+                    // Keep empty corridor node as named group with dummy invisible points? 
+                    // Tree only shows renderables — attach metadata via a zero-size line at rebase origin
+                    const ox = 0, oy = 0, oz = 0;
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute([ox, oy, oz, ox, oy, oz], 3));
+                    const stub = new THREE.LineSegments(
+                        geometry,
+                        new THREE.LineBasicMaterial({ color: 0xc0392b, transparent: true, opacity: 0.01 })
+                    );
+                    stub.name = `${name} (поверхности: ${surfRefs || '—'}; трассы: ${alignRefs || '—'})`;
+                    stub.userData.landXml = rwGroup.userData.landXml;
+                    group.add(stub);
+                    any = true;
+                }
+            });
+            return any ? group : null;
+        }
+
         function buildLandXMLRoot(xmlText, filename) {
             const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
             const parseError = doc.querySelector('parsererror');
@@ -5576,10 +5796,18 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             const surfaces = landXmlDescendants(rootEl, 'Surface');
             surfaces.forEach((surfaceEl, idx) => {
-                const mesh = landXmlBuildSurfaceMesh(surfaceEl, idx);
-                if (mesh) {
-                    root.add(mesh);
-                    summary.push(mesh.name);
+                const built = landXmlBuildSurfaceMesh(surfaceEl, idx);
+                if (built?.mesh) {
+                    root.add(built.mesh);
+                    summary.push(built.mesh.name);
+                    const skipped = built.mesh.userData.landXml?.skippedInvisible || 0;
+                    if (skipped) summary.push(`−${skipped} вне границы`);
+                }
+                const boundaries = built?.boundaries;
+                const bndLines = landXmlBuildBoundaryLines(surfaceEl, boundaries);
+                if (bndLines) {
+                    root.add(bndLines);
+                    summary.push(bndLines.name);
                 }
                 const contours = landXmlBuildContours(surfaceEl);
                 if (contours) {
@@ -5608,10 +5836,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 root.add(pipes);
                 summary.push(`${pipes.children.length} сетей труб`);
             }
+            const planFeatures = landXmlBuildPlanFeatures(rootEl);
+            if (planFeatures) {
+                root.add(planFeatures);
+                summary.push(`${planFeatures.children.length} PlanFeature`);
+            }
+            const roadways = landXmlBuildRoadways(rootEl);
+            if (roadways) {
+                root.add(roadways);
+                summary.push(`${roadways.children.length} коридоров`);
+            }
 
             if (!root.children.length) {
                 throw new Error(
-                    'В LandXML нет поддерживаемой геометрии. Сейчас читаются: Surfaces (TIN), Contours, CgPoints, Alignments, Parcels, PipeNetworks.'
+                    'В LandXML нет поддерживаемой геометрии. Сейчас читаются: Surfaces (TIN, граница i=1 / Boundaries), Contours, CgPoints, Alignments, Parcels, PipeNetworks, Roadways (коридоры), PlanFeatures.'
                 );
             }
             root.userData.landXmlSummary = summary;
@@ -9360,6 +9598,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (lx.surfType) infoHtml += propRow('Тип поверхности', lx.surfType);
                     if (lx.points != null) infoHtml += propRow('Точки TIN', String(lx.points));
                     if (lx.faces != null) infoHtml += propRow('Грани TIN', String(lx.faces));
+                    if (lx.skippedInvisible) infoHtml += propRow('Вне границы (i=1)', String(lx.skippedInvisible));
+                    if (lx.skippedBoundary) infoHtml += propRow('Обрезано Boundary', String(lx.skippedBoundary));
+                    if (lx.surfaceRefs) infoHtml += propRow('Поверхности', lx.surfaceRefs);
+                    if (lx.alignmentRefs) infoHtml += propRow('Трассы', lx.alignmentRefs);
                     if (lx.elevMin || lx.elevMax) {
                         infoHtml += propRow('Отметки', `${lx.elevMin || '—'} … ${lx.elevMax || '—'} м`);
                     }
