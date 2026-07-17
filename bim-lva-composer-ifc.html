@@ -1837,7 +1837,15 @@
     <div class="modal-backdrop" id="crsModal">
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
             <h3>CRS / смещение координат</h3>
-            <div class="bulk-note">Сдвигает всю сводку (IFC + внешние модели) в мировой системе сцены. Удобно подогнать northing/easting.</div>
+            <div class="bulk-note" id="crsAutoNote">
+                Сдвигает всю сводку (IFC + внешние модели) в мировой системе сцены.
+                Если модель в геодезических координатах (миллионы метров), при загрузке
+                координаты автоматически приводятся к началу — иначе WebGL «ломает» геометрию.
+            </div>
+            <div class="prop small" id="crsAutoOriginRow" style="display:none">
+                <div class="k">Авто-сдвиг (исходный центр модели)</div>
+                <div class="v" id="crsAutoOriginValue">—</div>
+            </div>
             <div class="prop small"><div class="k">ΔX (east)</div><input class="editInput" id="crsOffsetX" type="number" step="0.01" value="0"></div>
             <div class="prop small"><div class="k">ΔY (north)</div><input class="editInput" id="crsOffsetY" type="number" step="0.01" value="0"></div>
             <div class="prop small"><div class="k">ΔZ</div><input class="editInput" id="crsOffsetZ" type="number" step="0.01" value="0"></div>
@@ -3787,6 +3795,22 @@
             hideLoader();
             markNeedsRender();
 
+            if (ifcOriginAutoApplied && ifcWorldOrigin) {
+                const mag = Math.round(Math.hypot(ifcWorldOrigin.x, ifcWorldOrigin.y, ifcWorldOrigin.z));
+                console.info(
+                    `[BIM.LVA] Модель далеко от нуля (~${mag.toLocaleString('ru-RU')} м). ` +
+                    'Координаты сдвинуты к началу для точности WebGL. См. Анализ → CRS / смещение.'
+                );
+                ifcOriginAutoApplied = false;
+                const hint = $('hintControls');
+                if (hint) {
+                    hint.textContent =
+                        `Координаты сдвинуты к нулю (было ~${mag.toLocaleString('ru-RU')} м) · Анализ → CRS`;
+                    hint.title =
+                        'Модель была в геодезических координатах. Для точности WebGL вычтен общий origin. Исходный центр смотрите в CRS / смещение.';
+                }
+            }
+
             const loadedOk = files.length - skipped.length - failed.length;
             trackUsage('load_attempt', {
                 count: files.length,
@@ -4077,6 +4101,92 @@
             markNeedsRender();
         }
 
+        // ---- Large-world coordinate rebase (WebGL float precision) ----
+        // Геодезические IFC (UTM и т.п.) дают координаты в миллионах метров —
+        // 32-bit float «ломает» рёбра. Вычитаем общий origin из матриц размещения.
+        const LARGE_COORD_THRESHOLD = 5000; // м от (0,0,0)
+        let ifcWorldOrigin = null; // {x,y,z} в пространстве IFC (до поворота globalGroup)
+        let ifcOriginAutoApplied = false;
+
+        function estimateFragmentsOrigin(fragments) {
+            if (!fragments?.length) return null;
+            const box = new THREE.Box3();
+            const tmp = new THREE.Vector3();
+            const step = Math.max(1, Math.floor(fragments.length / 400));
+            for (let i = 0; i < fragments.length; i += step) {
+                tmp.setFromMatrixPosition(fragments[i].matrix);
+                box.expandByPoint(tmp);
+            }
+            if (box.isEmpty()) return null;
+            return box.getCenter(new THREE.Vector3());
+        }
+
+        function applyOriginOffsetToFragments(fragments, origin) {
+            const shift = new THREE.Matrix4().makeTranslation(-origin.x, -origin.y, -origin.z);
+            for (let i = 0; i < fragments.length; i++) {
+                fragments[i].matrix = shift.clone().multiply(fragments[i].matrix);
+            }
+        }
+
+        function syncGeoRasterToIfcOrigin() {
+            if (!geoRasterGroup) return;
+            if (!ifcWorldOrigin) {
+                geoRasterGroup.position.set(0, 0, 0);
+                return;
+            }
+            // IFC (x,y,z) под globalGroup.rotation.x = π/2 → сцена (x, -z, y)
+            // Вершины сдвинуты на -origin в IFC → растр (уже в сцене) сдвигаем на -R(origin)
+            geoRasterGroup.position.set(
+                -ifcWorldOrigin.x,
+                ifcWorldOrigin.z,
+                -ifcWorldOrigin.y
+            );
+        }
+
+        function updateCrsAutoUi() {
+            const row = $('crsAutoOriginRow');
+            const val = $('crsAutoOriginValue');
+            if (!row || !val) return;
+            if (!ifcWorldOrigin) {
+                row.style.display = 'none';
+                val.textContent = '—';
+                return;
+            }
+            row.style.display = '';
+            const o = ifcWorldOrigin;
+            val.textContent = `X ${o.x.toFixed(2)} · Y ${o.y.toFixed(2)} · Z ${o.z.toFixed(2)} м (вычтено при загрузке)`;
+        }
+
+        /**
+         * @returns {boolean} true если применили сдвиг
+         */
+        function rebaseLargeCoordinateFragments(fragments) {
+            if (!fragments?.length) return false;
+            const center = estimateFragmentsOrigin(fragments);
+            if (!center) return false;
+
+            if (!ifcWorldOrigin) {
+                if (center.length() < LARGE_COORD_THRESHOLD) return false;
+                ifcWorldOrigin = { x: center.x, y: center.y, z: center.z };
+                ifcOriginAutoApplied = true;
+                updateCrsAutoUi();
+                syncGeoRasterToIfcOrigin();
+                trackUsage('coord_rebase', {
+                    magnitude: Math.round(center.length())
+                });
+            }
+
+            applyOriginOffsetToFragments(fragments, ifcWorldOrigin);
+            return true;
+        }
+
+        function resetIfcWorldOrigin() {
+            ifcWorldOrigin = null;
+            ifcOriginAutoApplied = false;
+            syncGeoRasterToIfcOrigin();
+            updateCrsAutoUi();
+        }
+
         async function loadSingleIFC(file) {
             showLoader('ЧТЕНИЕ ФАЙЛА', file.name);
             await new Promise(r => setTimeout(r, 20));
@@ -4088,6 +4198,7 @@
 
                 // Геометрию сначала — пик памяти WASM ниже, чем OpenModel+полный текстовый индекс одновременно.
                 // USE_FAST_BOOLS снижает риск abort на сложных boolean-операциях.
+                // COORDINATE_TO_ORIGIN: false — общий сдвиг делаем сами (общий origin для нескольких IFC).
                 const openSettings = {
                     COORDINATE_TO_ORIGIN: false,
                     USE_FAST_BOOLS: true,
@@ -4143,6 +4254,12 @@
                 showLoader('ОПТИМИЗАЦИЯ', `${fragments.length.toLocaleString('ru-RU')} фрагментов…`);
                 await new Promise(r => setTimeout(r, 10));
 
+                const rebased = rebaseLargeCoordinateFragments(fragments);
+                if (rebased) {
+                    showLoader('КООРДИНАТЫ', 'Сдвиг к началу для точности WebGL…');
+                    await new Promise(r => setTimeout(r, 10));
+                }
+
                 if (fragments.length >= IFC_BATCH_THRESHOLD) {
                     buildIfcBatches(modData, fragments);
                     applyRenderQuality();
@@ -4150,6 +4267,9 @@
                     addIndividualIfcMeshes(modData, fragments);
                 }
                 modData._fragments = fragments;
+                if (rebased && ifcWorldOrigin) {
+                    modData.coordOrigin = { ...ifcWorldOrigin };
+                }
 
                 totalElements += modData.meshesByID.size;
 
@@ -6932,12 +7052,25 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (typeof externalGroup !== 'undefined' && externalGroup) {
                 externalGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
             }
+            // Ручной CRS — поверх авто-сдвига растра к IFC origin
+            if (typeof geoRasterGroup !== 'undefined' && geoRasterGroup) {
+                if (ifcWorldOrigin) {
+                    geoRasterGroup.position.set(
+                        -ifcWorldOrigin.x + crsOffsets.x,
+                        ifcWorldOrigin.z + crsOffsets.y,
+                        -ifcWorldOrigin.y + crsOffsets.z
+                    );
+                } else {
+                    geoRasterGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
+                }
+            }
             markNeedsRender();
         }
         $('btnCrs').addEventListener('click', () => {
             $('crsOffsetX').value = crsOffsets.x;
             $('crsOffsetY').value = crsOffsets.y;
             $('crsOffsetZ').value = crsOffsets.z;
+            updateCrsAutoUi();
             $('crsModal').classList.add('show');
         });
         $('cancelCrs').addEventListener('click', () => $('crsModal').classList.remove('show'));
@@ -8999,6 +9132,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             appearanceDraftTexture = null;
             appearanceDraftTextureName = '';
             clearAllGeoRasters();
+            resetIfcWorldOrigin();
+            crsOffsets = { x: 0, y: 0, z: 0 };
+            applyCrsOffsets();
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
