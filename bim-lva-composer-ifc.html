@@ -1880,6 +1880,32 @@
         </div>
     </div>
 
+    <div class="loader is-indeterminate" id="loader" aria-live="polite">
+        <b id="loadTitle">ОБРАБОТКА</b>
+        <div class="load-progress" id="loadProgressWrap">
+            <div class="load-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="loadTrack">
+                <div class="load-fill" id="loadFill"></div>
+                <div class="load-runner" id="loadRunner" aria-hidden="true" title="бежит…">
+                    <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+                        <g class="body-bob" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)">
+                            <circle cx="16" cy="7.2" r="3.1" fill="currentColor" stroke="none"></circle>
+                            <path d="M16 10.4v8.2"></path>
+                            <path class="arm-l" d="M16 13.2l-5.2 3.2"></path>
+                            <path class="arm-r" d="M16 13.2l5.4 2.8"></path>
+                            <path class="leg-l" d="M16 18.6l-4.8 7.2"></path>
+                            <path class="leg-r" d="M16 18.6l5.2 7"></path>
+                        </g>
+                    </svg>
+                </div>
+            </div>
+            <div class="load-meta">
+                <span id="loadPct">загрузка…</span>
+                <span id="loadBytes"></span>
+            </div>
+        </div>
+        <small id="loadSub">инициализация...</small>
+    </div>
+
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
         <span id="hintControls" title="Подсказка по управлению сценой, множественному выделению и обозначениям полей">ЛКМ+drag: вращение вокруг точки под курсором · Колесо: зум к курсору · F: кадр · 📌 пивот · ⚡ быстро</span>
@@ -2036,6 +2062,7 @@
         }
 
         function setLoaderProgress(ratio, opts = {}) {
+            if (!loader) return;
             const fill = $('loadFill');
             const runner = $('loadRunner');
             const pctEl = $('loadPct');
@@ -2089,8 +2116,11 @@
         }
 
         function showLoader(title, sub, progressOpts) {
-            $('loadTitle').textContent = title;
-            $('loadSub').textContent = sub || '';
+            if (!loader) return;
+            const titleEl = $('loadTitle');
+            const subEl = $('loadSub');
+            if (titleEl) titleEl.textContent = title;
+            if (subEl) subEl.textContent = sub || '';
             if (progressOpts && (progressOpts.ratio != null || progressOpts.loaded != null)) {
                 setLoaderProgress(progressOpts.ratio, progressOpts);
             } else {
@@ -2100,16 +2130,27 @@
         }
 
         function hideLoader() {
+            if (!loader) return;
             loader.classList.remove('show');
             setLoaderProgress(null, { label: 'загрузка…' });
         }
 
         // --- Three.js Setup ---
-        const renderer = new THREE.WebGLRenderer({
-            antialias: true,
-            powerPreference: 'high-performance',
-            stencil: false
-        });
+        let renderer;
+        try {
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                powerPreference: 'high-performance',
+                stencil: false
+            });
+        } catch (webglErr) {
+            console.error(webglErr);
+            const msg = document.createElement('div');
+            msg.style.cssText = 'position:fixed;inset:0;z-index:20000;display:flex;align-items:center;justify-content:center;padding:24px;background:#f3f5f7;font-family:system-ui,sans-serif;text-align:center';
+            msg.innerHTML = '<div><h2 style="margin:0 0 8px">Не удалось запустить 3D</h2><p style="margin:0;color:#555;max-width:420px">WebGL недоступен в этом браузере/вкладке. Обновите страницу, отключите блокировщики или попробуйте Chrome/Edge.</p></div>';
+            document.body.appendChild(msg);
+            throw webglErr;
+        }
         let basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         let perfMode = false;
         let sceneNeedsRender = true;
