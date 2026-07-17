@@ -1995,12 +1995,12 @@
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
             <h3>CRS / смещение координат</h3>
             <div class="bulk-note" id="crsAutoNote">
-                Сдвигает всю сводку (IFC + внешние модели) в мировой системе сцены.
-                Если модель в геодезических координатах (миллионы метров), при загрузке
-                координаты автоматически приводятся к началу — иначе WebGL «ломает» геометрию.
+                Первая загруженная модель с крупными (геодезическими) координатами задаёт
+                общий ноль сцены: точка (0,0,0) переносится к центру этой модели.
+                Следующие модели в тех же координатах вычитают тот же origin — без искажений WebGL.
             </div>
             <div class="prop small" id="crsAutoOriginRow" style="display:none">
-                <div class="k">Авто-сдвиг (исходный центр модели)</div>
+                <div class="k">Авто-ноль (первая модель)</div>
                 <div class="v" id="crsAutoOriginValue">—</div>
             </div>
             <div class="prop small"><div class="k">ΔX (east)</div><input class="editInput" id="crsOffsetX" type="number" step="0.01" value="0"></div>
@@ -3959,17 +3959,18 @@
 
             if (ifcOriginAutoApplied && ifcWorldOrigin) {
                 const mag = Math.round(Math.hypot(ifcWorldOrigin.x, ifcWorldOrigin.y, ifcWorldOrigin.z));
+                const srcName = worldOriginSource?.filename || 'первой модели';
                 console.info(
-                    `[BIM.LVA] Модель далеко от нуля (~${mag.toLocaleString('ru-RU')} м). ` +
-                    'Координаты сдвинуты к началу для точности WebGL. См. Анализ → CRS / смещение.'
+                    `[BIM.LVA] Ноль сцены задан ${srcName} (~${mag.toLocaleString('ru-RU')} м от абсолютного нуля). ` +
+                    'Следующие геодезические модели используют тот же origin. См. Анализ → CRS / смещение.'
                 );
                 ifcOriginAutoApplied = false;
                 const hint = $('hintControls');
                 if (hint) {
                     hint.textContent =
-                        `Координаты сдвинуты к нулю (было ~${mag.toLocaleString('ru-RU')} м) · Анализ → CRS`;
+                        `Ноль ← «${srcName}» (~${mag.toLocaleString('ru-RU')} м) · Анализ → CRS`;
                     hint.title =
-                        'Модель была в геодезических координатах. Для точности WebGL вычтен общий origin. Исходный центр смотрите в CRS / смещение.';
+                        'Первая модель с крупными координатами задала ноль сцены. Остальные геодезические файлы вычитают тот же origin — без искажений WebGL.';
                 }
             }
 
@@ -4264,11 +4265,13 @@
         }
 
         // ---- Large-world coordinate rebase (WebGL float precision) ----
-        // Геодезические IFC (UTM и т.п.) дают координаты в миллионах метров —
-        // 32-bit float «ломает» рёбра. Вычитаем общий origin из матриц размещения.
+        // Правило: первая модель с |center| ≥ LARGE_COORD_THRESHOLD задаёт общий origin
+        // (ноль сцены = центр этой модели). Остальные геодезические модели вычитают его.
+        // Локальные модели (|center| < порога) не сдвигаем — они уже у нуля.
         const LARGE_COORD_THRESHOLD = 5000; // м от (0,0,0)
-        let ifcWorldOrigin = null; // {x,y,z} в пространстве IFC (до поворота globalGroup)
+        let ifcWorldOrigin = null; // {x,y,z} в пространстве модели (до поворота globalGroup)
         let ifcOriginAutoApplied = false;
+        let worldOriginSource = null; // { filename, format }
 
         function estimateFragmentsOrigin(fragments) {
             if (!fragments?.length) return null;
@@ -4283,11 +4286,45 @@
             return box.getCenter(new THREE.Vector3());
         }
 
+        function estimateObject3DCenter(root) {
+            if (!root) return null;
+            root.updateWorldMatrix(true, true);
+            const box = new THREE.Box3().setFromObject(root);
+            if (box.isEmpty()) return null;
+            return box.getCenter(new THREE.Vector3());
+        }
+
         function applyOriginOffsetToFragments(fragments, origin) {
             const shift = new THREE.Matrix4().makeTranslation(-origin.x, -origin.y, -origin.z);
             for (let i = 0; i < fragments.length; i++) {
                 fragments[i].matrix = shift.clone().multiply(fragments[i].matrix);
             }
+        }
+
+        function setWorldOriginFromFirstModel(center, sourceMeta = {}) {
+            if (ifcWorldOrigin || !center) return false;
+            const mag = typeof center.length === 'function'
+                ? center.length()
+                : Math.hypot(center.x || 0, center.y || 0, center.z || 0);
+            if (mag < LARGE_COORD_THRESHOLD) return false;
+            ifcWorldOrigin = {
+                x: center.x,
+                y: center.y,
+                z: center.z
+            };
+            ifcOriginAutoApplied = true;
+            worldOriginSource = {
+                filename: sourceMeta.filename || sourceMeta.name || '',
+                format: sourceMeta.format || ''
+            };
+            updateCrsAutoUi();
+            syncGeoRasterToIfcOrigin();
+            trackUsage('coord_rebase', {
+                magnitude: Math.round(mag),
+                source: worldOriginSource.format || 'model',
+                first: true
+            });
+            return true;
         }
 
         function syncGeoRasterToIfcOrigin() {
@@ -4316,35 +4353,68 @@
             }
             row.style.display = '';
             const o = ifcWorldOrigin;
-            val.textContent = `X ${o.x.toFixed(2)} · Y ${o.y.toFixed(2)} · Z ${o.z.toFixed(2)} м (вычтено при загрузке)`;
+            const src = worldOriginSource?.filename
+                ? ` · от «${worldOriginSource.filename}»`
+                : '';
+            val.textContent =
+                `X ${o.x.toFixed(2)} · Y ${o.y.toFixed(2)} · Z ${o.z.toFixed(2)} м${src}`;
         }
 
         /**
+         * IFC: первая крупная модель задаёт origin; последующие крупные — вычитают его.
          * @returns {boolean} true если применили сдвиг
          */
-        function rebaseLargeCoordinateFragments(fragments) {
+        function rebaseLargeCoordinateFragments(fragments, sourceMeta = {}) {
             if (!fragments?.length) return false;
             const center = estimateFragmentsOrigin(fragments);
             if (!center) return false;
 
             if (!ifcWorldOrigin) {
-                if (center.length() < LARGE_COORD_THRESHOLD) return false;
-                ifcWorldOrigin = { x: center.x, y: center.y, z: center.z };
-                ifcOriginAutoApplied = true;
-                updateCrsAutoUi();
-                syncGeoRasterToIfcOrigin();
-                trackUsage('coord_rebase', {
-                    magnitude: Math.round(center.length())
-                });
+                if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
+            } else if (center.length() < LARGE_COORD_THRESHOLD) {
+                // Локальная модель при уже заданном геодезическом origin — не трогаем
+                return false;
             }
 
             applyOriginOffsetToFragments(fragments, ifcWorldOrigin);
             return true;
         }
 
+        /**
+         * DXF/FBX/OBJ/…: тот же принцип — bake −origin в геометрию (float32).
+         * LandXML сам вычитает origin в вершинах → skipCoordRebase.
+         */
+        function rebaseExternalObject3D(root, sourceMeta = {}) {
+            if (!root) return false;
+            const center = estimateObject3DCenter(root);
+            if (!center) return false;
+
+            if (!ifcWorldOrigin) {
+                if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
+            } else if (center.length() < LARGE_COORD_THRESHOLD) {
+                return false;
+            }
+
+            const o = ifcWorldOrigin;
+            root.traverse(obj => {
+                if (!obj.geometry?.attributes?.position) return;
+                obj.geometry.translate(-o.x, -o.y, -o.z);
+                obj.geometry.computeBoundingBox();
+                obj.geometry.computeBoundingSphere();
+            });
+            // Если у корня/узлов крупный position (без геометрии) — тоже сдвинем
+            if (root.position && root.position.length() >= LARGE_COORD_THRESHOLD) {
+                root.position.x -= o.x;
+                root.position.y -= o.y;
+                root.position.z -= o.z;
+            }
+            return true;
+        }
+
         function resetIfcWorldOrigin() {
             ifcWorldOrigin = null;
             ifcOriginAutoApplied = false;
+            worldOriginSource = null;
             syncGeoRasterToIfcOrigin();
             updateCrsAutoUi();
         }
@@ -4416,9 +4486,12 @@
                 showLoader('ОПТИМИЗАЦИЯ', `${fragments.length.toLocaleString('ru-RU')} фрагментов…`);
                 await new Promise(r => setTimeout(r, 10));
 
-                const rebased = rebaseLargeCoordinateFragments(fragments);
+                const rebased = rebaseLargeCoordinateFragments(fragments, {
+                    filename: file.name,
+                    format: 'IFC'
+                });
                 if (rebased) {
-                    showLoader('КООРДИНАТЫ', 'Сдвиг к началу для точности WebGL…');
+                    showLoader('КООРДИНАТЫ', 'Ноль сцены ← центр модели…');
                     await new Promise(r => setTimeout(r, 10));
                 }
 
@@ -4524,12 +4597,28 @@
             buildTreeForFBXModel(modData, root);
         }
 
-        async function addExternalModel(file, format, root) {
+        async function addExternalModel(file, format, root, opts = {}) {
             const modelID = allocExternalModelID(format);
             const modData = new FBXModelData(modelID, file.name, format);
             loadedModels.set(modelID, modData);
             showLoader(`ГЕОМЕТРИЯ ${format}`, 'Построение объектов...');
             await new Promise(resolve => setTimeout(resolve, 10));
+
+            // LandXML сам вычитает origin в вершинах; остальные форматы — здесь.
+            if (!opts.skipCoordRebase) {
+                const rebased = rebaseExternalObject3D(root, {
+                    filename: file.name,
+                    format
+                });
+                if (rebased && ifcWorldOrigin) {
+                    modData.coordOrigin = { ...ifcWorldOrigin };
+                    showLoader('КООРДИНАТЫ', 'Ноль сцены ← центр модели…');
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+            } else if (ifcWorldOrigin) {
+                modData.coordOrigin = { ...ifcWorldOrigin };
+            }
+
             registerExternalRoot(modData, root);
         }
 
@@ -5272,7 +5361,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return { x: sx / n, y: sy / n, z: sz / n, count: n };
         }
 
-        function landXmlPrepareCoordContext(rootEl) {
+        function landXmlPrepareCoordContext(rootEl, filename = 'LandXML') {
             landXmlCoordCtx = {
                 scale: landXmlUnitScale(rootEl),
                 swapXY: false,
@@ -5368,17 +5457,13 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             const fileOrigin = landXmlCoordCtx.swapXY ? centerSwap : centerStd;
             if (!landXmlCoordCtx.origin && fileOrigin && Math.hypot(fileOrigin.x, fileOrigin.y, fileOrigin.z) >= LARGE_COORD_THRESHOLD) {
-                ifcWorldOrigin = { ...fileOrigin };
-                ifcOriginAutoApplied = true;
-                landXmlCoordCtx.origin = { ...fileOrigin };
-                updateCrsAutoUi();
-                syncGeoRasterToIfcOrigin();
-                trackUsage('coord_rebase', {
-                    magnitude: Math.round(Math.hypot(fileOrigin.x, fileOrigin.y, fileOrigin.z)),
-                    source: 'landxml'
+                setWorldOriginFromFirstModel(fileOrigin, {
+                    filename,
+                    format: 'LandXML'
                 });
+                landXmlCoordCtx.origin = ifcWorldOrigin ? { ...ifcWorldOrigin } : { ...fileOrigin };
             } else if (landXmlCoordCtx.origin) {
-                // already from IFC
+                // already from IFC / previous model
             } else if (fileOrigin) {
                 landXmlCoordCtx.origin = { ...fileOrigin };
             }
@@ -5968,7 +6053,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 throw new Error('Ожидается корневой элемент LandXML (Civil 3D → Export to LandXML).');
             }
 
-            const coordCtx = landXmlPrepareCoordContext(rootEl);
+            const coordCtx = landXmlPrepareCoordContext(rootEl, filename);
 
             const root = new THREE.Group();
             root.name = filename;
@@ -6063,7 +6148,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 showLoader('ГЕОМЕТРИЯ LandXML', 'Построение поверхностей Civil 3D…');
                 await new Promise(r => setTimeout(r, 10));
                 const root = buildLandXMLRoot(text, file.name);
-                await addExternalModel(file, 'LandXML', root);
+                await addExternalModel(file, 'LandXML', root, { skipCoordRebase: true });
                 if (ifcWorldOrigin) {
                     const mod = [...loadedModels.values()].find(m => m.filename === file.name && m.format === 'LandXML');
                     if (mod) {
