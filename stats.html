@@ -31,7 +31,7 @@
         var(--bg);
       padding: 32px 20px 48px;
     }
-    .wrap { max-width: 880px; margin: 0 auto; }
+    .wrap { max-width: 960px; margin: 0 auto; }
     header {
       display: flex;
       align-items: flex-end;
@@ -79,9 +79,9 @@
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 12px;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
     .card {
       background: var(--panel);
@@ -99,7 +99,7 @@
     }
     .card .value {
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 32px;
+      font-size: 30px;
       font-weight: 600;
       color: var(--txt);
       line-height: 1;
@@ -140,7 +140,7 @@
       font-family: 'IBM Plex Mono', monospace;
       font-size: 12px;
       color: var(--dim);
-      margin-top: 8px;
+      margin-top: 4px;
       margin-bottom: 16px;
     }
     .status.ok { color: var(--ok); }
@@ -165,24 +165,41 @@
     }
     .gate .err { color: #d43c59; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
     .hidden { display: none !important; }
-    table.users {
+    table.users, table.events {
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
     }
-    table.users th, table.users td {
+    table.users th, table.users td,
+    table.events th, table.events td {
       text-align: left;
       padding: 8px 6px;
       border-bottom: 1px solid var(--line);
       vertical-align: top;
     }
-    table.users th {
+    table.users th, table.events th {
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: .06em;
       color: var(--dim);
     }
+    table.events td.mono {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+    }
     .empty-users { color: var(--dim); font-size: 13px; }
+    .conv-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      margin-top: 4px;
+    }
+    .conv-item {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px;
+      color: var(--txt);
+    }
+    .conv-item span { color: var(--dim); margin-right: 6px; }
   </style>
 </head>
 <body>
@@ -215,18 +232,35 @@
     <div id="dashboard" class="hidden">
       <div class="actions" style="margin-bottom:16px">
         <button type="button" class="primary" id="refreshBtn">Обновить</button>
+        <button type="button" id="clearLogBtn">Очистить журнал</button>
         <button type="button" id="lockBtn">Заблокировать</button>
       </div>
 
       <div class="grid" id="cards">
-        <div class="card"><div class="label">Сайт</div><div class="value" data-key="site">…</div><div class="hint">Уникальные сессии лендинга</div></div>
+        <div class="card"><div class="label">Сайт</div><div class="value" data-key="site">…</div><div class="hint">Сессии лендинга / case / plugin</div></div>
         <div class="card"><div class="label">Composer</div><div class="value" data-key="composer">…</div><div class="hint">Открытия Composer IFC</div></div>
-        <div class="card"><div class="label">Загрузки моделей</div><div class="value" data-key="load">…</div><div class="hint">Успешные открытия файлов</div></div>
-        <div class="card"><div class="label">Функции</div><div class="value" data-key="feature">…</div><div class="hint">Экспорт, clash, merge и др.</div></div>
-        <div class="card"><div class="label">Лиды / скачивания</div><div class="value" data-key="lead">…</div><div class="hint">Запросы плагинов и download</div></div>
+        <div class="card"><div class="label">Загрузки</div><div class="value" data-key="load">…</div><div class="hint">Успехи / ошибки / Я.Диск</div></div>
+        <div class="card"><div class="label">Функции</div><div class="value" data-key="feature">…</div><div class="hint">Инструменты, правки, экспорт</div></div>
+        <div class="card"><div class="label">Лиды</div><div class="value" data-key="lead">…</div><div class="hint">Запросы и download CTA</div></div>
+      </div>
+
+      <div class="panel">
+        <h2>Конверсии</h2>
+        <div class="conv-row" id="conversions">
+          <div class="conv-item"><span>сайт → Composer</span>—</div>
+          <div class="conv-item"><span>Composer → загрузка</span>—</div>
+          <div class="conv-item"><span>сайт → лид</span>—</div>
+          <div class="conv-item"><span>функции / Composer</span>—</div>
+        </div>
       </div>
 
       <p class="status" id="status">Загрузка…</p>
+
+      <div class="panel">
+        <h2>Журнал событий (этот браузер)</h2>
+        <p style="margin-bottom:10px">Последние действия без имён файлов. Полезно отлаживать Я.Диск / ошибки загрузки.</p>
+        <div id="eventsBox"><p class="empty-users">Пока пусто</p></div>
+      </div>
 
       <div class="panel">
         <h2>Зарегистрированные пользователи (локальный режим)</h2>
@@ -236,10 +270,12 @@
 
       <div class="panel">
         <h2>Как читать</h2>
-        <p>
-          «Сайт» и «Composer» считаются раз за вкладку. Загрузки и лиды — каждый раз.
-          Имена файлов и модели не отправляются.
-        </p>
+        <ul>
+          <li>«Сайт» и «Composer» — раз за вкладку.</li>
+          <li>«Загрузки» и «Лиды» — каждый раз (включая ошибки загрузки / Я.Диск).</li>
+          <li>«Функции» — раз за сессию на тип действия (замер, clash, bulk edit…).</li>
+          <li>Метрика: <code>YANDEX_METRIKA_ID</code> в <code>stats.js</code> (сейчас <span id="metrikaStatus">выкл</span>).</li>
+        </ul>
       </div>
     </div>
   </div>
@@ -257,11 +293,22 @@
       dashboard.classList.remove('hidden');
       refresh();
       renderUsers();
+      renderEvents();
     }
 
     function showGate() {
       dashboard.classList.add('hidden');
       gate.classList.remove('hidden');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function fmtPct(v) {
+      return v == null ? '—' : (v + '%');
     }
 
     async function refresh() {
@@ -274,12 +321,48 @@
           const v = counts[el.dataset.key];
           el.textContent = v == null ? '—' : String(v);
         });
+        const d = BimLvaStats.getDerived(counts);
+        document.getElementById('conversions').innerHTML = `
+          <div class="conv-item"><span>сайт → Composer</span>${fmtPct(d.siteToComposer)}</div>
+          <div class="conv-item"><span>Composer → загрузка</span>${fmtPct(d.composerToLoad)}</div>
+          <div class="conv-item"><span>сайт → лид</span>${fmtPct(d.siteToLead)}</div>
+          <div class="conv-item"><span>функции / Composer</span>${d.featuresPerComposer == null ? '—' : d.featuresPerComposer}</div>
+        `;
+        document.getElementById('metrikaStatus').textContent =
+          BimLvaStats.YANDEX_METRIKA_ID ? ('вкл · id ' + BimLvaStats.YANDEX_METRIKA_ID) : 'выкл';
         status.className = 'status ok';
-        status.textContent = 'Обновлено ' + new Date().toLocaleString('ru-RU');
+        status.textContent = 'Обновлено ' + new Date().toLocaleString('ru-RU') +
+          ' · ns ' + BimLvaStats.NAMESPACE;
+        renderEvents();
       } catch (e) {
         status.className = 'status err';
         status.textContent = 'Не удалось прочитать счётчики: ' + (e.message || e);
       }
+    }
+
+    function renderEvents() {
+      const box = document.getElementById('eventsBox');
+      const rows = BimLvaStats.getRecentEvents(50);
+      if (!rows.length) {
+        box.innerHTML = '<p class="empty-users">Пока нет локальных событий в этом браузере.</p>';
+        return;
+      }
+      box.innerHTML = `<table class="events">
+        <thead><tr><th>Когда</th><th>Событие</th><th>Параметры</th></tr></thead>
+        <tbody>
+          ${rows.map((r) => {
+            const when = r.t ? new Date(r.t).toLocaleString('ru-RU') : '—';
+            const props = r.p && Object.keys(r.p).length
+              ? Object.entries(r.p).map(([k, v]) => `${k}=${v}`).join(' · ')
+              : '—';
+            return `<tr>
+              <td class="mono">${escapeHtml(when)}</td>
+              <td><code>${escapeHtml(r.e || '')}</code></td>
+              <td class="mono">${escapeHtml(props)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
     }
 
     function renderUsers() {
@@ -288,7 +371,7 @@
       const mode = BimLvaAuth.mode();
       note.textContent = mode === 'supabase'
         ? 'Сейчас Supabase: список смотрите в панели Authentication → Users.'
-        : 'Локальный режим: видны только пользователи, зарегистрированные в ЭТОМ браузере. Для общей базы подключите Supabase в auth-config.js.';
+        : 'Локальный режим: видны только пользователи, зарегистрированные в ЭТОМ браузере.';
 
       if (mode === 'supabase') {
         box.innerHTML = '<p class="empty-users">Откройте dashboard Supabase → Authentication → Users.</p>';
@@ -313,12 +396,6 @@
       </table>`;
     }
 
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-      }[c]));
-    }
-
     document.getElementById('gateForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const err = document.getElementById('gateErr');
@@ -334,6 +411,10 @@
     document.getElementById('refreshBtn').addEventListener('click', () => {
       refresh();
       renderUsers();
+    });
+    document.getElementById('clearLogBtn').addEventListener('click', () => {
+      BimLvaStats.clearRecentEvents();
+      renderEvents();
     });
     document.getElementById('lockBtn').addEventListener('click', () => {
       BimLvaAuth.lockStats();

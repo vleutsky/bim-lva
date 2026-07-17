@@ -1,22 +1,21 @@
 /**
  * BIM.LVA — лёгкая статистика посещений и использования.
  *
- * По умолчанию пишет в CounterAPI (без регистрации) — смотрите stats.html.
- * Опционально: укажите YANDEX_METRIKA_ID, чтобы видеть графики в Яндекс.Метрике.
- *
+ * CounterAPI: 5 агрегатных счётчиков (лимит free).
+ * Детали событий — в Яндекс.Метрике (если задан ID) и в локальном журнале для stats.html.
  * Не передаём имена файлов, содержимое моделей и персональные данные.
  */
 (function (global) {
   'use strict';
 
-  // --- конфиг ---
   // Номер счётчика из https://metrika.yandex.ru/ (0 = выкл.)
   const YANDEX_METRIKA_ID = 0;
 
   const COUNTER_API = 'https://api.counterapi.dev/v1';
   const NAMESPACE = 'bimlva';
+  const EVENT_LOG_KEY = 'bimlva_stats_event_log_v1';
+  const EVENT_LOG_MAX = 80;
 
-  // Ровно 5 публичных счётчиков (лимит free CounterAPI)
   const BUCKETS = {
     site: 'page_site',
     composer: 'page_composer',
@@ -33,6 +32,12 @@
   }
   function safeSessionSet(key, value) {
     try { sessionStorage.setItem(key, value); } catch (_) {}
+  }
+  function safeLocalGet(key) {
+    try { return localStorage.getItem(key); } catch (_) { return null; }
+  }
+  function safeLocalSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (_) {}
   }
 
   function bump(counterName) {
@@ -100,6 +105,70 @@
     } catch (_) {}
   }
 
+  function sanitizeProps(props) {
+    const safe = {};
+    if (!props || typeof props !== 'object') return safe;
+    Object.keys(props).forEach((k) => {
+      const v = props[k];
+      if (v == null) return;
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+        // не копим длинные имена файлов / пути
+        if (typeof v === 'string' && v.length > 80) safe[k] = v.slice(0, 77) + '…';
+        else safe[k] = v;
+      }
+    });
+    return safe;
+  }
+
+  function pushEventLog(name, props) {
+    try {
+      const raw = safeLocalGet(EVENT_LOG_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      const arr = Array.isArray(list) ? list : [];
+      arr.unshift({
+        t: Date.now(),
+        e: name,
+        p: props || {}
+      });
+      safeLocalSet(EVENT_LOG_KEY, JSON.stringify(arr.slice(0, EVENT_LOG_MAX)));
+    } catch (_) {}
+  }
+
+  function getRecentEvents(limit) {
+    try {
+      const raw = safeLocalGet(EVENT_LOG_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      const arr = Array.isArray(list) ? list : [];
+      return arr.slice(0, Math.max(1, Number(limit) || 40));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function clearRecentEvents() {
+    try { localStorage.removeItem(EVENT_LOG_KEY); } catch (_) {}
+  }
+
+  function resolveBucket(name) {
+    if (
+      name === 'model_load' ||
+      name.startsWith('load_') ||
+      name.startsWith('yandex_load') ||
+      name === 'yandex_browse_success' ||
+      name === 'yandex_browse_failed'
+    ) {
+      return BUCKETS.load;
+    }
+    if (
+      name === 'lead_request' ||
+      name === 'download_click' ||
+      name === 'lead_open'
+    ) {
+      return BUCKETS.lead;
+    }
+    return BUCKETS.feature;
+  }
+
   /**
    * @param {'site'|'composer'|'case'|'plugin_ksi'|string} page
    */
@@ -111,6 +180,7 @@
       oncePerSession('page_site', BUCKETS.site);
     }
     metrikaHit(location.pathname + location.search + '#' + p);
+    pushEventLog('page_' + p, {});
   }
 
   /**
@@ -119,29 +189,24 @@
    */
   function track(event, props) {
     const name = String(event || 'unknown');
-    const bucket =
-      name === 'model_load' || name.startsWith('load_') ? BUCKETS.load :
-      name === 'lead_request' || name === 'download_click' || name === 'lead_open' ? BUCKETS.lead :
-      name === 'composer_cta' ? BUCKETS.feature :
-      BUCKETS.feature;
+    const bucket = resolveBucket(name);
+    const safe = sanitizeProps(props);
 
-    // Модели и лиды считаем каждый раз; остальное — не чаще раза за сессию на имя события
-    if (bucket === BUCKETS.load || bucket === BUCKETS.lead) {
+    // Загрузки / ошибки загрузок / лиды — каждый раз; остальное — раз за сессию на имя+ключ
+    const always =
+      bucket === BUCKETS.load ||
+      bucket === BUCKETS.lead ||
+      name.endsWith('_failed') ||
+      name.endsWith('_attempt');
+
+    if (always) {
       bump(bucket);
     } else {
-      oncePerSession('ev_' + name, bucket);
+      const onceKey = 'ev_' + name + (safe.source ? '_' + safe.source : '') + (safe.mode ? '_' + safe.mode : '');
+      oncePerSession(onceKey, bucket);
     }
 
-    const safe = {};
-    if (props && typeof props === 'object') {
-      Object.keys(props).forEach((k) => {
-        const v = props[k];
-        if (v == null) return;
-        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-          safe[k] = v;
-        }
-      });
-    }
+    pushEventLog(name, safe);
     metrikaGoal(name, safe);
   }
 
@@ -168,6 +233,21 @@
     return out;
   }
 
+  function getDerived(counts) {
+    const site = Number(counts?.site) || 0;
+    const composer = Number(counts?.composer) || 0;
+    const load = Number(counts?.load) || 0;
+    const feature = Number(counts?.feature) || 0;
+    const lead = Number(counts?.lead) || 0;
+    const pct = (a, b) => (b > 0 ? Math.round((a / b) * 1000) / 10 : null);
+    return {
+      siteToComposer: pct(composer, site),
+      composerToLoad: pct(load, composer),
+      siteToLead: pct(lead, site),
+      featuresPerComposer: composer > 0 ? Math.round((feature / composer) * 100) / 100 : null
+    };
+  }
+
   if (YANDEX_METRIKA_ID) ensureMetrika();
 
   global.BimLvaStats = {
@@ -175,6 +255,9 @@
     track,
     getCount,
     getAllCounts,
+    getDerived,
+    getRecentEvents,
+    clearRecentEvents,
     BUCKETS,
     NAMESPACE,
     YANDEX_METRIKA_ID
