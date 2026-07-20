@@ -1791,6 +1791,7 @@
                 <div class="stat-row">Всего файлов <b id="sFile">0</b></div>
                 <div class="stat-row" title="Элементы с геометрией в сцене (уникальные ExpressID), не строки файла">Всего элементов <b id="sElems">0</b></div>
                 <div class="stat-row">Выделено <b id="sSelected" style="color:var(--accent)">0</b></div>
+                <div class="stat-row" style="font-size:11px;color:var(--dim);margin-top:6px" id="composerBuildTag">build: —</div>
             </div>
             <div class="props" id="props">
                 <div class="empty">Выделите элемент для просмотра.</div>
@@ -2622,8 +2623,10 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'sel-geom-v3';
+        const COMPOSER_BUILD = 'sel-geom-v4';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
+        const _buildTagEl = document.getElementById('composerBuildTag');
+        if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
 
         const IFC_BATCH_THRESHOLD = 2000;
         const BATCH_SEL_MAX = 64;
@@ -4353,25 +4356,31 @@ uniform vec3 uBatchSelColor;
             return _overlayRelMat.copy(parent.matrixWorld).invert().multiply(object.matrixWorld);
         }
 
+        function purgeLegacySelectionMeshes() {
+            const stash = [];
+            globalGroup.traverse(o => {
+                if (o.userData?.isOverlay) stash.push(o);
+                if (o.isMesh) {
+                    const mats = Array.isArray(o.material) ? o.material : [o.material];
+                    if (mats.some(m => m?.userData?.overlayShared)) stash.push(o);
+                }
+            });
+            const seen = new Set();
+            stash.forEach(o => {
+                if (seen.has(o)) return;
+                seen.add(o);
+                o.parent?.remove(o);
+                if (o.userData?.ownsGeometry && o.geometry) o.geometry.dispose();
+            });
+        }
+
         function buildSelectionContours(items) {
             if (!isSelectionContour3dEnabled() || !items?.length) return;
             items.forEach(item => {
                 const mod = loadedModels.get(item.modelID);
                 if (!mod || mod.hiddenIds?.has(item.expressID)) return;
-
-                if (mod.batched && mod.fragmentGeoms?.has(item.expressID)) {
-                    const anchors = (mod.meshesByID.get(item.expressID) || []).filter(m => m.isMesh);
-                    const anchorList = anchors.length ? anchors : [mod.group];
-                    anchorList.forEach(anchor => {
-                        mod.fragmentGeoms.get(item.expressID).forEach(frag => {
-                            const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
-                            addOutlineEdgesToAnchor(geom, anchor);
-                            geom.dispose();
-                        });
-                    });
-                    return;
-                }
-
+                // Батч-IFC: только шейдер на том же меше (отдельная геометрия давала неверный поворот).
+                if (mod.batched) return;
                 const meshes = mod.meshesByID.get(item.expressID) || [];
                 meshes.forEach(src => {
                     if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
@@ -4387,7 +4396,7 @@ uniform vec3 uBatchSelColor;
         }
 
         function syncSelectionSceneHighlight(items) {
-            // Без прозрачных копий mesh: шейдер/emissive + опциональный контур в локальных координатах.
+            purgeLegacySelectionMeshes();
             clearSelectionOverlays();
             clearBatchSelectionHighlights();
             const list = items || [];
