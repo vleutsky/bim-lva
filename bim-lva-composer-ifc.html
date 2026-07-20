@@ -2622,6 +2622,8 @@
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
         const IFC_BATCH_THRESHOLD = 2000;
+        const BATCH_SEL_MAX = 64;
+        const HIGHLIGHT_COLOR = 0x2b7fd4;
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const key = new THREE.DirectionalLight(0xffffff, 1.6); 
@@ -4182,6 +4184,95 @@
             });
         }
 
+        /** Подсветка выбранных expressID внутри батч-меша (без дублирования геометрии / «призрака»). */
+        function installBatchSelectionShader(material) {
+            if (!material || material.userData.batchSelInstalled) return;
+            material.userData.batchSelInstalled = true;
+            const selIds = new Float32Array(BATCH_SEL_MAX);
+            material.userData.batchSelIds = selIds;
+            const selColor = new THREE.Color(HIGHLIGHT_COLOR);
+            const prevOnBeforeCompile = material.onBeforeCompile;
+            material.onBeforeCompile = (shader) => {
+                prevOnBeforeCompile?.(shader);
+                shader.uniforms.uBatchSelIds = { value: selIds };
+                shader.uniforms.uBatchSelCount = { value: 0 };
+                shader.uniforms.uBatchSelColor = { value: selColor };
+                material.userData._batchSelUniforms = shader.uniforms;
+                shader.uniforms.uBatchSelCount.value = material.userData._batchSelCountPending || 0;
+
+                shader.vertexShader = `
+varying float vBatchExpressId;
+` + shader.vertexShader;
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <begin_vertex>',
+                    '#include <begin_vertex>\nvBatchExpressId = expressId;'
+                );
+                shader.fragmentShader = `
+varying float vBatchExpressId;
+uniform float uBatchSelIds[${BATCH_SEL_MAX}];
+uniform int uBatchSelCount;
+uniform vec3 uBatchSelColor;
+` + shader.fragmentShader;
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <opaque_fragment>',
+                    `if (uBatchSelCount > 0) {
+                        for (int i = 0; i < ${BATCH_SEL_MAX}; i++) {
+                            if (i >= uBatchSelCount) break;
+                            if (abs(vBatchExpressId - uBatchSelIds[i]) < 0.5) {
+                                diffuseColor.rgb = mix(diffuseColor.rgb, uBatchSelColor, 0.48);
+                                break;
+                            }
+                        }
+                    }
+                    #include <opaque_fragment>`
+                );
+            };
+            material.customProgramCacheKey = () => 'bimlva-batch-sel-v1';
+        }
+
+        function clearBatchSelectionHighlights() {
+            for (const mod of loadedModels.values()) {
+                if (!mod.batched) continue;
+                for (const mesh of mod.batchMeshes || []) {
+                    const mat = mesh.material;
+                    if (mat?.userData) mat.userData._batchSelCountPending = 0;
+                    const u = mat?.userData?._batchSelUniforms;
+                    if (u) u.uBatchSelCount.value = 0;
+                }
+            }
+        }
+
+        function applyBatchSelectionHighlights(items) {
+            if (!items?.length) return;
+            const meshToIds = new Map();
+            for (const item of items) {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod?.batched || mod.hiddenIds?.has(item.expressID)) continue;
+                for (const mesh of mod.meshesByID.get(item.expressID) || []) {
+                    let list = meshToIds.get(mesh);
+                    if (!list) {
+                        list = [];
+                        meshToIds.set(mesh, list);
+                    }
+                    if (list.length >= BATCH_SEL_MAX) continue;
+                    if (!list.includes(item.expressID)) list.push(item.expressID);
+                }
+            }
+            for (const [mesh, ids] of meshToIds) {
+                const mat = mesh.material;
+                if (!mat) continue;
+                installBatchSelectionShader(mat);
+                const buf = mat.userData.batchSelIds;
+                ids.forEach((id, i) => { buf[i] = id; });
+                mat.userData._batchSelCountPending = ids.length;
+                const u = mat.userData._batchSelUniforms;
+                if (u) {
+                    u.uBatchSelIds.value = buf;
+                    u.uBatchSelCount.value = ids.length;
+                }
+            }
+        }
+
         function bakeFragmentGeometry(geom, matrix, expressID) {
             const g = geom.clone();
             g.applyMatrix4(matrix);
@@ -4224,10 +4315,11 @@
             return _overlayRelMat.copy(parent.matrixWorld).invert().multiply(object.matrixWorld);
         }
 
-        function showSelectionOverlays(items) {
-            // Прозрачный mesh-оверлей давал «призрак» в чужой плоскости (двойной/кривой bake
-            // под globalGroup.rotation). Полностью отключён — выделение через emissive/цвет.
+        function syncSelectionSceneHighlight(items) {
+            // Прозрачные mesh-копии отключены навсегда — только шейдерная подсветка батч-IFC + emissive на одиночных мешах.
             clearSelectionOverlays();
+            clearBatchSelectionHighlights();
+            applyBatchSelectionHighlights(items || []);
             markNeedsRender();
         }
 
@@ -4288,6 +4380,7 @@
                 if (!merged) continue;
                 merged.computeBoundingSphere();
                 const mat = createIfcMaterial(list[0].hex, list[0].opacity);
+                installBatchSelectionShader(mat);
                 mat.clippingPlanes = getActiveClipPlanes();
                 const mesh = new THREE.Mesh(merged, mat);
                 mesh.matrixAutoUpdate = false;
@@ -7371,10 +7464,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (mod.batched && mod._fragments) {
                 buildIfcBatches(mod, mod._fragments);
                 if (selectedItems.length) {
-                    showSelectionOverlays(selectedItems.filter(item => {
-                        const m = loadedModels.get(item.modelID);
-                        return m && m.batched;
-                    }));
+                    applyBatchSelectionHighlights(selectedItems);
                 }
                 markNeedsRender();
                 return;
@@ -7641,7 +7731,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         // --- SELECTION (Только подсветка, без прозрачности) ---
-        const highlightColor = 0x2b7fd4;
+        const highlightColor = HIGHLIGHT_COLOR;
         let treeSelectionAnchor = null;
 
         const selectionKey = item => `${String(item.modelID)}::${String(item.expressID)}`;
@@ -7769,7 +7859,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     mod.meshesByID.get(i.expressID).forEach(m => setEmissive(m, 0x000000));
                 }
             });
-            clearSelectionOverlays();
+            syncSelectionSceneHighlight([]);
 
             // Убираем выделение в дереве
             document.querySelectorAll('.trow.sel').forEach(el => el.classList.remove('sel'));
@@ -7785,7 +7875,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 return;
             }
 
-            // 2. Подсветка: emissive + яркий контур по рёбрам
+            // 2. Подсветка: emissive на одиночных мешах; батч-IFC — шейдер по expressId (без оверлеев)
             items.forEach(i => {
                 const mod = loadedModels.get(i.modelID);
                 if (!mod || mod.batched) return;
@@ -7793,7 +7883,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     mod.meshesByID.get(i.expressID).forEach(m => setEmissive(m, highlightColor));
                 }
             });
-            showSelectionOverlays(items);
+            syncSelectionSceneHighlight(items);
 
             const mod0 = loadedModels.get(items[0].modelID);
             if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
