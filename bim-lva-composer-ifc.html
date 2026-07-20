@@ -1789,7 +1789,7 @@
         <div class="scroll">
             <div class="stats">
                 <div class="stat-row">Всего файлов <b id="sFile">0</b></div>
-                <div class="stat-row">Всего элементов <b id="sElems">0</b></div>
+                <div class="stat-row" title="Элементы с геометрией в сцене (уникальные ExpressID), не строки файла">Всего элементов <b id="sElems">0</b></div>
                 <div class="stat-row">Выделено <b id="sSelected" style="color:var(--accent)">0</b></div>
             </div>
             <div class="props" id="props">
@@ -2657,9 +2657,16 @@
         let globalGroup = new THREE.Group();
         globalGroup.rotation.x = MODEL_ROT_X; 
         scene.add(globalGroup);
-        const highlightOverlayGroup = new THREE.Group();
+        let highlightOverlayGroup = new THREE.Group();
         highlightOverlayGroup.name = 'SelectionOverlay';
         globalGroup.add(highlightOverlayGroup);
+
+        function ensureHighlightOverlayGroup() {
+            if (highlightOverlayGroup.parent === globalGroup) return;
+            highlightOverlayGroup = new THREE.Group();
+            highlightOverlayGroup.name = 'SelectionOverlay';
+            globalGroup.add(highlightOverlayGroup);
+        }
         let externalGroup = new THREE.Group();
         scene.add(externalGroup);
         function applyRenderQuality() {
@@ -4306,8 +4313,23 @@ uniform vec3 uBatchSelColor;
             activeSelectionOverlays.push(object3d);
         }
 
-        function addEdgesOutlineFromGeometry(geometry, parent, matrix) {
+        /** Контур в той же системе координат, что и модель (через highlightOverlayGroup ⊂ globalGroup). */
+        function attachSelectionOutlineLine(line, anchorObject) {
+            if (!line || !anchorObject) return;
+            ensureHighlightOverlayGroup();
+            line.userData.isOverlay = true;
+            line.renderOrder = 1000;
+            line.matrixAutoUpdate = false;
+            anchorObject.updateWorldMatrix(true, false);
+            highlightOverlayGroup.updateWorldMatrix(true, false);
+            line.matrix.copy(matrixRelativeToParent(anchorObject, highlightOverlayGroup));
+            highlightOverlayGroup.add(line);
+            activeSelectionOverlays.push(line);
+        }
+
+        function addEdgesOutlineFromGeometry(geometry, anchorObject, matrix) {
             if (!geometry?.attributes?.position || geometry.attributes.position.count < 3) return;
+            if (!anchorObject) return;
             try {
                 const edges = new THREE.EdgesGeometry(geometry, 30);
                 if (!edges.attributes.position || edges.attributes.position.count < 2) {
@@ -4317,7 +4339,7 @@ uniform vec3 uBatchSelColor;
                 if (matrix) edges.applyMatrix4(matrix);
                 const line = new THREE.LineSegments(edges, getSelectionOutlineMaterial());
                 line.userData.ownsGeometry = true;
-                addSelectionOutlineObject(line, parent);
+                attachSelectionOutlineLine(line, anchorObject);
             } catch (_) { /* geometry may be non-triangulated */ }
         }
 
@@ -4348,12 +4370,11 @@ uniform vec3 uBatchSelColor;
                 meshes.forEach(src => {
                     if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
                     if (src.isMesh && src.geometry) {
-                        // Контур — дочерний объект меша: наследует matrix без bake matrixWorld (иначе «левый» поворот).
                         addEdgesOutlineFromGeometry(src.geometry, src, null);
                     } else if ((src.isLine || src.isLineSegments) && src.geometry) {
-                        const line = new THREE.LineSegments(src.geometry, getSelectionOutlineMaterial());
-                        line.userData.ownsGeometry = false;
-                        addSelectionOutlineObject(line, src);
+                        const line = new THREE.LineSegments(src.geometry.clone(), getSelectionOutlineMaterial());
+                        line.userData.ownsGeometry = true;
+                        attachSelectionOutlineLine(line, src);
                     }
                 });
             });
@@ -11055,6 +11076,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             globalGroup = new THREE.Group(); 
             globalGroup.rotation.x = MODEL_ROT_X; 
             scene.add(globalGroup);
+            ensureHighlightOverlayGroup();
 
             scene.remove(externalGroup);
             externalGroup = new THREE.Group();
