@@ -2623,7 +2623,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'sel-geom-v4';
+        const COMPOSER_BUILD = 'camera-center-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4100,8 +4100,14 @@
             $('measureModeSelect').disabled = loadedModels.size === 0;
             updateIfcToolButtons();
 
-            if (loadedModels.size) fitView();
-            restoreSharedViewFromHash();
+            if (loadedModels.size) {
+                ensureSceneContentNearOrigin();
+                globalGroup.updateWorldMatrix(true, true);
+                if (/#view=/.test(location.hash)) restoreSharedViewFromHash();
+                else fitView();
+            } else {
+                restoreSharedViewFromHash();
+            }
             hideLoader();
             markNeedsRender();
 
@@ -4702,14 +4708,47 @@ uniform vec3 uBatchSelColor;
         function estimateFragmentsOrigin(fragments) {
             if (!fragments?.length) return null;
             const box = new THREE.Box3();
-            const tmp = new THREE.Vector3();
+            const tmpBox = new THREE.Box3();
             const step = Math.max(1, Math.floor(fragments.length / 400));
             for (let i = 0; i < fragments.length; i += step) {
-                tmp.setFromMatrixPosition(fragments[i].matrix);
-                box.expandByPoint(tmp);
+                const frag = fragments[i];
+                if (!frag?.geom?.attributes?.position) {
+                    tmpBox.setFromMatrixPosition(frag.matrix);
+                    box.expandByPoint(tmpBox.min);
+                    box.expandByPoint(tmpBox.max);
+                    continue;
+                }
+                if (!frag.geom.boundingBox) frag.geom.computeBoundingBox();
+                if (!frag.geom.boundingBox || frag.geom.boundingBox.isEmpty()) continue;
+                tmpBox.copy(frag.geom.boundingBox).applyMatrix4(frag.matrix);
+                box.union(tmpBox);
             }
             if (box.isEmpty()) return null;
             return box.getCenter(new THREE.Vector3());
+        }
+
+        /** Сдвинуть всю геометрию к нулю сцены (точность WebGL + камера / проезд). */
+        function ensureSceneContentNearOrigin() {
+            globalGroup.updateWorldMatrix(true, true);
+            externalGroup.updateWorldMatrix(true, true);
+            geoRasterGroup.updateWorldMatrix(true, true);
+            const box = getSceneContentBox();
+            if (box.isEmpty()) return;
+            const center = box.getCenter(new THREE.Vector3());
+            if (center.length() < 3) return;
+            const shift = center.clone().negate();
+            loadedModels.forEach(mod => {
+                if (mod.group) mod.group.position.add(shift);
+            });
+            externalGroup.position.add(shift);
+            geoRasterGroup.position.add(shift);
+            if (tourWaypoints?.length) {
+                tourWaypoints.forEach(p => p.add(shift));
+                rebuildTourVisuals?.();
+            }
+            if (tourPathGroup) tourPathGroup.position.add(shift);
+            if (tourCar) tourCar.position.add(shift);
+            markNeedsRender();
         }
 
         function estimateObject3DCenter(root) {
@@ -10991,6 +11030,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
 
         function fitView() {
+            globalGroup.updateWorldMatrix(true, true);
+            externalGroup.updateWorldMatrix(true, true);
+            geoRasterGroup.updateWorldMatrix(true, true);
             const box = new THREE.Box3();
             const ifcBox = new THREE.Box3().setFromObject(globalGroup);
             const extBox = new THREE.Box3().setFromObject(externalGroup);
