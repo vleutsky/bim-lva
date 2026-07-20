@@ -2623,7 +2623,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v3';
+        const COMPOSER_BUILD = 'camera-center-v4';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4806,23 +4806,68 @@ uniform vec3 uBatchSelColor;
             return box.getCenter(new THREE.Vector3());
         }
 
-        /** Сдвинуть всю геометрию к нулю сцены (мировой сдвиг корней, с учётом поворота globalGroup). */
-        function ensureSceneContentNearOrigin() {
+        const _snapShiftLocal = new THREE.Vector3();
+        const _snapInvWorld = new THREE.Matrix4();
+        const _snapIfcShift = new THREE.Vector3();
+        const _snapInvQuat = new THREE.Quaternion();
+
+        /**
+         * Перенос вершин к нулю сцены (сдвиг globalGroup при 2e6 м не спасает float32 в GPU).
+         * @returns {boolean} true если был сдвиг
+         */
+        function snapSceneContentToOrigin() {
             globalGroup.updateWorldMatrix(true, true);
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
-            const box = getSceneContentBox();
-            if (box.isEmpty()) return;
-            const center = box.getCenter(new THREE.Vector3());
-            if (center.lengthSq() < 0.25) return;
-            sceneViewPan.add(center);
-            applyCrsOffsets();
+            const box = new THREE.Box3();
+            if (!expandBoxFromVisibleMeshes(box)) return false;
+            const centerWorld = box.getCenter(new THREE.Vector3());
+            if (centerWorld.lengthSq() < 1e-6) return false;
+
+            const negCw = centerWorld.clone().negate();
+            globalGroup.getWorldQuaternion(_snapInvQuat).invert();
+            _snapIfcShift.copy(negCw).applyQuaternion(_snapInvQuat);
+
+            for (const mod of loadedModels.values()) {
+                const frags = mod._fragments;
+                if (!frags?.length) continue;
+                for (let i = 0; i < frags.length; i++) {
+                    const geom = frags[i]?.geom;
+                    if (!geom?.attributes?.position) continue;
+                    geom.translate(_snapIfcShift.x, _snapIfcShift.y, _snapIfcShift.z);
+                    geom.computeBoundingBox();
+                    geom.computeBoundingSphere();
+                }
+            }
+
+            for (let mi = 0; mi < allMeshes.length; mi++) {
+                const mesh = allMeshes[mi];
+                if (!mesh.visible || mesh.userData?.isOverlay) continue;
+                const geom = mesh.geometry;
+                if (!geom?.attributes?.position) continue;
+                mesh.updateWorldMatrix(true, false);
+                _snapInvWorld.copy(mesh.matrixWorld).invert();
+                _snapShiftLocal.copy(negCw).applyMatrix4(_snapInvWorld);
+                geom.translate(_snapShiftLocal.x, _snapShiftLocal.y, _snapShiftLocal.z);
+                geom.computeBoundingBox();
+                geom.computeBoundingSphere();
+            }
+
             if (tourWaypoints?.length) {
-                tourWaypoints.forEach(p => p.sub(center));
+                tourWaypoints.forEach(p => p.add(negCw));
                 rebuildTourVisuals?.();
             }
-            if (tourCar) tourCar.position.sub(center);
+            if (tourCar) tourCar.position.add(negCw);
+
+            sceneViewPan.set(0, 0, 0);
+            applyCrsOffsets();
             markNeedsRender();
+            return true;
+        }
+
+        /** Центрирование после загрузки / перед кадрированием. */
+        function ensureSceneContentNearOrigin() {
+            snapSceneContentToOrigin();
         }
 
         function estimateObject3DCenter(root) {
@@ -10839,6 +10884,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             camera.far = Math.max(maxDim * 40, camera.far, 1000);
             camera.updateProjectionMatrix();
             controls.update();
+            camera.lookAt(controls.target);
         }
 
         function focusOnList(items) {
