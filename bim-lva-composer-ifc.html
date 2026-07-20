@@ -2623,7 +2623,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v1';
+        const COMPOSER_BUILD = 'camera-center-v2';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4102,9 +4102,15 @@
 
             if (loadedModels.size) {
                 ensureSceneContentNearOrigin();
-                globalGroup.updateWorldMatrix(true, true);
-                if (/#view=/.test(location.hash)) restoreSharedViewFromHash();
-                else fitView();
+                const frameCamera = () => {
+                    globalGroup.updateWorldMatrix(true, true);
+                    externalGroup.updateWorldMatrix(true, true);
+                    geoRasterGroup.updateWorldMatrix(true, true);
+                    if (/#view=/.test(location.hash)) restoreSharedViewFromHash();
+                    else fitView();
+                    markNeedsRender();
+                };
+                requestAnimationFrame(() => requestAnimationFrame(frameCamera));
             } else {
                 restoreSharedViewFromHash();
             }
@@ -4727,7 +4733,7 @@ uniform vec3 uBatchSelColor;
             return box.getCenter(new THREE.Vector3());
         }
 
-        /** Сдвинуть всю геометрию к нулю сцены (точность WebGL + камера / проезд). */
+        /** Сдвинуть всю геометрию к нулю сцены (мировой сдвиг корней, с учётом поворота globalGroup). */
         function ensureSceneContentNearOrigin() {
             globalGroup.updateWorldMatrix(true, true);
             externalGroup.updateWorldMatrix(true, true);
@@ -4735,19 +4741,14 @@ uniform vec3 uBatchSelColor;
             const box = getSceneContentBox();
             if (box.isEmpty()) return;
             const center = box.getCenter(new THREE.Vector3());
-            if (center.length() < 3) return;
-            const shift = center.clone().negate();
-            loadedModels.forEach(mod => {
-                if (mod.group) mod.group.position.add(shift);
-            });
-            externalGroup.position.add(shift);
-            geoRasterGroup.position.add(shift);
+            if (center.lengthSq() < 0.25) return;
+            sceneViewPan.add(center);
+            applyCrsOffsets();
             if (tourWaypoints?.length) {
-                tourWaypoints.forEach(p => p.add(shift));
+                tourWaypoints.forEach(p => p.sub(center));
                 rebuildTourVisuals?.();
             }
-            if (tourPathGroup) tourPathGroup.position.add(shift);
-            if (tourCar) tourCar.position.add(shift);
+            if (tourCar) tourCar.position.sub(center);
             markNeedsRender();
         }
 
@@ -8847,21 +8848,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
 
         let crsOffsets = { x: 0, y: 0, z: 0 };
+        /** Накопленный сдвиг сцены в мировых координатах (центрирование после загрузки). */
+        const sceneViewPan = new THREE.Vector3();
+
         function applyCrsOffsets() {
-            globalGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
+            const px = crsOffsets.x - sceneViewPan.x;
+            const py = crsOffsets.y - sceneViewPan.y;
+            const pz = crsOffsets.z - sceneViewPan.z;
+            globalGroup.position.set(px, py, pz);
             if (typeof externalGroup !== 'undefined' && externalGroup) {
-                externalGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
+                externalGroup.position.set(px, py, pz);
             }
-            // Ручной CRS — поверх авто-сдвига растра к IFC origin
             if (typeof geoRasterGroup !== 'undefined' && geoRasterGroup) {
                 if (ifcWorldOrigin) {
                     geoRasterGroup.position.set(
-                        -ifcWorldOrigin.x + crsOffsets.x,
-                        ifcWorldOrigin.z + crsOffsets.y,
-                        -ifcWorldOrigin.y + crsOffsets.z
+                        -ifcWorldOrigin.x + px,
+                        ifcWorldOrigin.z + py,
+                        -ifcWorldOrigin.y + pz
                     );
                 } else {
-                    geoRasterGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
+                    geoRasterGroup.position.set(px, py, pz);
                 }
             }
             markNeedsRender();
@@ -11148,6 +11154,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             clearAllGeoRasters();
             resetIfcWorldOrigin();
             crsOffsets = { x: 0, y: 0, z: 0 };
+            sceneViewPan.set(0, 0, 0);
             applyCrsOffsets();
             stopTourPlayback();
             tourWaypoints = [];
