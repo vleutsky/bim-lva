@@ -2267,9 +2267,9 @@
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
         <span class="coord-readout" id="coordReadout" title="Координаты в метрах. Если задан авто-origin — абсолютные (мир), иначе относительно сцены.">
-            <span>курсор <b id="coordCursor">—</b></span>
+            <span><b id="coordCursor">—</b> курсор</span>
             <span class="coord-sep">·</span>
-            <span>выделение <b id="coordSelection">—</b></span>
+            <span><b id="coordSelection">—</b> выделение</span>
         </span>
         <span id="hintControls" title="ЛКМ+drag: вращение · Колесо: зум · F: кадр · 📌 пивот · ⚡ быстро. Камера без инерции — поворот и зум однотипны.">ЛКМ+drag: вращение · Колесо: зум · F: кадр · без инерции камеры</span>
         <span class="right" id="fps">—</span>
@@ -2623,7 +2623,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v4';
+        const COMPOSER_BUILD = 'camera-center-v5';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4443,6 +4443,36 @@ uniform vec3 uBatchSelColor;
             modData.batchMeshes = [];
         }
 
+        /** Убрать меши модели со сцены (геометрию фрагментов не dispose — она в _fragments). */
+        function clearModelMeshesFromScene(modData) {
+            disposeModelBatches(modData);
+            const remove = [];
+            modData.group.traverse(o => {
+                if (o.isMesh) remove.push(o);
+            });
+            for (let i = 0; i < remove.length; i++) {
+                const mesh = remove[i];
+                modData.group.remove(mesh);
+                allMeshes = allMeshes.filter(m => m !== mesh);
+                if (mesh.material) {
+                    if (Array.isArray(mesh.material)) mesh.material.forEach(m => m.dispose());
+                    else mesh.material.dispose();
+                }
+            }
+            modData.meshesByID = new Map();
+            if (modData.fragmentGeoms) modData.fragmentGeoms.clear();
+        }
+
+        function rebuildIfcMeshesFromFragments(modData) {
+            const frags = modData._fragments;
+            if (!frags?.length) return;
+            if (modData.batched) buildIfcBatches(modData, frags);
+            else {
+                clearModelMeshesFromScene(modData);
+                addIndividualIfcMeshes(modData, frags);
+            }
+        }
+
         function buildIfcBatches(modData, fragments) {
             disposeModelBatches(modData);
             modData.fragmentGeoms = new Map();
@@ -4566,6 +4596,51 @@ uniform vec3 uBatchSelColor;
                 if (frag.matrix.equals(identity)) continue;
                 applyMatrix4ToGeometryInPlace(frag.geom, frag.matrix);
                 frag.matrix.copy(identity);
+            }
+        }
+
+        /** Центр габарита в ноль (всегда, не только геодезия). */
+        function forceCenterFragmentsNearOrigin(fragments) {
+            const c = estimateFragmentsOrigin(fragments);
+            if (!c || c.lengthSq() < 1e-12) return;
+            for (let i = 0; i < fragments.length; i++) {
+                const geom = fragments[i]?.geom;
+                if (!geom?.attributes?.position) continue;
+                geom.translate(-c.x, -c.y, -c.z);
+                geom.computeBoundingBox();
+                geom.computeBoundingSphere();
+            }
+        }
+
+        function shiftLoadedModelsByWorldVector(shiftWorld) {
+            if (!shiftWorld || shiftWorld.lengthSq() < 1e-12) return;
+            globalGroup.updateWorldMatrix(true, true);
+            globalGroup.getWorldQuaternion(_snapInvQuat).invert();
+            _snapIfcShift.copy(shiftWorld).applyQuaternion(_snapInvQuat);
+
+            for (const mod of loadedModels.values()) {
+                const frags = mod._fragments;
+                if (frags?.length) {
+                    for (let i = 0; i < frags.length; i++) {
+                        const geom = frags[i]?.geom;
+                        if (!geom?.attributes?.position) continue;
+                        geom.translate(_snapIfcShift.x, _snapIfcShift.y, _snapIfcShift.z);
+                        geom.computeBoundingBox();
+                        geom.computeBoundingSphere();
+                    }
+                    rebuildIfcMeshesFromFragments(mod);
+                    continue;
+                }
+                if (!mod.group) continue;
+                mod.group.traverse(obj => {
+                    if (!obj.isMesh || !obj.geometry?.attributes?.position || obj.userData?.isOverlay) return;
+                    obj.updateWorldMatrix(true, false);
+                    _snapInvWorld.copy(obj.matrixWorld).invert();
+                    _snapShiftLocal.copy(shiftWorld).applyMatrix4(_snapInvWorld);
+                    obj.geometry.translate(_snapShiftLocal.x, _snapShiftLocal.y, _snapShiftLocal.z);
+                    obj.geometry.computeBoundingBox();
+                    obj.geometry.computeBoundingSphere();
+                });
             }
         }
 
@@ -4709,33 +4784,56 @@ uniform vec3 uBatchSelColor;
             return true;
         }
 
+        function formatCoordComponent(n, digits = 2) {
+            const x = Number(n);
+            if (!Number.isFinite(x)) return '—';
+            const s = x.toFixed(digits);
+            return x >= 0 ? `+${s}` : s;
+        }
+
         function formatCoordTriple(v, digits = 2) {
             if (!v) return '—';
-            return `${v.x.toFixed(digits)} · ${v.y.toFixed(digits)} · ${v.z.toFixed(digits)}`;
+            return `${formatCoordComponent(v.x, digits)} · ${formatCoordComponent(v.y, digits)} · ${formatCoordComponent(v.z, digits)}`;
         }
 
-        /** Мировая точка сцены → CAD XYZ (до поворота globalGroup), с восстановлением origin. */
-        function worldPointToAbsoluteXYZ(worldPoint) {
+        /** Мировая точка сцены → абсолютные XYZ (м), как LandXML: отметка = Z сцены. */
+        function worldPointToAbsoluteXYZ(worldPoint, hitObject = null) {
             if (!worldPoint) return null;
+            const o = ifcWorldOrigin;
+            if (!o) return worldPoint.clone();
+
+            let isExternal = false;
+            if (hitObject?.userData?.modelID != null) {
+                const mod = loadedModels.get(hitObject.userData.modelID);
+                isExternal = !!(mod?.isExternal || mod?.isFBX);
+            }
+
+            if (isExternal) {
+                return new THREE.Vector3(
+                    worldPoint.x + o.x,
+                    worldPoint.y + o.y,
+                    worldPoint.z + o.z
+                );
+            }
+
             const local = worldPoint.clone();
             globalGroup.worldToLocal(local);
-            if (ifcWorldOrigin) {
-                local.x += ifcWorldOrigin.x;
-                local.y += ifcWorldOrigin.y;
-                local.z += ifcWorldOrigin.z;
-            }
-            return local;
+            return new THREE.Vector3(
+                local.x + o.x,
+                local.y + o.y,
+                worldPoint.z + o.z
+            );
         }
 
-        function updateCoordCursorReadout(worldPoint) {
+        function updateCoordCursorReadout(worldPoint, hitObject = null) {
             const el = $('coordCursor');
             if (!el) return;
             if (!worldPoint) {
                 el.textContent = '—';
                 return;
             }
-            const abs = worldPointToAbsoluteXYZ(worldPoint);
-            el.textContent = formatCoordTriple(abs) + ' м';
+            const abs = worldPointToAbsoluteXYZ(worldPoint, hitObject);
+            el.textContent = `${formatCoordTriple(abs)} м`;
         }
 
         function updateCoordSelectionReadout() {
@@ -4752,8 +4850,8 @@ uniform vec3 uBatchSelColor;
             }
             const center = box.getCenter(new THREE.Vector3());
             const abs = worldPointToAbsoluteXYZ(center);
-            const suffix = selectedItems.length > 1 ? ` (${selectedItems.length})` : '';
-            el.textContent = formatCoordTriple(abs) + ' м' + suffix;
+            const suffix = selectedItems.length > 1 ? ` · ×${selectedItems.length}` : '';
+            el.textContent = `${formatCoordTriple(abs)} м${suffix}`;
         }
 
         let _coordCursorRaf = 0;
@@ -4771,7 +4869,7 @@ uniform vec3 uBatchSelColor;
                 }
                 const hit = pickStageHit(p.clientX, p.clientY);
                 if (hit?.point) {
-                    updateCoordCursorReadout(hit.point);
+                    updateCoordCursorReadout(hit.point, hit.object);
                     return;
                 }
                 // Плоскость по пивоту орбиты — чтобы координаты были и «в воздухе»
@@ -4820,38 +4918,18 @@ uniform vec3 uBatchSelColor;
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
             const box = new THREE.Box3();
-            if (!expandBoxFromVisibleMeshes(box)) return false;
+            if (!expandBoxFromVisibleMeshes(box)) {
+                const a = new THREE.Box3().setFromObject(globalGroup);
+                const b = new THREE.Box3().setFromObject(externalGroup);
+                if (!a.isEmpty()) box.union(a);
+                if (!b.isEmpty()) box.union(b);
+            }
+            if (box.isEmpty()) return false;
             const centerWorld = box.getCenter(new THREE.Vector3());
-            if (centerWorld.lengthSq() < 1e-6) return false;
+            if (centerWorld.lengthSq() < 1e-8) return false;
 
             const negCw = centerWorld.clone().negate();
-            globalGroup.getWorldQuaternion(_snapInvQuat).invert();
-            _snapIfcShift.copy(negCw).applyQuaternion(_snapInvQuat);
-
-            for (const mod of loadedModels.values()) {
-                const frags = mod._fragments;
-                if (!frags?.length) continue;
-                for (let i = 0; i < frags.length; i++) {
-                    const geom = frags[i]?.geom;
-                    if (!geom?.attributes?.position) continue;
-                    geom.translate(_snapIfcShift.x, _snapIfcShift.y, _snapIfcShift.z);
-                    geom.computeBoundingBox();
-                    geom.computeBoundingSphere();
-                }
-            }
-
-            for (let mi = 0; mi < allMeshes.length; mi++) {
-                const mesh = allMeshes[mi];
-                if (!mesh.visible || mesh.userData?.isOverlay) continue;
-                const geom = mesh.geometry;
-                if (!geom?.attributes?.position) continue;
-                mesh.updateWorldMatrix(true, false);
-                _snapInvWorld.copy(mesh.matrixWorld).invert();
-                _snapShiftLocal.copy(negCw).applyMatrix4(_snapInvWorld);
-                geom.translate(_snapShiftLocal.x, _snapShiftLocal.y, _snapShiftLocal.z);
-                geom.computeBoundingBox();
-                geom.computeBoundingSphere();
-            }
+            shiftLoadedModelsByWorldVector(negCw);
 
             if (tourWaypoints?.length) {
                 tourWaypoints.forEach(p => p.add(negCw));
@@ -5167,6 +5245,7 @@ uniform vec3 uBatchSelColor;
                     await new Promise(r => setTimeout(r, 10));
                 }
                 bakeFragmentTransformsIntoGeometry(fragments);
+                forceCenterFragmentsNearOrigin(fragments);
 
                 if (fragments.length >= IFC_BATCH_THRESHOLD) {
                     buildIfcBatches(modData, fragments);
@@ -10875,16 +10954,17 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const maxDim = Math.max(size.x, size.y, size.z, 0.01);
             const fov = THREE.MathUtils.degToRad(camera.fov);
             const dist = (maxDim / (2 * Math.tan(fov / 2))) * 1.45;
-            const dir = camera.position.clone().sub(controls.target);
-            if (dir.lengthSq() < 1e-8) dir.set(1, -1, 0.8);
-            dir.normalize();
+            const aspect = Math.max(camera.aspect || 1, 0.05);
+            const distFit = Math.max(dist, (maxDim / (2 * Math.tan(fov / 2) * aspect)) * 1.45);
+            const dir = new THREE.Vector3(1, -1, 0.85).normalize();
             controls.target.copy(center);
-            camera.position.copy(center).add(dir.multiplyScalar(dist));
+            camera.position.copy(center).add(dir.multiplyScalar(distFit));
+            camera.up.set(0, 0, 1);
             applyCameraNear(maxDim);
             camera.far = Math.max(maxDim * 40, camera.far, 1000);
             camera.updateProjectionMatrix();
-            controls.update();
             camera.lookAt(controls.target);
+            controls.update();
         }
 
         function focusOnList(items) {
