@@ -2623,7 +2623,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v2';
+        const COMPOSER_BUILD = 'camera-center-v3';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4314,7 +4314,7 @@ uniform vec3 uBatchSelColor;
 
         function bakeFragmentGeometry(geom, matrix, expressID) {
             const g = geom.clone();
-            g.applyMatrix4(matrix);
+            applyMatrix4ToGeometryInPlace(g, matrix);
             const nVerts = g.attributes.position.count;
             const ids = new Float32Array(nVerts);
             ids.fill(expressID);
@@ -4531,6 +4531,79 @@ uniform vec3 uBatchSelColor;
         let ifcOriginAutoApplied = false;
         let worldOriginSource = null; // { filename, format }
         let worldOriginLengthUnit = 'm';
+        let crsOffsets = { x: 0, y: 0, z: 0 };
+        /** Накопленный сдвиг сцены в мировых координатах (центрирование после загрузки). */
+        const sceneViewPan = new THREE.Vector3();
+        const _meshBoundsScratch = new THREE.Vector3();
+
+        /** Вершины в float32: умножение матрицы в double, иначе геодезия «ломает» bbox и WebGL. */
+        function applyMatrix4ToGeometryInPlace(geometry, matrix) {
+            const pos = geometry?.attributes?.position;
+            if (!pos?.array?.length) return;
+            const arr = pos.array;
+            const e = matrix.elements;
+            const n = pos.count;
+            for (let i = 0; i < n; i++) {
+                const i3 = i * 3;
+                const x = arr[i3];
+                const y = arr[i3 + 1];
+                const z = arr[i3 + 2];
+                arr[i3] = e[0] * x + e[4] * y + e[8] * z + e[12];
+                arr[i3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+                arr[i3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+            }
+            pos.needsUpdate = true;
+            geometry.computeBoundingBox();
+            geometry.computeBoundingSphere();
+        }
+
+        function bakeFragmentTransformsIntoGeometry(fragments) {
+            if (!fragments?.length) return;
+            const identity = new THREE.Matrix4();
+            for (let i = 0; i < fragments.length; i++) {
+                const frag = fragments[i];
+                if (!frag?.geom || !frag.matrix) continue;
+                if (frag.matrix.equals(identity)) continue;
+                applyMatrix4ToGeometryInPlace(frag.geom, frag.matrix);
+                frag.matrix.copy(identity);
+            }
+        }
+
+        /** Bbox по видимым мешам (точнее setFromObject при крупных координатах). */
+        function expandBoxFromVisibleMeshes(targetBox) {
+            if (!allMeshes?.length) return false;
+            let any = false;
+            const stepMax = 900;
+            for (let mi = 0; mi < allMeshes.length; mi++) {
+                const mesh = allMeshes[mi];
+                if (!mesh.visible) continue;
+                if (mesh.userData?.isGeoRaster || mesh.userData?.isOverlay) continue;
+                mesh.updateWorldMatrix(true, false);
+                const pos = mesh.geometry?.attributes?.position;
+                if (!pos?.count) {
+                    const ob = new THREE.Box3().setFromObject(mesh);
+                    if (!ob.isEmpty()) {
+                        targetBox.union(ob);
+                        any = true;
+                    }
+                    continue;
+                }
+                const step = Math.max(1, Math.floor(pos.count / stepMax));
+                const e = mesh.matrixWorld.elements;
+                for (let vi = 0; vi < pos.count; vi += step) {
+                    _meshBoundsScratch.fromBufferAttribute(pos, vi);
+                    const x = _meshBoundsScratch.x;
+                    const y = _meshBoundsScratch.y;
+                    const z = _meshBoundsScratch.z;
+                    _meshBoundsScratch.x = e[0] * x + e[4] * y + e[8] * z + e[12];
+                    _meshBoundsScratch.y = e[1] * x + e[5] * y + e[9] * z + e[13];
+                    _meshBoundsScratch.z = e[2] * x + e[6] * y + e[10] * z + e[14];
+                    targetBox.expandByPoint(_meshBoundsScratch);
+                    any = true;
+                }
+            }
+            return any;
+        }
 
         function detectIfcLengthToMetersFromText(text) {
             if (!text) return 1;
@@ -5048,6 +5121,7 @@ uniform vec3 uBatchSelColor;
                     showLoader('КООРДИНАТЫ', 'Ноль сцены ← центр модели…');
                     await new Promise(r => setTimeout(r, 10));
                 }
+                bakeFragmentTransformsIntoGeometry(fragments);
 
                 if (fragments.length >= IFC_BATCH_THRESHOLD) {
                     buildIfcBatches(modData, fragments);
@@ -8847,10 +8921,6 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             trackUsage('export_csv', { rows: items.length });
         });
 
-        let crsOffsets = { x: 0, y: 0, z: 0 };
-        /** Накопленный сдвиг сцены в мировых координатах (центрирование после загрузки). */
-        const sceneViewPan = new THREE.Vector3();
-
         function applyCrsOffsets() {
             const px = crsOffsets.x - sceneViewPan.x;
             const py = crsOffsets.y - sceneViewPan.y;
@@ -11036,38 +11106,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
 
         function fitView() {
+            ensureSceneContentNearOrigin();
             globalGroup.updateWorldMatrix(true, true);
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
-            const box = new THREE.Box3();
-            const ifcBox = new THREE.Box3().setFromObject(globalGroup);
-            const extBox = new THREE.Box3().setFromObject(externalGroup);
-            const geoBox = new THREE.Box3().setFromObject(geoRasterGroup);
-            if (!ifcBox.isEmpty()) box.union(ifcBox);
-            if (!extBox.isEmpty()) box.union(extBox);
-            if (!geoBox.isEmpty()) box.union(geoBox);
+            const box = getSceneContentBox();
             if (box.isEmpty()) return;
-            
-            const size = box.getSize(new THREE.Vector3()); 
+
+            const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z) || 10;
-            const dist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.6;
-            
-            camera.position.copy(center.clone().add(new THREE.Vector3(1, -1, 0.8).normalize().multiplyScalar(dist)));
-            applyCameraNear(maxDim);
-            camera.far = Math.max(maxDim * 40, 999999999);
-            camera.updateProjectionMatrix();
-            
-            controls.target.copy(center); 
-            controls.update();
-            
+            const maxDim = Math.max(size.x, size.y, size.z, 0.01);
+            frameBox(box);
+
             scene.remove(grid);
             const gsize = Math.max(40, Math.ceil(maxDim * 1.6 / 10) * 10);
             grid = new THREE.GridHelper(gsize, gsize / 4, 0xaeb8c3, 0xdde3e9);
-            grid.rotation.x = Math.PI / 2; 
+            grid.rotation.x = Math.PI / 2;
             grid.position.set(center.x, center.y, box.min.z);
-            grid.visible = $('gridBtn').classList.contains('on'); 
+            grid.visible = $('gridBtn').classList.contains('on');
             scene.add(grid);
+            markNeedsRender();
         }
 
         $('fit').addEventListener('click', () => {
@@ -12388,6 +12446,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function getSceneContentBox() {
             const box = new THREE.Box3();
+            globalGroup.updateWorldMatrix(true, true);
+            externalGroup.updateWorldMatrix(true, true);
+            geoRasterGroup.updateWorldMatrix(true, true);
+            if (expandBoxFromVisibleMeshes(box)) return box;
             const a = new THREE.Box3().setFromObject(globalGroup);
             const b = new THREE.Box3().setFromObject(externalGroup);
             const c = new THREE.Box3().setFromObject(geoRasterGroup);
