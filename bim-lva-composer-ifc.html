@@ -2267,9 +2267,9 @@
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
         <span class="coord-readout" id="coordReadout" title="Координаты в метрах. Если задан авто-origin — абсолютные (мир), иначе относительно сцены.">
-            <span><b id="coordCursor">—</b> курсор</span>
+            <span><b id="coordCursor">—</b> м курсор</span>
             <span class="coord-sep">·</span>
-            <span><b id="coordSelection">—</b> выделение</span>
+            <span><b id="coordSelection">—</b> м выделение</span>
         </span>
         <span id="hintControls" title="ЛКМ+drag: вращение · Колесо: зум · F: кадр · 📌 пивот · ⚡ быстро. Камера без инерции — поворот и зум однотипны.">ЛКМ+drag: вращение · Колесо: зум · F: кадр · без инерции камеры</span>
         <span class="right" id="fps">—</span>
@@ -2623,7 +2623,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v5';
+        const COMPOSER_BUILD = 'camera-center-v6';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4796,7 +4796,7 @@ uniform vec3 uBatchSelColor;
             return `${formatCoordComponent(v.x, digits)} · ${formatCoordComponent(v.y, digits)} · ${formatCoordComponent(v.z, digits)}`;
         }
 
-        /** Мировая точка сцены → абсолютные XYZ (м), как LandXML: отметка = Z сцены. */
+        /** Мировая точка → абсолютные координаты: восток · север · отметка (м). */
         function worldPointToAbsoluteXYZ(worldPoint, hitObject = null) {
             if (!worldPoint) return null;
             const o = ifcWorldOrigin;
@@ -4816,13 +4816,13 @@ uniform vec3 uBatchSelColor;
                 );
             }
 
-            const local = worldPoint.clone();
-            globalGroup.worldToLocal(local);
-            return new THREE.Vector3(
-                local.x + o.x,
-                local.y + o.y,
-                worldPoint.z + o.z
-            );
+            const p = worldPoint.clone();
+            globalGroup.worldToLocal(p);
+            // IFC Z-up в сцене: Rx(π/2) → показ как восток · север · отметка (север без «вечного» минуса)
+            const east = p.x + o.x;
+            const north = -(p.z + o.z);
+            const elev = p.y + o.y;
+            return new THREE.Vector3(east, north, elev);
         }
 
         function updateCoordCursorReadout(worldPoint, hitObject = null) {
@@ -4833,7 +4833,7 @@ uniform vec3 uBatchSelColor;
                 return;
             }
             const abs = worldPointToAbsoluteXYZ(worldPoint, hitObject);
-            el.textContent = `${formatCoordTriple(abs)} м`;
+            el.textContent = formatCoordTriple(abs);
         }
 
         function updateCoordSelectionReadout() {
@@ -4851,7 +4851,7 @@ uniform vec3 uBatchSelColor;
             const center = box.getCenter(new THREE.Vector3());
             const abs = worldPointToAbsoluteXYZ(center);
             const suffix = selectedItems.length > 1 ? ` · ×${selectedItems.length}` : '';
-            el.textContent = `${formatCoordTriple(abs)} м${suffix}`;
+            el.textContent = `${formatCoordTriple(abs)}${suffix}`;
         }
 
         let _coordCursorRaf = 0;
@@ -4883,25 +4883,114 @@ uniform vec3 uBatchSelColor;
         }
 
         function estimateFragmentsOrigin(fragments) {
+            return estimateFragmentsOriginDouble(fragments);
+        }
+
+        /** Центр габарита фрагментов в IFC-локали (double, без float32 bbox). */
+        function estimateFragmentsOriginDouble(fragments) {
             if (!fragments?.length) return null;
             const box = new THREE.Box3();
-            const tmpBox = new THREE.Box3();
-            const step = Math.max(1, Math.floor(fragments.length / 400));
-            for (let i = 0; i < fragments.length; i += step) {
-                const frag = fragments[i];
+            const eTmp = new THREE.Matrix4();
+            const stepFrag = Math.max(1, Math.floor(fragments.length / 400));
+            for (let fi = 0; fi < fragments.length; fi += stepFrag) {
+                const frag = fragments[fi];
                 if (!frag?.geom?.attributes?.position) {
-                    tmpBox.setFromMatrixPosition(frag.matrix);
-                    box.expandByPoint(tmpBox.min);
-                    box.expandByPoint(tmpBox.max);
+                    if (frag?.matrix) {
+                        _meshBoundsScratch.setFromMatrixPosition(frag.matrix);
+                        box.expandByPoint(_meshBoundsScratch);
+                    }
                     continue;
                 }
-                if (!frag.geom.boundingBox) frag.geom.computeBoundingBox();
-                if (!frag.geom.boundingBox || frag.geom.boundingBox.isEmpty()) continue;
-                tmpBox.copy(frag.geom.boundingBox).applyMatrix4(frag.matrix);
-                box.union(tmpBox);
+                const pos = frag.geom.attributes.position;
+                const arr = pos.array;
+                const e = frag.matrix?.elements || eTmp.identity().elements;
+                const step = Math.max(1, Math.floor(pos.count / 400));
+                for (let i = 0; i < pos.count; i += step) {
+                    const i3 = i * 3;
+                    const x = arr[i3];
+                    const y = arr[i3 + 1];
+                    const z = arr[i3 + 2];
+                    _meshBoundsScratch.x = e[0] * x + e[4] * y + e[8] * z + e[12];
+                    _meshBoundsScratch.y = e[1] * x + e[5] * y + e[9] * z + e[13];
+                    _meshBoundsScratch.z = e[2] * x + e[6] * y + e[10] * z + e[14];
+                    box.expandByPoint(_meshBoundsScratch);
+                }
             }
             if (box.isEmpty()) return null;
             return box.getCenter(new THREE.Vector3());
+        }
+
+        /** Вычесть origin из вершин в double (геодезия не ломает float32 bbox). */
+        function subtractVectorFromFragmentVertices(fragments, origin) {
+            if (!fragments?.length || !origin) return;
+            const ox = origin.x;
+            const oy = origin.y;
+            const oz = origin.z;
+            const identity = new THREE.Matrix4();
+            for (let fi = 0; fi < fragments.length; fi++) {
+                const frag = fragments[fi];
+                const pos = frag?.geom?.attributes?.position;
+                if (!pos?.array?.length) continue;
+                const arr = pos.array;
+                const e = frag.matrix?.elements;
+                const hasMatrix = e && !frag.matrix.equals(identity);
+                const n = pos.count;
+                for (let i = 0; i < n; i++) {
+                    const i3 = i * 3;
+                    let x = arr[i3];
+                    let y = arr[i3 + 1];
+                    let z = arr[i3 + 2];
+                    if (hasMatrix) {
+                        const tx = e[0] * x + e[4] * y + e[8] * z + e[12];
+                        const ty = e[1] * x + e[5] * y + e[9] * z + e[13];
+                        const tz = e[2] * x + e[6] * y + e[10] * z + e[14];
+                        x = tx - ox;
+                        y = ty - oy;
+                        z = tz - oz;
+                    } else {
+                        x -= ox;
+                        y -= oy;
+                        z -= oz;
+                    }
+                    arr[i3] = x;
+                    arr[i3 + 1] = y;
+                    arr[i3 + 2] = z;
+                }
+                pos.needsUpdate = true;
+                frag.matrix.copy(identity);
+                frag.geom.computeBoundingBox();
+                frag.geom.computeBoundingSphere();
+            }
+        }
+
+        /** Мировой bbox сцены по вершинам (double). */
+        function computeSceneWorldBoundsBox(targetBox) {
+            targetBox.makeEmpty();
+            if (!allMeshes?.length) return false;
+            let any = false;
+            const stepMax = 1200;
+            for (let mi = 0; mi < allMeshes.length; mi++) {
+                const mesh = allMeshes[mi];
+                if (!mesh.visible || mesh.userData?.isGeoRaster || mesh.userData?.isOverlay) continue;
+                mesh.updateWorldMatrix(true, false);
+                const pos = mesh.geometry?.attributes?.position;
+                if (!pos?.count) continue;
+                const arr = pos.array;
+                const e = mesh.matrixWorld.elements;
+                const step = Math.max(1, Math.floor(pos.count / stepMax));
+                for (let i = 0; i < pos.count; i += step) {
+                    const i3 = i * 3;
+                    const x = arr[i3];
+                    const y = arr[i3 + 1];
+                    const z = arr[i3 + 2];
+                    _meshBoundsScratch.x = e[0] * x + e[4] * y + e[8] * z + e[12];
+                    _meshBoundsScratch.y = e[1] * x + e[5] * y + e[9] * z + e[13];
+                    _meshBoundsScratch.z = e[2] * x + e[6] * y + e[10] * z + e[14];
+                    targetBox.expandByPoint(_meshBoundsScratch);
+                    any = true;
+                }
+            }
+            return any;
         }
 
         const _snapShiftLocal = new THREE.Vector3();
@@ -4918,7 +5007,7 @@ uniform vec3 uBatchSelColor;
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
             const box = new THREE.Box3();
-            if (!expandBoxFromVisibleMeshes(box)) {
+            if (!computeSceneWorldBoundsBox(box) && !expandBoxFromVisibleMeshes(box)) {
                 const a = new THREE.Box3().setFromObject(globalGroup);
                 const b = new THREE.Box3().setFromObject(externalGroup);
                 if (!a.isEmpty()) box.union(a);
@@ -4926,7 +5015,7 @@ uniform vec3 uBatchSelColor;
             }
             if (box.isEmpty()) return false;
             const centerWorld = box.getCenter(new THREE.Vector3());
-            if (centerWorld.lengthSq() < 1e-8) return false;
+            if (centerWorld.lengthSq() < 0.01) return false;
 
             const negCw = centerWorld.clone().negate();
             shiftLoadedModelsByWorldVector(negCw);
@@ -4938,14 +5027,21 @@ uniform vec3 uBatchSelColor;
             if (tourCar) tourCar.position.add(negCw);
 
             sceneViewPan.set(0, 0, 0);
+            globalGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
+            externalGroup.position.set(crsOffsets.x, crsOffsets.y, crsOffsets.z);
             applyCrsOffsets();
             markNeedsRender();
             return true;
         }
 
-        /** Центрирование после загрузки / перед кадрированием. */
         function ensureSceneContentNearOrigin() {
-            snapSceneContentToOrigin();
+            for (let i = 0; i < 4; i++) {
+                const box = new THREE.Box3();
+                if (!computeSceneWorldBoundsBox(box)) break;
+                const c = box.getCenter(new THREE.Vector3());
+                if (c.lengthSq() < 0.25) break;
+                if (!snapSceneContentToOrigin()) break;
+            }
         }
 
         function estimateObject3DCenter(root) {
@@ -5084,17 +5180,21 @@ uniform vec3 uBatchSelColor;
          */
         function rebaseLargeCoordinateFragments(fragments, sourceMeta = {}) {
             if (!fragments?.length) return false;
-            const center = estimateFragmentsOrigin(fragments);
+            const center = estimateFragmentsOriginDouble(fragments);
             if (!center) return false;
 
             if (!ifcWorldOrigin) {
                 if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
             } else if (center.length() < LARGE_COORD_THRESHOLD) {
-                // Локальная модель при уже заданном геодезическом origin — не трогаем
                 return false;
             }
 
-            applyOriginOffsetToFragments(fragments, ifcWorldOrigin);
+            const origin = new THREE.Vector3(
+                ifcWorldOrigin.x,
+                ifcWorldOrigin.y,
+                ifcWorldOrigin.z
+            );
+            subtractVectorFromFragmentVertices(fragments, origin);
             return true;
         }
 
@@ -5245,7 +5345,9 @@ uniform vec3 uBatchSelColor;
                     await new Promise(r => setTimeout(r, 10));
                 }
                 bakeFragmentTransformsIntoGeometry(fragments);
-                forceCenterFragmentsNearOrigin(fragments);
+                if (!rebased) {
+                    forceCenterFragmentsNearOrigin(fragments);
+                }
 
                 if (fragments.length >= IFC_BATCH_THRESHOLD) {
                     buildIfcBatches(modData, fragments);
@@ -12575,6 +12677,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             globalGroup.updateWorldMatrix(true, true);
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
+            if (computeSceneWorldBoundsBox(box)) return box;
             if (expandBoxFromVisibleMeshes(box)) return box;
             const a = new THREE.Box3().setFromObject(globalGroup);
             const b = new THREE.Box3().setFromObject(externalGroup);
