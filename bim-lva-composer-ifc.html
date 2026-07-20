@@ -2616,8 +2616,10 @@
         let pivotLockToSelection = false;
         const zoomRaycaster = new THREE.Raycaster();
         const zoomMouse = new THREE.Vector2();
-        const ZOOM_FACTOR = 0.12;
+        const ZOOM_FACTOR = 0.11;          // по элементу
+        const ZOOM_FACTOR_EMPTY = 0.038;   // мимо геометрии — заметно спокойнее
         let lastZoomHitPoint = null;
+        let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
         const IFC_BATCH_THRESHOLD = 2000;
 
@@ -10626,7 +10628,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             if (pivotLockToSelection && selectedItems.length && !options.ignorePivotLock) {
                 const box = getSelectionBounds(selectedItems);
-                if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
+                if (!box.isEmpty()) {
+                    lastZoomHitWasGeometry = false;
+                    return box.getCenter(new THREE.Vector3());
+                }
             }
 
             const rect = renderer.domElement.getBoundingClientRect();
@@ -10646,13 +10651,18 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 );
                 if (hits.length) {
                     lastZoomHitPoint = hits[0].point.clone();
+                    lastZoomHitWasGeometry = true;
                     return lastZoomHitPoint.clone();
                 }
-            } else if (lastZoomHitPoint) {
+            } else if (lastZoomHitPoint && lastZoomHitWasGeometry) {
+                // Недавно попали в геометрию — держим якорь, пока throttle raycast
                 return lastZoomHitPoint.clone();
             }
 
-            if (!allowPlaneFallback) return null;
+            if (!allowPlaneFallback) {
+                lastZoomHitWasGeometry = false;
+                return null;
+            }
             const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
                 camera.getWorldDirection(new THREE.Vector3()),
                 controls.target
@@ -10660,8 +10670,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const hit = new THREE.Vector3();
             if (zoomRaycaster.ray.intersectPlane(plane, hit)) {
                 lastZoomHitPoint = hit.clone();
+                lastZoomHitWasGeometry = false;
                 return hit;
             }
+            lastZoomHitWasGeometry = false;
             return null;
         }
 
@@ -10669,11 +10681,18 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!zoomToCursorEnabled || perfMode || allMeshes.length > 15000) {
                 if (pivotLockToSelection && selectedItems.length) {
                     const box = getSelectionBounds(selectedItems);
-                    if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
+                    if (!box.isEmpty()) {
+                        lastZoomHitWasGeometry = false;
+                        return box.getCenter(new THREE.Vector3());
+                    }
                 }
-                return lastZoomHitPoint ? lastZoomHitPoint.clone() : controls.target.clone();
+                lastZoomHitWasGeometry = false;
+                return controls.target.clone();
             }
-            return pickScenePoint(clientX, clientY) || controls.target.clone();
+            const hit = pickScenePoint(clientX, clientY);
+            if (hit) return hit;
+            lastZoomHitWasGeometry = false;
+            return controls.target.clone();
         }
 
         // Вращение ЛКМ вокруг точки под курсором (как Navis): без предварительной сдвижки lookAt
@@ -10774,9 +10793,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         renderer.domElement.addEventListener('pointerup', endOrbitDrag, true);
         renderer.domElement.addEventListener('pointercancel', endOrbitDrag, true);
 
-        function zoomCameraTowardPoint(point, deltaY) {
+        function zoomCameraTowardPoint(point, deltaY, options = {}) {
             // Как в OrbitControls: прокрутка вверх (deltaY < 0) — приближение
-            const factor = Math.exp(Math.sign(deltaY || 1) * ZOOM_FACTOR * Math.min(Math.abs(deltaY || 100) / 100, 3));
+            const hitGeom = options.hitGeometry === true;
+            let base = hitGeom ? ZOOM_FACTOR : ZOOM_FACTOR_EMPTY;
+            // Мимо модели на большой дистанции — ещё мягче, иначе «пролёт» за 1–2 тика
+            if (!hitGeom) {
+                const dist = camera.position.distanceTo(point);
+                if (dist > 40) base *= Math.max(0.3, 40 / dist);
+                if (dist > 200) base *= 0.7;
+            }
+            const intensityCap = hitGeom ? 2.5 : 1.25;
+            const intensity = Math.min(Math.abs(deltaY || 100) / 100, intensityCap);
+            const factor = Math.exp(Math.sign(deltaY || 1) * base * intensity);
+
             const camOffset = camera.position.clone().sub(point);
             const targetOffset = controls.target.clone().sub(point);
             camera.position.copy(point).add(camOffset.multiplyScalar(factor));
@@ -10796,7 +10826,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!controls.enabled) return;
             event.preventDefault();
             const point = getZoomAnchorPoint(event.clientX, event.clientY);
-            zoomCameraTowardPoint(point, event.deltaY);
+            zoomCameraTowardPoint(point, event.deltaY, { hitGeometry: lastZoomHitWasGeometry });
         }, { passive: false });
 
         $('btnZoomCursor').addEventListener('click', () => {
