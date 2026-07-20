@@ -16,6 +16,9 @@
   const EVENT_LOG_KEY = 'bimlva_stats_event_log_v1';
   const EVENT_LOG_MAX = 200;
   const SESSION_STARTED_KEY = 'bimlva_stats_session_started_v1';
+  const CLIENT_ID_KEY = 'bimlva_stats_client_id_v1';
+  const REMOTE_QUEUE_KEY = 'bimlva_stats_remote_queue_v1';
+  const REMOTE_QUEUE_MAX = 40;
 
   const BUCKETS = {
     site: 'page_site',
@@ -119,6 +122,128 @@
       }
     });
     return safe;
+  }
+
+  function getClientId() {
+    let id = safeLocalGet(CLIENT_ID_KEY);
+    if (!id) {
+      id = 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+      safeLocalSet(CLIENT_ID_KEY, id);
+    }
+    return id;
+  }
+
+  function currentPageTag() {
+    const p = String(location.pathname || '');
+    if (p.includes('composer')) return 'composer';
+    if (p.includes('stats')) return 'stats';
+    if (p.includes('plugin')) return 'plugin';
+    if (p.includes('case')) return 'case';
+    return 'site';
+  }
+
+  function queueRemoteEvent(name, props) {
+    try {
+      const raw = safeLocalGet(REMOTE_QUEUE_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      const arr = Array.isArray(list) ? list : [];
+      arr.push({ t: Date.now(), e: name, p: props || {} });
+      safeLocalSet(REMOTE_QUEUE_KEY, JSON.stringify(arr.slice(-REMOTE_QUEUE_MAX)));
+    } catch (_) {}
+  }
+
+  async function flushRemoteQueue() {
+    const auth = global.BimLvaAuth;
+    const cfg = global.BIMLVA_AUTH_CONFIG || {};
+    if (!cfg.supabaseUrl || !(cfg.supabaseAnonKey || cfg.supabasePublishableKey)) return;
+    if (!auth?.getSupabaseClient) return;
+    let sb;
+    try { sb = await auth.getSupabaseClient(); } catch (_) { return; }
+    if (!sb) return;
+
+    let raw;
+    try { raw = safeLocalGet(REMOTE_QUEUE_KEY); } catch (_) { return; }
+    let arr = [];
+    try {
+      arr = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(arr) || !arr.length) return;
+    } catch (_) { return; }
+
+    const user = auth.getUser?.() || null;
+    const clientId = getClientId();
+    const page = currentPageTag();
+    const rows = arr.map((item) => ({
+      event: String(item.e || 'unknown'),
+      props: sanitizeProps(item.p),
+      client_id: clientId,
+      email: user?.email || null,
+      user_id: user?.id || null,
+      page
+    }));
+
+    const { error } = await sb.from('viewer_usage_events').insert(rows);
+    if (!error) {
+      try { localStorage.removeItem(REMOTE_QUEUE_KEY); } catch (_) {}
+    }
+  }
+
+  async function fetchViewerUsageEvents(limit) {
+    const auth = global.BimLvaAuth;
+    if (!auth?.getSupabaseClient) throw new Error('Supabase не подключён');
+    const user = auth.getUser?.();
+    if (!user?.isAdmin) throw new Error('Только для admin-аккаунта');
+    const sb = await auth.getSupabaseClient();
+    if (!sb) throw new Error('Нет клиента Supabase');
+    const lim = Math.min(2000, Math.max(50, Number(limit) || 500));
+    const { data, error } = await sb
+      .from('viewer_usage_events')
+      .select('created_at,email,client_id,event,props,page,user_id')
+      .order('created_at', { ascending: false })
+      .limit(lim);
+    if (error) throw error;
+    return data || [];
+  }
+
+  function aggregateViewerUsage(rows) {
+    const byKey = new Map();
+    (rows || []).forEach((r) => {
+      const email = r.email ? String(r.email).toLowerCase() : '';
+      const key = email || ('anon:' + String(r.client_id || '?'));
+      let row = byKey.get(key);
+      if (!row) {
+        row = {
+          key,
+          email: email || null,
+          clientId: r.client_id || '',
+          events: 0,
+          composerOpens: 0,
+          loadsOk: 0,
+          loadsFail: 0,
+          features: 0,
+          lastAt: 0,
+          top: {}
+        };
+        byKey.set(key, row);
+      }
+      const t = r.created_at ? new Date(r.created_at).getTime() : 0;
+      if (t > row.lastAt) row.lastAt = t;
+      const ev = String(r.event || '');
+      row.events += 1;
+      row.top[ev] = (row.top[ev] || 0) + 1;
+      if (ev === 'page_composer') row.composerOpens += 1;
+      if (ev === 'model_load' || ev === 'yandex_load_ok') row.loadsOk += 1;
+      if (ev.endsWith('_failed') || ev === 'load_failed') row.loadsFail += 1;
+      if (resolveBucket(ev) === BUCKETS.feature) row.features += 1;
+    });
+    return [...byKey.values()]
+      .map((row) => {
+        const top = Object.entries(row.top)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([name, count]) => ({ name, count }));
+        return { ...row, top };
+      })
+      .sort((a, b) => b.lastAt - a.lastAt);
   }
 
   function pushEventLog(name, props) {
@@ -244,6 +369,8 @@
     }
     metrikaHit(location.pathname + location.search + '#' + p);
     pushEventLog('page_' + p, {});
+    queueRemoteEvent('page_' + p, {});
+    try { flushRemoteQueue().catch(() => {}); } catch (_) {}
   }
 
   /**
@@ -271,7 +398,9 @@
     }
 
     pushEventLog(name, safe);
+    queueRemoteEvent(name, safe);
     metrikaGoal(name, safe);
+    try { flushRemoteQueue().catch(() => {}); } catch (_) {}
   }
 
   async function getCount(counterName) {
@@ -334,6 +463,10 @@
     getRecentEvents,
     getLocalSummary,
     clearRecentEvents,
+    fetchViewerUsageEvents,
+    aggregateViewerUsage,
+    flushRemoteQueue,
+    getClientId,
     BUCKETS,
     NAMESPACE,
     YANDEX_METRIKA_ID

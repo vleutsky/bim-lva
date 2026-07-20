@@ -267,6 +267,18 @@
       <p class="status" id="status">Загрузка…</p>
 
       <div class="panel">
+        <h2>Composer — пользователи (Supabase)</h2>
+        <p style="margin-bottom:10px">
+          Сводка по всем браузерам: кто открывал вьювер, загрузки, инструменты.
+          Нужна таблица <code>viewer_usage_events</code> и ваш email в <code>site_admins</code>
+          (см. <code>supabase/migrations/20260720120000_viewer_usage_events.sql</code>).
+          Без имён IFC-файлов.
+        </p>
+        <p class="status" id="viewerUsageStatus">—</p>
+        <div id="viewerUsageBox"><p class="empty-users">Загрузка…</p></div>
+      </div>
+
+      <div class="panel">
         <h2>Журнал событий (этот браузер)</h2>
         <p style="margin-bottom:10px">Последние действия без имён файлов. Полезно отлаживать Я.Диск / ошибки загрузки.</p>
         <div id="eventsBox"><p class="empty-users">Пока пусто</p></div>
@@ -284,6 +296,7 @@
           <li>«Сайт» и «Composer» — раз за вкладку.</li>
           <li>«Загрузки» и «Лиды» — каждый раз (включая ошибки загрузки / Я.Диск).</li>
           <li>«Функции» — раз за сессию на тип действия (замер, clash, bulk edit…).</li>
+          <li>Composer (Supabase): события без имён файлов — открытия, загрузки, clash, bulk edit, переключатель контура и т.д.</li>
           <li>Метрика: <code>YANDEX_METRIKA_ID</code> в <code>stats.js</code> (сейчас <span id="metrikaStatus">выкл</span>).</li>
         </ul>
       </div>
@@ -305,6 +318,7 @@
       renderUsers();
       renderEvents();
       renderLocalSummary();
+      renderViewerUsage();
     }
 
     function showGate() {
@@ -354,6 +368,60 @@
       </table>`;
     }
 
+    async function renderViewerUsage() {
+      const status = document.getElementById('viewerUsageStatus');
+      const box = document.getElementById('viewerUsageBox');
+      if (!status || !box) return;
+      status.className = 'status';
+      status.textContent = 'Загрузка из Supabase…';
+      if (BimLvaAuth.mode() !== 'supabase') {
+        status.textContent = 'Режим local — общая статистика только при mode: supabase.';
+        box.innerHTML = '<p class="empty-users">Включите Supabase в auth-config.js и выполните SQL-миграцию.</p>';
+        return;
+      }
+      if (!BimLvaAuth.getUser()?.isAdmin) {
+        status.textContent = 'Войдите под admin-email из auth-config.js.';
+        box.innerHTML = '<p class="empty-users">—</p>';
+        return;
+      }
+      try {
+        const rows = await BimLvaStats.fetchViewerUsageEvents(800);
+        const users = BimLvaStats.aggregateViewerUsage(rows);
+        status.className = 'status ok';
+        status.textContent = `Записей: ${rows.length} · пользователей/клиентов: ${users.length} · обновлено ${new Date().toLocaleString('ru-RU')}`;
+        if (!users.length) {
+          box.innerHTML = '<p class="empty-users">Пока нет событий (или нет прав SELECT — добавьте email в site_admins).</p>';
+          return;
+        }
+        box.innerHTML = `<table class="users">
+          <thead><tr>
+            <th>Пользователь</th><th>Событий</th><th>Composer</th><th>Загрузки</th><th>Ошибки</th><th>Функции</th><th>Последний визит</th><th>Топ действий</th>
+          </tr></thead>
+          <tbody>
+            ${users.map((u) => {
+              const label = u.email || ('аноним · ' + escapeHtml(String(u.clientId).slice(0, 12)));
+              const top = (u.top || []).map((t) => `${t.name} (${t.count})`).join(', ') || '—';
+              const when = u.lastAt ? new Date(u.lastAt).toLocaleString('ru-RU') : '—';
+              return `<tr>
+                <td>${label}</td>
+                <td class="mono">${u.events}</td>
+                <td class="mono">${u.composerOpens}</td>
+                <td class="mono">${u.loadsOk}</td>
+                <td class="mono">${u.loadsFail}</td>
+                <td class="mono">${u.features}</td>
+                <td class="mono">${escapeHtml(when)}</td>
+                <td class="mono">${escapeHtml(top)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+      } catch (e) {
+        status.className = 'status err';
+        status.textContent = e.message || String(e);
+        box.innerHTML = '<p class="empty-users">Проверьте таблицу viewer_usage_events, RLS и site_admins.</p>';
+      }
+    }
+
     async function refresh() {
       const status = document.getElementById('status');
       status.className = 'status';
@@ -378,6 +446,7 @@
           ' · ns ' + BimLvaStats.NAMESPACE;
         renderEvents();
         renderLocalSummary();
+        renderViewerUsage();
       } catch (e) {
         status.className = 'status err';
         status.textContent = 'Не удалось прочитать счётчики: ' + (e.message || e);
@@ -465,6 +534,7 @@
     document.getElementById('refreshBtn').addEventListener('click', () => {
       refresh();
       renderUsers();
+      renderViewerUsage();
     });
     document.getElementById('clearLogBtn').addEventListener('click', () => {
       BimLvaStats.clearRecentEvents();

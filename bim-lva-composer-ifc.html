@@ -1690,6 +1690,7 @@
                     <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
                     <button class="btn" id="btnTour" disabled title="Проезд «как на машине» или облёт по траектории">🚗 Проезд / облёт</button>
                     <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
+                    <button class="btn on" id="btnSelectionContour" title="Синий контур рёбер у выделенных элементов в 3D (в тех же координатах, что и модель)">◇ Контур выделения</button>
                     <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
                     <div class="tb-menu-label">Ближнее отсечение</div>
                     <div class="tb-menu-row" title="Near plane камеры: при приближении слишком большое значение «съедает» близкую геометрию. Выключите Авто и поставьте 0.01–0.05">
@@ -2624,6 +2625,19 @@
         const IFC_BATCH_THRESHOLD = 2000;
         const BATCH_SEL_MAX = 64;
         const HIGHLIGHT_COLOR = 0x2b7fd4;
+        const SELECTION_CONTOUR_LS_KEY = 'bimlva_selection_contour_3d';
+
+        function isSelectionContour3dEnabled() {
+            try { return localStorage.getItem(SELECTION_CONTOUR_LS_KEY) !== '0'; } catch (_) { return true; }
+        }
+        function setSelectionContour3dEnabled(on) {
+            try { localStorage.setItem(SELECTION_CONTOUR_LS_KEY, on ? '1' : '0'); } catch (_) {}
+        }
+        function updateSelectionContourButton() {
+            const btn = $('btnSelectionContour');
+            if (!btn) return;
+            btn.classList.toggle('on', isSelectionContour3dEnabled());
+        }
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const key = new THREE.DirectionalLight(0xffffff, 1.6); 
@@ -4315,11 +4329,43 @@ uniform vec3 uBatchSelColor;
             return _overlayRelMat.copy(parent.matrixWorld).invert().multiply(object.matrixWorld);
         }
 
+        function buildSelectionContours(items) {
+            if (!isSelectionContour3dEnabled() || !items?.length) return;
+            items.forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod || mod.hiddenIds?.has(item.expressID)) return;
+
+                if (mod.batched && mod.fragmentGeoms?.has(item.expressID)) {
+                    mod.fragmentGeoms.get(item.expressID).forEach(frag => {
+                        const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
+                        addEdgesOutlineFromGeometry(geom, mod.group, null);
+                        geom.dispose();
+                    });
+                    return;
+                }
+
+                const meshes = mod.meshesByID.get(item.expressID) || [];
+                meshes.forEach(src => {
+                    if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
+                    if (src.isMesh && src.geometry) {
+                        // Контур — дочерний объект меша: наследует matrix без bake matrixWorld (иначе «левый» поворот).
+                        addEdgesOutlineFromGeometry(src.geometry, src, null);
+                    } else if ((src.isLine || src.isLineSegments) && src.geometry) {
+                        const line = new THREE.LineSegments(src.geometry, getSelectionOutlineMaterial());
+                        line.userData.ownsGeometry = false;
+                        addSelectionOutlineObject(line, src);
+                    }
+                });
+            });
+        }
+
         function syncSelectionSceneHighlight(items) {
-            // Прозрачные mesh-копии отключены навсегда — только шейдерная подсветка батч-IFC + emissive на одиночных мешах.
+            // Без прозрачных копий mesh: шейдер/emissive + опциональный контур в локальных координатах.
             clearSelectionOverlays();
             clearBatchSelectionHighlights();
-            applyBatchSelectionHighlights(items || []);
+            const list = items || [];
+            applyBatchSelectionHighlights(list);
+            buildSelectionContours(list);
             markNeedsRender();
         }
 
@@ -10873,6 +10919,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 setOrbitPivotToSelection(false);
             }
             trackUsage('pivot_lock', { on: pivotLockToSelection });
+        });
+
+        updateSelectionContourButton();
+        $('btnSelectionContour')?.addEventListener('click', () => {
+            setSelectionContour3dEnabled(!isSelectionContour3dEnabled());
+            updateSelectionContourButton();
+            syncSelectionSceneHighlight(selectedItems);
+            trackUsage('selection_contour_toggle', { on: isSelectionContour3dEnabled() });
         });
 
         $('btnPerfMode').addEventListener('click', () => {

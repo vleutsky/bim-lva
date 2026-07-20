@@ -407,6 +407,7 @@
     lockStats,
     isAdminEmail,
     onChange,
+    getSupabaseClient: ensureSupabase,
     config: cfg
   };
 })(typeof window !== 'undefined' ? window : globalThis);
