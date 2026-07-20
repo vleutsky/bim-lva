@@ -1690,7 +1690,7 @@
                     <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
                     <button class="btn" id="btnTour" disabled title="Проезд «как на машине» или облёт по траектории">🚗 Проезд / облёт</button>
                     <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
-                    <button class="btn on" id="btnSelectionContour" title="Синий контур рёбер у выделенных элементов в 3D (в тех же координатах, что и модель)">◇ Контур выделения</button>
+                    <button class="btn" id="btnSelectionContour" title="Контур рёбер (опционально). Подсветка по умолчанию — на самой геометрии, без отдельной «коробки»">◇ Контур выделения</button>
                     <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
                     <div class="tb-menu-label">Ближнее отсечение</div>
                     <div class="tb-menu-row" title="Near plane камеры: при приближении слишком большое значение «съедает» близкую геометрию. Выключите Авто и поставьте 0.01–0.05">
@@ -2622,13 +2622,16 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
+        const COMPOSER_BUILD = 'sel-geom-v3';
+        console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
+
         const IFC_BATCH_THRESHOLD = 2000;
         const BATCH_SEL_MAX = 64;
         const HIGHLIGHT_COLOR = 0x2b7fd4;
         const SELECTION_CONTOUR_LS_KEY = 'bimlva_selection_contour_3d';
 
         function isSelectionContour3dEnabled() {
-            try { return localStorage.getItem(SELECTION_CONTOUR_LS_KEY) !== '0'; } catch (_) { return true; }
+            try { return localStorage.getItem(SELECTION_CONTOUR_LS_KEY) === '1'; } catch (_) { return false; }
         }
         function setSelectionContour3dEnabled(on) {
             try { localStorage.setItem(SELECTION_CONTOUR_LS_KEY, on ? '1' : '0'); } catch (_) {}
@@ -4235,17 +4238,17 @@ uniform int uBatchSelCount;
 uniform vec3 uBatchSelColor;
 ` + shader.fragmentShader;
                 shader.fragmentShader = shader.fragmentShader.replace(
-                    '#include <opaque_fragment>',
+                    '#include <dithering_fragment>',
                     `if (uBatchSelCount > 0) {
                         for (int i = 0; i < ${BATCH_SEL_MAX}; i++) {
                             if (i >= uBatchSelCount) break;
                             if (abs(vBatchExpressId - uBatchSelIds[i]) < 0.5) {
-                                diffuseColor.rgb = mix(diffuseColor.rgb, uBatchSelColor, 0.48);
+                                diffuseColor.rgb = mix(diffuseColor.rgb, uBatchSelColor, 0.52);
                                 break;
                             }
                         }
                     }
-                    #include <opaque_fragment>`
+                    #include <dithering_fragment>`
                 );
             };
             material.customProgramCacheKey = () => 'bimlva-batch-sel-v1';
@@ -4313,33 +4316,32 @@ uniform vec3 uBatchSelColor;
             activeSelectionOverlays.push(object3d);
         }
 
-        /** Контур в той же системе координат, что и модель (через highlightOverlayGroup ⊂ globalGroup). */
-        function attachSelectionOutlineLine(line, anchorObject) {
-            if (!line || !anchorObject) return;
-            ensureHighlightOverlayGroup();
-            line.userData.isOverlay = true;
-            line.renderOrder = 1000;
-            line.matrixAutoUpdate = false;
-            anchorObject.updateWorldMatrix(true, false);
-            highlightOverlayGroup.updateWorldMatrix(true, false);
-            line.matrix.copy(matrixRelativeToParent(anchorObject, highlightOverlayGroup));
-            highlightOverlayGroup.add(line);
-            activeSelectionOverlays.push(line);
-        }
-
-        function addEdgesOutlineFromGeometry(geometry, anchorObject, matrix) {
-            if (!geometry?.attributes?.position || geometry.attributes.position.count < 3) return;
-            if (!anchorObject) return;
+        function addOutlineEdgesToAnchor(geometry, anchor) {
+            if (!geometry?.attributes?.position || !anchor) return;
+            if (geometry.attributes.position.count < 3) return;
             try {
                 const edges = new THREE.EdgesGeometry(geometry, 30);
                 if (!edges.attributes.position || edges.attributes.position.count < 2) {
                     edges.dispose();
                     return;
                 }
-                if (matrix) edges.applyMatrix4(matrix);
                 const line = new THREE.LineSegments(edges, getSelectionOutlineMaterial());
                 line.userData.ownsGeometry = true;
-                attachSelectionOutlineLine(line, anchorObject);
+                addSelectionOutlineObject(line, anchor);
+            } catch (_) {}
+        }
+
+        function addEdgesOutlineFromGeometry(geometry, anchorObject, matrix) {
+            if (!geometry?.attributes?.position || geometry.attributes.position.count < 3) return;
+            if (!anchorObject) return;
+            try {
+                let g = geometry;
+                if (matrix) {
+                    g = geometry.clone();
+                    g.applyMatrix4(matrix);
+                }
+                addOutlineEdgesToAnchor(g, anchorObject);
+                if (matrix && g !== geometry) g.dispose();
             } catch (_) { /* geometry may be non-triangulated */ }
         }
 
@@ -4358,10 +4360,14 @@ uniform vec3 uBatchSelColor;
                 if (!mod || mod.hiddenIds?.has(item.expressID)) return;
 
                 if (mod.batched && mod.fragmentGeoms?.has(item.expressID)) {
-                    mod.fragmentGeoms.get(item.expressID).forEach(frag => {
-                        const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
-                        addEdgesOutlineFromGeometry(geom, mod.group, null);
-                        geom.dispose();
+                    const anchors = (mod.meshesByID.get(item.expressID) || []).filter(m => m.isMesh);
+                    const anchorList = anchors.length ? anchors : [mod.group];
+                    anchorList.forEach(anchor => {
+                        mod.fragmentGeoms.get(item.expressID).forEach(frag => {
+                            const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
+                            addOutlineEdgesToAnchor(geom, anchor);
+                            geom.dispose();
+                        });
                     });
                     return;
                 }
@@ -4370,11 +4376,11 @@ uniform vec3 uBatchSelColor;
                 meshes.forEach(src => {
                     if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
                     if (src.isMesh && src.geometry) {
-                        addEdgesOutlineFromGeometry(src.geometry, src, null);
+                        addOutlineEdgesToAnchor(src.geometry, src);
                     } else if ((src.isLine || src.isLineSegments) && src.geometry) {
                         const line = new THREE.LineSegments(src.geometry.clone(), getSelectionOutlineMaterial());
                         line.userData.ownsGeometry = true;
-                        attachSelectionOutlineLine(line, src);
+                        addSelectionOutlineObject(line, src);
                     }
                 });
             });
