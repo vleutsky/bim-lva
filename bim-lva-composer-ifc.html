@@ -2638,7 +2638,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'wasd-drive-v1';
+        const COMPOSER_BUILD = 'wasd-drive-v2';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -12616,11 +12616,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         let driveModeActive = false;
         const driveKeys = { w: false, a: false, s: false, d: false, space: false };
         let driveHeading = 0;
+        let driveSteer = 0;
         let driveVel = 0;
         const drivePos = new THREE.Vector3();
         const DRIVE_MAX_SPEED = 32;
         const DRIVE_ACCEL = 48;
-        const DRIVE_TURN = 2.4;
+        const DRIVE_TURN_MAX = 0.68;
+        const DRIVE_STEER_SMOOTH = 3.8;
+        const FERRARI_MESH_REV = 2;
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
         const _driveDown = new THREE.Vector3(0, 0, -1);
@@ -12692,88 +12695,118 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             tourMarkerMeshes.length = 0;
         }
 
-        /** Стилизованная low-poly Ferrari (rosso corsa) — без внешних ассетов */
+        /** Стилизованная Ferrari (rosso corsa) — профиль Lathe, без внешних ассетов */
         function createFerrariMesh() {
             const root = new THREE.Group();
             root.name = 'TourFerrari';
-            const red = new THREE.MeshStandardMaterial({ color: 0xc40000, metalness: 0.55, roughness: 0.35 });
-            const dark = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.4, roughness: 0.5 });
+            const red = new THREE.MeshStandardMaterial({ color: 0xe01010, metalness: 0.72, roughness: 0.24 });
+            const redDeep = new THREE.MeshStandardMaterial({ color: 0x8c0808, metalness: 0.58, roughness: 0.3 });
+            const dark = new THREE.MeshStandardMaterial({ color: 0x121212, metalness: 0.42, roughness: 0.58 });
             const glass = new THREE.MeshStandardMaterial({
-                color: 0x88ccee, metalness: 0.2, roughness: 0.15, transparent: true, opacity: 0.55
+                color: 0xa8d4f0, metalness: 0.12, roughness: 0.06, transparent: true, opacity: 0.45
             });
-            const yellow = new THREE.MeshStandardMaterial({ color: 0xffd200, metalness: 0.3, roughness: 0.4 });
-            const chrome = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.9, roughness: 0.2 });
+            const yellow = new THREE.MeshStandardMaterial({ color: 0xffd200, metalness: 0.35, roughness: 0.38 });
+            const chrome = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, metalness: 0.94, roughness: 0.16 });
+            const tail = new THREE.MeshStandardMaterial({
+                color: 0xff3311, emissive: 0x550800, metalness: 0.2, roughness: 0.45
+            });
 
-            const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 4.35, 0.55), red);
-            body.position.z = 0.55;
+            const bodyProfile = [
+                new THREE.Vector2(0.38, -2.35),
+                new THREE.Vector2(0.72, -2.05),
+                new THREE.Vector2(0.98, -1.15),
+                new THREE.Vector2(1.02, -0.15),
+                new THREE.Vector2(0.92, 0.75),
+                new THREE.Vector2(0.62, 1.55),
+                new THREE.Vector2(0.28, 2.15),
+                new THREE.Vector2(0.06, 2.48)
+            ];
+            const body = new THREE.Mesh(new THREE.LatheGeometry(bodyProfile, 36), red);
+            body.position.z = 0.38;
             root.add(body);
 
-            const nose = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.1, 0.35), red);
-            nose.position.set(0, 2.35, 0.42);
-            root.add(nose);
+            const sill = new THREE.Mesh(
+                new THREE.CapsuleGeometry(0.12, 2.85, 4, 10),
+                redDeep
+            );
+            sill.rotation.z = Math.PI / 2;
+            sill.scale.set(1, 1, 0.55);
+            sill.position.set(0, 0.05, 0.28);
+            root.add(sill);
 
-            const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.55, 1.5, 0.55), red);
-            cabin.position.set(0, -0.15, 0.95);
+            const cabin = new THREE.Mesh(
+                new THREE.SphereGeometry(0.72, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55),
+                glass
+            );
+            cabin.scale.set(1.05, 0.95, 0.62);
+            cabin.position.set(0, -0.05, 0.88);
             root.add(cabin);
 
-            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.15, 0.12), glass);
-            roof.position.set(0, -0.1, 1.28);
+            const roof = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.95, 6, 14), red);
+            roof.rotation.z = Math.PI / 2;
+            roof.position.set(0, 0.15, 0.92);
             root.add(roof);
 
-            const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.08, 0.55), glass);
-            windshield.position.set(0, 0.7, 1.05);
-            windshield.rotation.x = -0.55;
-            root.add(windshield);
+            const intakeL = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.42, 4, 8), redDeep);
+            intakeL.rotation.z = Math.PI / 2;
+            intakeL.position.set(-0.78, -0.4, 0.62);
+            root.add(intakeL);
+            const intakeR = intakeL.clone();
+            intakeR.position.x = 0.78;
+            root.add(intakeR);
 
-            const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.12, 0.28), red);
-            spoiler.position.set(0, -2.15, 0.95);
-            root.add(spoiler);
-            const spoilerPostL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.35), dark);
-            spoilerPostL.position.set(-0.55, -2.05, 0.75);
-            root.add(spoilerPostL);
-            const spoilerPostR = spoilerPostL.clone();
-            spoilerPostR.position.x = 0.55;
-            root.add(spoilerPostR);
+            const wing = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 1.75, 4, 8), redDeep);
+            wing.rotation.z = Math.PI / 2;
+            wing.position.set(0, -2.18, 0.95);
+            wing.rotation.x = -0.14;
+            root.add(wing);
 
-            const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.04, 16), yellow);
+            const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.03, 20), yellow);
             badge.rotation.x = Math.PI / 2;
-            badge.position.set(0, 2.85, 0.55);
+            badge.position.set(0, 2.55, 0.48);
             root.add(badge);
 
-            const lightGeo = new THREE.SphereGeometry(0.12, 10, 8);
             [-0.55, 0.55].forEach(x => {
-                const hl = new THREE.Mesh(lightGeo, chrome);
-                hl.position.set(x, 2.7, 0.45);
+                const hl = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), chrome);
+                hl.position.set(x, 2.42, 0.42);
                 root.add(hl);
-                const tl = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.08, 0.12), new THREE.MeshStandardMaterial({
-                    color: 0xff2200, emissive: 0x440000, metalness: 0.2, roughness: 0.5
-                }));
-                tl.position.set(x, -2.2, 0.55);
+                const tl = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.28, 3, 6), tail);
+                tl.rotation.z = Math.PI / 2;
+                tl.position.set(x, -2.32, 0.5);
                 root.add(tl);
             });
 
             function wheel(x, y) {
-                const w = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.28, 18), dark);
-                w.rotation.z = Math.PI / 2;
-                w.position.set(x, y, 0.38);
-                root.add(w);
-                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.3, 12), chrome);
-                rim.rotation.z = Math.PI / 2;
-                rim.position.copy(w.position);
+                const tire = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.14, 12, 24), dark);
+                tire.rotation.y = Math.PI / 2;
+                tire.position.set(x, y, 0.38);
+                root.add(tire);
+                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.22, 16), chrome);
+                rim.rotation.x = Math.PI / 2;
+                rim.position.copy(tire.position);
                 root.add(rim);
+                const caliper = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.12, 3, 6), yellow);
+                caliper.rotation.z = Math.PI / 2;
+                caliper.position.set(x > 0 ? x - 0.1 : x + 0.1, y, 0.38);
+                root.add(caliper);
             }
-            wheel(-0.95, 1.35);
-            wheel(0.95, 1.35);
-            wheel(-0.95, -1.45);
-            wheel(0.95, -1.45);
+            wheel(-0.88, 1.28);
+            wheel(0.88, 1.28);
+            wheel(-0.88, -1.38);
+            wheel(0.88, -1.38);
 
-            // Локальная система: +Y вперёд, +Z вверх (как сцена)
             root.userData.isTourCar = true;
+            root.userData.meshRev = FERRARI_MESH_REV;
             return root;
         }
 
         function ensureTourCar() {
-            if (tourCar) return tourCar;
+            if (tourCar && tourCar.userData.meshRev === FERRARI_MESH_REV) return tourCar;
+            if (tourCar) {
+                scene.remove(tourCar);
+                disposeTourObject(tourCar);
+                tourCar = null;
+            }
             tourCar = createFerrariMesh();
             tourCar.visible = false;
             scene.add(tourCar);
@@ -12962,6 +12995,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             drivePos.set(center.x, center.y, gz + 0.1);
             driveHeading = 0;
             driveVel = 0;
+            driveSteer = 0;
             syncDriveCarTransform();
             applyDriveCamera();
             $('tourModal')?.classList.remove('show');
@@ -12975,6 +13009,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!driveModeActive) return;
             driveModeActive = false;
             driveVel = 0;
+            driveSteer = 0;
             driveKeys.w = driveKeys.a = driveKeys.s = driveKeys.d = driveKeys.space = false;
             controls.enabled = true;
             if (tourCar) tourCar.visible = false;
@@ -12985,8 +13020,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function updateDriveMode(dt) {
             if (!driveModeActive) return;
-            const turn = (driveKeys.a ? 1 : 0) - (driveKeys.d ? 1 : 0);
-            driveHeading += turn * DRIVE_TURN * dt;
+            const steerTarget = (driveKeys.d ? 1 : 0) - (driveKeys.a ? 1 : 0);
+            driveSteer += (steerTarget - driveSteer) * Math.min(1, DRIVE_STEER_SMOOTH * dt);
 
             const throttle = (driveKeys.w ? 1 : 0) - (driveKeys.s ? 1 : 0);
             const speedScale = 0.35 + tourSpeed * 2.2;
@@ -12997,6 +13032,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             } else {
                 driveVel += (targetVel - driveVel) * Math.min(1, DRIVE_ACCEL * dt / Math.max(maxSpd, 1));
             }
+
+            const spd = Math.abs(driveVel);
+            const moveDir = spd < 0.35 ? 1 : Math.sign(driveVel) || 1;
+            const turnRate = DRIVE_TURN_MAX * (0.4 + 0.6 * Math.min(1, spd / 14));
+            driveHeading += driveSteer * turnRate * dt * moveDir;
 
             drivePos.x += Math.sin(driveHeading) * driveVel * dt;
             drivePos.y += Math.cos(driveHeading) * driveVel * dt;
