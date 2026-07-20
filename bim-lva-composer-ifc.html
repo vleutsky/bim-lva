@@ -679,12 +679,22 @@
             grid-area: stage;
             position: relative;
             overflow: hidden;
+            min-width: 0;
+            min-height: 0;
+        }
+
+        .stage canvas {
+            display: block;
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
         }
 
         canvas {
             display: block;
-            position: relative;
-            z-index: 1;
         }
 
         .drop-hint {
@@ -2530,8 +2540,7 @@
         THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
         
         const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
-        camera.up.set(0, 0, 1); 
-        camera.position.set(20, -24, 16);
+        camera.up.set(0, 0, 1);
 
         const CAMERA_NEAR_STORAGE = 'bimlva_camera_near_v1';
         let lastSceneMaxDim = 10;
@@ -2589,6 +2598,7 @@
         }
 
         const controls = new OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 0, 0);
         // Без damping: поворот (кастомный) и зум одинаково «жёсткие», меньше усталости при долгой работе
         controls.enableDamping = false;
         controls.dampingFactor = 0;
@@ -2623,7 +2633,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v7';
+        const COMPOSER_BUILD = 'camera-center-v8';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -2655,7 +2665,8 @@
         scene.add(fill);
 
         let grid = new THREE.GridHelper(120, 120, 0xaeb8c3, 0xdde3e9);
-        grid.rotation.x = Math.PI / 2; 
+        grid.rotation.x = Math.PI / 2;
+        grid.position.set(0, 0, 0);
         scene.add(grid);
 
 // 1. Возвращаем правильный разворот по оси X
@@ -3394,15 +3405,18 @@
             const h = stage.clientHeight;
             if (w === 0 || h === 0) return;
             
-            renderer.setSize(w, h, false); 
+            renderer.setSize(w, h, true);
             camera.aspect = w / h; 
             camera.updateProjectionMatrix();
             markNeedsRender();
         }
-        window.addEventListener('resize', resize); 
+        window.addEventListener('resize', resize);
         resize();
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(() => resize()).observe(stage);
+        }
 
-        let last = performance.now(); 
+        let last = performance.now();
         let frames = 0; 
         let acc = 0;
         
@@ -5051,6 +5065,21 @@ uniform vec3 uBatchSelColor;
             camera.up.set(0, 0, 1);
             camera.lookAt(controls.target);
             controls.update();
+        }
+
+        /** Камера на центр сцены (0,0,0) — стартовый экран и пустая сцена. */
+        function frameOriginView(distance = 50) {
+            controls.target.set(0, 0, 0);
+            const dir = new THREE.Vector3(0.72, -0.86, 0.62).normalize();
+            camera.position.copy(dir.multiplyScalar(distance));
+            camera.up.set(0, 0, 1);
+            lastSceneMaxDim = 120;
+            applyCameraNear(120);
+            camera.far = 50000;
+            camera.updateProjectionMatrix();
+            syncOrbitControlsFromCamera();
+            if (grid) grid.position.set(0, 0, 0);
+            markNeedsRender();
         }
 
         /** Мировой bbox сцены по вершинам (double). */
@@ -11160,8 +11189,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             applyCameraNear(maxDim);
             camera.far = Math.max(maxDim * 40, camera.far, 1000);
             camera.updateProjectionMatrix();
-            camera.lookAt(controls.target);
-            controls.update();
+            syncOrbitControlsFromCamera();
         }
 
         function focusOnList(items) {
@@ -11434,7 +11462,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
             const box = getSceneContentBox();
-            if (box.isEmpty()) return;
+            if (box.isEmpty()) {
+                frameOriginView();
+                return;
+            }
 
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
@@ -12550,8 +12581,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             renderer.setClearColor(theme.hex, 1); 
             scene.remove(grid);
             
-            grid = new THREE.GridHelper(120, 120, theme.grid, theme.grid); 
-            grid.rotation.x = Math.PI / 2; 
+            grid = new THREE.GridHelper(120, 120, theme.grid, theme.grid);
+            grid.rotation.x = Math.PI / 2;
+            grid.position.set(0, 0, 0);
             grid.visible = $('gridBtn').classList.contains('on'); 
             scene.add(grid);
         });
@@ -13188,9 +13220,23 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
         window.addEventListener('resize', updateDockColumns);
 
+        // Стартовый кадр: сетка в центре viewport (до #view= только если нет моделей)
+        requestAnimationFrame(() => {
+            resize();
+            if (/#view=/.test(location.hash) && !loadedModels.size) {
+                restoreSharedViewFromHash();
+            } else {
+                frameOriginView();
+            }
+        });
+
         // Восстановление вида из URL только до первой загрузки модели (камера из #view= ломает «вписать»)
         setTimeout(() => {
-            if (!loadedModels.size) restoreSharedViewFromHash();
+            if (!loadedModels.size && !/#view=/.test(location.hash)) {
+                frameOriginView();
+            } else if (!loadedModels.size) {
+                restoreSharedViewFromHash();
+            }
         }, 0);
 
         if ('serviceWorker' in navigator) {
