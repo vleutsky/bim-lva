@@ -2623,7 +2623,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v6';
+        const COMPOSER_BUILD = 'camera-center-v7';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4106,8 +4106,13 @@
                     globalGroup.updateWorldMatrix(true, true);
                     externalGroup.updateWorldMatrix(true, true);
                     geoRasterGroup.updateWorldMatrix(true, true);
-                    if (/#view=/.test(location.hash)) restoreSharedViewFromHash();
-                    else fitView();
+                    clearViewHashFromUrl();
+                    fitView();
+                    restoreSharedViewFromHash({ skipCamera: true });
+                    requestAnimationFrame(() => {
+                        fitView();
+                        markNeedsRender();
+                    });
                     markNeedsRender();
                 };
                 requestAnimationFrame(() => requestAnimationFrame(frameCamera));
@@ -4963,6 +4968,91 @@ uniform vec3 uBatchSelColor;
             }
         }
 
+        /** Bbox по _fragments в мировых координатах (источник истины для IFC). */
+        function expandLoadedFragmentsWorldBounds(targetBox) {
+            globalGroup.updateWorldMatrix(true, true);
+            const e = globalGroup.matrixWorld.elements;
+            let any = false;
+            for (const mod of loadedModels.values()) {
+                const frags = mod._fragments;
+                if (frags?.length) {
+                    for (let fi = 0; fi < frags.length; fi++) {
+                        const pos = frags[fi]?.geom?.attributes?.position;
+                        if (!pos?.count) continue;
+                        const arr = pos.array;
+                        const step = Math.max(1, Math.floor(pos.count / 500));
+                        for (let i = 0; i < pos.count; i += step) {
+                            const i3 = i * 3;
+                            const x = arr[i3];
+                            const y = arr[i3 + 1];
+                            const z = arr[i3 + 2];
+                            _meshBoundsScratch.x = e[0] * x + e[4] * y + e[8] * z + e[12];
+                            _meshBoundsScratch.y = e[1] * x + e[5] * y + e[9] * z + e[13];
+                            _meshBoundsScratch.z = e[2] * x + e[6] * y + e[10] * z + e[14];
+                            targetBox.expandByPoint(_meshBoundsScratch);
+                            any = true;
+                        }
+                    }
+                    continue;
+                }
+                if (!mod.group) continue;
+                mod.group.updateWorldMatrix(true, false);
+                mod.group.traverse(obj => {
+                    if (!obj.isMesh || !obj.geometry?.attributes?.position || obj.userData?.isOverlay) return;
+                    const pos = obj.geometry.attributes.position;
+                    const arr = pos.array;
+                    const m = obj.matrixWorld.elements;
+                    const step = Math.max(1, Math.floor(pos.count / 500));
+                    for (let i = 0; i < pos.count; i += step) {
+                        const i3 = i * 3;
+                        const x = arr[i3];
+                        const y = arr[i3 + 1];
+                        const z = arr[i3 + 2];
+                        _meshBoundsScratch.x = m[0] * x + m[4] * y + m[8] * z + m[12];
+                        _meshBoundsScratch.y = m[1] * x + m[5] * y + m[9] * z + m[13];
+                        _meshBoundsScratch.z = m[2] * x + m[6] * y + m[10] * z + m[14];
+                        targetBox.expandByPoint(_meshBoundsScratch);
+                        any = true;
+                    }
+                });
+            }
+            if (!any && geoRasterGroup) {
+                geoRasterGroup.updateWorldMatrix(true, true);
+                const gr = geoRasterGroup.matrixWorld.elements;
+                for (let mi = 0; mi < allMeshes.length; mi++) {
+                    const mesh = allMeshes[mi];
+                    if (!mesh.userData?.isGeoRaster) continue;
+                    const pos = mesh.geometry?.attributes?.position;
+                    if (!pos?.count) continue;
+                    const arr = pos.array;
+                    const step = Math.max(1, Math.floor(pos.count / 400));
+                    for (let i = 0; i < pos.count; i += step) {
+                        const i3 = i * 3;
+                        const x = arr[i3];
+                        const y = arr[i3 + 1];
+                        const z = arr[i3 + 2];
+                        _meshBoundsScratch.x = gr[0] * x + gr[4] * y + gr[8] * z + gr[12];
+                        _meshBoundsScratch.y = gr[1] * x + gr[5] * y + gr[9] * z + gr[13];
+                        _meshBoundsScratch.z = gr[2] * x + gr[6] * y + gr[10] * z + gr[14];
+                        targetBox.expandByPoint(_meshBoundsScratch);
+                        any = true;
+                    }
+                }
+            }
+            return any;
+        }
+
+        function clearViewHashFromUrl() {
+            if (!/#view=/.test(location.hash)) return;
+            history.replaceState(null, '', location.pathname + location.search);
+        }
+
+        function syncOrbitControlsFromCamera() {
+            camera.up.set(0, 0, 1);
+            camera.lookAt(controls.target);
+            controls.update();
+        }
+
         /** Мировой bbox сцены по вершинам (double). */
         function computeSceneWorldBoundsBox(targetBox) {
             targetBox.makeEmpty();
@@ -5007,7 +5097,9 @@ uniform vec3 uBatchSelColor;
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
             const box = new THREE.Box3();
-            if (!computeSceneWorldBoundsBox(box) && !expandBoxFromVisibleMeshes(box)) {
+            if (!expandLoadedFragmentsWorldBounds(box) &&
+                !computeSceneWorldBoundsBox(box) &&
+                !expandBoxFromVisibleMeshes(box)) {
                 const a = new THREE.Box3().setFromObject(globalGroup);
                 const b = new THREE.Box3().setFromObject(externalGroup);
                 if (!a.isEmpty()) box.union(a);
@@ -5037,7 +5129,7 @@ uniform vec3 uBatchSelColor;
         function ensureSceneContentNearOrigin() {
             for (let i = 0; i < 4; i++) {
                 const box = new THREE.Box3();
-                if (!computeSceneWorldBoundsBox(box)) break;
+                if (!expandLoadedFragmentsWorldBounds(box) && !computeSceneWorldBoundsBox(box)) break;
                 const c = box.getCenter(new THREE.Vector3());
                 if (c.lengthSq() < 0.25) break;
                 if (!snapSceneContentToOrigin()) break;
@@ -9222,14 +9314,17 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             trackUsage('share_view');
         });
 
-        function restoreSharedViewFromHash() {
+        function restoreSharedViewFromHash(opts = {}) {
             const m = location.hash.match(/#view=([^&]+)/);
             if (!m) return;
+            const skipCamera = opts.skipCamera === true || loadedModels.size > 0;
             try {
                 const state = JSON.parse(decodeURIComponent(escape(atob(m[1]))));
-                if (state.cam?.p) camera.position.fromArray(state.cam.p);
-                if (state.cam?.t) controls.target.fromArray(state.cam.t);
-                if (state.cam?.u) camera.up.fromArray(state.cam.u);
+                if (!skipCamera) {
+                    if (state.cam?.p) camera.position.fromArray(state.cam.p);
+                    if (state.cam?.t) controls.target.fromArray(state.cam.t);
+                    if (state.cam?.u) camera.up.fromArray(state.cam.u);
+                }
                 if (state.crs) {
                     crsOffsets = { x: state.crs.x || 0, y: state.crs.y || 0, z: state.crs.z || 0 };
                     applyCrsOffsets();
@@ -11357,6 +11452,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         $('fit').addEventListener('click', () => {
+            clearViewHashFromUrl();
             fitView();
             trackUsage('fit_view');
         });
@@ -12677,6 +12773,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             globalGroup.updateWorldMatrix(true, true);
             externalGroup.updateWorldMatrix(true, true);
             geoRasterGroup.updateWorldMatrix(true, true);
+            if (expandLoadedFragmentsWorldBounds(box)) return box;
             if (computeSceneWorldBoundsBox(box)) return box;
             if (expandBoxFromVisibleMeshes(box)) return box;
             const a = new THREE.Box3().setFromObject(globalGroup);
@@ -13091,8 +13188,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
         window.addEventListener('resize', updateDockColumns);
 
-        // Восстановление вида из URL (если модели уже будут — повторно вызовется после загрузки)
-        setTimeout(() => restoreSharedViewFromHash(), 0);
+        // Восстановление вида из URL только до первой загрузки модели (камера из #view= ломает «вписать»)
+        setTimeout(() => {
+            if (!loadedModels.size) restoreSharedViewFromHash();
+        }, 0);
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
