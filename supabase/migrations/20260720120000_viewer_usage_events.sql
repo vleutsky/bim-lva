@@ -25,6 +25,9 @@ create table if not exists public.site_admins (
 
 comment on table public.site_admins is 'Кто может читать viewer_usage_events (совпадает с adminEmails в auth-config.js)';
 
+-- Пример (замените на свои adminEmails):
+-- insert into public.site_admins (email) values ('vladimirl1985@gmail.com') on conflict do nothing;
+
 alter table public.viewer_usage_events enable row level security;
 alter table public.site_admins enable row level security;
 
