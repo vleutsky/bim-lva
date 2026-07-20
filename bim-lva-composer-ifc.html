@@ -1698,7 +1698,7 @@
                     <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ Сохранённые виды</button>
                     <button class="btn" id="btnShareView" disabled title="Скопировать ссылку на текущий вид">🔗 Ссылка на вид</button>
                     <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
-                    <button class="btn" id="btnTour" disabled title="Проезд «как на машине» или облёт по траектории">🚗 Проезд / облёт</button>
+                    <button class="btn" id="btnTour" disabled title="Проезд по маршруту или свободная езда WASD">🚗 Проезд / облёт</button>
                     <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
                     <button class="btn" id="btnSelectionContour" title="Контур рёбер (опционально). Подсветка по умолчанию — на самой геометрии, без отдельной «коробки»">◇ Контур выделения</button>
                     <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
@@ -2014,14 +2014,19 @@
             <h3>Проезд / облёт</h3>
             <div class="bulk-note">
                 <b>Проезд</b> — Ferrari по маршруту, камера с места водителя или сзади.
-                <b>Облёт</b> — сверху по курсу. Маршрут: авто или точки кликом.
+                <b>Облёт</b> — сверху по курсу.
+                <b>Свободная езда</b> — Ferrari на WASD по модели.
             </div>
             <div class="prop small">
                 <div class="k">Режим</div>
                 <select class="editInput" id="tourModeSelect">
                     <option value="car">🚗 Проезд (Ferrari)</option>
                     <option value="fly">✈️ Облёт</option>
+                    <option value="drive">🎮 Свободная езда (WASD)</option>
                 </select>
+            </div>
+            <div id="tourDriveHint" class="bulk-note" style="display:none">
+                <b>WASD</b> — газ/руль, <b>Space</b> — тормоз, <b>Esc</b> — выход. Машина прилипает к рельефу модели.
             </div>
             <div class="prop small" id="tourCarOptions">
                 <div class="k">Камера</div>
@@ -2043,7 +2048,7 @@
                 <input class="editInput" id="tourSpeed" type="range" min="0.04" max="0.35" step="0.01" value="0.12">
             </div>
             <div class="bulk-note" id="tourStatus">Точек маршрута: 0</div>
-            <div class="modal-actions" style="flex-wrap:wrap;justify-content:stretch">
+            <div class="modal-actions" id="tourPathActions" style="flex-wrap:wrap;justify-content:stretch">
                 <button class="btn" id="tourAutoBtn" style="flex:1">Авто-маршрут</button>
                 <button class="btn" id="tourRecordBtn" style="flex:1">＋ Точки кликом</button>
                 <button class="btn" id="tourClearBtn" style="flex:1">Очистить</button>
@@ -2633,7 +2638,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'camera-center-v8';
+        const COMPOSER_BUILD = 'wasd-drive-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -3425,6 +3430,7 @@
             const dt = Math.min(0.05, ((now - (tick._lastNow || now)) || 16) / 1000);
             tick._lastNow = now;
             if (typeof updateTourPlayback === 'function') updateTourPlayback(dt);
+            if (typeof updateDriveMode === 'function') updateDriveMode(dt);
             if (!suppressControlsUpdate) controls.update();
             if (sceneNeedsRender) {
                 renderer.render(scene, camera);
@@ -11290,6 +11296,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (isBoxSelecting || isMeasuring) return;
             if (typeof tourRecording !== 'undefined' && tourRecording) return;
             if (typeof tourPlaying !== 'undefined' && tourPlaying) return;
+            if (typeof driveModeActive !== 'undefined' && driveModeActive) return;
             if (event.target !== renderer.domElement) return;
             if (event.button !== 0) return;
 
@@ -12606,6 +12613,17 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         let tourPathLine = null;
         const tourMarkerMeshes = [];
         let tourCar = null;
+        let driveModeActive = false;
+        const driveKeys = { w: false, a: false, s: false, d: false, space: false };
+        let driveHeading = 0;
+        let driveVel = 0;
+        const drivePos = new THREE.Vector3();
+        const DRIVE_MAX_SPEED = 32;
+        const DRIVE_ACCEL = 48;
+        const DRIVE_TURN = 2.4;
+        const _driveRay = new THREE.Raycaster();
+        const _driveRayO = new THREE.Vector3();
+        const _driveDown = new THREE.Vector3(0, 0, -1);
         const _tourFwd = new THREE.Vector3();
         const _tourUp = new THREE.Vector3(0, 0, 1);
         const _tourRight = new THREE.Vector3();
@@ -12622,14 +12640,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             tourShowCar = !!$('tourShowCar')?.checked;
             tourSpeed = parseFloat($('tourSpeed')?.value) || 0.12;
             const carOpts = $('tourCarOptions');
-            if (carOpts) carOpts.style.display = tourStyle === 'car' ? '' : 'none';
+            const isDrive = tourStyle === 'drive';
+            const isCar = tourStyle === 'car' || isDrive;
+            if (carOpts) carOpts.style.display = isCar ? '' : 'none';
+            const driveHint = $('tourDriveHint');
+            if (driveHint) driveHint.style.display = isDrive ? '' : 'none';
+            const pathActs = $('tourPathActions');
+            if (pathActs) pathActs.style.display = isDrive ? 'none' : '';
+            const playBtn = $('tourPlayBtn');
+            if (playBtn) playBtn.textContent = isDrive ? '▶ Поехали (WASD)' : '▶ Старт';
         }
 
         function updateTourStatus() {
             const el = $('tourStatus');
             if (!el) return;
-            const mode = tourStyle === 'fly' ? 'облёт' : 'проезд Ferrari';
-            const cam = tourStyle === 'car'
+            if (driveModeActive) {
+                el.textContent = 'WASD — езда · Space — тормоз · Esc — выход';
+                return;
+            }
+            const mode = tourStyle === 'fly' ? 'облёт' : (tourStyle === 'drive' ? 'свободная езда' : 'проезд Ferrari');
+            const cam = (tourStyle === 'car' || tourStyle === 'drive')
                 ? (tourCamView === 'driver' ? ' · кабина' : ' · сзади')
                 : '';
             el.textContent = `Точек маршрута: ${tourWaypoints.length}${cam}` +
@@ -12866,7 +12896,135 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (label && text) label.textContent = text;
         }
 
+        function sampleGroundZAt(x, y, fallbackZ = 0) {
+            if (!allMeshes.length) return fallbackZ;
+            _driveRayO.set(x, y, 80000);
+            _driveRay.set(_driveRayO, _driveDown);
+            const hits = _driveRay.intersectObjects(
+                allMeshes.filter(m => m.visible && !m.userData?.isGeoRaster && !m.userData?.isOverlay),
+                false
+            );
+            if (hits.length) return hits[0].point.z;
+            const box = getSceneContentBox();
+            return box.isEmpty() ? fallbackZ : box.min.z;
+        }
+
+        function syncDriveCarTransform() {
+            if (!tourCar) return;
+            _tourFwd.set(Math.sin(driveHeading), Math.cos(driveHeading), 0);
+            if (_tourFwd.lengthSq() < 1e-8) _tourFwd.set(0, 1, 0);
+            _tourFwd.normalize();
+            _tourRight.crossVectors(_tourFwd, _tourUp).normalize();
+            _tourMat.makeBasis(_tourRight, _tourFwd, _tourUp);
+            tourCar.quaternion.setFromRotationMatrix(_tourMat);
+            tourCar.position.copy(drivePos);
+            tourCar.visible = tourShowCar;
+        }
+
+        function applyDriveCamera() {
+            _tourFwd.set(Math.sin(driveHeading), Math.cos(driveHeading), 0).normalize();
+            _tourRight.crossVectors(_tourFwd, _tourUp).normalize();
+            if (tourCamView === 'driver') {
+                _tourCam.copy(drivePos)
+                    .addScaledVector(_tourFwd, -0.35)
+                    .addScaledVector(_tourUp, tourEyeHeight);
+                _tourLook.copy(drivePos)
+                    .addScaledVector(_tourFwd, 14)
+                    .addScaledVector(_tourUp, tourEyeHeight * 0.85);
+            } else {
+                _tourCam.copy(drivePos)
+                    .addScaledVector(_tourFwd, -tourChaseDist)
+                    .addScaledVector(_tourUp, Math.max(tourEyeHeight + 0.8, tourChaseDist * 0.28));
+                _tourLook.copy(drivePos).addScaledVector(_tourUp, tourEyeHeight * 0.55);
+            }
+            camera.position.copy(_tourCam);
+            controls.target.copy(_tourLook);
+            camera.up.copy(_tourUp);
+            camera.lookAt(_tourLook);
+            syncOrbitControlsFromCamera();
+        }
+
+        function startDriveMode() {
+            if (!loadedModels.size) {
+                alert('Сначала загрузите модель.');
+                return;
+            }
+            readTourSettingsFromUi();
+            stopTourPlayback();
+            driveModeActive = true;
+            tourPlaying = false;
+            tourRecording = false;
+            controls.enabled = false;
+            ensureTourCar();
+            const box = getSceneContentBox();
+            const center = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
+            const gz = sampleGroundZAt(center.x, center.y, box.isEmpty() ? 0 : box.min.z);
+            drivePos.set(center.x, center.y, gz + 0.1);
+            driveHeading = 0;
+            driveVel = 0;
+            syncDriveCarTransform();
+            applyDriveCamera();
+            $('tourModal')?.classList.remove('show');
+            setTourHud(true, 'WASD — езда · Space — тормоз · Esc — выход');
+            updateTourStatus();
+            trackUsage('drive_mode_start', { cam: tourCamView });
+            markNeedsRender();
+        }
+
+        function stopDriveMode() {
+            if (!driveModeActive) return;
+            driveModeActive = false;
+            driveVel = 0;
+            driveKeys.w = driveKeys.a = driveKeys.s = driveKeys.d = driveKeys.space = false;
+            controls.enabled = true;
+            if (tourCar) tourCar.visible = false;
+            setTourHud(false);
+            updateTourStatus();
+            markNeedsRender();
+        }
+
+        function updateDriveMode(dt) {
+            if (!driveModeActive) return;
+            const turn = (driveKeys.a ? 1 : 0) - (driveKeys.d ? 1 : 0);
+            driveHeading += turn * DRIVE_TURN * dt;
+
+            const throttle = (driveKeys.w ? 1 : 0) - (driveKeys.s ? 1 : 0);
+            const speedScale = 0.35 + tourSpeed * 2.2;
+            const maxSpd = DRIVE_MAX_SPEED * speedScale;
+            const targetVel = throttle * maxSpd;
+            if (driveKeys.space) {
+                driveVel *= Math.pow(0.015, dt);
+            } else {
+                driveVel += (targetVel - driveVel) * Math.min(1, DRIVE_ACCEL * dt / Math.max(maxSpd, 1));
+            }
+
+            drivePos.x += Math.sin(driveHeading) * driveVel * dt;
+            drivePos.y += Math.cos(driveHeading) * driveVel * dt;
+            const gz = sampleGroundZAt(drivePos.x, drivePos.y, drivePos.z);
+            drivePos.z = gz + 0.12;
+
+            syncDriveCarTransform();
+            applyDriveCamera();
+            markNeedsRender();
+        }
+
+        function setDriveKeyFromEvent(event, down) {
+            if (!driveModeActive) return;
+            if (event.target.closest('input, textarea, select, .editInput')) return;
+            const code = event.code;
+            if (code === 'KeyW' || code === 'KeyЦ') driveKeys.w = down;
+            else if (code === 'KeyS' || code === 'KeyЫ') driveKeys.s = down;
+            else if (code === 'KeyA' || code === 'KeyФ') driveKeys.a = down;
+            else if (code === 'KeyD' || code === 'KeyВ') driveKeys.d = down;
+            else if (code === 'Space') {
+                driveKeys.space = down;
+                if (down) event.preventDefault();
+            } else return;
+            event.preventDefault();
+        }
+
         function stopTourPlayback() {
+            stopDriveMode();
             tourPlaying = false;
             tourCurve = null;
             tourProgress = 0;
@@ -12942,6 +13100,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function startTourPlayback() {
             readTourSettingsFromUi();
+            if (tourStyle === 'drive') {
+                startDriveMode();
+                return;
+            }
             if (tourWaypoints.length < 2) {
                 alert('Нужны минимум 2 точки маршрута (Авто-маршрут или клики).');
                 return;
@@ -13041,6 +13203,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('tourStopBtn')?.addEventListener('click', () => stopTourPlayback());
         $('tourHudCancel')?.addEventListener('click', () => stopTourPlayback());
         window.addEventListener('keydown', (event) => {
+            if (driveModeActive) setDriveKeyFromEvent(event, true);
+            if (event.key === 'Escape' && driveModeActive) {
+                event.preventDefault();
+                stopTourPlayback();
+                return;
+            }
             if (event.key === 'Escape' && tourPlaying) {
                 event.preventDefault();
                 stopTourPlayback();
@@ -13050,6 +13218,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 $('tourRecordBtn')?.classList.remove('on');
                 updateTourStatus();
             }
+        });
+        window.addEventListener('keyup', (event) => {
+            if (driveModeActive) setDriveKeyFromEvent(event, false);
         });
         readTourSettingsFromUi();
 
