@@ -4214,6 +4214,14 @@
             } catch (_) { /* geometry may be non-triangulated */ }
         }
 
+        /** matrixWorld → локальная матрица относительно parent (без двойного поворота globalGroup). */
+        const _overlayRelMat = new THREE.Matrix4();
+        function matrixRelativeToParent(object, parent) {
+            parent.updateWorldMatrix(true, false);
+            object.updateWorldMatrix(true, false);
+            return _overlayRelMat.copy(parent.matrixWorld).invert().multiply(object.matrixWorld);
+        }
+
         function showSelectionOverlays(items) {
             clearSelectionOverlays();
             const mat = new THREE.MeshBasicMaterial({
@@ -4234,7 +4242,7 @@
                 if (!mod) return;
                 if (mod.hiddenIds?.has(item.expressID)) return;
 
-                // Батч-IFC: заливка + контур по фрагментам
+                // Батч-IFC: заливка + контур по фрагментам (frag.matrix уже в локали mod.group)
                 if (mod.batched && mod.fragmentGeoms?.has(item.expressID)) {
                     mod.fragmentGeoms.get(item.expressID).forEach(frag => {
                         const geom = bakeFragmentGeometry(frag.geom, frag.matrix, item.expressID);
@@ -4248,25 +4256,26 @@
                     return;
                 }
 
-                // Обычные меши / внешние модели: заливка + контур по рёбрам
+                // Обычные меши / внешние модели: bake относительно mod.group.
+                // Раньше использовали matrixWorld + parent=mod.group → поворот π/2
+                // применялся дважды, и «синяя проекция» вставала вертикально сквозь модель.
                 const meshes = mod.meshesByID.get(item.expressID) || [];
                 meshes.forEach(src => {
                     if (src.userData?.isOverlay || src.userData?.isGeoRaster) return;
                     if (src.isMesh && src.geometry) {
-                        src.updateWorldMatrix(true, false);
+                        const rel = matrixRelativeToParent(src, mod.group).clone();
                         const fillGeom = src.geometry.clone();
-                        fillGeom.applyMatrix4(src.matrixWorld);
+                        fillGeom.applyMatrix4(rel);
                         const fillMesh = new THREE.Mesh(fillGeom, mat);
                         fillMesh.userData.isOverlay = true;
                         fillMesh.userData.ownsGeometry = true;
                         addSelectionOutlineObject(fillMesh, mod.group);
                         usedFill = true;
-                        addEdgesOutlineFromGeometry(src.geometry, mod.group, src.matrixWorld);
+                        addEdgesOutlineFromGeometry(src.geometry, mod.group, rel);
                     } else if ((src.isLine || src.isLineSegments) && src.geometry) {
-                        // Для линий — дублируем ярким цветом поверх
+                        const rel = matrixRelativeToParent(src, mod.group).clone();
                         const cloneGeom = src.geometry.clone();
-                        src.updateWorldMatrix(true, false);
-                        cloneGeom.applyMatrix4(src.matrixWorld);
+                        cloneGeom.applyMatrix4(rel);
                         const line = new THREE.LineSegments(cloneGeom, getSelectionOutlineMaterial());
                         line.userData.ownsGeometry = true;
                         addSelectionOutlineObject(line, mod.group);
