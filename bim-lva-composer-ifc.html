@@ -1793,6 +1793,7 @@
                 <option value="orbit">Облёт мышью</option>
             </select>
             <button type="button" class="btn" id="tourHudCamCycle" title="Следующий вид (C)">Вид ›</button>
+            <button type="button" class="btn load-btn" id="tourHudStart" hidden title="Enter">▶ Enter — проезд</button>
             <button type="button" class="btn load-btn" id="tourHudCancel">⏹ Отменить</button>
         </div>
     </main>
@@ -2024,7 +2025,7 @@
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(480px,100%)">
             <h3>Проезд / облёт</h3>
             <div class="bulk-note">
-                <b>Проезд</b> — Chery Tiggo 7 Pro по маршруту, камера с места водителя или сзади.
+                <b>Проезд</b> — по маршруту (точки кликом → Enter).
                 <b>Облёт</b> — сверху по курсу.
                 <b>Свободная езда</b> — Tiggo 7 Pro на WASD по модели.
             </div>
@@ -2666,7 +2667,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'tiggo-cam-v2';
+        const COMPOSER_BUILD = 'tour-points-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -13111,9 +13112,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             tourWaypoints.push(p);
             rebuildTourVisuals();
             updateTourStatus();
+            if (tourRecording) setTourHud(true, tourRecordHudText(), 'record');
             const hint = $('hintControls');
             if (hint) {
-                hint.textContent = `Точка маршрута #${tourWaypoints.length} · кликните ещё или откройте Проезд → Старт`;
+                hint.textContent = tourWaypoints.length >= 2
+                    ? `Точка #${tourWaypoints.length} · Enter — начать проезд · клик — ещё`
+                    : `Точка #${tourWaypoints.length} · кликните ещё (≥2) · Esc — отмена`;
             }
             trackUsage('tour_waypoint', { count: tourWaypoints.length });
             markNeedsRender();
@@ -13177,12 +13181,76 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             trackUsage('tour_auto', { mode: style, points: pts.length });
         }
 
-        function setTourHud(visible, text) {
+        function setTourHud(visible, text, mode = 'play') {
             const hud = $('tourHud');
             if (!hud) return;
             hud.hidden = !visible;
             const label = $('tourHudText');
             if (label && text) label.textContent = text;
+            const recording = mode === 'record';
+            const camSel = $('tourHudCamView');
+            const camCycle = $('tourHudCamCycle');
+            const startBtn = $('tourHudStart');
+            if (camSel) camSel.hidden = recording || !visible;
+            if (camCycle) camCycle.hidden = recording || !visible;
+            if (startBtn) {
+                startBtn.hidden = !recording || !visible;
+                startBtn.disabled = tourWaypoints.length < 2;
+            }
+            const cancel = $('tourHudCancel');
+            if (cancel) cancel.textContent = recording ? 'Esc — отмена' : '⏹ Отменить';
+        }
+
+        function closeAllComposerModals() {
+            document.querySelectorAll('.modal-backdrop.show').forEach(el => el.classList.remove('show'));
+        }
+
+        function tourRecordHudText() {
+            const n = tourWaypoints.length;
+            if (n < 2) return `Точки маршрута: ${n} · клик по модели · нужно ≥2 · Esc — отмена`;
+            return `Точки: ${n} · Enter — проезд · клик — ещё точка · Esc — отмена`;
+        }
+
+        function startTourPointRecording() {
+            readTourSettingsFromUi();
+            if (tourStyle === 'drive') {
+                // Для точек нужен режим проезда/облёта, не WASD
+                tourStyle = 'car';
+                const sel = $('tourModeSelect');
+                if (sel) sel.value = 'car';
+                readTourSettingsFromUi();
+            }
+            stopTourPlayback();
+            closeAllComposerModals();
+            tourRecording = true;
+            $('tourRecordBtn')?.classList.add('on');
+            setTourHud(true, tourRecordHudText(), 'record');
+            const hint = $('hintControls');
+            if (hint) {
+                hint.textContent = 'Маршрут: клик — точка · Enter — проезд · Esc — отмена';
+            }
+            updateTourStatus();
+            trackUsage('tour_record_start');
+        }
+
+        function stopTourPointRecording() {
+            if (!tourRecording) return;
+            tourRecording = false;
+            $('tourRecordBtn')?.classList.remove('on');
+            if (!tourPlaying && !driveModeActive) setTourHud(false);
+            updateTourStatus();
+        }
+
+        function tryStartTourFromRecording() {
+            if (!tourRecording) return false;
+            if (tourWaypoints.length < 2) {
+                setTourHud(true, `Нужно минимум 2 точки (сейчас ${tourWaypoints.length}) · кликните ещё`, 'record');
+                return false;
+            }
+            tourRecording = false;
+            $('tourRecordBtn')?.classList.remove('on');
+            startTourPlayback();
+            return true;
         }
 
         function sampleGroundZAt(x, y, fallbackZ = 0) {
@@ -13553,15 +13621,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('tourModal')?.classList.add('show');
         });
         $('tourCloseBtn')?.addEventListener('click', () => {
-            tourRecording = false;
-            $('tourRecordBtn')?.classList.remove('on');
             $('tourModal')?.classList.remove('show');
             updateTourStatus();
         });
         $('tourModal')?.addEventListener('click', e => {
             if (e.target === $('tourModal')) {
-                tourRecording = false;
-                $('tourRecordBtn')?.classList.remove('on');
                 $('tourModal').classList.remove('show');
                 updateTourStatus();
             }
@@ -13588,17 +13652,15 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             buildAutoTourPath($('tourModeSelect')?.value || 'car');
         });
         $('tourRecordBtn')?.addEventListener('click', () => {
-            tourRecording = !tourRecording;
             if (tourRecording) {
-                stopTourPlayback();
-                $('tourModal')?.classList.remove('show');
-                alert('Кликайте ЛКМ по модели, чтобы ставить точки маршрута. Затем снова откройте «Проезд / облёт» и нажмите Старт.');
+                stopTourPointRecording();
+                return;
             }
-            $('tourRecordBtn')?.classList.toggle('on', tourRecording);
-            updateTourStatus();
+            startTourPointRecording();
         });
         $('tourClearBtn')?.addEventListener('click', () => {
             stopTourPlayback();
+            stopTourPointRecording();
             tourWaypoints = [];
             clearTourVisuals();
             removeTourCar();
@@ -13607,7 +13669,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
         $('tourPlayBtn')?.addEventListener('click', () => startTourPlayback());
         $('tourStopBtn')?.addEventListener('click', () => stopTourPlayback());
-        $('tourHudCancel')?.addEventListener('click', () => stopTourPlayback());
+        $('tourHudStart')?.addEventListener('click', () => tryStartTourFromRecording());
+        $('tourHudCancel')?.addEventListener('click', () => {
+            if (tourRecording) {
+                stopTourPointRecording();
+                return;
+            }
+            stopTourPlayback();
+        });
         window.addEventListener('keydown', (event) => {
             if (driveModeActive) setDriveKeyFromEvent(event, true);
             const camLive = driveModeActive || (tourPlaying && tourStyle !== 'fly');
@@ -13632,6 +13701,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     cycleTourCamView(1);
                 }
             }
+            if (event.key === 'Enter' && tourRecording) {
+                if (event.target.closest?.('input, textarea, select, .editInput')) return;
+                event.preventDefault();
+                tryStartTourFromRecording();
+                return;
+            }
             if (event.key === 'Escape' && driveModeActive) {
                 event.preventDefault();
                 stopTourPlayback();
@@ -13640,11 +13715,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (event.key === 'Escape' && tourPlaying) {
                 event.preventDefault();
                 stopTourPlayback();
+                return;
             }
             if (event.key === 'Escape' && tourRecording) {
-                tourRecording = false;
-                $('tourRecordBtn')?.classList.remove('on');
-                updateTourStatus();
+                event.preventDefault();
+                stopTourPointRecording();
             }
         });
         window.addEventListener('keyup', (event) => {
@@ -13840,7 +13915,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=57').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=58').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
