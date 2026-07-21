@@ -2109,7 +2109,16 @@
     <div class="modal-backdrop" id="bcfModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bcfModalTitle" style="width:min(560px,100%)">
             <h3 id="bcfModalTitle">BCF-заметки</h3>
-            <div class="bulk-note">Кликните по модели, чтобы поставить точку замечания, введите текст и сохраните. Экспорт — файл <b>.bcfzip</b> (BCF 2.1).</div>
+            <div class="bulk-note">Кликните по модели, чтобы поставить точку замечания, введите текст и сохраните. Экспорт — файл <b>.bcfzip</b> (BCF 2.1). После входа заметки в облаке — общий <b>код обмена</b> для коллег и экспертизы.</div>
+            <div class="prop small" id="bcfCloudBlock">
+                <div class="k">Облако (аккаунт)</div>
+                <div class="bulk-note" id="bcfCloudStatus">Локально в браузере. Войдите (Supabase), чтобы синхронизировать.</div>
+                <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px;margin-top:6px">
+                    <input class="editInput" id="bcfShareCodeIn" placeholder="Код обмена" style="max-width:140px">
+                    <button type="button" class="btn" id="bcfJoinBtn" title="Подключиться к чужим заметкам (экспертиза)">Подключить код</button>
+                    <button type="button" class="btn" id="bcfCloudRefreshBtn" title="Обновить с сервера">↻</button>
+                </div>
+            </div>
             <div class="prop small">
                 <div class="k">Заголовок</div>
                 <input class="editInput" id="bcfTitle" placeholder="Например: Коллизия трубы и балки">
@@ -2305,6 +2314,7 @@
     <script src="./auth-config.js"></script>
     <script src="./auth.js"></script>
     <script src="./auth-ui.js"></script>
+    <script src="./bcf-sync.js"></script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -2638,7 +2648,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'wasd-drive-v2';
+        const COMPOSER_BUILD = 'bcf-share-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -9460,9 +9470,68 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         let bcfPickMode = false;
         let bcfPickPoint = null;
         let bcfPickSelection = null;
+        let bcfCloudNotebook = null;
+        let bcfCloudLoading = false;
         const bcfMarkers = new THREE.Group();
         bcfMarkers.name = 'BCFMarkers';
         scene.add(bcfMarkers);
+
+        function getBcfModelKey() {
+            const names = [...loadedModels.values()]
+                .map(m => (m.filename || m.format || 'model').trim())
+                .filter(Boolean)
+                .sort();
+            return names.length ? names.join(' · ') : null;
+        }
+
+        function updateBcfCloudStatus(text) {
+            const el = $('bcfCloudStatus');
+            if (el && text != null) el.textContent = text;
+        }
+
+        async function refreshBcfFromCloud() {
+            const sync = globalThis.BimLvaBcfSync;
+            const modelKey = getBcfModelKey();
+            if (!sync?.authReady()) {
+                bcfCloudNotebook = null;
+                updateBcfCloudStatus('Локально в браузере. Войдите (Supabase), чтобы синхронизировать.');
+                return;
+            }
+            if (!modelKey && !bcfCloudNotebook?.id) {
+                updateBcfCloudStatus('Загрузите модель или подключите код обмена.');
+                return;
+            }
+            if (bcfCloudLoading) return;
+            bcfCloudLoading = true;
+            updateBcfCloudStatus('Синхронизация…');
+            try {
+                let nb = null;
+                if (bcfCloudNotebook?.id) {
+                    nb = await sync.fetchNotebook(bcfCloudNotebook.id);
+                }
+                if (!nb && modelKey) {
+                    nb = await sync.ensureNotebook(modelKey, modelKey);
+                }
+                if (!nb) {
+                    updateBcfCloudStatus('Загрузите модель или подключите код обмена.');
+                    return;
+                }
+                bcfCloudNotebook = nb;
+                const remote = await sync.loadTopics(nb.id);
+                bcfTopics.length = 0;
+                remote.forEach(t => bcfTopics.push(t));
+                renderBcfList();
+                syncBcfMarkers();
+                updateBcfCloudStatus(
+                    `Облако: код ${nb.share_code} — передайте экспертизе или коллегам. Заметок: ${bcfTopics.length}.`
+                );
+            } catch (err) {
+                console.warn('BCF cloud', err);
+                updateBcfCloudStatus('Облако: ' + (err.message || String(err)));
+            } finally {
+                bcfCloudLoading = false;
+            }
+        }
 
         function uuid4() {
             if (crypto?.randomUUID) return crypto.randomUUID();
@@ -9480,7 +9549,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             el.innerHTML = bcfTopics.map((t, idx) => `
                 <div class="ya-file-row" style="margin-bottom:6px">
-                    <span class="ya-name" title="${escAttr(t.comment || '')}">${esc(t.title)}</span>
+                    <span class="ya-name" title="${escAttr(t.comment || '')}">${esc(t.title)}${t.authorEmail ? ` <span style="opacity:.65">(${esc(t.authorEmail)})</span>` : ''}</span>
                     <button type="button" class="btn" data-bcf-act="focus" data-bcf-idx="${idx}">▶</button>
                     <button type="button" class="btn" data-bcf-act="del" data-bcf-idx="${idx}">✕</button>
                 </div>
@@ -9509,6 +9578,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function openBcfModal() {
             renderBcfList();
+            refreshBcfFromCloud().catch(() => {});
             $('bcfModal').classList.add('show');
         }
         function closeBcfModal() {
@@ -9613,7 +9683,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 alert('Сначала поставьте точку на модели.');
                 return;
             }
-            bcfTopics.push({
+            const user = globalThis.BimLvaAuth?.getUser?.();
+            const topic = {
                 guid: uuid4(),
                 commentGuid: uuid4(),
                 viewpointGuid: uuid4(),
@@ -9622,32 +9693,87 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 created: new Date().toISOString(),
                 point: bcfPickPoint.slice(),
                 selection: bcfPickSelection,
+                authorEmail: user?.email || null,
                 camera: {
                     position: camera.position.toArray(),
                     target: controls.target.toArray(),
                     up: camera.up.toArray()
                 }
-            });
-            $('bcfTitle').value = '';
-            $('bcfComment').value = '';
-            bcfPickPoint = null;
-            bcfPickSelection = null;
-            $('bcfPickStatus').textContent = 'Точка не выбрана.';
-            renderBcfList();
-            syncBcfMarkers();
-            trackUsage('bcf_topic_add');
+            };
+            const sync = globalThis.BimLvaBcfSync;
+            const pushLocal = () => {
+                bcfTopics.push(topic);
+                $('bcfTitle').value = '';
+                $('bcfComment').value = '';
+                bcfPickPoint = null;
+                bcfPickSelection = null;
+                $('bcfPickStatus').textContent = 'Точка не выбрана.';
+                renderBcfList();
+                syncBcfMarkers();
+                trackUsage('bcf_topic_add');
+            };
+            if (sync?.authReady() && bcfCloudNotebook?.id) {
+                sync.insertTopic(bcfCloudNotebook.id, topic)
+                    .then(cloudId => {
+                        if (cloudId) topic._cloudRowId = cloudId;
+                        pushLocal();
+                        updateBcfCloudStatus(
+                            `Облако: код ${bcfCloudNotebook.share_code} · заметок: ${bcfTopics.length}`
+                        );
+                    })
+                    .catch(err => alert('Не удалось сохранить в облако: ' + (err.message || err)));
+                return;
+            }
+            pushLocal();
         });
         $('bcfExportBtn').addEventListener('click', () => {
             exportBcfZip().catch(err => alert('Ошибка экспорта BCF: ' + err.message));
+        });
+        $('bcfCloudRefreshBtn')?.addEventListener('click', () => {
+            refreshBcfFromCloud().catch(() => {});
+        });
+        $('bcfJoinBtn')?.addEventListener('click', async () => {
+            const code = $('bcfShareCodeIn')?.value?.trim();
+            if (!code) {
+                alert('Введите код обмена от автора заметок.');
+                return;
+            }
+            const sync = globalThis.BimLvaBcfSync;
+            if (!sync?.authReady()) {
+                alert('Сначала войдите в аккаунт (режим Supabase в auth-config.js).');
+                return;
+            }
+            try {
+                const nbId = await sync.joinByShareCode(code);
+                const modelKey = getBcfModelKey() || (`joined:${code.toLowerCase()}`);
+                sync.rememberNotebook(modelKey, nbId);
+                bcfCloudNotebook = await sync.fetchNotebook(nbId);
+                await refreshBcfFromCloud();
+                alert('Подключено. Заметки этого блокнота загружены.');
+            } catch (err) {
+                alert(err.message || String(err));
+            }
+        });
+        globalThis.BimLvaAuth?.onChange?.(() => {
+            if ($('bcfModal')?.classList.contains('show')) refreshBcfFromCloud().catch(() => {});
         });
         $('bcfList').addEventListener('click', e => {
             const btn = e.target.closest('[data-bcf-act]');
             if (!btn) return;
             const idx = Number(btn.dataset.bcfIdx);
             if (btn.dataset.bcfAct === 'del') {
-                bcfTopics.splice(idx, 1);
-                renderBcfList();
-                syncBcfMarkers();
+                const t = bcfTopics[idx];
+                const sync = globalThis.BimLvaBcfSync;
+                const done = () => {
+                    bcfTopics.splice(idx, 1);
+                    renderBcfList();
+                    syncBcfMarkers();
+                };
+                if (t?._cloudRowId && sync?.authReady()) {
+                    sync.deleteTopic(t._cloudRowId)
+                        .then(done)
+                        .catch(err => alert('Не удалось удалить в облаке: ' + (err.message || err)));
+                } else done();
                 return;
             }
             if (btn.dataset.bcfAct === 'focus') {
@@ -12621,8 +12747,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         const drivePos = new THREE.Vector3();
         const DRIVE_MAX_SPEED = 32;
         const DRIVE_ACCEL = 48;
-        const DRIVE_TURN_MAX = 0.68;
-        const DRIVE_STEER_SMOOTH = 3.8;
+        const DRIVE_TURN_MAX = 0.45;
+        const DRIVE_STEER_SMOOTH = 2.4;
         const FERRARI_MESH_REV = 2;
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
@@ -13452,7 +13578,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=55').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
