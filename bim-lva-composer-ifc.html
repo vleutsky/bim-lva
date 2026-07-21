@@ -2013,14 +2013,14 @@
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(480px,100%)">
             <h3>Проезд / облёт</h3>
             <div class="bulk-note">
-                <b>Проезд</b> — Ferrari по маршруту, камера с места водителя или сзади.
+                <b>Проезд</b> — Chery Tiggo 7 Pro по маршруту, камера с места водителя или сзади.
                 <b>Облёт</b> — сверху по курсу.
-                <b>Свободная езда</b> — Ferrari на WASD по модели.
+                <b>Свободная езда</b> — Tiggo 7 Pro на WASD по модели.
             </div>
             <div class="prop small">
                 <div class="k">Режим</div>
                 <select class="editInput" id="tourModeSelect">
-                    <option value="car">🚗 Проезд (Ferrari)</option>
+                    <option value="car">🚗 Проезд (Tiggo 7 Pro)</option>
                     <option value="fly">✈️ Облёт</option>
                     <option value="drive">🎮 Свободная езда (WASD)</option>
                 </select>
@@ -2035,12 +2035,12 @@
                     <option value="driver">Из кабины (глаза водителя)</option>
                 </select>
                 <div class="k" style="margin-top:8px">Высота глаз водителя, м</div>
-                <input class="editInput" id="tourEyeHeight" type="number" min="0.8" max="2.4" step="0.05" value="1.25">
+                <input class="editInput" id="tourEyeHeight" type="number" min="0.8" max="2.4" step="0.05" value="1.45">
                 <div class="k" style="margin-top:8px">Отступ камеры сзади, м</div>
-                <input class="editInput" id="tourChaseDist" type="number" min="3" max="25" step="0.5" value="8">
+                <input class="editInput" id="tourChaseDist" type="number" min="3" max="25" step="0.5" value="9">
                 <label class="bulk-note" style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-top:8px">
                     <input type="checkbox" id="tourShowCar" checked>
-                    Показывать Ferrari на сцене
+                    Показывать Chery Tiggo 7 Pro на сцене
                 </label>
             </div>
             <div class="prop small">
@@ -2648,7 +2648,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'bcf-share-v1';
+        const COMPOSER_BUILD = 'tiggo-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -12730,7 +12730,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         let tourSpeed = 0.12;
         let tourStyle = 'car';
         let tourCamView = 'chase';
-        let tourEyeHeight = 1.25;
+        let tourEyeHeight = 1.45;
         let tourChaseDist = 8;
         let tourShowCar = true;
         const tourPathGroup = new THREE.Group();
@@ -12749,7 +12749,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         const DRIVE_ACCEL = 48;
         const DRIVE_TURN_MAX = 0.45;
         const DRIVE_STEER_SMOOTH = 2.4;
-        const FERRARI_MESH_REV = 2;
+        const TOUR_CAR_MESH_REV = 3;
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
         const _driveDown = new THREE.Vector3(0, 0, -1);
@@ -12764,8 +12764,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         function readTourSettingsFromUi() {
             tourStyle = $('tourModeSelect')?.value || 'car';
             tourCamView = $('tourCamView')?.value || 'chase';
-            tourEyeHeight = Math.max(0.6, parseFloat($('tourEyeHeight')?.value) || 1.25);
-            tourChaseDist = Math.max(2, parseFloat($('tourChaseDist')?.value) || 8);
+            tourEyeHeight = Math.max(0.6, parseFloat($('tourEyeHeight')?.value) || 1.45);
+            tourChaseDist = Math.max(2, parseFloat($('tourChaseDist')?.value) || 9);
             tourShowCar = !!$('tourShowCar')?.checked;
             tourSpeed = parseFloat($('tourSpeed')?.value) || 0.12;
             const carOpts = $('tourCarOptions');
@@ -12787,7 +12787,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 el.textContent = 'WASD — езда · Space — тормоз · Esc — выход';
                 return;
             }
-            const mode = tourStyle === 'fly' ? 'облёт' : (tourStyle === 'drive' ? 'свободная езда' : 'проезд Ferrari');
+            const mode = tourStyle === 'fly' ? 'облёт' : (tourStyle === 'drive' ? 'свободная езда' : 'проезд Tiggo 7 Pro');
             const cam = (tourStyle === 'car' || tourStyle === 'drive')
                 ? (tourCamView === 'driver' ? ' · кабина' : ' · сзади')
                 : '';
@@ -12821,119 +12821,191 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             tourMarkerMeshes.length = 0;
         }
 
-        /** Стилизованная Ferrari (rosso corsa) — профиль Lathe, без внешних ассетов */
-        function createFerrariMesh() {
+        /**
+         * Chery Tiggo 7 Pro — стилизованный кроссовер.
+         * Габариты: 4513 × 1862 × 1696 мм, база 2670 мм.
+         * Ось меша: Y вперёд, X вправо, Z вверх.
+         * Официальный CAD/GLB Chery не включаем (лицензия) — узнаваемый силуэт и решётка.
+         */
+        function createTourCarMesh() {
             const root = new THREE.Group();
-            root.name = 'TourFerrari';
-            const red = new THREE.MeshStandardMaterial({ color: 0xe01010, metalness: 0.72, roughness: 0.24 });
-            const redDeep = new THREE.MeshStandardMaterial({ color: 0x8c0808, metalness: 0.58, roughness: 0.3 });
-            const dark = new THREE.MeshStandardMaterial({ color: 0x121212, metalness: 0.42, roughness: 0.58 });
+            root.name = 'TourCheryTiggo7Pro';
+
+            const paint = new THREE.MeshStandardMaterial({ color: 0xd8dee6, metalness: 0.55, roughness: 0.28 });
+            const paintDark = new THREE.MeshStandardMaterial({ color: 0x2a3038, metalness: 0.5, roughness: 0.35 });
+            const black = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.35, roughness: 0.55 });
             const glass = new THREE.MeshStandardMaterial({
-                color: 0xa8d4f0, metalness: 0.12, roughness: 0.06, transparent: true, opacity: 0.45
+                color: 0x1a2836, metalness: 0.2, roughness: 0.08, transparent: true, opacity: 0.55
             });
-            const yellow = new THREE.MeshStandardMaterial({ color: 0xffd200, metalness: 0.35, roughness: 0.38 });
-            const chrome = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, metalness: 0.94, roughness: 0.16 });
+            const chrome = new THREE.MeshStandardMaterial({ color: 0xe8ecf0, metalness: 0.95, roughness: 0.18 });
+            const led = new THREE.MeshStandardMaterial({
+                color: 0xf2f6ff, emissive: 0x8899aa, emissiveIntensity: 0.35, metalness: 0.4, roughness: 0.25
+            });
             const tail = new THREE.MeshStandardMaterial({
-                color: 0xff3311, emissive: 0x550800, metalness: 0.2, roughness: 0.45
+                color: 0xff1a2e, emissive: 0x880010, emissiveIntensity: 0.45, metalness: 0.25, roughness: 0.4
+            });
+            const silver = new THREE.MeshStandardMaterial({ color: 0xb8c0c8, metalness: 0.85, roughness: 0.22 });
+
+            // Боковой силуэт кроссовера (Extrude): Shape x=длина, y=высота → после поворотов X=ширина, Y=длина, Z=высота
+            const side = new THREE.Shape();
+            side.moveTo(-2.20, 0.28);
+            side.lineTo(-2.00, 0.22);
+            side.lineTo(2.05, 0.22);
+            side.lineTo(2.22, 0.30);
+            side.lineTo(2.25, 0.55);
+            side.lineTo(2.18, 0.78);
+            side.lineTo(2.05, 0.95);
+            side.lineTo(1.55, 1.12);
+            side.lineTo(1.15, 1.42);
+            side.lineTo(0.55, 1.55);
+            side.lineTo(-0.85, 1.56);
+            side.lineTo(-1.45, 1.48);
+            side.lineTo(-1.85, 1.28);
+            side.lineTo(-2.12, 0.95);
+            side.lineTo(-2.22, 0.62);
+            side.lineTo(-2.20, 0.28);
+
+            const bodyGeo = new THREE.ExtrudeGeometry(side, {
+                depth: 1.78,
+                bevelEnabled: true,
+                bevelThickness: 0.035,
+                bevelSize: 0.04,
+                bevelSegments: 2
+            });
+            bodyGeo.translate(0, 0, -0.89);
+            bodyGeo.rotateY(-Math.PI / 2);
+            bodyGeo.rotateX(Math.PI / 2);
+            root.add(new THREE.Mesh(bodyGeo, paint));
+
+            const skirt = new THREE.Mesh(new THREE.BoxGeometry(1.82, 4.15, 0.16), black);
+            skirt.position.set(0, 0.02, 0.30);
+            root.add(skirt);
+
+            const hood = new THREE.Mesh(new THREE.BoxGeometry(1.72, 1.05, 0.08), paint);
+            hood.position.set(0, 1.35, 0.98);
+            hood.rotation.x = -0.08;
+            root.add(hood);
+
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.48, 1.95, 0.07), paintDark);
+            roof.position.set(0, -0.15, 1.58);
+            root.add(roof);
+            [-0.72, 0.72].forEach(x => {
+                const rail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.7, 0.035), silver);
+                rail.position.set(x, -0.12, 1.64);
+                root.add(rail);
             });
 
-            const bodyProfile = [
-                new THREE.Vector2(0.38, -2.35),
-                new THREE.Vector2(0.72, -2.05),
-                new THREE.Vector2(0.98, -1.15),
-                new THREE.Vector2(1.02, -0.15),
-                new THREE.Vector2(0.92, 0.75),
-                new THREE.Vector2(0.62, 1.55),
-                new THREE.Vector2(0.28, 2.15),
-                new THREE.Vector2(0.06, 2.48)
-            ];
-            const body = new THREE.Mesh(new THREE.LatheGeometry(bodyProfile, 36), red);
-            body.position.z = 0.38;
-            root.add(body);
+            const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.06, 0.72), glass);
+            windshield.position.set(0, 0.95, 1.28);
+            windshield.rotation.x = -0.55;
+            root.add(windshield);
 
-            const sill = new THREE.Mesh(
-                new THREE.CapsuleGeometry(0.12, 2.85, 4, 10),
-                redDeep
-            );
-            sill.rotation.z = Math.PI / 2;
-            sill.scale.set(1, 1, 0.55);
-            sill.position.set(0, 0.05, 0.28);
-            root.add(sill);
+            const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.06, 0.55), glass);
+            rearGlass.position.set(0, -1.25, 1.28);
+            rearGlass.rotation.x = 0.42;
+            root.add(rearGlass);
 
-            const cabin = new THREE.Mesh(
-                new THREE.SphereGeometry(0.72, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55),
-                glass
-            );
-            cabin.scale.set(1.05, 0.95, 0.62);
-            cabin.position.set(0, -0.05, 0.88);
-            root.add(cabin);
+            [-0.88, 0.88].forEach(x => {
+                const sideWin = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.55, 0.48), glass);
+                sideWin.position.set(x, -0.05, 1.22);
+                root.add(sideWin);
+            });
 
-            const roof = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.95, 6, 14), red);
-            roof.rotation.z = Math.PI / 2;
-            roof.position.set(0, 0.15, 0.92);
-            root.add(roof);
+            [0.78, 0.05, -0.85].forEach(y => {
+                [-0.86, 0.86].forEach(x => {
+                    const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.55), black);
+                    pillar.position.set(x, y, 1.25);
+                    root.add(pillar);
+                });
+            });
 
-            const intakeL = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.42, 4, 8), redDeep);
-            intakeL.rotation.z = Math.PI / 2;
-            intakeL.position.set(-0.78, -0.4, 0.62);
-            root.add(intakeL);
-            const intakeR = intakeL.clone();
-            intakeR.position.x = 0.78;
-            root.add(intakeR);
+            // Алмазная решётка (характерная «морда» Chery)
+            const grilleFrame = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.08, 0.55), black);
+            grilleFrame.position.set(0, 2.15, 0.62);
+            root.add(grilleFrame);
+            const grillePlate = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.04, 0.42), chrome);
+            grillePlate.position.set(0, 2.18, 0.62);
+            root.add(grillePlate);
+            for (let row = 0; row < 4; row++) {
+                for (let col = 0; col < 9; col++) {
+                    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.03, 0.07), black);
+                    cell.position.set(-0.56 + col * 0.14, 2.20, 0.48 + row * 0.09);
+                    cell.rotation.z = Math.PI / 4;
+                    root.add(cell);
+                }
+            }
 
-            const wing = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 1.75, 4, 8), redDeep);
-            wing.rotation.z = Math.PI / 2;
-            wing.position.set(0, -2.18, 0.95);
-            wing.rotation.x = -0.14;
-            root.add(wing);
-
-            const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.03, 20), yellow);
+            const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.04, 20), silver);
             badge.rotation.x = Math.PI / 2;
-            badge.position.set(0, 2.55, 0.48);
+            badge.position.set(0, 2.22, 0.88);
             root.add(badge);
 
-            [-0.55, 0.55].forEach(x => {
-                const hl = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), chrome);
-                hl.position.set(x, 2.42, 0.42);
+            [-0.72, 0.72].forEach(x => {
+                const hl = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.08, 0.12), led);
+                hl.position.set(x, 2.12, 0.78);
                 root.add(hl);
-                const tl = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.28, 3, 6), tail);
-                tl.rotation.z = Math.PI / 2;
-                tl.position.set(x, -2.32, 0.5);
+            });
+
+            const lowerIntake = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 0.22), black);
+            lowerIntake.position.set(0, 2.08, 0.38);
+            root.add(lowerIntake);
+
+            const tailBar = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.08, 0.1), tail);
+            tailBar.position.set(0, -2.18, 0.95);
+            root.add(tailBar);
+            [-0.55, 0.55].forEach(x => {
+                const tl = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.07, 0.18), tail);
+                tl.position.set(x, -2.20, 0.82);
                 root.add(tl);
             });
 
+            [-0.95, 0.95].forEach(x => {
+                const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 0.12), paintDark);
+                mirror.position.set(x, 0.72, 1.05);
+                root.add(mirror);
+            });
+
+            function arch(x, y) {
+                const a = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.07, 8, 18, Math.PI), black);
+                a.rotation.y = Math.PI / 2;
+                a.rotation.z = Math.PI;
+                a.position.set(x, y, 0.42);
+                root.add(a);
+            }
+            arch(-0.92, 1.335); arch(0.92, 1.335);
+            arch(-0.92, -1.335); arch(0.92, -1.335);
+
             function wheel(x, y) {
-                const tire = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.14, 12, 24), dark);
+                const tire = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.12, 14, 28), black);
                 tire.rotation.y = Math.PI / 2;
-                tire.position.set(x, y, 0.38);
+                tire.position.set(x, y, 0.36);
                 root.add(tire);
-                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.22, 16), chrome);
-                rim.rotation.x = Math.PI / 2;
+                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.18, 18), silver);
+                rim.rotation.z = Math.PI / 2;
                 rim.position.copy(tire.position);
                 root.add(rim);
-                const caliper = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.12, 3, 6), yellow);
-                caliper.rotation.z = Math.PI / 2;
-                caliper.position.set(x > 0 ? x - 0.1 : x + 0.1, y, 0.38);
-                root.add(caliper);
+                const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.2, 12), chrome);
+                hub.rotation.z = Math.PI / 2;
+                hub.position.copy(tire.position);
+                root.add(hub);
             }
-            wheel(-0.88, 1.28);
-            wheel(0.88, 1.28);
-            wheel(-0.88, -1.38);
-            wheel(0.88, -1.38);
+            wheel(-0.92, 1.335); wheel(0.92, 1.335);
+            wheel(-0.92, -1.335); wheel(0.92, -1.335);
 
             root.userData.isTourCar = true;
-            root.userData.meshRev = FERRARI_MESH_REV;
+            root.userData.meshRev = TOUR_CAR_MESH_REV;
+            root.userData.carModel = 'Chery Tiggo 7 Pro';
             return root;
         }
 
         function ensureTourCar() {
-            if (tourCar && tourCar.userData.meshRev === FERRARI_MESH_REV) return tourCar;
+            if (tourCar && tourCar.userData.meshRev === TOUR_CAR_MESH_REV) return tourCar;
             if (tourCar) {
                 scene.remove(tourCar);
                 disposeTourObject(tourCar);
                 tourCar = null;
             }
-            tourCar = createFerrariMesh();
+            tourCar = createTourCarMesh();
             tourCar.visible = false;
             scene.add(tourCar);
             return tourCar;
@@ -13213,7 +13285,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (_tourFwd.lengthSq() < 1e-8) _tourFwd.set(0, 1, 0);
             _tourFwd.normalize();
             _tourRight.crossVectors(_tourFwd, _tourUp).normalize();
-            // Базис: X = вправо, Y = вперёд (как у меша Ferrari), Z = вверх
+            // Базис: X = вправо, Y = вперёд (как у меша Tiggo), Z = вверх
             _tourMat.makeBasis(_tourRight, _tourFwd, _tourUp);
             tourCar.quaternion.setFromRotationMatrix(_tourMat);
             tourCar.position.copy(pos);
@@ -13289,7 +13361,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             else if (tourCar) tourCar.visible = false;
             $('tourModal')?.classList.remove('show');
             applyTourCamera(0);
-            setTourHud(true, tourStyle === 'fly' ? 'Облёт… Esc или «Отменить»' : 'Проезд Ferrari… Esc или «Отменить»');
+            setTourHud(true, tourStyle === 'fly' ? 'Облёт… Esc или «Отменить»' : 'Проезд Tiggo 7 Pro… Esc или «Отменить»');
             updateTourStatus();
             trackUsage('tour_play', {
                 mode: tourStyle,
@@ -13578,7 +13650,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=55').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=56').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
