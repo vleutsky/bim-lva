@@ -1979,11 +1979,16 @@
     <div class="modal-backdrop" id="clashModal">
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(480px,100%)">
             <h3>Коллизии (AABB)</h3>
-            <div class="bulk-note">Быстрая проверка пересечения габаритов элементов двух моделей. Не заменяет точный clash detection.</div>
+            <div class="bulk-note">Быстрая проверка пересечения габаритов двух моделей. Пары сохраняются по <b>IFC GlobalId</b> — после обновления файла можно перепроверить те же элементы. Не заменяет точный clash detection.</div>
             <div class="prop small"><div class="k">Модель A</div><select class="editInput" id="clashModelA"></select></div>
             <div class="prop small"><div class="k">Модель B</div><select class="editInput" id="clashModelB"></select></div>
             <div class="prop small"><div class="k">Допуск (м)</div><input class="editInput" id="clashTolerance" type="number" step="0.01" value="0.01"></div>
             <div class="bulk-note" id="clashStatus">Выберите две разные модели и запустите проверку.</div>
+            <div id="clashReportList" class="bulk-note" style="margin-top:8px;max-height:160px;overflow:auto"></div>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
+                <button class="btn" id="clashRecheckBtn" title="Перепроверить сохранённые пары по GlobalId">↻ Перепроверить по GUID</button>
+                <button class="btn" id="clashExportBtn" title="Экспорт отчёта JSON с GlobalId">⬇ JSON</button>
+            </div>
             <div class="modal-actions">
                 <button class="btn" id="cancelClash">Закрыть</button>
                 <button class="btn load-btn" id="runClash">Проверить</button>
@@ -2128,7 +2133,7 @@
     <div class="modal-backdrop" id="bcfModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bcfModalTitle" style="width:min(560px,100%)">
             <h3 id="bcfModalTitle">BCF-заметки</h3>
-            <div class="bulk-note">Кликните по модели, чтобы поставить точку замечания, введите текст и сохраните. Экспорт — файл <b>.bcfzip</b> (BCF 2.1). После входа заметки в облаке — общий <b>код обмена</b> для коллег и экспертизы.</div>
+            <div class="bulk-note">Кликните по модели, чтобы поставить точку замечания. Привязка — к <b>IFC GlobalId</b> элемента (устойчиво при обновлении файла, в отличие от ExpressID). Экспорт — <b>.bcfzip</b> (BCF 2.1). После входа — общий <b>код обмена</b> для экспертизы.</div>
             <div class="prop small" id="bcfCloudBlock">
                 <div class="k">Облако (аккаунт)</div>
                 <div class="bulk-note" id="bcfCloudStatus">Локально в браузере. Войдите (Supabase), чтобы синхронизировать.</div>
@@ -2667,7 +2672,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'tiggo-box-v3';
+        const COMPOSER_BUILD = 'guid-track-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -3978,7 +3983,11 @@
                 this.ifcIndex = null;
                 this.edited = false;
                 this.appearanceByID = new Map();
-                
+                this.globalIdByExpress = new Map();
+                this.expressByGlobalId = new Map();
+                this.projectGlobalId = null;
+                this.fileContentHash = null;
+
                 this.group = new THREE.Group();
                 globalGroup.add(this.group);
             }
@@ -5528,6 +5537,10 @@ uniform vec3 uBatchSelColor;
                     modData.ifcIndex = null;
                 }
                 data = null;
+
+                showLoader('GUID', 'Индекс GlobalId…');
+                await new Promise(r => setTimeout(r, 10));
+                buildGlobalIdIndex(modData);
 
                 showLoader('СТРУКТУРА', 'Построение связей...');
                 await new Promise(r => setTimeout(r, 10));
@@ -8539,11 +8552,17 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (attr && hit.face) expressID = Math.round(attr.getX(hit.face.a));
                 }
                 bcfPickSelection = (expressID != null && ud.modelID != null)
-                    ? { modelID: ud.modelID, expressID }
+                    ? (() => {
+                        const mod = loadedModels.get(ud.modelID);
+                        return makeElementRef(mod, expressID) || { modelID: ud.modelID, expressID };
+                    })()
                     : null;
                 bcfPickMode = false;
                 $('bcfPickBtn').classList.remove('on');
-                $('bcfPickStatus').textContent = `Точка: ${bcfPickPoint.map(n => n.toFixed(2)).join(', ')}`;
+                $('bcfPickStatus').textContent = bcfPickSelection?.ifcGlobalId
+                    ? `Точка: ${bcfPickPoint.map(n => n.toFixed(2)).join(', ')} · GlobalId ${bcfPickSelection.ifcGlobalId}`
+                    : `Точка: ${bcfPickPoint.map(n => n.toFixed(2)).join(', ')}` +
+                      (bcfPickSelection ? ` · #${bcfPickSelection.expressID} (без GlobalId)` : '');
                 openBcfModal();
                 return;
             }
@@ -9141,9 +9160,59 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             );
         }
 
+        const CLASH_REPORTS_KEY = 'bimlva_clash_reports_v1';
+        let clashReports = [];
+        try { clashReports = JSON.parse(localStorage.getItem(CLASH_REPORTS_KEY) || '[]'); } catch (_) { clashReports = []; }
+
+        function saveClashReports() {
+            try { localStorage.setItem(CLASH_REPORTS_KEY, JSON.stringify(clashReports.slice(0, 20))); } catch (_) {}
+        }
+
+        function modelIdentityMeta(mod) {
+            return {
+                modelID: mod.modelID,
+                filename: mod.filename || '',
+                projectGlobalId: mod.projectGlobalId || null
+            };
+        }
+
+        function renderClashReportList() {
+            const el = $('clashReportList');
+            if (!el) return;
+            if (!clashReports.length) {
+                el.textContent = 'Сохранённых отчётов по GlobalId пока нет.';
+                return;
+            }
+            el.innerHTML = clashReports.slice(0, 5).map((r, i) => `
+                <div style="margin:4px 0">
+                  <b>#${i + 1}</b> ${esc(r.created?.slice(0, 19) || '')} · пар: ${r.pairs?.length || 0}
+                  · open: ${(r.pairs || []).filter(p => p.status === 'open').length}
+                  · resolved: ${(r.pairs || []).filter(p => p.status === 'resolved').length}
+                </div>
+            `).join('');
+        }
+
+        function boxesStillClash(refA, refB, tol) {
+            const a = resolveElementRef(refA);
+            const b = resolveElementRef(refB);
+            if (!a || !b) return { ok: false, missing: true };
+            const modA = loadedModels.get(a.modelID);
+            const modB = loadedModels.get(b.modelID);
+            const boxA = getElementWorldBox(modA, a.expressID);
+            const boxB = getElementWorldBox(modB, b.expressID);
+            if (!boxA || !boxB) return { ok: false, missing: true };
+            return { ok: boxesOverlap(boxA, boxB, tol), missing: false, items: [a, b] };
+        }
+
+        function newClashReportId() {
+            if (crypto?.randomUUID) return crypto.randomUUID();
+            return 'clash-' + Date.now().toString(36);
+        }
+
         $('btnClash').addEventListener('click', () => {
             fillModelSelect($('clashModelA'));
             fillModelSelect($('clashModelB'));
+            renderClashReportList();
             $('clashModal').classList.add('show');
         });
         $('cancelClash').addEventListener('click', () => $('clashModal').classList.remove('show'));
@@ -9160,28 +9229,98 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const boxesA = [];
             for (const eid of modA.meshesByID.keys()) {
                 const box = getElementWorldBox(modA, eid);
-                if (box) boxesA.push({ modelID: idA, expressID: eid, box });
+                if (box) boxesA.push({ expressID: eid, box, ref: makeElementRef(modA, eid) });
             }
             const hits = [];
+            const pairs = [];
+            const seen = new Set();
             for (const eid of modB.meshesByID.keys()) {
                 const boxB = getElementWorldBox(modB, eid);
                 if (!boxB) continue;
+                const refB = makeElementRef(modB, eid);
                 for (const a of boxesA) {
-                    if (boxesOverlap(a.box, boxB, tol)) {
-                        hits.push({ modelID: idB, expressID: eid });
-                        hits.push({ modelID: a.modelID, expressID: a.expressID });
-                        break;
-                    }
+                    if (!boxesOverlap(a.box, boxB, tol)) continue;
+                    const key = `${a.ref?.ifcGlobalId || a.expressID}::${refB?.ifcGlobalId || eid}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    hits.push({ modelID: idB, expressID: eid });
+                    hits.push({ modelID: idA, expressID: a.expressID });
+                    pairs.push({
+                        a: a.ref,
+                        b: refB,
+                        status: 'open',
+                        foundAt: new Date().toISOString()
+                    });
                 }
             }
             hideLoader();
             const unique = uniqueSelectionItems(hits);
+            const withGid = pairs.filter(p => p.a?.ifcGlobalId && p.b?.ifcGlobalId).length;
             $('clashStatus').textContent = unique.length
-                ? `Найдено пересечений (элементов): ${unique.length}. Выделено на сцене.`
+                ? `Найдено пар: ${pairs.length} (элементов: ${unique.length}). С GlobalId обеих сторон: ${withGid}. Сохранено для перепроверки.`
                 : 'Пересечений AABB не найдено.';
-            trackUsage('run_clash', { hits: unique.length });
+            if (pairs.length) {
+                clashReports.unshift({
+                    id: newClashReportId(),
+                    created: new Date().toISOString(),
+                    tolerance: tol,
+                    modelA: modelIdentityMeta(modA),
+                    modelB: modelIdentityMeta(modB),
+                    pairs
+                });
+                saveClashReports();
+                renderClashReportList();
+            }
+            trackUsage('run_clash', { hits: unique.length, pairs: pairs.length, withGid });
             selectMultiple(unique);
             $('clashModal').classList.remove('show');
+        });
+        $('clashRecheckBtn')?.addEventListener('click', () => {
+            const report = clashReports[0];
+            if (!report?.pairs?.length) {
+                alert('Нет сохранённого отчёта. Сначала запустите проверку.');
+                return;
+            }
+            const tol = parseFloat($('clashTolerance').value) || report.tolerance || 0;
+            let open = 0, resolved = 0, missing = 0;
+            const select = [];
+            report.pairs.forEach(p => {
+                const r = boxesStillClash(p.a, p.b, tol);
+                if (r.missing) {
+                    p.status = 'missing';
+                    missing++;
+                    return;
+                }
+                if (r.ok) {
+                    p.status = 'open';
+                    open++;
+                    select.push(...r.items);
+                } else {
+                    p.status = 'resolved';
+                    resolved++;
+                }
+            });
+            report.recheckedAt = new Date().toISOString();
+            saveClashReports();
+            renderClashReportList();
+            selectMultiple(uniqueSelectionItems(select));
+            $('clashStatus').textContent =
+                `Перепроверка по GlobalId: open ${open}, resolved ${resolved}, missing ${missing}.`;
+            trackUsage('clash_recheck', { open, resolved, missing });
+        });
+        $('clashExportBtn')?.addEventListener('click', () => {
+            const report = clashReports[0];
+            if (!report) {
+                alert('Нет отчёта для экспорта.');
+                return;
+            }
+            const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `clash-guid-${(report.created || '').slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
         });
 
         function collectIfcClasses() {
@@ -9228,17 +9367,149 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             trackUsage('ifc_class_filter', { classes: allowed.size });
         });
 
-        function elementIdentityKey(mod, expressID) {
+        function readLineGlobalId(mod, expressID) {
             try {
-                if (typeof ifcAPI !== 'undefined' && mod.modelID != null) {
+                if (typeof ifcAPI === 'undefined' || mod?.modelID == null || mod.isFBX) return null;
+                const line = ifcAPI.GetLine(mod.modelID, expressID, false);
+                const gid = line?.GlobalId?.value ?? line?.GlobalId;
+                return typeof gid === 'string' && gid.length ? gid : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function readLineNameClass(mod, expressID) {
+            let ifcClass = '';
+            let name = '';
+            try {
+                if (!mod?.isFBX && typeof ifcAPI !== 'undefined' && mod.modelID != null) {
                     const line = ifcAPI.GetLine(mod.modelID, expressID, false);
-                    const gid = line?.GlobalId?.value || line?.GlobalId;
-                    if (gid) return 'gid:' + gid;
+                    ifcClass = (line?.constructor?.name || line?.type || '').toString().replace(/^IFC/i, '') || '';
+                    name = line?.Name?.value || line?.Name || line?.LongName?.value || '';
+                    if (typeof name !== 'string') name = '';
                 }
             } catch (_) {}
-            const ent = getEntityParts(mod, expressID);
-            const name = ent ? unquoteStepString(ent.args?.[2] || '') : '';
-            return `cls:${ent?.className || '?'}|name:${name}|id:${expressID}`;
+            if (!ifcClass || !name) {
+                const ent = getEntityParts(mod, expressID);
+                if (ent) {
+                    if (!ifcClass) ifcClass = (ent.className || '').replace(/^IFC/, '');
+                    if (!name) name = unquoteStepString(ent.args?.[2] || '');
+                }
+            }
+            return { ifcClass, name };
+        }
+
+        /** Индекс GlobalId после загрузки — основа стабильных BCF/clash привязок. */
+        function buildGlobalIdIndex(modData) {
+            if (!modData || modData.isFBX) return;
+            modData.globalIdByExpress = new Map();
+            modData.expressByGlobalId = new Map();
+            let dup = 0;
+            for (const eid of modData.meshesByID.keys()) {
+                let gid = readLineGlobalId(modData, eid);
+                if (!gid && modData.ifcIndex) {
+                    const ent = getEntityParts(modData, eid);
+                    const raw = ent?.args?.[0];
+                    if (typeof raw === 'string') {
+                        const m = raw.match(/'([^']+)'/);
+                        if (m) gid = m[1];
+                    }
+                }
+                if (!gid) continue;
+                modData.globalIdByExpress.set(eid, gid);
+                if (modData.expressByGlobalId.has(gid)) dup++;
+                else modData.expressByGlobalId.set(gid, eid);
+            }
+            try {
+                const typeId = WebIFC?.IFCPROJECT;
+                if (typeId != null) {
+                    const ids = ifcAPI.GetLineIDsWithType(modData.modelID, typeId);
+                    const n = ids?.size?.() ?? ids?.length ?? 0;
+                    if (n > 0) {
+                        const pid = typeof ids.get === 'function' ? ids.get(0) : ids[0];
+                        modData.projectGlobalId = readLineGlobalId(modData, pid);
+                    }
+                }
+            } catch (_) {}
+            console.info(
+                `[BIM.LVA] GlobalId index: ${modData.filename} · ${modData.globalIdByExpress.size} элементов` +
+                (dup ? ` · дублей: ${dup}` : '') +
+                (modData.projectGlobalId ? ` · project=${modData.projectGlobalId}` : '')
+            );
+        }
+
+        function getElementGlobalId(mod, expressID) {
+            if (!mod) return null;
+            if (mod.globalIdByExpress?.has(expressID)) return mod.globalIdByExpress.get(expressID);
+            return readLineGlobalId(mod, expressID);
+        }
+
+        /** Стабильная ссылка на элемент для BCF / clash / экспорта. */
+        function makeElementRef(mod, expressID) {
+            if (!mod || expressID == null) return null;
+            const { ifcClass, name } = readLineNameClass(mod, expressID);
+            return {
+                modelID: mod.modelID,
+                expressID,
+                ifcGlobalId: getElementGlobalId(mod, expressID) || null,
+                ifcClass: ifcClass || null,
+                name: name || null,
+                filename: mod.filename || null,
+                projectGlobalId: mod.projectGlobalId || null
+            };
+        }
+
+        function findModelForElementRef(ref) {
+            if (!ref) return null;
+            if (ref.modelID != null && loadedModels.has(ref.modelID)) return loadedModels.get(ref.modelID);
+            if (ref.projectGlobalId) {
+                for (const mod of loadedModels.values()) {
+                    if (!mod.isFBX && mod.projectGlobalId === ref.projectGlobalId) return mod;
+                }
+            }
+            if (ref.filename) {
+                const name = String(ref.filename).toLowerCase();
+                for (const mod of loadedModels.values()) {
+                    if (String(mod.filename || '').toLowerCase() === name) return mod;
+                }
+            }
+            return null;
+        }
+
+        /** Резолв ссылки после перезагрузки модели → { modelID, expressID } или null. */
+        function resolveElementRef(ref) {
+            if (!ref) return null;
+            const mod = findModelForElementRef(ref);
+            if (!mod) return null;
+            if (ref.ifcGlobalId && mod.expressByGlobalId?.has(ref.ifcGlobalId)) {
+                return { modelID: mod.modelID, expressID: mod.expressByGlobalId.get(ref.ifcGlobalId) };
+            }
+            if (ref.expressID != null && mod.meshesByID.has(ref.expressID)) {
+                // ExpressID — только подсказка для той же сессии / неизменённого файла
+                const gidNow = getElementGlobalId(mod, ref.expressID);
+                if (!ref.ifcGlobalId || gidNow === ref.ifcGlobalId) {
+                    return { modelID: mod.modelID, expressID: ref.expressID };
+                }
+            }
+            return null;
+        }
+
+        function resolveElementRefs(refs) {
+            const out = [];
+            const missing = [];
+            (refs || []).forEach(ref => {
+                const hit = resolveElementRef(ref);
+                if (hit) out.push(hit);
+                else missing.push(ref);
+            });
+            return { items: uniqueSelectionItems(out), missing };
+        }
+
+        function elementIdentityKey(mod, expressID) {
+            const gid = getElementGlobalId(mod, expressID);
+            if (gid) return 'gid:' + gid;
+            const { ifcClass, name } = readLineNameClass(mod, expressID);
+            return `cls:${ifcClass || '?'}|name:${name || ''}|id:${expressID}`;
         }
 
         $('btnCompare').addEventListener('click', () => {
@@ -9496,11 +9767,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         scene.add(bcfMarkers);
 
         function getBcfModelKey() {
-            const names = [...loadedModels.values()]
-                .map(m => (m.filename || m.format || 'model').trim())
+            const parts = [...loadedModels.values()]
+                .map(m => {
+                    if (!m.isFBX && m.projectGlobalId) return `prj:${m.projectGlobalId}`;
+                    return (m.filename || m.format || 'model').trim();
+                })
                 .filter(Boolean)
                 .sort();
-            return names.length ? names.join(' · ') : null;
+            return parts.length ? parts.join(' · ') : null;
         }
 
         function updateBcfCloudStatus(text) {
@@ -9568,7 +9842,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             el.innerHTML = bcfTopics.map((t, idx) => `
                 <div class="ya-file-row" style="margin-bottom:6px">
-                    <span class="ya-name" title="${escAttr(t.comment || '')}">${esc(t.title)}${t.authorEmail ? ` <span style="opacity:.65">(${esc(t.authorEmail)})</span>` : ''}</span>
+                    <span class="ya-name" title="${escAttr(t.comment || '')}">${esc(t.title)}${(t.elements?.[0]?.ifcGlobalId || t.selection?.ifcGlobalId) ? ` <span style="opacity:.65">[${esc(t.elements?.[0]?.ifcGlobalId || t.selection.ifcGlobalId)}]</span>` : ''}${t.authorEmail ? ` <span style="opacity:.65">(${esc(t.authorEmail)})</span>` : ''}</span>
                     <button type="button" class="btn" data-bcf-act="focus" data-bcf-idx="${idx}">▶</button>
                     <button type="button" class="btn" data-bcf-act="del" data-bcf-idx="${idx}">✕</button>
                 </div>
@@ -9648,20 +9922,24 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const [tx, ty, tz] = topic.camera.target;
                 const dir = new THREE.Vector3(tx - px, ty - py, tz - pz).normalize();
                 const up = new THREE.Vector3().fromArray(topic.camera.up || [0, 0, 1]);
-                const vp = `<?xml version="1.0" encoding="UTF-8"?>
-<VisualizationInfo Guid="${topic.viewpointGuid}">
-  <Components><Selection/><Visibility DefaultVisibility="true"><Exceptions/></Visibility><Coloring/></Components>
-  <PerspectiveCamera>
-    <CameraViewPoint><X>${px}</X><Y>${py}</Y><Z>${pz}</Z></CameraViewPoint>
-    <CameraDirection><X>${dir.x}</X><Y>${dir.y}</Y><Z>${dir.z}</Z></CameraDirection>
-    <CameraUpVector><X>${up.x}</X><Y>${up.y}</Y><Z>${up.z}</Z></CameraUpVector>
-    <FieldOfView>60</FieldOfView>
-  </PerspectiveCamera>
-  ${topic.point ? `<ClippingPlanes/><OrthogonalCamera/><Lines/><Bitmaps/><Viewpoint/><Components/><Snapshot/><Index>0</Index>` : ''}
-</VisualizationInfo>`;
-                // Simplified valid-enough viewpoint for many BCF readers
+                const selRefs = topic.elements?.length
+                    ? topic.elements
+                    : (topic.selection ? [topic.selection] : []);
+                const componentXml = selRefs
+                    .map(r => r?.ifcGlobalId
+                        ? `    <Component IfcGuid="${bcfEscapeXml(r.ifcGlobalId)}"/>`
+                        : null)
+                    .filter(Boolean)
+                    .join('\n');
                 const vpSimple = `<?xml version="1.0" encoding="UTF-8"?>
 <VisualizationInfo Guid="${topic.viewpointGuid}">
+  <Components>
+    <Selection>
+${componentXml || '    '}
+    </Selection>
+    <Visibility DefaultVisibility="true"><Exceptions/></Visibility>
+    <Coloring/>
+  </Components>
   <PerspectiveCamera>
     <CameraViewPoint><X>${px}</X><Y>${py}</Y><Z>${pz}</Z></CameraViewPoint>
     <CameraDirection><X>${dir.x}</X><Y>${dir.y}</Y><Z>${dir.z}</Z></CameraDirection>
@@ -9712,6 +9990,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 created: new Date().toISOString(),
                 point: bcfPickPoint.slice(),
                 selection: bcfPickSelection,
+                elements: bcfPickSelection ? [bcfPickSelection] : [],
                 authorEmail: user?.email || null,
                 camera: {
                     position: camera.position.toArray(),
@@ -9802,6 +10081,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 controls.target.fromArray(t.camera.target);
                 if (t.camera.up) camera.up.fromArray(t.camera.up);
                 controls.update();
+                const refs = t.elements?.length
+                    ? t.elements
+                    : (t.selection ? [t.selection] : []);
+                const { items, missing } = resolveElementRefs(refs);
+                if (items.length) selectMultiple(items);
+                if (missing.length) {
+                    console.warn('BCF: не найдены элементы по GlobalId', missing);
+                }
                 markNeedsRender();
                 closeBcfModal();
             }
@@ -13870,7 +14157,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=59').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=60').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
