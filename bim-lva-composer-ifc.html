@@ -2667,7 +2667,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'tour-points-v1';
+        const COMPOSER_BUILD = 'tiggo-box-v3';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -12768,7 +12768,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         const DRIVE_ACCEL = 48;
         const DRIVE_TURN_MAX = 0.45;
         const DRIVE_STEER_SMOOTH = 2.4;
-        const TOUR_CAR_MESH_REV = 4;
+        const TOUR_CAR_MESH_REV = 5;
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
         const _driveDown = new THREE.Vector3(0, 0, -1);
@@ -12847,213 +12847,168 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         }
 
         /**
-         * Chery Tiggo 7 Pro — по ортогональным габаритам / чертежным пропорциям.
-         * Spec: L=4513 W=1862 H=1696 WB=2670 GC≈175 мм; шины 225/55 R18.
-         * Y вперёд, X вправо, Z вверх. Без лицензионного CAD Chery.
+         * Chery Tiggo 7 Pro — low-poly «коробочная» сборка по габаритам (не Extrude-«дирижабль»).
+         * L=4.513 W=1.862 H=1.696 WB=2.670; шины 225/55 R18. Y↑вперёд, Z↑вверх.
+         * Цвета/детали по референсу: красный кузов, чёрная крыша, алмазная решётка.
          */
         function createTourCarMesh() {
             const root = new THREE.Group();
             root.name = 'TourCheryTiggo7Pro';
 
-            // ——— чертёжные константы (м) ———
-            const L = 4.513, W = 1.862, H = 1.696, WB = 2.670, GC = 0.175;
-            const FRONT_OH = 0.930;                 // передний свес
-            const REAR_OH = L - WB - FRONT_OH;      // ≈0.913
-            const Y_FRONT = WB / 2 + FRONT_OH;      // +2.265
-            const Y_REAR = -(WB / 2 + REAR_OH);     // −2.248
-            const Y_FA = WB / 2;                    // +1.335
-            const Y_RA = -WB / 2;                   // −1.335
-            // 225/55 R18 → R = 0.5*18*0.0254 + 0.225*0.55
-            const TIRE_R = 0.5 * 18 * 0.0254 + 0.225 * 0.55; // ≈0.352
-            const TIRE_TUBE = 0.095;
-            const TIRE_MAJOR = Math.max(0.18, TIRE_R - TIRE_TUBE);
-            const TRACK = 1.55; // колея ~1550 мм
-            const HALF_W = W * 0.5;
+            const L = 4.513, W = 1.862, H = 1.696, WB = 2.670;
+            const Y_FA = WB / 2;      // 1.335
+            const Y_RA = -WB / 2;     // -1.335
+            const Y_F = L / 2;        // 2.2565 бампер
+            const Y_B = -L / 2;       // -2.2565
+            const TIRE_R = 0.5 * 18 * 0.0254 + 0.225 * 0.55; // ~0.352
+            const TUBE = 0.10;
+            const MAJOR = TIRE_R - TUBE;
+            const TRACK = 1.55;
+            const HX = TRACK / 2;
+            const Z_ROCKER = 0.32;
+            const Z_BELT = 1.08;
+            const Z_ROOF = H - 0.04; // ~1.66
 
-            const paint = new THREE.MeshStandardMaterial({ color: 0xcfd6de, metalness: 0.62, roughness: 0.26 });
-            const paintDark = new THREE.MeshStandardMaterial({ color: 0x1c222a, metalness: 0.45, roughness: 0.38 });
-            const black = new THREE.MeshStandardMaterial({ color: 0x0e0e10, metalness: 0.3, roughness: 0.6 });
+            const red = new THREE.MeshStandardMaterial({ color: 0xc4121a, metalness: 0.55, roughness: 0.32 });
+            const redDeep = new THREE.MeshStandardMaterial({ color: 0x8a0c12, metalness: 0.5, roughness: 0.38 });
+            const black = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.35, roughness: 0.55 });
+            const glossBlack = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, metalness: 0.7, roughness: 0.22 });
             const glass = new THREE.MeshStandardMaterial({
-                color: 0x152030, metalness: 0.15, roughness: 0.06, transparent: true, opacity: 0.52
+                color: 0x1a2430, metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.55
             });
-            const chrome = new THREE.MeshStandardMaterial({ color: 0xeef1f4, metalness: 0.96, roughness: 0.16 });
+            const chrome = new THREE.MeshStandardMaterial({ color: 0xe8ecf0, metalness: 0.95, roughness: 0.18 });
+            const silver = new THREE.MeshStandardMaterial({ color: 0xc0c6cc, metalness: 0.85, roughness: 0.25 });
             const led = new THREE.MeshStandardMaterial({
-                color: 0xf5f8ff, emissive: 0x7a8ea8, emissiveIntensity: 0.4, metalness: 0.35, roughness: 0.22
+                color: 0xf4f7ff, emissive: 0x8899aa, emissiveIntensity: 0.45, metalness: 0.3, roughness: 0.25
             });
             const tail = new THREE.MeshStandardMaterial({
-                color: 0xff2030, emissive: 0x8a0010, emissiveIntensity: 0.5, metalness: 0.2, roughness: 0.35
-            });
-            const silver = new THREE.MeshStandardMaterial({ color: 0xb4bcc4, metalness: 0.88, roughness: 0.2 });
-
-            // Боковой контур по чертежу (Y длина, Z высота от земли) → Extrude → оси сцены
-            // Точки: задний бампер → крыша → капот → передний бампер → днище
-            const sidePts = [
-                [Y_REAR + 0.02, GC + 0.08],
-                [Y_REAR + 0.12, GC + 0.02],
-                [Y_RA - 0.35, GC + 0.02],
-                [Y_RA + 0.35, GC + 0.02],
-                [Y_FA - 0.35, GC + 0.02],
-                [Y_FA + 0.35, GC + 0.02],
-                [Y_FRONT - 0.18, GC + 0.04],
-                [Y_FRONT - 0.04, GC + 0.12],
-                [Y_FRONT, 0.42],
-                [Y_FRONT - 0.02, 0.62],
-                [Y_FRONT - 0.08, 0.82],
-                [Y_FRONT - 0.22, 0.98],
-                [Y_FA + 0.35, 1.08],          // капот
-                [Y_FA - 0.15, 1.18],          // низ лобового
-                [Y_FA - 0.55, 1.48],          // A-стойка / крыша
-                [0.15, 1.62],
-                [-0.55, H - 0.06],            // крыша почти плоская
-                [Y_RA + 0.15, H - 0.08],
-                [Y_RA - 0.35, 1.52],          // C-стойка
-                [Y_REAR + 0.35, 1.28],
-                [Y_REAR + 0.12, 0.95],
-                [Y_REAR + 0.04, 0.62],
-                [Y_REAR, 0.42],
-                [Y_REAR + 0.02, GC + 0.08]
-            ];
-            const side = new THREE.Shape();
-            side.moveTo(sidePts[0][0], sidePts[0][1]);
-            for (let i = 1; i < sidePts.length; i++) side.lineTo(sidePts[i][0], sidePts[i][1]);
-
-            const bodyW = W * 0.96;
-            const bodyGeo = new THREE.ExtrudeGeometry(side, {
-                depth: bodyW,
-                bevelEnabled: true,
-                bevelThickness: 0.028,
-                bevelSize: 0.032,
-                bevelSegments: 3
-            });
-            bodyGeo.translate(0, 0, -bodyW / 2);
-            bodyGeo.rotateY(-Math.PI / 2);
-            bodyGeo.rotateX(Math.PI / 2);
-            root.add(new THREE.Mesh(bodyGeo, paint));
-
-            // Пороги / нижний пластик
-            const skirt = new THREE.Mesh(new THREE.BoxGeometry(W * 0.98, L * 0.90, 0.14), black);
-            skirt.position.set(0, 0.02, GC + 0.12);
-            root.add(skirt);
-
-            // Капот (плоскость по чертежу)
-            const hood = new THREE.Mesh(new THREE.BoxGeometry(W * 0.90, FRONT_OH + 0.55, 0.06), paint);
-            hood.position.set(0, Y_FA + 0.20, 1.05);
-            hood.rotation.x = -0.06;
-            root.add(hood);
-
-            // Крыша + рейлинги
-            const roof = new THREE.Mesh(new THREE.BoxGeometry(W * 0.78, WB * 0.72, 0.05), paintDark);
-            roof.position.set(0, -0.05, H - 0.08);
-            root.add(roof);
-            [-W * 0.36, W * 0.36].forEach(x => {
-                const rail = new THREE.Mesh(new THREE.BoxGeometry(0.035, WB * 0.65, 0.03), silver);
-                rail.position.set(x, -0.02, H - 0.02);
-                root.add(rail);
+                color: 0xff1e2e, emissive: 0x990010, emissiveIntensity: 0.55, metalness: 0.2, roughness: 0.35
             });
 
-            // Остекление
-            const windshield = new THREE.Mesh(new THREE.BoxGeometry(W * 0.82, 0.05, 0.70), glass);
-            windshield.position.set(0, Y_FA - 0.35, 1.32);
-            windshield.rotation.x = -0.52;
-            root.add(windshield);
-            const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(W * 0.80, 0.05, 0.52), glass);
-            rearGlass.position.set(0, Y_RA - 0.15, 1.30);
-            rearGlass.rotation.x = 0.38;
-            root.add(rearGlass);
-            [-HALF_W + 0.05, HALF_W - 0.05].forEach(x => {
-                const sw = new THREE.Mesh(new THREE.BoxGeometry(0.04, WB * 0.58, 0.46), glass);
-                sw.position.set(x, -0.02, 1.22);
-                root.add(sw);
+            function box(w, l, h, mat, x, y, z, rx = 0, ry = 0, rz = 0) {
+                const m = new THREE.Mesh(new THREE.BoxGeometry(w, l, h), mat);
+                m.position.set(x, y, z);
+                if (rx) m.rotation.x = rx;
+                if (ry) m.rotation.y = ry;
+                if (rz) m.rotation.z = rz;
+                root.add(m);
+                return m;
+            }
+
+            // ——— нижний кузов (двери / пороги) ———
+            box(W * 0.98, L * 0.88, Z_BELT - Z_ROCKER, red, 0, 0.02, (Z_ROCKER + Z_BELT) / 2);
+
+            // чёрный пластик низа
+            box(W * 1.01, L * 0.86, 0.14, black, 0, 0.02, Z_ROCKER + 0.02);
+
+            // ——— капот ———
+            const hoodLen = Y_F - 0.08 - (Y_FA - 0.15);
+            box(W * 0.92, hoodLen, 0.08, red, 0, Y_FA + hoodLen * 0.28, Z_BELT - 0.02, -0.07);
+
+            // передний бампер
+            box(W * 0.96, 0.28, 0.42, redDeep, 0, Y_F - 0.16, 0.55);
+
+            // ——— кабина / крыша (двухцвет: чёрная) ———
+            const cabinY0 = Y_RA + 0.15;
+            const cabinY1 = Y_FA - 0.25;
+            const cabinLen = cabinY1 - cabinY0;
+            const cabinMid = (cabinY0 + cabinY1) / 2;
+            box(W * 0.88, cabinLen, 0.10, glossBlack, 0, cabinMid, Z_ROOF);           // крыша
+            box(W * 0.90, cabinLen * 0.98, Z_ROOF - Z_BELT - 0.08, red, 0, cabinMid, (Z_BELT + Z_ROOF) / 2 - 0.02);
+
+            // рейлинги
+            box(0.04, cabinLen * 0.85, 0.03, silver, -W * 0.34, cabinMid, Z_ROOF + 0.04);
+            box(0.04, cabinLen * 0.85, 0.03, silver,  W * 0.34, cabinMid, Z_ROOF + 0.04);
+
+            // ——— багажник / корма ———
+            box(W * 0.94, Math.abs(Y_B) - Math.abs(cabinY0) + 0.1, 0.55, red, 0, (Y_B + cabinY0) / 2 + 0.05, Z_BELT - 0.15);
+            box(W * 0.90, 0.22, 0.35, redDeep, 0, Y_B + 0.14, 0.55);
+
+            // ——— остекление ———
+            box(W * 0.82, 0.06, 0.62, glass, 0, cabinY1 - 0.02, Z_BELT + 0.32, -0.48); // лобовое
+            box(W * 0.80, 0.06, 0.48, glass, 0, cabinY0 + 0.05, Z_BELT + 0.30, 0.35);  // заднее
+            box(0.05, cabinLen * 0.72, 0.42, glass, -W * 0.45, cabinMid, Z_BELT + 0.28);
+            box(0.05, cabinLen * 0.72, 0.42, glass,  W * 0.45, cabinMid, Z_BELT + 0.28);
+            // хром по низу окон
+            box(W * 0.86, cabinLen * 0.9, 0.025, chrome, 0, cabinMid, Z_BELT + 0.04);
+
+            // стойки (floating roof)
+            [cabinY1 - 0.08, cabinMid, cabinY0 + 0.12].forEach(y => {
+                box(0.07, 0.10, 0.48, glossBlack, -W * 0.44, y, Z_BELT + 0.30);
+                box(0.07, 0.10, 0.48, glossBlack,  W * 0.44, y, Z_BELT + 0.30);
             });
 
-            // Чёрные стойки (floating roof)
-            [Y_FA - 0.55, 0.05, Y_RA + 0.25].forEach(y => {
-                [-HALF_W + 0.06, HALF_W - 0.06].forEach(x => {
-                    const p = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.11, 0.52), black);
-                    p.position.set(x, y, 1.28);
-                    root.add(p);
-                });
-            });
-
-            // Передняя «морда»: алмазная решётка Chery
-            const grilleY = Y_FRONT - 0.04;
-            const grilleFrame = new THREE.Mesh(new THREE.BoxGeometry(W * 0.84, 0.07, 0.52), black);
-            grilleFrame.position.set(0, grilleY, 0.62);
-            root.add(grilleFrame);
-            const grillePlate = new THREE.Mesh(new THREE.BoxGeometry(W * 0.76, 0.035, 0.40), chrome);
-            grillePlate.position.set(0, grilleY + 0.03, 0.62);
-            root.add(grillePlate);
+            // ——— морда: алмазная решётка ———
+            const gY = Y_F - 0.05;
+            box(W * 0.82, 0.08, 0.58, black, 0, gY, 0.68);
+            box(W * 0.74, 0.04, 0.46, chrome, 0, gY + 0.03, 0.68);
             for (let row = 0; row < 5; row++) {
-                for (let col = 0; col < 11; col++) {
-                    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.025, 0.06), black);
-                    cell.position.set(-0.65 + col * 0.13, grilleY + 0.045, 0.46 + row * 0.08);
+                for (let col = 0; col < 10; col++) {
+                    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.03, 0.055), chrome);
+                    cell.position.set(-0.58 + col * 0.128, gY + 0.05, 0.50 + row * 0.085);
                     cell.rotation.z = Math.PI / 4;
                     root.add(cell);
                 }
             }
-            const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.035, 22), silver);
+            // логотип
+            const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.04, 20), silver);
             badge.rotation.x = Math.PI / 2;
-            badge.position.set(0, grilleY + 0.05, 0.90);
+            badge.position.set(0, gY + 0.06, 0.98);
             root.add(badge);
 
-            [-0.70, 0.70].forEach(x => {
-                const hl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.07, 0.11), led);
-                hl.position.set(x, grilleY - 0.01, 0.80);
-                root.add(hl);
-            });
-            const lowerIntake = new THREE.Mesh(new THREE.BoxGeometry(W * 0.62, 0.09, 0.20), black);
-            lowerIntake.position.set(0, grilleY - 0.02, 0.38);
-            root.add(lowerIntake);
+            // фары
+            box(0.46, 0.08, 0.12, led, -0.68, gY - 0.01, 0.86);
+            box(0.46, 0.08, 0.12, led,  0.68, gY - 0.01, 0.86);
+            // нижние воздухозаборники
+            box(0.38, 0.08, 0.28, black, -0.62, gY - 0.02, 0.38);
+            box(0.38, 0.08, 0.28, black,  0.62, gY - 0.02, 0.38);
+            box(W * 0.42, 0.08, 0.18, black, 0, gY - 0.02, 0.36);
+            box(W * 0.70, 0.06, 0.04, chrome, 0, gY - 0.04, 0.22);
 
-            // Задняя LED-полоса
-            const tailY = Y_REAR + 0.05;
-            const tailBar = new THREE.Mesh(new THREE.BoxGeometry(W * 0.88, 0.07, 0.09), tail);
-            tailBar.position.set(0, tailY, 0.98);
-            root.add(tailBar);
-            [-0.58, 0.58].forEach(x => {
-                const tl = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.06, 0.16), tail);
-                tl.position.set(x, tailY - 0.01, 0.84);
-                root.add(tl);
-            });
+            // ——— задние фонари ———
+            box(W * 0.90, 0.08, 0.10, tail, 0, Y_B + 0.06, 0.98);
+            box(0.38, 0.07, 0.18, tail, -0.58, Y_B + 0.05, 0.82);
+            box(0.38, 0.07, 0.18, tail,  0.58, Y_B + 0.05, 0.82);
 
-            [-HALF_W + 0.02, HALF_W - 0.02].forEach(x => {
-                const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, 0.11), paintDark);
-                mirror.position.set(x, Y_FA - 0.55, 1.08);
-                root.add(mirror);
-            });
+            // зеркала
+            box(0.16, 0.22, 0.12, red, -W * 0.52, cabinY1 - 0.15, Z_BELT + 0.05);
+            box(0.16, 0.22, 0.12, red,  W * 0.52, cabinY1 - 0.15, Z_BELT + 0.05);
 
+            // колёсные арки (чёрный пластик)
             function arch(x, y) {
-                const a = new THREE.Mesh(new THREE.TorusGeometry(TIRE_R + 0.08, 0.06, 8, 20, Math.PI), black);
+                const a = new THREE.Mesh(new THREE.TorusGeometry(TIRE_R + 0.10, 0.07, 8, 18, Math.PI), black);
                 a.rotation.y = Math.PI / 2;
                 a.rotation.z = Math.PI;
-                a.position.set(x, y, TIRE_R + 0.02);
+                a.position.set(x, y, TIRE_R + 0.04);
                 root.add(a);
             }
-            const hx = TRACK / 2;
-            arch(-hx, Y_FA); arch(hx, Y_FA);
-            arch(-hx, Y_RA); arch(hx, Y_RA);
+            arch(-HX - 0.02, Y_FA); arch(HX + 0.02, Y_FA);
+            arch(-HX - 0.02, Y_RA); arch(HX + 0.02, Y_RA);
 
             function wheel(x, y) {
-                const tire = new THREE.Mesh(new THREE.TorusGeometry(TIRE_MAJOR, TIRE_TUBE, 14, 28), black);
+                const tire = new THREE.Mesh(new THREE.TorusGeometry(MAJOR, TUBE, 12, 24), black);
                 tire.rotation.y = Math.PI / 2;
                 tire.position.set(x, y, TIRE_R);
                 root.add(tire);
-                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.20, 0.20, 0.17, 20), silver);
+                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.16, 18), silver);
                 rim.rotation.z = Math.PI / 2;
                 rim.position.copy(tire.position);
                 root.add(rim);
-                const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.19, 12), chrome);
-                hub.rotation.z = Math.PI / 2;
-                hub.position.copy(tire.position);
-                root.add(hub);
+                // спицы
+                for (let i = 0; i < 5; i++) {
+                    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.03), chrome);
+                    const a = (i / 5) * Math.PI * 2;
+                    spoke.position.set(x + Math.cos(a) * 0.02, y + Math.sin(a) * 0.09, TIRE_R);
+                    spoke.rotation.z = a;
+                    root.add(spoke);
+                }
             }
-            wheel(-hx, Y_FA); wheel(hx, Y_FA);
-            wheel(-hx, Y_RA); wheel(hx, Y_RA);
+            wheel(-HX, Y_FA); wheel(HX, Y_FA);
+            wheel(-HX, Y_RA); wheel(HX, Y_RA);
 
             root.userData.isTourCar = true;
             root.userData.meshRev = TOUR_CAR_MESH_REV;
             root.userData.carModel = 'Chery Tiggo 7 Pro';
-            root.userData.dims = { L, W, H, WB, TIRE_R };
             return root;
         }
 
@@ -13915,7 +13870,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=58').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=59').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
