@@ -2134,7 +2134,7 @@
     <div class="modal-backdrop" id="bcfModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bcfModalTitle" style="width:min(560px,100%)">
             <h3 id="bcfModalTitle">BCF-заметки</h3>
-            <div class="bulk-note">Кликните по модели, чтобы поставить точку замечания. Привязка — к <b>IFC GlobalId</b> элемента (устойчиво при обновлении файла, в отличие от ExpressID). Экспорт — <b>.bcfzip</b> (BCF 2.1). После входа — общий <b>код обмена</b> для экспертизы.</div>
+            <div class="bulk-note">Кликните по модели, чтобы поставить точку замечания. Привязка — к <b>IFC GlobalId</b> элемента (устойчиво при обновлении файла, в отличие от ExpressID). Экспорт / импорт — <b>.bcfzip</b> (BCF 2.1). После входа — общий <b>код обмена</b> для экспертизы.</div>
             <div class="prop small" id="bcfCloudBlock">
                 <div class="k">Облако (аккаунт)</div>
                 <div class="bulk-note" id="bcfCloudStatus">Локально в браузере. Войдите (Supabase), чтобы синхронизировать.</div>
@@ -2153,10 +2153,12 @@
                 <input class="editInput" id="bcfComment" placeholder="Описание замечания">
             </div>
             <div class="bulk-note" id="bcfPickStatus">Точка не выбрана. Включите режим «Поставить точку» и кликните по геометрии.</div>
-            <div class="modal-actions" style="justify-content:flex-start">
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
                 <button class="btn" id="bcfPickBtn">Поставить точку</button>
                 <button class="btn load-btn" id="bcfAddBtn">Добавить заметку</button>
                 <button class="btn" id="bcfExportBtn">⬇ Экспорт BCF</button>
+                <button class="btn" id="bcfImportBtn" title="Импорт .bcfzip (BCF 2.1)">⬆ Импорт BCF</button>
+                <input type="file" id="bcfImportFile" accept=".bcfzip,.bcf,.zip,application/zip" hidden>
             </div>
             <div id="bcfList" class="bulk-note" style="margin-top:10px;max-height:240px;overflow:auto">Заметок пока нет.</div>
             <div class="modal-actions">
@@ -2673,7 +2675,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'vehicles-glb-v5';
+        const COMPOSER_BUILD = 'bcf-import-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -9892,6 +9894,222 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
+        function bcfLocalName(node) {
+            if (!node) return '';
+            return node.localName || String(node.tagName || '').replace(/^.*:/, '');
+        }
+
+        function bcfChildEls(parent, localName) {
+            if (!parent?.children) return [];
+            const want = String(localName).toLowerCase();
+            return [...parent.children].filter(c => bcfLocalName(c).toLowerCase() === want);
+        }
+
+        function bcfDescendantEls(root, localName) {
+            if (!root) return [];
+            const want = String(localName).toLowerCase();
+            return [...root.getElementsByTagName('*')].filter(el => bcfLocalName(el).toLowerCase() === want);
+        }
+
+        function bcfFirstChild(parent, localName) {
+            return bcfChildEls(parent, localName)[0] || null;
+        }
+
+        function bcfText(parent, localName) {
+            const el = bcfFirstChild(parent, localName);
+            return (el?.textContent || '').trim();
+        }
+
+        function bcfVec3(parent, localName) {
+            const el = bcfFirstChild(parent, localName);
+            if (!el) return null;
+            const x = parseFloat(bcfText(el, 'X'));
+            const y = parseFloat(bcfText(el, 'Y'));
+            const z = parseFloat(bcfText(el, 'Z'));
+            if (![x, y, z].every(Number.isFinite)) return null;
+            return [x, y, z];
+        }
+
+        function bcfParseCameraFromViewpointDoc(vpDoc) {
+            const root = vpDoc?.documentElement;
+            if (!root) return null;
+            const persp = bcfFirstChild(root, 'PerspectiveCamera') || bcfDescendantEls(root, 'PerspectiveCamera')[0];
+            const ortho = bcfFirstChild(root, 'OrthogonalCamera') || bcfDescendantEls(root, 'OrthogonalCamera')[0];
+            const camEl = persp || ortho;
+            if (!camEl) return null;
+            const position = bcfVec3(camEl, 'CameraViewPoint');
+            const direction = bcfVec3(camEl, 'CameraDirection');
+            const up = bcfVec3(camEl, 'CameraUpVector') || [0, 0, 1];
+            if (!position || !direction) return null;
+            const dir = new THREE.Vector3(direction[0], direction[1], direction[2]);
+            if (dir.lengthSq() < 1e-12) dir.set(0, 1, 0);
+            else dir.normalize();
+            const target = [
+                position[0] + dir.x,
+                position[1] + dir.y,
+                position[2] + dir.z
+            ];
+            return { position, target, up };
+        }
+
+        function bcfParseIfcGuidsFromViewpointDoc(vpDoc) {
+            const root = vpDoc?.documentElement;
+            if (!root) return [];
+            const guids = [];
+            const seen = new Set();
+            bcfDescendantEls(root, 'Component').forEach(comp => {
+                const gid = (comp.getAttribute('IfcGuid') || '').trim();
+                if (!gid || seen.has(gid)) return;
+                seen.add(gid);
+                guids.push(gid);
+            });
+            return guids;
+        }
+
+        /**
+         * Импорт BCF 2.1 (.bcfzip): Topic + Viewpoint → заметки Composer.
+         * Повторный Guid пропускается. point = target камеры (в файле маркера нет).
+         */
+        async function importBcfZip(file) {
+            if (!file) return { added: 0, skipped: 0 };
+            const JSZip = await ensureJSZip();
+            const zip = await JSZip.loadAsync(file);
+            const existing = new Set(bcfTopics.map(t => t.guid));
+            const markupPaths = Object.keys(zip.files)
+                .filter(p => !zip.files[p].dir && /(^|\/)markup\.bcf$/i.test(p))
+                .sort();
+            if (!markupPaths.length) {
+                throw new Error('В архиве нет markup.bcf — это не похоже на BCF.');
+            }
+
+            const toAdd = [];
+            let skipped = 0;
+
+            for (const markupPath of markupPaths) {
+                const folder = markupPath.includes('/')
+                    ? markupPath.slice(0, markupPath.lastIndexOf('/') + 1)
+                    : '';
+                const markupXml = await zip.file(markupPath).async('string');
+                const markupDoc = new DOMParser().parseFromString(markupXml, 'application/xml');
+                if (markupDoc.querySelector('parsererror')) {
+                    console.warn('[BCF import] битый XML', markupPath);
+                    skipped += 1;
+                    continue;
+                }
+                const markupRoot = markupDoc.documentElement;
+                const topicEl = bcfFirstChild(markupRoot, 'Topic') || bcfDescendantEls(markupDoc, 'Topic')[0];
+                if (!topicEl) {
+                    skipped += 1;
+                    continue;
+                }
+                const guid = (topicEl.getAttribute('Guid') || folder.replace(/\/$/, '') || '').trim() || uuid4();
+                if (existing.has(guid) || toAdd.some(t => t.guid === guid)) {
+                    skipped += 1;
+                    continue;
+                }
+
+                const title = bcfText(topicEl, 'Title') || 'Импорт BCF';
+                const description = bcfText(topicEl, 'Description');
+                const created = bcfText(topicEl, 'CreationDate') || new Date().toISOString();
+                const authorEmail = bcfText(topicEl, 'CreationAuthor') || null;
+
+                let comment = description;
+                let commentGuid = uuid4();
+                const commentBlocks = bcfChildEls(markupRoot, 'Comment');
+                if (commentBlocks.length) {
+                    const block = commentBlocks[0];
+                    commentGuid = (block.getAttribute('Guid') || '').trim() || commentGuid;
+                    const body = bcfText(block, 'Comment');
+                    if (body) comment = body;
+                    else if (!comment) comment = title;
+                } else if (!comment) {
+                    comment = title;
+                }
+
+                let viewpointGuid = uuid4();
+                let vpRel = 'viewpoint.bcfv';
+                const vpBlocks = bcfChildEls(markupRoot, 'Viewpoints');
+                if (vpBlocks.length) {
+                    const block = vpBlocks[0];
+                    viewpointGuid = (block.getAttribute('Guid') || '').trim() || viewpointGuid;
+                    const rel = bcfText(block, 'Viewpoint');
+                    if (rel) vpRel = rel.replace(/^\.\//, '');
+                }
+
+                let camState = {
+                    position: camera.position.toArray(),
+                    target: controls.target.toArray(),
+                    up: camera.up.toArray()
+                };
+                let elements = [];
+                const vpPath = folder + vpRel;
+                const vpFile = zip.file(vpPath) || zip.file(folder + 'viewpoint.bcfv');
+                if (vpFile) {
+                    const vpXml = await vpFile.async('string');
+                    const vpDoc = new DOMParser().parseFromString(vpXml, 'application/xml');
+                    if (!vpDoc.querySelector('parsererror')) {
+                        const parsedCam = bcfParseCameraFromViewpointDoc(vpDoc);
+                        if (parsedCam) camState = parsedCam;
+                        const vpRoot = vpDoc.documentElement;
+                        const vg = (vpRoot?.getAttribute('Guid') || '').trim();
+                        if (vg) viewpointGuid = vg;
+                        elements = bcfParseIfcGuidsFromViewpointDoc(vpDoc).map(ifcGlobalId => ({
+                            modelID: null,
+                            expressID: null,
+                            ifcGlobalId,
+                            ifcClass: null,
+                            name: null,
+                            filename: null,
+                            projectGlobalId: null
+                        }));
+                    }
+                }
+
+                const point = (camState.target || camState.position || [0, 0, 0]).slice(0, 3);
+                toAdd.push({
+                    guid,
+                    commentGuid,
+                    viewpointGuid,
+                    title,
+                    comment,
+                    created,
+                    point,
+                    selection: elements[0] || null,
+                    elements,
+                    authorEmail,
+                    camera: camState
+                });
+            }
+
+            if (!toAdd.length) {
+                return { added: 0, skipped };
+            }
+
+            const sync = globalThis.BimLvaBcfSync;
+            const cloudOk = !!(sync?.authReady?.() && bcfCloudNotebook?.id);
+            for (const topic of toAdd) {
+                if (cloudOk) {
+                    try {
+                        const cloudId = await sync.insertTopic(bcfCloudNotebook.id, topic);
+                        if (cloudId) topic._cloudRowId = cloudId;
+                    } catch (err) {
+                        console.warn('[BCF import] облако:', err);
+                    }
+                }
+                bcfTopics.push(topic);
+                existing.add(topic.guid);
+            }
+            renderBcfList();
+            syncBcfMarkers();
+            if (cloudOk) {
+                updateBcfCloudStatus(
+                    `Облако: код ${bcfCloudNotebook.share_code} · заметок: ${bcfTopics.length}`
+                );
+            }
+            trackUsage('import_bcf', { added: toAdd.length, skipped });
+            return { added: toAdd.length, skipped };
+        }
+
         async function exportBcfZip() {
             if (!bcfTopics.length) {
                 alert('Нет заметок для экспорта.');
@@ -10027,6 +10245,28 @@ ${componentXml || '    '}
         });
         $('bcfExportBtn').addEventListener('click', () => {
             exportBcfZip().catch(err => alert('Ошибка экспорта BCF: ' + err.message));
+        });
+        $('bcfImportBtn')?.addEventListener('click', () => {
+            $('bcfImportFile')?.click();
+        });
+        $('bcfImportFile')?.addEventListener('change', async () => {
+            const input = $('bcfImportFile');
+            const file = input?.files?.[0];
+            if (!file) return;
+            try {
+                const { added, skipped } = await importBcfZip(file);
+                if (!added && !skipped) {
+                    alert('В файле не найдено тем BCF.');
+                } else if (!added) {
+                    alert(`Новых заметок нет (пропущено дублей/ошибок: ${skipped}).`);
+                } else {
+                    alert(`Импортировано заметок: ${added}${skipped ? ` · пропущено: ${skipped}` : ''}.`);
+                }
+            } catch (err) {
+                alert('Ошибка импорта BCF: ' + (err.message || err));
+            } finally {
+                if (input) input.value = '';
+            }
         });
         $('bcfCloudRefreshBtn')?.addEventListener('click', () => {
             refreshBcfFromCloud().catch(() => {});
