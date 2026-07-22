@@ -2673,7 +2673,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'vehicles-glb-v3';
+        const COMPOSER_BUILD = 'vehicles-glb-v4';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -13056,7 +13056,7 @@ ${componentXml || '    '}
         const DRIVE_ACCEL = 48;
         const DRIVE_TURN_MAX = 0.45;
         const DRIVE_STEER_SMOOTH = 2.4;
-        const TOUR_VEHICLE_REV = 8;
+        const TOUR_VEHICLE_REV = 9;
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
         const _driveDown = new THREE.Vector3(0, 0, -1);
@@ -13168,10 +13168,13 @@ ${componentXml || '    '}
 
         /**
          * Вписать GLB в оси тура: Y — вперёд, X — вправо, Z — вверх, низ на z=0.
+         * ToyCar: убираем showcase-ткань Fabric; нос модели в glTF смотрит в −Z → после
+         * Y-up→Z-up это −Y, поэтому +π по yaw, иначе камера «сзади» видит морду.
+         * Самолёт: кладём фюзеляж горизонтально (иначе Z≫X,Y и uniform scale раздувает модель).
          */
         function fitGltfToTourAxes(gltfScene, opts = {}) {
             const kind = opts.kind || 'car';
-            const targetLength = opts.targetLength || (kind === 'plane' ? 14 : 4.6);
+            const targetLength = opts.targetLength || (kind === 'plane' ? 1.4 : 4.6);
             // root: только position/quaternion от тура (не scale!)
             // offset: центрирование в мировых метрах
             // inner: rotation + uniform scale модели
@@ -13183,8 +13186,11 @@ ${componentXml || '    '}
 
             const strip = [];
             model.traverse(o => {
+                const name = o.name || '';
                 if (o.isCamera || o.isLight) strip.push(o);
-                else if (/^camera/i.test(o.name || '')) strip.push(o);
+                else if (/^camera/i.test(name)) strip.push(o);
+                // красная «простыня» / постамент из Khronos ToyCar showcase
+                else if (/fabric|cloth|sheet|drape|pedestal|showcase/i.test(name)) strip.push(o);
             });
             strip.forEach(o => o.parent?.remove(o));
 
@@ -13197,9 +13203,23 @@ ${componentXml || '    '}
 
             let box = computeMeshWorldBox(root);
             let size = box.getSize(new THREE.Vector3());
-            // Нос вдоль +Y
+            // Если модель «стоит» (длина по Z) — положить: Z → +Y
+            if (size.z > size.x && size.z > size.y) {
+                inner.rotation.x += Math.PI / 2;
+                root.updateMatrixWorld(true);
+                box = computeMeshWorldBox(root);
+                size = box.getSize(new THREE.Vector3());
+            }
+            // Нос вдоль +Y (длинная горизонталь)
             if (size.x > size.y * 1.05) {
                 inner.rotation.z += Math.PI / 2;
+                root.updateMatrixWorld(true);
+                box = computeMeshWorldBox(root);
+                size = box.getSize(new THREE.Vector3());
+            }
+            // ToyCar / типичный glTF: нос был +Z → после Rx(π/2) смотрит в −Y
+            if (kind === 'car') {
+                inner.rotation.z += Math.PI;
                 root.updateMatrixWorld(true);
                 box = computeMeshWorldBox(root);
                 size = box.getSize(new THREE.Vector3());
@@ -13222,6 +13242,7 @@ ${componentXml || '    '}
                 y: +size.y.toFixed(2),
                 z: +size.z.toFixed(2),
                 minZ: +minZ.toFixed(3),
+                targetLength,
                 stripped: strip.length
             });
 
@@ -13297,7 +13318,7 @@ ${componentXml || '    '}
 
         async function loadTourVehicleGltf(kind) {
             const url = tourVehicleUrl(kind);
-            const targetLength = kind === 'plane' ? 14 : 4.6;
+            const targetLength = kind === 'plane' ? 1.4 : 4.6;
             try {
                 console.info('[BIM.LVA] loading vehicle', url);
                 const gltf = await gltfLoader.loadAsync(url);
