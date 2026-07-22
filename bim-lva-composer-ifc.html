@@ -2673,7 +2673,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'vehicles-glb-v2';
+        const COMPOSER_BUILD = 'vehicles-glb-v3';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -13056,7 +13056,7 @@ ${componentXml || '    '}
         const DRIVE_ACCEL = 48;
         const DRIVE_TURN_MAX = 0.45;
         const DRIVE_STEER_SMOOTH = 2.4;
-        const TOUR_VEHICLE_REV = 7;
+        const TOUR_VEHICLE_REV = 8;
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
         const _driveDown = new THREE.Vector3(0, 0, -1);
@@ -13172,11 +13172,15 @@ ${componentXml || '    '}
         function fitGltfToTourAxes(gltfScene, opts = {}) {
             const kind = opts.kind || 'car';
             const targetLength = opts.targetLength || (kind === 'plane' ? 14 : 4.6);
+            // root: только position/quaternion от тура (не scale!)
+            // offset: центрирование в мировых метрах
+            // inner: rotation + uniform scale модели
             const root = new THREE.Group();
             root.name = opts.name || (kind === 'plane' ? 'TourPlane' : 'TourCar');
-
+            const offset = new THREE.Group();
             const inner = new THREE.Group();
             const model = gltfScene.clone(true);
+
             const strip = [];
             model.traverse(o => {
                 if (o.isCamera || o.isLight) strip.push(o);
@@ -13187,65 +13191,39 @@ ${componentXml || '    '}
             inner.add(model);
             // Y-up → Z-up
             inner.rotation.x = Math.PI / 2;
-            root.add(inner);
+            offset.add(inner);
+            root.add(offset);
             root.updateMatrixWorld(true);
 
             let box = computeMeshWorldBox(root);
             let size = box.getSize(new THREE.Vector3());
-            let horiz = Math.max(size.x, size.y, 1e-9);
-            root.scale.setScalar(targetLength / horiz);
-            root.updateMatrixWorld(true);
-
-            box = computeMeshWorldBox(root);
-            size = box.getSize(new THREE.Vector3());
+            // Нос вдоль +Y
             if (size.x > size.y * 1.05) {
                 inner.rotation.z += Math.PI / 2;
                 root.updateMatrixWorld(true);
+                box = computeMeshWorldBox(root);
+                size = box.getSize(new THREE.Vector3());
             }
 
-            const center = new THREE.Vector3();
-            box = computeMeshWorldBox(root);
-            center.copy(box.getCenter(new THREE.Vector3()));
-            inner.position.x -= center.x;
-            inner.position.y -= center.y;
-            root.updateMatrixWorld(true);
-            box = computeMeshWorldBox(root);
-            inner.position.z -= box.min.z;
+            const len = Math.max(size.y, size.x, 1e-9);
+            inner.scale.setScalar(targetLength / len);
             root.updateMatrixWorld(true);
 
             box = computeMeshWorldBox(root);
-            size = box.getSize(new THREE.Vector3());
-            const sY = targetLength / Math.max(size.y, 1e-9);
-            root.scale.multiplyScalar(sY);
-            root.updateMatrixWorld(true);
-            box = computeMeshWorldBox(root);
-            center.copy(box.getCenter(new THREE.Vector3()));
-            inner.position.x -= center.x;
-            inner.position.y -= center.y;
-            root.updateMatrixWorld(true);
-            box = computeMeshWorldBox(root);
-            inner.position.z -= box.min.z;
+            const center = box.getCenter(new THREE.Vector3());
+            // offset в мире (root identity) — корректно при любом inner.scale
+            offset.position.set(-center.x, -center.y, -box.min.z);
             root.updateMatrixWorld(true);
 
             size = computeMeshWorldBox(root).getSize(new THREE.Vector3());
+            const minZ = computeMeshWorldBox(root).min.z;
             console.info('[BIM.LVA] vehicle fit', kind, {
-                x: +size.x.toFixed(2), y: +size.y.toFixed(2), z: +size.z.toFixed(2)
+                x: +size.x.toFixed(2),
+                y: +size.y.toFixed(2),
+                z: +size.z.toFixed(2),
+                minZ: +minZ.toFixed(3),
+                stripped: strip.length
             });
-            if (!(size.y > 0.5 && size.y < 80)) {
-                console.warn('[BIM.LVA] suspicious vehicle size, using fallback scale');
-                root.scale.setScalar(1);
-                inner.position.set(0, 0, 0);
-                inner.rotation.set(Math.PI / 2, 0, 0);
-                root.updateMatrixWorld(true);
-                box = computeMeshWorldBox(root);
-                size = box.getSize(new THREE.Vector3());
-                horiz = Math.max(size.x, size.y, 1e-9);
-                root.scale.setScalar(targetLength / horiz);
-                root.updateMatrixWorld(true);
-                box = computeMeshWorldBox(root);
-                center.copy(box.getCenter(new THREE.Vector3()));
-                inner.position.set(-center.x, -center.y, -box.min.z);
-            }
 
             root.traverse(o => {
                 if (o.isMesh) {
@@ -13253,6 +13231,16 @@ ${componentXml || '    '}
                     o.receiveShadow = false;
                     o.frustumCulled = false;
                     o.visible = true;
+                    // если текстуры не подгрузились — не оставлять чёрную дыру
+                    const mats = Array.isArray(o.material) ? o.material : [o.material];
+                    mats.forEach(m => {
+                        if (!m) return;
+                        if (m.map === null && m.color) {
+                            // ok
+                        }
+                        m.side = THREE.DoubleSide;
+                        m.needsUpdate = true;
+                    });
                 }
             });
             root.userData.isTourCar = true;
@@ -14271,7 +14259,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=62').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=63').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
