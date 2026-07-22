@@ -2673,7 +2673,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'vehicles-glb-v4';
+        const COMPOSER_BUILD = 'vehicles-glb-v5';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -13056,7 +13056,7 @@ ${componentXml || '    '}
         const DRIVE_ACCEL = 48;
         const DRIVE_TURN_MAX = 0.45;
         const DRIVE_STEER_SMOOTH = 2.4;
-        const TOUR_VEHICLE_REV = 9;
+        const TOUR_VEHICLE_REV = 10;
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
         const _driveDown = new THREE.Vector3(0, 0, -1);
@@ -13168,8 +13168,8 @@ ${componentXml || '    '}
 
         /**
          * Вписать GLB в оси тура: Y — вперёд, X — вправо, Z — вверх, низ на z=0.
-         * ToyCar: убираем showcase-ткань Fabric; нос модели в glTF смотрит в −Z → после
-         * Y-up→Z-up это −Y, поэтому +π по yaw, иначе камера «сзади» видит морду.
+         * ToyCar: убираем showcase-ткань Fabric; нос в glTF (−Z) после Y-up→Z-up смотрит в −Y —
+         * разворот +π вокруг мирового Z отдельной группой (не Euler на inner, иначе вверх ногами).
          * Самолёт: кладём фюзеляж горизонтально (иначе Z≫X,Y и uniform scale раздувает модель).
          */
         function fitGltfToTourAxes(gltfScene, opts = {}) {
@@ -13177,10 +13177,12 @@ ${componentXml || '    '}
             const targetLength = opts.targetLength || (kind === 'plane' ? 1.4 : 4.6);
             // root: только position/quaternion от тура (не scale!)
             // offset: центрирование в мировых метрах
-            // inner: rotation + uniform scale модели
+            // yawFix: опциональный разворот вокруг Z (верх)
+            // inner: pitch (Y-up→Z-up) + uniform scale модели
             const root = new THREE.Group();
             root.name = opts.name || (kind === 'plane' ? 'TourPlane' : 'TourCar');
             const offset = new THREE.Group();
+            const yawFix = new THREE.Group();
             const inner = new THREE.Group();
             const model = gltfScene.clone(true);
 
@@ -13197,7 +13199,8 @@ ${componentXml || '    '}
             inner.add(model);
             // Y-up → Z-up
             inner.rotation.x = Math.PI / 2;
-            offset.add(inner);
+            yawFix.add(inner);
+            offset.add(yawFix);
             root.add(offset);
             root.updateMatrixWorld(true);
 
@@ -13212,14 +13215,14 @@ ${componentXml || '    '}
             }
             // Нос вдоль +Y (длинная горизонталь)
             if (size.x > size.y * 1.05) {
-                inner.rotation.z += Math.PI / 2;
+                yawFix.rotation.z += Math.PI / 2;
                 root.updateMatrixWorld(true);
                 box = computeMeshWorldBox(root);
                 size = box.getSize(new THREE.Vector3());
             }
-            // ToyCar / типичный glTF: нос был +Z → после Rx(π/2) смотрит в −Y
+            // ToyCar: нос смотрел в −Y — разворот вокруг вертикали, без переворота
             if (kind === 'car') {
-                inner.rotation.z += Math.PI;
+                yawFix.rotation.z += Math.PI;
                 root.updateMatrixWorld(true);
                 box = computeMeshWorldBox(root);
                 size = box.getSize(new THREE.Vector3());
