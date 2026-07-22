@@ -48,12 +48,13 @@
             font-family: 'Archivo', sans-serif;
             display: grid;
             grid-template-columns: var(--w-left) 4px 1fr 4px var(--w-right);
-            grid-template-rows: 58px 1fr 28px;
+            grid-template-rows: auto 1fr 28px;
             grid-template-areas:
                 "top top top top top"
                 "tree resL stage resR side"
                 "status status status status status";
             height: 100vh;
+            --top-bar-h: 58px;
         }
 
         body.panels-swapped {
@@ -73,7 +74,7 @@
         }
         .dock-zone {
             position: fixed;
-            top: 58px;
+            top: var(--top-bar-h, 58px);
             bottom: 28px;
             width: min(22vw, 280px);
             z-index: 55;
@@ -95,13 +96,15 @@
             grid-area: top;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 0 14px 0 16px;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            padding: 6px 12px 6px 14px;
             background:
                 linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
             border-bottom: 1px solid var(--line);
             z-index: 40;
             min-width: 0;
+            min-height: 52px;
         }
 
         .brand {
@@ -139,8 +142,9 @@
         .tb {
             display: flex;
             align-items: center;
-            gap: 8px;
-            flex: 1 1 auto;
+            flex-wrap: wrap;
+            gap: 6px 8px;
+            flex: 1 1 320px;
             min-width: 0;
             overflow: visible;
         }
@@ -148,9 +152,23 @@
         .tb-end {
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
             gap: 6px;
             margin-left: auto;
-            flex: 0 0 auto;
+            flex: 1 1 auto;
+            justify-content: flex-end;
+            min-width: 0;
+        }
+
+        .tb-end [data-bimlva-auth-slot] {
+            max-width: min(100%, 220px);
+            min-width: 0;
+            flex: 0 1 auto;
+            overflow: hidden;
+        }
+
+        .tb-txt {
+            display: inline;
         }
 
         .tb-cluster {
@@ -161,6 +179,7 @@
             background: rgba(28, 39, 51, 0.04);
             border-radius: 8px;
             flex: 0 0 auto;
+            max-width: 100%;
         }
 
         .tb-cluster .btn {
@@ -510,16 +529,45 @@
             border-color: var(--line);
         }
 
-        @media (max-width: 1200px) {
+        @media (max-width: 1500px) {
             .brand b { font-size: 13px; }
             .brand small { display: none; }
-            button.btn { padding: 7px 8px; font-size: 11px; }
-            .tb { gap: 6px; }
-            .tb-menu-btn { padding: 7px 9px; }
+            button.btn { padding: 6px 8px; font-size: 11px; }
+            .tb { gap: 5px 6px; }
+            .tb-menu-btn { padding: 6px 9px; font-size: 12px; }
+            .tb-cluster .btn { padding: 6px 7px; }
+            .tb-cluster .tool-select { min-width: 40px; padding: 6px 4px; }
+            .bimlva-auth-user { max-width: 96px !important; }
+            .tb-end [data-bimlva-auth-slot] { max-width: 180px; }
+        }
+
+        @media (max-width: 1280px) {
+            .tb-cluster .tb-txt,
+            .tb-end .tb-cluster .tb-txt { display: none; }
+            .tb-cluster .btn { padding: 6px 8px; gap: 0; }
+            .bimlva-auth-user { max-width: 72px !important; }
+            .bimlva-auth-stats-label { display: none; }
+            .tb-end [data-bimlva-auth-slot] { max-width: 140px; }
+        }
+
+        @media (max-width: 1100px) {
+            .tb-cluster[data-priority="secondary"] { display: none; }
+            .top { padding: 6px 8px; gap: 6px; }
         }
 
         @media (max-width: 900px) {
-            .tb-cluster[data-priority="secondary"] { display: none; }
+            .tb {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                overflow-y: hidden;
+                scrollbar-width: thin;
+                padding-bottom: 2px;
+                flex-basis: 100%;
+            }
+            .tb-end {
+                flex: 0 0 auto;
+                margin-left: 0;
+            }
         }
 
         .color-legend {
@@ -1665,7 +1713,7 @@
 
         <div class="tb">
             <div class="tb-cluster" title="Основные инструменты сцены">
-                <button class="btn" id="btnMeasure" disabled title="Инструмент замеров">📏 Замер</button>
+                <button class="btn" id="btnMeasure" disabled title="Инструмент замеров">📏 <span class="tb-txt">Замер</span></button>
                 <select id="measureModeSelect" class="tool-select" disabled title="Режим замера">
                     <option value="distance">м</option>
                     <option value="chain">∑</option>
@@ -1673,7 +1721,7 @@
                     <option value="angle">∠</option>
                     <option value="area">м²</option>
                 </select>
-                <button class="btn" id="btnClip" disabled title="Секущая плоскость или коробка сечения">✂ Разрез</button>
+                <button class="btn" id="btnClip" disabled title="Секущая плоскость или коробка сечения">✂ <span class="tb-txt">Разрез</span></button>
                 <select id="clipModeSelect" class="tool-select" disabled title="Ось плоскости или коробка сечения">
                     <option value="z">Z</option>
                     <option value="x">X</option>
@@ -1681,13 +1729,13 @@
                     <option value="box">BOX</option>
                 </select>
                 <button class="btn" id="btnClipGizmo" disabled title="Для коробки: сдвиг (↔) или масштаб (⤢) ручки">↔</button>
-                <button class="btn" id="btnBoxSelect" disabled title="Выделение рамкой: перетащите мышью по сцене, чтобы выбрать все элементы в прямоугольнике">▭ Рамка</button>
+                <button class="btn" id="btnBoxSelect" disabled title="Выделение рамкой: перетащите мышью по сцене, чтобы выбрать все элементы в прямоугольнике">▭ <span class="tb-txt">Рамка</span></button>
             </div>
 
             <div class="tb-cluster" data-priority="secondary" title="Видимость">
-                <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы">👁 Скрыть</button>
-                <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное">◎ Isolate</button>
-                <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию">Показать</button>
+                <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы">👁 <span class="tb-txt">Скрыть</span></button>
+                <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное">◎ <span class="tb-txt">Isolate</span></button>
+                <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию">◉ <span class="tb-txt">Показать</span></button>
             </div>
 
             <div class="tb-menu" id="menuView">
@@ -1740,10 +1788,10 @@
             <div class="tb-end">
                 <div data-bimlva-auth-slot style="display:inline-flex;align-items:center;gap:6px;margin-right:4px;"></div>
                 <div class="tb-cluster">
-                    <button class="btn btn-cloud" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ Я.Диск</button>
+                    <button class="btn btn-cloud" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ <span class="tb-txt">Я.Диск</span></button>
                     <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.dwg,.glb,.gltf,.obj,.stl,.ply,.dae,.3ds,.xml" multiple>
-                    <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="Поддерживаются IFC, FBX, DXF, LandXML/Civil XML, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS. RVT/Tekla/Plant — экспорт в IFC">⬆ Локально</label>
-                    <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 Растр</button>
+                    <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="Поддерживаются IFC, FBX, DXF, LandXML/Civil XML, GLB/GLTF, OBJ, STL, PLY, DAE и 3DS. RVT/Tekla/Plant — экспорт в IFC">⬆ <span class="tb-txt">Локально</span></label>
+                    <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 <span class="tb-txt">Растр</span></button>
                     <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT</button>
                     <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕</button>
                 </div>
@@ -2417,6 +2465,20 @@
             });
         })();
 
+        (function syncTopBarHeight() {
+            const topEl = document.querySelector('header.top');
+            if (!topEl) return;
+            const apply = () => {
+                const h = Math.ceil(topEl.getBoundingClientRect().height) || 58;
+                document.body.style.setProperty('--top-bar-h', `${h}px`);
+            };
+            apply();
+            if (typeof ResizeObserver !== 'undefined') {
+                new ResizeObserver(apply).observe(topEl);
+            }
+            window.addEventListener('resize', apply);
+        })();
+
         const ACTION_TOOLTIPS = {
             bulkChangeClass: 'Применить выбранный IFC-класс ко всем выбранным IFC-элементам',
             bulkRenamePset: 'Найти Pset по текущему имени и переименовать у выбранных элементов',
@@ -2675,7 +2737,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'bcf-import-v1';
+        const COMPOSER_BUILD = 'toolbar-fit-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;

@@ -41,10 +41,11 @@
       font-size: 12px;
       font-weight: 600;
       opacity: .9;
-      max-width: 140px;
+      max-width: 120px;
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .bimlva-auth-stats-label { white-space: nowrap; }
     .bimlva-auth-backdrop {
       position: fixed; inset: 0; z-index: 2000;
       background: rgba(15, 23, 42, .55);
@@ -223,7 +224,7 @@
     const btnClass = onDarkNav ? 'bimlva-auth-btn' : 'bimlva-auth-btn light';
 
     const html = user
-      ? `${user.isAdmin ? `<a class="${btnClass}" href="stats.html" title="Статистика (только admin)">Статистика</a>` : ''}
+      ? `${user.isAdmin ? `<a class="${btnClass}" href="stats.html" title="Статистика (только admin)">📊 <span class="bimlva-auth-stats-label">Статистика</span></a>` : ''}
          <button type="button" class="${btnClass}" data-auth-menu title="${escapeHtml(user.email)}">
            <span class="bimlva-auth-user">${escapeHtml(user.name || user.email)}${user.isAdmin ? ' · admin' : ''}</span>
            <span aria-hidden="true">▾</span>
