@@ -181,6 +181,7 @@
             border: 1px solid var(--tb-rail-line);
             border-radius: calc(var(--tb-radius) + 2px);
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+            overflow: visible;
         }
 
         .tb-rail-end {
@@ -1701,6 +1702,55 @@
             margin-top: 14px;
         }
 
+        .ai-chat-log {
+            margin-top: 10px;
+            max-height: min(42vh, 360px);
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #f7f9fc;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        .ai-chat-bubble {
+            padding: 8px 10px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .ai-chat-bubble.user {
+            align-self: flex-end;
+            background: #fff0e7;
+            border: 1px solid #f0c2a8;
+            max-width: 92%;
+        }
+        .ai-chat-bubble.assistant {
+            align-self: flex-start;
+            background: #fff;
+            border: 1px solid var(--line);
+            max-width: 96%;
+        }
+        .ai-chat-bubble.system {
+            align-self: stretch;
+            background: transparent;
+            color: var(--txt-dim);
+            border: none;
+            padding: 2px 0;
+            font-size: 12px;
+        }
+        .ai-chat-input {
+            width: 100%;
+            resize: vertical;
+            min-height: 72px;
+            font-family: 'Archivo', sans-serif;
+        }
+        #aiStatus.ok { color: var(--ok); }
+        #aiStatus.err { color: var(--err); }
+
         .pgroup {
             margin-top: 14px;
         }
@@ -1936,6 +1986,7 @@
                             <button class="btn" id="btnCompare" disabled title="Сравнить два IFC: добавлено / удалено">⇄ Сравнение IFC</button>
                             <button class="btn" id="btnSchedule" disabled title="Ведомость выделенного → CSV">▦ Ведомость CSV</button>
                             <button class="btn" id="btnCrs" disabled title="Смещение модели / northing (CRS offset)">🌐 CRS / смещение</button>
+                            <button class="btn" id="btnAiLocal" disabled title="Локальный ИИ через Ollama (см. AI-LOCAL.md)">🤖 ИИ (локально)</button>
                         </div>
                     </div>
 
@@ -2178,6 +2229,39 @@
             <button type="button" class="pop" id="colorLegendClose" title="Скрыть легенду">✕</button>
         </div>
         <div id="colorLegendBody"></div>
+    </div>
+
+    <div class="modal-backdrop" id="aiModal">
+        <div class="modal-card ai-modal-card" role="dialog" aria-modal="true" aria-labelledby="aiModalTitle" style="width:min(720px,100%)">
+            <h3 id="aiModalTitle">ИИ (локально)</h3>
+            <div class="bulk-note">
+                Работает через <b>Ollama + ai-bridge</b> на этом ПК. Composer нужно открывать с
+                <code>http://127.0.0.1:3847/...</code> (не с GitHub Pages). Инструкция:
+                <code>AI-LOCAL.md</code>.
+            </div>
+            <div class="prop small">
+                <div class="k">Статус</div>
+                <div id="aiStatus" class="bulk-note" style="margin:0">Не проверено</div>
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
+                <button type="button" class="btn" id="aiHealthBtn">Проверить связь</button>
+                <select id="aiModelSelect" class="editInput" style="max-width:220px" title="Модель Ollama"></select>
+                <input id="aiBridgeUrl" class="editInput" style="max-width:220px" placeholder="http://127.0.0.1:3847" title="URL bridge">
+            </div>
+            <div id="aiChatLog" class="ai-chat-log" aria-live="polite"></div>
+            <div class="prop small">
+                <div class="k">Сообщение</div>
+                <textarea id="aiChatInput" class="editInput ai-chat-input" rows="3" placeholder="Например: какие классы чаще встречаются? Сформулируй черновик BCF по выделению."></textarea>
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
+                <button type="button" class="btn load-btn" id="aiSendBtn">Отправить</button>
+                <button type="button" class="btn" id="aiClearBtn">Очистить чат</button>
+                <button type="button" class="btn" id="aiPresetBcf">Черновик BCF</button>
+                <button type="button" class="btn" id="aiPresetClasses">Классы модели</button>
+                <span style="flex:1"></span>
+                <button type="button" class="btn" id="cancelAi">Закрыть</button>
+            </div>
+        </div>
     </div>
 
     <div class="modal-backdrop" id="proprietaryModal">
@@ -2568,6 +2652,7 @@
     <script src="./auth.js"></script>
     <script src="./auth-ui.js"></script>
     <script src="./bcf-sync.js"></script>
+    <script src="./ai-client.js"></script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -2978,7 +3063,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'toolbar-menus-v1';
+        const COMPOSER_BUILD = 'local-ai-v1';
         console.info('[BIM.LVA] Composer build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -4457,7 +4542,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnAiLocal', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -10638,6 +10723,300 @@ ${componentXml || '    '}
             }
         });
 
+        // --- Local AI (Ollama via ai-bridge) ---
+        const aiChatHistory = [];
+        const AI_INDEX_LIMIT = 800;
+
+        function openAiModal() {
+            $('aiModal')?.classList.add('show');
+            const urlIn = $('aiBridgeUrl');
+            if (urlIn && globalThis.BimLvaAI) urlIn.value = BimLvaAI.getBase();
+            refreshAiHealth().catch(() => {});
+        }
+        function closeAiModal() {
+            $('aiModal')?.classList.remove('show');
+        }
+
+        function aiAppendBubble(role, text) {
+            const log = $('aiChatLog');
+            if (!log) return;
+            const div = document.createElement('div');
+            div.className = `ai-chat-bubble ${role}`;
+            div.textContent = text;
+            log.appendChild(div);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function buildAiModelContext() {
+            const models = [];
+            const classCounts = {};
+            let indexed = 0;
+            const sample = [];
+
+            for (const [modelID, mod] of loadedModels) {
+                if (mod.isFBX || mod.isExternal) {
+                    models.push({ modelID, filename: mod.filename, kind: mod.format || 'external' });
+                    continue;
+                }
+                const gmap = mod.expressByGlobalId;
+                const entries = gmap ? [...gmap.entries()] : [];
+                const classBag = {};
+                for (const [gid, expressID] of entries) {
+                    let ifcClass = null;
+                    try {
+                        if (mod.ifcIndex) {
+                            const ent = getEntityFromIndex?.(mod, expressID);
+                            ifcClass = ent?.className || null;
+                        }
+                    } catch (_) {}
+                    if (!ifcClass && mod.searchCache?.has(expressID)) {
+                        const s = mod.searchCache.get(expressID) || '';
+                        const m = s.match(/\b(ifc[a-z0-9_]+)\b/i);
+                        if (m) ifcClass = m[1];
+                    }
+                    const cls = ifcClass || 'Unknown';
+                    classBag[cls] = (classBag[cls] || 0) + 1;
+                    classCounts[cls] = (classCounts[cls] || 0) + 1;
+                    if (sample.length < AI_INDEX_LIMIT) {
+                        sample.push({
+                            globalId: gid,
+                            expressID,
+                            modelID,
+                            ifcClass: cls,
+                            name: String(mod.searchCache?.get(expressID) || '').slice(0, 120) || null
+                        });
+                        indexed += 1;
+                    }
+                }
+                models.push({
+                    modelID,
+                    filename: mod.filename,
+                    kind: 'IFC',
+                    elementsWithGlobalId: entries.length,
+                    topClasses: Object.entries(classBag).sort((a, b) => b[1] - a[1]).slice(0, 12)
+                });
+            }
+
+            const selection = (selectedItems || []).slice(0, 40).map(it => {
+                const mod = loadedModels.get(it.modelID);
+                const gid = mod?.globalIdByExpress?.get(it.expressID) || null;
+                return {
+                    modelID: it.modelID,
+                    expressID: it.expressID,
+                    globalId: gid,
+                    hint: mod?.searchCache?.get(it.expressID) || null
+                };
+            });
+
+            let clashHint = null;
+            try {
+                const raw = localStorage.getItem('bimlva_clash_reports_v1');
+                if (raw) {
+                    const reports = JSON.parse(raw);
+                    if (Array.isArray(reports) && reports.length) {
+                        const last = reports[reports.length - 1];
+                        clashHint = {
+                            count: reports.length,
+                            lastPairs: Array.isArray(last?.pairs) ? last.pairs.length : (last?.count || null),
+                            lastAt: last?.created || last?.at || null
+                        };
+                    }
+                }
+            } catch (_) {}
+
+            return {
+                build: COMPOSER_BUILD,
+                modelCount: loadedModels.size,
+                selectedCount: selectedItems.length,
+                bcfTopics: bcfTopics.length,
+                models,
+                classCounts: Object.entries(classCounts).sort((a, b) => b[1] - a[1]).slice(0, 30),
+                selection,
+                elementSample: sample,
+                clashHint,
+                note: 'elementSample ограничен; GlobalId только из этого контекста'
+            };
+        }
+
+        function getEntityFromIndex(modData, expressID) {
+            if (!modData?.ifcIndex) return null;
+            const span = modData.ifcIndex.index.get(expressID);
+            if (!span) return null;
+            const full = modData.ifcIndex.lines.slice(span.start, span.end + 1).join(' ');
+            const classMatch = full.match(/#\d+\s*=\s*([A-Za-z0-9_]+)\s*\(/);
+            return classMatch ? { className: classMatch[1].toUpperCase() } : null;
+        }
+
+        async function runAiActions(actions) {
+            if (!Array.isArray(actions) || !actions.length) return;
+            for (const act of actions) {
+                const tool = act?.tool || act?.name;
+                const args = act?.args || act?.arguments || {};
+                if (!tool || tool === 'summarize_only') continue;
+                if (tool === 'select_by_global_ids') {
+                    const ids = (args.globalIds || args.guids || []).filter(Boolean);
+                    const refs = ids.map(ifcGlobalId => ({ ifcGlobalId }));
+                    const { items, missing } = resolveElementRefs(refs);
+                    if (items.length) selectMultiple(items);
+                    if (missing.length) aiAppendBubble('system', `Не найдены GlobalId: ${missing.length}`);
+                } else if (tool === 'isolate_selection') {
+                    $('btnIsolate')?.click();
+                } else if (tool === 'show_all') {
+                    showAllGeometry?.();
+                    $('btnShowAll')?.click();
+                } else if (tool === 'fit_view') {
+                    $('fit')?.click();
+                } else if (tool === 'filter_ifc_class') {
+                    const want = String(args.className || args.class || '').toLowerCase();
+                    if (!want) continue;
+                    const found = [];
+                    for (const [modelID, mod] of loadedModels) {
+                        if (mod.isFBX || !mod.expressByGlobalId) continue;
+                        for (const [gid, expressID] of mod.expressByGlobalId) {
+                            const ent = getEntityFromIndex(mod, expressID);
+                            const cls = (ent?.className || '').toLowerCase();
+                            const search = String(mod.searchCache?.get(expressID) || '').toLowerCase();
+                            if (cls.includes(want.replace(/^ifc/, 'ifc')) || search.includes(want)) {
+                                found.push({ modelID, expressID, ifcGlobalId: gid });
+                            }
+                            if (found.length >= 500) break;
+                        }
+                    }
+                    if (found.length) selectMultiple(found.map(({ modelID, expressID }) => ({ modelID, expressID })));
+                    aiAppendBubble('system', `Фильтр класса «${args.className || args.class}»: найдено ${found.length}`);
+                } else if (tool === 'draft_bcf') {
+                    const title = String(args.title || 'Замечание ИИ').trim();
+                    const comment = String(args.comment || title).trim();
+                    if ($('bcfTitle')) $('bcfTitle').value = title;
+                    if ($('bcfComment')) $('bcfComment').value = comment;
+                    aiAppendBubble('system', 'Черновик BCF подставлен в форму. Откройте «BCF-заметки», поставьте точку и добавьте.');
+                    openBcfModal();
+                } else {
+                    aiAppendBubble('system', `Неизвестный tool: ${tool}`);
+                }
+            }
+            markNeedsRender?.();
+        }
+
+        async function refreshAiHealth() {
+            const status = $('aiStatus');
+            const sel = $('aiModelSelect');
+            const ai = globalThis.BimLvaAI;
+            if (!ai) {
+                if (status) {
+                    status.textContent = 'ai-client.js не загружен';
+                    status.className = 'bulk-note err';
+                }
+                return;
+            }
+            const urlIn = $('aiBridgeUrl');
+            if (urlIn?.value) ai.setBase(urlIn.value);
+            try {
+                const h = await ai.health();
+                if (!h.ollama) {
+                    if (status) {
+                        status.textContent = `Bridge OK, но Ollama недоступна: ${h.error || 'запустите ollama'}`;
+                        status.className = 'bulk-note err';
+                    }
+                    return;
+                }
+                if (status) {
+                    const hostOk = ai.isLocalComposerHost()
+                        ? 'Composer на localhost — OK'
+                        : 'Внимание: откройте Composer через http://127.0.0.1:3847 (не GitHub Pages)';
+                    status.textContent = `Связь OK · моделей: ${(h.models || []).length} · ${hostOk}`;
+                    status.className = 'bulk-note ok';
+                }
+                if (sel) {
+                    const current = ai.getModel() || h.defaultModel || '';
+                    sel.innerHTML = (h.models || []).map(name =>
+                        `<option value="${escAttr(name)}"${name === current ? ' selected' : ''}>${esc(name)}</option>`
+                    ).join('') || `<option value="${escAttr(h.defaultModel || 'llama3.2')}">${esc(h.defaultModel || 'llama3.2')}</option>`;
+                    if (current) ai.setModel(current);
+                }
+            } catch (err) {
+                if (status) {
+                    status.textContent = `Bridge недоступен: ${err.message || err}. Запустите node ai-bridge/server.mjs`;
+                    status.className = 'bulk-note err';
+                }
+            }
+        }
+
+        async function sendAiChat(presetText) {
+            const ai = globalThis.BimLvaAI;
+            if (!ai) {
+                alert('ai-client.js не загружен');
+                return;
+            }
+            const input = $('aiChatInput');
+            const text = (presetText || input?.value || '').trim();
+            if (!text) return;
+            const urlIn = $('aiBridgeUrl');
+            if (urlIn?.value) ai.setBase(urlIn.value);
+            const model = $('aiModelSelect')?.value || ai.getModel();
+            if (model) ai.setModel(model);
+            if (input && !presetText) input.value = '';
+            aiAppendBubble('user', text);
+            aiChatHistory.push({ role: 'user', content: text });
+            const sendBtn = $('aiSendBtn');
+            if (sendBtn) sendBtn.disabled = true;
+            try {
+                const context = buildAiModelContext();
+                const res = await ai.chat({
+                    message: text,
+                    context,
+                    history: aiChatHistory.slice(0, -1),
+                    model
+                });
+                const reply = res.message || '(пустой ответ)';
+                aiAppendBubble('assistant', reply);
+                aiChatHistory.push({ role: 'assistant', content: reply });
+                await runAiActions(res.actions || []);
+                trackUsage('ai_chat', { model: res.model || model || '', actions: (res.actions || []).length });
+            } catch (err) {
+                aiAppendBubble('system', `Ошибка: ${err.message || err}`);
+            } finally {
+                if (sendBtn) sendBtn.disabled = false;
+            }
+        }
+
+        $('btnAiLocal')?.addEventListener('click', openAiModal);
+        $('cancelAi')?.addEventListener('click', closeAiModal);
+        $('aiModal')?.addEventListener('click', e => {
+            if (e.target === $('aiModal')) closeAiModal();
+        });
+        $('aiHealthBtn')?.addEventListener('click', () => {
+            refreshAiHealth().catch(() => {});
+        });
+        $('aiSendBtn')?.addEventListener('click', () => {
+            sendAiChat().catch(() => {});
+        });
+        $('aiClearBtn')?.addEventListener('click', () => {
+            aiChatHistory.length = 0;
+            const log = $('aiChatLog');
+            if (log) log.innerHTML = '';
+        });
+        $('aiPresetBcf')?.addEventListener('click', () => {
+            sendAiChat('Сформулируй черновик BCF по текущему выделению и контексту. Верни action draft_bcf.').catch(() => {});
+        });
+        $('aiPresetClasses')?.addEventListener('click', () => {
+            sendAiChat('Кратко перечисли топ IFC-классов из контекста и сколько элементов в индексе.').catch(() => {});
+        });
+        $('aiChatInput')?.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                sendAiChat().catch(() => {});
+            }
+        });
+        $('aiBridgeUrl')?.addEventListener('change', () => {
+            const v = $('aiBridgeUrl')?.value;
+            if (v && globalThis.BimLvaAI) BimLvaAI.setBase(v);
+        });
+        $('aiModelSelect')?.addEventListener('change', () => {
+            const v = $('aiModelSelect')?.value;
+            if (v && globalThis.BimLvaAI) BimLvaAI.setModel(v);
+        });
+
         // --- Search ---
         $('searchInput').addEventListener('keyup', (e) => {
             if (e.key !== 'Enter') return;
@@ -11957,7 +12336,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnAiLocal', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -12560,7 +12939,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnAiLocal', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
