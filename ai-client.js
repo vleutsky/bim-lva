@@ -8,6 +8,7 @@
   const DEFAULT_BASE = 'http://127.0.0.1:3847';
   const LS_BASE = 'bimlva_ai_bridge_url';
   const LS_MODEL = 'bimlva_ai_model';
+  const CHAT_TIMEOUT_MS = 180000;
 
   function getBase() {
     try {
@@ -48,20 +49,34 @@
 
   async function chat({ message, context, history, model, temperature }) {
     const base = getBase();
-    const res = await fetch(`${base}/ai/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message,
-        context: context || {},
-        history: history || [],
-        model: model || getModel() || undefined,
-        temperature: temperature ?? 0.2,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Bridge HTTP ${res.status}`);
-    return data;
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl
+      ? setTimeout(() => ctrl.abort(), CHAT_TIMEOUT_MS)
+      : null;
+    try {
+      const res = await fetch(`${base}/ai/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl?.signal,
+        body: JSON.stringify({
+          message,
+          context: context || {},
+          history: history || [],
+          model: model || getModel() || undefined,
+          temperature: temperature ?? 0.2,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Bridge HTTP ${res.status}`);
+      return data;
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        throw new Error('Таймаут ожидания ответа (3 мин). Первый запрос к модели часто долгий — подождите или смотрите окно Ollama/bridge.');
+      }
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   function isLocalComposerHost() {
@@ -79,5 +94,6 @@
     listModels,
     chat,
     isLocalComposerHost,
+    CHAT_TIMEOUT_MS,
   };
 })(typeof window !== 'undefined' ? window : globalThis);
