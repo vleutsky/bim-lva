@@ -21,7 +21,7 @@
 13. [x] **Шаринг вида** — состояние в URL
 14. [x] **PWA / офлайн-кэш**
 15. [x] **RVT/Tekla → IFC** — подсказка / заготовка под конвейер
-16. [x] **Локальный ИИ** — Ollama + ai-bridge, чат/actions в Composer (`AI-LOCAL.md`)
+16. [x] **Composer AI (отдельный файл)** — локальный Ollama + ai-bridge; `bim-lva-composer-ai.html`, инструкция `AI-LOCAL.md`
 
 ## Уже есть (не трогать без нужды)
 
@@ -40,6 +40,8 @@
 
 ## Заметки
 
-- Канонический файл: `bim-lva-composer-ifc.html`
+- Канонический стабильный файл: `bim-lva-composer-ifc.html` (без ИИ)
+- Версия с ИИ: `bim-lva-composer-ai.html` (+ `ai-bridge/`, `ai-client.js`, `AI-LOCAL.md`)
 - Ветка: `cursor/ifc-bulk-edit-37f9` → периодически merge в `main`
 - Браузер-only: без серверного Revit/Tekla SDK
+- ИИ только через localhost bridge; Pages — для стабильного Composer

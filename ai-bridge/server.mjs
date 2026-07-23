@@ -6,7 +6,7 @@
  *
  * Usage:
  *   node ai-bridge/server.mjs
- *   then open http://127.0.0.1:3847/bim-lva-composer-ifc.html
+ *   then open http://127.0.0.1:3847/bim-lva-composer-ai.html
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -251,10 +251,11 @@ function extractActions(text) {
 server.listen(PORT, HOST, () => {
   console.log('');
   console.log('BIM.LVA AI bridge');
-  console.log(`  UI:     http://${HOST}:${PORT}/bim-lva-composer-ifc.html`);
-  console.log(`  Health: http://${HOST}:${PORT}/ai/health`);
-  console.log(`  Ollama: ${OLLAMA}`);
-  console.log(`  Model:  ${DEFAULT_MODEL}`);
+  console.log(`  UI (AI):     http://${HOST}:${PORT}/bim-lva-composer-ai.html`);
+  console.log(`  UI (stable): http://${HOST}:${PORT}/bim-lva-composer-ifc.html`);
+  console.log(`  Health:     http://${HOST}:${PORT}/ai/health`);
+  console.log(`  Ollama:     ${OLLAMA}`);
+  console.log(`  Model:      ${DEFAULT_MODEL}`);
   console.log('');
   console.log('Держите это окно открытым. Инструкция: AI-LOCAL.md');
 });
