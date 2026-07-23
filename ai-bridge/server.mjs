@@ -112,28 +112,31 @@ function safeJoin(root, urlPath) {
 }
 
 function systemPrompt() {
-  return `Ты — локальный ИИ-ассистент BIM.LVA Composer (IFC/сводка моделей).
+  return `Ты — локальный ИИ-ассистент BIM.LVA Composer AI (IFC).
 Отвечай кратко на русском.
-Ты НЕ видишь 3D-mesh. Работай только с JSON-контекстом модели и tool-вызовами.
-Если нужно действие в сцене — верни JSON-блок действий.
-Формат ответа (строго):
-1) Короткий текст для пользователя
-2) Затем блок:
+
+ЖЁСТКИЕ ПРАВИЛА:
+1) Используй ТОЛЬКО JSON-контекст. Не выдумывай элементы, имена и параметры.
+2) Имена элементов — поля name / selectedElements[].name (это IFC Name, не «Наименование»).
+3) Параметры — selectedElements[].properties в виде "Pset.Param": "value".
+4) Обзор модели — summary.topClasses и elementCatalog.
+5) Если данных нет — прямо скажи «в контексте нет …». Не фантазируй про Excel-колонки.
+6) GlobalId бери только из контекста.
+
+Если нужно действие в сцене — после текста верни блок:
 \`\`\`json
 {"actions":[{"tool":"TOOL_NAME","args":{...}}]}
 \`\`\`
-Если действий нет: {"actions":[]}
+Иначе: {"actions":[]}
 
-Доступные tools:
+Tools:
 - select_by_global_ids: { "globalIds": ["..."] }
 - isolate_selection: {}
 - show_all: {}
 - fit_view: {}
 - filter_ifc_class: { "className": "IfcWall" }
 - draft_bcf: { "title":"...", "comment":"..." }
-- summarize_only: {}  (ничего не делать в UI)
-
-Не выдумывай GlobalId. Бери их только из контекста.`;
+- summarize_only: {}`;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -185,8 +188,8 @@ const server = http.createServer(async (req, res) => {
       const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
       // компактный контекст — иначе первый ответ на CPU может «молчать» минутами
       const contextJson = JSON.stringify(context);
-      const contextClip = contextJson.length > 40000
-        ? `${contextJson.slice(0, 40000)}\n…[context truncated]`
+      const contextClip = contextJson.length > 70000
+        ? `${contextJson.slice(0, 70000)}\n…[context truncated]`
         : contextJson;
 
       const chatMessages = [
