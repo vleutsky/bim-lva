@@ -3067,7 +3067,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'composer-ai-v3';
+        const COMPOSER_BUILD = 'composer-ai-v4';
         console.info('[BIM.LVA] Composer AI build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -10730,7 +10730,8 @@ ${componentXml || '    '}
         // --- Local AI (Ollama via ai-bridge) ---
         const aiChatHistory = [];
         const AI_INDEX_LIMIT = 250;
-        const AI_PROP_LIMIT = 48;
+        const AI_PROP_LIMIT = 64;
+        const AI_NAMES_LIMIT = 800;
 
         function openAiModal() {
             $('aiModal')?.classList.add('show');
@@ -10752,56 +10753,37 @@ ${componentXml || '    '}
             log.scrollTop = log.scrollHeight;
         }
 
-        function aiReadEntityBasics(mod, expressID) {
-            const out = {
-                expressID,
-                name: null,
-                ifcClass: null,
-                objectType: null,
-                globalId: mod.globalIdByExpress?.get(expressID) || null,
-                storey: null
-            };
-            try {
-                const ent = getEntityFromIndex?.(mod, expressID);
-                if (ent?.className) out.ifcClass = ent.className;
-            } catch (_) {}
-            try {
-                if (typeof getIfcEntityLabel === 'function') {
-                    const label = getIfcEntityLabel(mod, expressID);
-                    if (label && label !== `#${expressID}`) out.name = label;
-                }
-            } catch (_) {}
-            try {
-                const line = ifcAPI.GetLine(mod.modelID, expressID, false);
-                if (!out.name) out.name = readVal(line.Name) || readVal(line.LongName) || null;
-                out.objectType = readVal(line.ObjectType) || null;
-                if (!out.ifcClass) {
-                    const tc = ifcAPI.GetLineType(mod.modelID, expressID);
-                    if (tc != null && TYPE_NAMES?.[tc]) out.ifcClass = TYPE_NAMES[tc];
-                }
-                if (!out.globalId) out.globalId = readVal(line.GlobalId) || out.globalId;
-            } catch (_) {}
-            if (!out.name && mod.searchCache?.has(expressID)) {
-                const s = String(mod.searchCache.get(expressID) || '').trim();
-                if (s) out.name = s.slice(0, 120);
+        function aiIsJunkDisplayName(s, ifcClass) {
+            if (s == null) return true;
+            const t = String(s).trim();
+            if (!t) return true;
+            if (/^#\d+$/.test(t)) return true;
+            const low = t.toLowerCase();
+            const cls = String(ifcClass || '').replace(/^ifc/i, '').toLowerCase();
+            // searchCache часто даёт "buildingelementproxy wall ifc…"
+            if (cls && (low === cls || low === `ifc${cls}` || low.startsWith(cls + ' '))) return true;
+            if (!/[а-яё]/i.test(t) && /^(building)?elementproxy|ifc[a-z0-9_]+$/i.test(low.replace(/\s+/g, ''))) return true;
+            if (/proxy/i.test(low) && !/[а-яё0-9]/i.test(t) && t.length < 40) return true;
+            return false;
+        }
+
+        function aiPickNameFromProps(props) {
+            const entries = Object.entries(props || {}).filter(([, v]) => v != null && String(v).trim() !== '');
+            const prefer = [
+                /наименование$/i,
+                /(^|\.)name$/i,
+                /mark$/i,
+                /tag$/i,
+                /обозначение$/i,
+                /номер/i,
+                /objecttype$/i
+            ];
+            for (const re of prefer) {
+                const hit = entries.find(([k]) => re.test(k.split('.').pop() || k));
+                if (hit) return String(hit[1]).trim();
             }
-            // этаж по parentOf
-            try {
-                let cur = expressID;
-                for (let depth = 0; depth < 16 && cur != null; depth++) {
-                    const ent = getEntityFromIndex?.(mod, cur);
-                    const cls = String(ent?.className || '').toUpperCase();
-                    if (cls.includes('BUILDINGSTOREY') || cls === 'IFCBUILDINGSTOREY') {
-                        out.storey = (typeof getIfcEntityLabel === 'function'
-                            ? getIfcEntityLabel(mod, cur)
-                            : null) || `#${cur}`;
-                        break;
-                    }
-                    cur = mod.parentOf?.get(cur);
-                    if (cur == null) break;
-                }
-            } catch (_) {}
-            return out;
+            const nomen = entries.find(([k]) => /наименование/i.test(k));
+            return nomen ? String(nomen[1]).trim() : null;
         }
 
         function aiCollectProperties(mod, expressID, maxProps = AI_PROP_LIMIT) {
@@ -10840,26 +10822,130 @@ ${componentXml || '    '}
                     let propVal = null;
                     try {
                         const rawProperty = typeof getEntityParts === 'function' ? getEntityParts(mod, propId) : null;
-                        if (rawProperty) {
-                            propName = unquoteStepString(rawProperty.args[0]) || null;
-                        }
+                        if (rawProperty) propName = unquoteStepString(rawProperty.args[0]) || null;
                         const p = ifcAPI.GetLine(mod.modelID, propId, true);
                         if (!propName) propName = readVal(p.Name) || `Prop${propId}`;
                         const nv = p.NominalValue || p.Value || p.AreaValue || p.LengthValue || p.VolumeValue;
                         propVal = nv != null ? readVal(nv) : readVal(p.Description);
-                        if ((propVal == null || propVal === '') && p.Unit) {
-                            // keep empty
-                        }
                     } catch (_) {
                         continue;
                     }
                     if (!propName) continue;
-                    const key = `${psetName}.${propName}`;
-                    props[key] = propVal == null || propVal === '' ? null : String(propVal).slice(0, 200);
+                    props[`${psetName}.${propName}`] = propVal == null || propVal === '' ? null : String(propVal).slice(0, 200);
                     count += 1;
                 }
             }
             return props;
+        }
+
+        function aiReadEntityBasics(mod, expressID, opts = {}) {
+            const withProps = opts.withProps !== false;
+            const out = {
+                expressID,
+                name: null,
+                nomenklatura: null,
+                ifcClass: null,
+                objectType: null,
+                globalId: mod.globalIdByExpress?.get(expressID) || null,
+                storey: null
+            };
+            try {
+                const ent = getEntityFromIndex?.(mod, expressID);
+                if (ent?.className) out.ifcClass = ent.className;
+            } catch (_) {}
+            try {
+                const line = ifcAPI.GetLine(mod.modelID, expressID, false);
+                const ifcName = readVal(line.Name) || readVal(line.LongName) || '';
+                if (ifcName && !aiIsJunkDisplayName(ifcName, out.ifcClass)) out.name = ifcName;
+                out.objectType = readVal(line.ObjectType) || null;
+                if (!out.ifcClass) {
+                    const tc = ifcAPI.GetLineType(mod.modelID, expressID);
+                    if (tc != null && TYPE_NAMES?.[tc]) out.ifcClass = TYPE_NAMES[tc];
+                }
+                if (!out.globalId) out.globalId = readVal(line.GlobalId) || out.globalId;
+            } catch (_) {}
+            try {
+                if (!out.name && typeof getIfcEntityLabel === 'function') {
+                    const label = getIfcEntityLabel(mod, expressID);
+                    if (label && !aiIsJunkDisplayName(label, out.ifcClass)) out.name = label;
+                }
+            } catch (_) {}
+
+            // Главное для RU-моделей: Pset «Наименование»
+            if (withProps) {
+                const props = aiCollectProperties(mod, expressID, AI_PROP_LIMIT);
+                const fromProp = aiPickNameFromProps(props);
+                if (fromProp) {
+                    out.nomenklatura = fromProp;
+                    out.name = fromProp;
+                }
+                out._props = props;
+            }
+
+            if (!out.name && out.objectType && !aiIsJunkDisplayName(out.objectType, out.ifcClass)) {
+                out.name = out.objectType;
+            }
+            if (!out.name) out.name = out.ifcClass || `#${expressID}`;
+
+            try {
+                let cur = expressID;
+                for (let depth = 0; depth < 16 && cur != null; depth++) {
+                    const ent = getEntityFromIndex?.(mod, cur);
+                    const cls = String(ent?.className || '').toUpperCase();
+                    if (cls.includes('BUILDINGSTOREY') || cls === 'IFCBUILDINGSTOREY') {
+                        out.storey = (typeof getIfcEntityLabel === 'function'
+                            ? getIfcEntityLabel(mod, cur)
+                            : null) || `#${cur}`;
+                        break;
+                    }
+                    cur = mod.parentOf?.get(cur);
+                    if (cur == null) break;
+                }
+            } catch (_) {}
+            return out;
+        }
+
+        /** Кэш отображаемых имён (Наименование) по модели — строится один раз. */
+        function aiEnsureNameCache(mod) {
+            if (mod.aiNameCache instanceof Map && mod.aiNameCache.size) return mod.aiNameCache;
+            const cache = new Map();
+            const gmap = mod.expressByGlobalId;
+            const idList = gmap && gmap.size
+                ? [...gmap.values()]
+                : [...(mod.meshesByID?.keys?.() || [])];
+            for (const expressID of idList) {
+                const basics = aiReadEntityBasics(mod, expressID, { withProps: true });
+                cache.set(expressID, {
+                    name: basics.name,
+                    nomenklatura: basics.nomenklatura,
+                    ifcClass: basics.ifcClass,
+                    globalId: basics.globalId,
+                    storey: basics.storey,
+                    objectType: basics.objectType
+                });
+            }
+            mod.aiNameCache = cache;
+            return cache;
+        }
+
+        function aiListAllNames() {
+            const rows = [];
+            for (const [, mod] of loadedModels) {
+                if (mod.isFBX || mod.isExternal) continue;
+                const cache = aiEnsureNameCache(mod);
+                for (const [expressID, info] of cache) {
+                    rows.push({
+                        name: info.nomenklatura || info.name,
+                        ifcClass: info.ifcClass,
+                        globalId: info.globalId,
+                        storey: info.storey,
+                        expressID,
+                        filename: mod.filename
+                    });
+                }
+            }
+            rows.sort((a, b) => String(a.name).localeCompare(String(b.name), 'ru'));
+            return rows;
         }
 
         function buildAiModelContext() {
@@ -10867,6 +10953,8 @@ ${componentXml || '    '}
             const classCounts = {};
             const elementCatalog = [];
             const byClassSamples = {};
+            const elementNames = [];
+            const seenNames = new Set();
 
             if (!loadedModels.size) {
                 return {
@@ -10875,7 +10963,8 @@ ${componentXml || '    '}
                     modelCount: 0,
                     summary: { totalElements: 0, topClasses: [], files: [] },
                     selectedElements: [],
-                    elementCatalog: []
+                    elementCatalog: [],
+                    elementNames: []
                 };
             }
 
@@ -10890,34 +10979,31 @@ ${componentXml || '    '}
                     continue;
                 }
 
-                const gmap = mod.expressByGlobalId;
-                const entries = gmap ? [...gmap.entries()] : [];
-                // если GlobalId-индекса нет — берём meshes
-                const idList = entries.length
-                    ? entries.map(([gid, expressID]) => ({ gid, expressID }))
-                    : [...(mod.meshesByID?.keys?.() || [])].map(expressID => ({
-                        gid: mod.globalIdByExpress?.get(expressID) || null,
-                        expressID
-                    }));
-
+                const cache = aiEnsureNameCache(mod);
                 const classBag = {};
-                for (const { gid, expressID } of idList) {
-                    const basics = aiReadEntityBasics(mod, expressID);
-                    const cls = basics.ifcClass || 'Unknown';
+                for (const [expressID, info] of cache) {
+                    const cls = info.ifcClass || 'Unknown';
                     classBag[cls] = (classBag[cls] || 0) + 1;
                     classCounts[cls] = (classCounts[cls] || 0) + 1;
+
+                    const display = info.nomenklatura || info.name;
+                    if (display && !seenNames.has(display) && elementNames.length < AI_NAMES_LIMIT) {
+                        seenNames.add(display);
+                        elementNames.push(display);
+                    }
 
                     if (!byClassSamples[cls]) byClassSamples[cls] = [];
                     if (byClassSamples[cls].length < 8 && elementCatalog.length < AI_INDEX_LIMIT) {
                         const row = {
                             modelID,
                             filename: mod.filename,
-                            expressID: basics.expressID,
-                            globalId: basics.globalId || gid,
+                            expressID,
+                            globalId: info.globalId,
                             ifcClass: cls,
-                            name: basics.name,
-                            objectType: basics.objectType,
-                            storey: basics.storey
+                            name: display,
+                            nomenklatura: info.nomenklatura,
+                            objectType: info.objectType,
+                            storey: info.storey
                         };
                         byClassSamples[cls].push(row);
                         elementCatalog.push(row);
@@ -10928,7 +11014,7 @@ ${componentXml || '    '}
                     modelID,
                     filename: mod.filename,
                     kind: 'IFC',
-                    elementsIndexed: idList.length,
+                    elementsIndexed: cache.size,
                     topClasses: Object.entries(classBag).sort((a, b) => b[1] - a[1]).slice(0, 20)
                 });
             }
@@ -10936,8 +11022,9 @@ ${componentXml || '    '}
             const selectedElements = (selectedItems || []).slice(0, 12).map(it => {
                 const mod = loadedModels.get(it.modelID);
                 if (!mod) return { modelID: it.modelID, expressID: it.expressID, missing: true };
-                const basics = aiReadEntityBasics(mod, it.expressID);
-                const properties = aiCollectProperties(mod, it.expressID, AI_PROP_LIMIT);
+                const basics = aiReadEntityBasics(mod, it.expressID, { withProps: true });
+                const properties = basics._props || aiCollectProperties(mod, it.expressID, AI_PROP_LIMIT);
+                delete basics._props;
                 return {
                     ...basics,
                     modelID: it.modelID,
@@ -10968,11 +11055,11 @@ ${componentXml || '    '}
 
             return {
                 instructions: [
-                    'Отвечай ТОЛЬКО по этому JSON. Не выдумывай элементы и параметры.',
-                    'Имена элементов — в полях name / selectedElements[].name.',
-                    'Параметры — в selectedElements[].properties как "Pset.Param": "value".',
-                    'Если свойства пустые — так и скажи; не ссылайся на несуществующее поле «Наименование».',
-                    'Для обзора модели используй summary.topClasses и elementCatalog.'
+                    'Отвечай ТОЛЬКО по этому JSON. Не выдумывай tools и элементы.',
+                    'Поле elementNames — список наименований (из параметра «Наименование» / Name).',
+                    'selectedElements[].properties — реальные Pset; ключ вида "Pset.Наименование".',
+                    'Запрещено выдумывать GetSelectedElements и любые tools вне списка.',
+                    'Если просят все имена — перечисли elementNames как есть.'
                 ].join(' '),
                 build: COMPOSER_BUILD,
                 modelCount: loadedModels.size,
@@ -10985,13 +11072,15 @@ ${componentXml || '    '}
                     })),
                     totalElements,
                     topClasses,
+                    namedCount: elementNames.length,
                     selectedCount: selectedItems.length,
                     bcfTopics: bcfTopics.length,
                     clashHint
                 },
+                elementNames,
                 selectedElements,
                 elementCatalog,
-                catalogNote: `Каталог до ${AI_INDEX_LIMIT} элементов (сэмпл по классам). Полный список не передаётся.`
+                catalogNote: `elementNames до ${AI_NAMES_LIMIT} уникальных наименований. Имена берутся из Pset «Наименование», если есть.`
             };
         }
 
