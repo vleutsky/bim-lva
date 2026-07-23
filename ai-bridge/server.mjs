@@ -69,23 +69,38 @@ function readJson(req) {
 
 async function ollamaFetch(pathname, options = {}) {
   const url = `${OLLAMA}${pathname}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-  });
-  const text = await res.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch (_) {}
-  if (!res.ok) {
-    const msg = json?.error || text || res.statusText;
-    const err = new Error(`Ollama: ${msg}`);
-    err.status = res.status;
+  const timeoutMs = Number(options.timeoutMs || (pathname.includes('/api/chat') ? 170000 : 20000));
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+    });
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch (_) {}
+    if (!res.ok) {
+      const msg = json?.error || text || res.statusText;
+      const err = new Error(`Ollama: ${msg}`);
+      err.status = res.status;
+      throw err;
+    }
+    return json ?? text;
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const e = new Error(`Ollama не ответила за ${Math.round(timeoutMs / 1000)} с. Подождите прогрев модели или проверьте, что Ollama запущена.`);
+      e.status = 504;
+      throw e;
+    }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return json ?? text;
 }
 
 function safeJoin(root, urlPath) {
@@ -168,17 +183,24 @@ const server = http.createServer(async (req, res) => {
 
       const context = body.context || {};
       const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
+      // компактный контекст — иначе первый ответ на CPU может «молчать» минутами
+      const contextJson = JSON.stringify(context);
+      const contextClip = contextJson.length > 40000
+        ? `${contextJson.slice(0, 40000)}\n…[context truncated]`
+        : contextJson;
 
       const chatMessages = [
         { role: 'system', content: systemPrompt() },
         {
           role: 'system',
-          content: `Контекст модели (JSON, обрезан при необходимости):\n${JSON.stringify(context).slice(0, 120000)}`,
+          content: `Контекст модели (JSON):\n${contextClip}`,
         },
         ...history,
         { role: 'user', content: userText },
       ];
 
+      console.log(`[ai/chat] → ${model} (${userText.slice(0, 80)}…)`);
+      const t0 = Date.now();
       const result = await ollamaFetch('/api/chat', {
         method: 'POST',
         body: JSON.stringify({
@@ -187,9 +209,11 @@ const server = http.createServer(async (req, res) => {
           messages: chatMessages,
           options: {
             temperature: body.temperature ?? 0.2,
+            num_predict: 512,
           },
         }),
       });
+      console.log(`[ai/chat] ← ${model} ${Date.now() - t0}ms`);
 
       const content = result?.message?.content || result?.response || '';
       const actions = extractActions(content);
@@ -198,7 +222,6 @@ const server = http.createServer(async (req, res) => {
         model,
         message: content,
         actions,
-        raw: result,
       });
     }
 

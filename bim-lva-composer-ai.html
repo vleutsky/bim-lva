@@ -3064,7 +3064,7 @@
         let lastZoomHitPoint = null;
         let lastZoomHitWasGeometry = false;
         let lastZoomRaycastAt = 0;
-        const COMPOSER_BUILD = 'composer-ai-v1';
+        const COMPOSER_BUILD = 'composer-ai-v2';
         console.info('[BIM.LVA] Composer AI build:', COMPOSER_BUILD);
         const _buildTagEl = document.getElementById('composerBuildTag');
         if (_buildTagEl) _buildTagEl.textContent = 'build: ' + COMPOSER_BUILD;
@@ -10726,7 +10726,7 @@ ${componentXml || '    '}
 
         // --- Local AI (Ollama via ai-bridge) ---
         const aiChatHistory = [];
-        const AI_INDEX_LIMIT = 800;
+        const AI_INDEX_LIMIT = 200;
 
         function openAiModal() {
             $('aiModal')?.classList.add('show');
@@ -10960,7 +10960,15 @@ ${componentXml || '    '}
             aiAppendBubble('user', text);
             aiChatHistory.push({ role: 'user', content: text });
             const sendBtn = $('aiSendBtn');
+            const presets = [$('aiPresetBcf'), $('aiPresetClasses'), $('aiClearBtn')];
             if (sendBtn) sendBtn.disabled = true;
+            presets.forEach(b => { if (b) b.disabled = true; });
+            const think = document.createElement('div');
+            think.className = 'ai-chat-bubble system';
+            think.id = 'aiThinkingBubble';
+            think.textContent = 'Думаю… ответ появится ниже (первый запрос к модели может занять 1–3 минуты).';
+            $('aiChatLog')?.appendChild(think);
+            $('aiChatLog') && ($('aiChatLog').scrollTop = $('aiChatLog').scrollHeight);
             try {
                 const context = buildAiModelContext();
                 const res = await ai.chat({
@@ -10969,15 +10977,18 @@ ${componentXml || '    '}
                     history: aiChatHistory.slice(0, -1),
                     model
                 });
-                const reply = res.message || '(пустой ответ)';
+                think.remove();
+                const reply = String(res.message || '').trim() || '(пустой ответ модели)';
                 aiAppendBubble('assistant', reply);
                 aiChatHistory.push({ role: 'assistant', content: reply });
                 await runAiActions(res.actions || []);
                 trackUsage('ai_chat', { model: res.model || model || '', actions: (res.actions || []).length });
             } catch (err) {
+                think.remove();
                 aiAppendBubble('system', `Ошибка: ${err.message || err}`);
             } finally {
                 if (sendBtn) sendBtn.disabled = false;
+                presets.forEach(b => { if (b) b.disabled = false; });
             }
         }
 
@@ -15204,7 +15215,8 @@ ${componentXml || '    '}
             }
         }, 0);
 
-        if ('serviceWorker' in navigator) {
+        // AI-edition: без Service Worker — кэш Pages/stable не должен перехватывать локальный bridge
+        if (false && 'serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('./sw-composer.js?v=63').catch(err => {
                     console.warn('SW register failed', err);
