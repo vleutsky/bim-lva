@@ -225,8 +225,8 @@
 
     const html = user
       ? `${user.isAdmin ? `<a class="${btnClass}" href="stats.html" title="Статистика (только admin)">📊 <span class="bimlva-auth-stats-label">Статистика</span></a>` : ''}
-         <button type="button" class="${btnClass}" data-auth-menu title="${escapeHtml(user.email)}">
-           <span class="bimlva-auth-user">${escapeHtml(user.name || user.email)}${user.isAdmin ? ' · admin' : ''}</span>
+         <button type="button" class="${btnClass}" data-auth-menu title="${escapeHtml((user.name ? user.name + ' · ' : '') + (user.email || '')}${user.isAdmin ? ' · admin' : '')}">
+           <span class="bimlva-auth-user">${escapeHtml(user.name || user.email || 'Аккаунт')}</span>
            <span aria-hidden="true">▾</span>
          </button>`
       : `<button type="button" class="${btnClass}" data-auth-open>Войти</button>
@@ -243,9 +243,11 @@
       host.id = 'bimlvaAuthAutoSlot';
       host.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin-left:8px;';
       const navInner = document.querySelector('nav .hidden.md\\:flex');
-      const topEnd = document.querySelector('.tb-end') || document.querySelector('header.top');
+      const topEnd = document.querySelector('.tb-rail-end .tb-auth') || document.querySelector('.tb-aside') || document.querySelector('header.top');
       if (navInner) navInner.appendChild(host);
-      else if (topEnd) topEnd.insertBefore(host, topEnd.firstChild);
+      else if (topEnd?.hasAttribute?.('data-bimlva-auth-slot')) {
+        /* slot already exists */
+      } else if (topEnd) topEnd.insertBefore(host, topEnd.firstChild);
       else return;
     }
     host.innerHTML = html;
