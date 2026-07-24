@@ -2262,6 +2262,7 @@
                 <button type="button" class="btn" id="aiClearBtn">Очистить чат</button>
                 <button type="button" class="btn" id="aiPresetBcf">Черновик BCF</button>
                 <button type="button" class="btn" id="aiPresetClasses">Классы модели</button>
+                <button type="button" class="btn" id="aiPresetNames" title="Без ИИ: сразу список из параметра Наименование">Все наименования</button>
                 <span style="flex:1"></span>
                 <button type="button" class="btn" id="cancelAi">Закрыть</button>
             </div>
@@ -2656,7 +2657,28 @@
     <script src="./auth.js"></script>
     <script src="./auth-ui.js"></script>
     <script src="./bcf-sync.js"></script>
-    <script src="./ai-client.js"></script>
+    <script src="./ai-client.js" onerror="console.error('[BIM.LVA] ai-client.js не загрузился по относительному пути')"></script>
+    <script>
+        // Если открыли не через bridge / битый путь — догружаем клиент с localhost
+        (function ensureAiClientBoot() {
+            if (globalThis.BimLvaAI) return;
+            const urls = [
+                './ai-client.js',
+                'http://127.0.0.1:3847/ai-client.js',
+                'http://localhost:3847/ai-client.js'
+            ];
+            let i = 0;
+            function tryNext() {
+                if (globalThis.BimLvaAI || i >= urls.length) return;
+                const s = document.createElement('script');
+                s.src = urls[i++] + '?t=' + Date.now();
+                s.onload = () => console.info('[BIM.LVA] ai-client loaded from', s.src);
+                s.onerror = tryNext;
+                document.head.appendChild(s);
+            }
+            tryNext();
+        })();
+    </script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -11138,7 +11160,7 @@ ${componentXml || '    '}
                     aiAppendBubble('system', 'Черновик BCF подставлен в форму. Откройте «BCF-заметки», поставьте точку и добавьте.');
                     openBcfModal();
                 } else {
-                    aiAppendBubble('system', `Неизвестный tool: ${tool}`);
+                    aiAppendBubble('system', `Пропущен неизвестный tool «${tool}» (модель его выдумала). Доступны только select/isolate/show_all/fit/filter/draft_bcf.`);
                 }
             }
             markNeedsRender?.();
@@ -11150,7 +11172,10 @@ ${componentXml || '    '}
             const ai = globalThis.BimLvaAI;
             if (!ai) {
                 if (status) {
-                    status.textContent = 'ai-client.js не загружен';
+                    status.innerHTML = 'ai-client.js не загружен.<br>' +
+                        '1) Запустите <code>node ai-bridge\\server.mjs</code> из папки bim-lva<br>' +
+                        '2) Откройте именно <code>http://127.0.0.1:3847/bim-lva-composer-ai.html</code><br>' +
+                        '3) Проверьте в новой вкладке: <a href="http://127.0.0.1:3847/ai-client.js" target="_blank">/ai-client.js</a> — должен открыться текст скрипта';
                     status.className = 'bulk-note err';
                 }
                 return;
@@ -11205,7 +11230,7 @@ ${componentXml || '    '}
             aiAppendBubble('user', text);
             aiChatHistory.push({ role: 'user', content: text });
             const sendBtn = $('aiSendBtn');
-            const presets = [$('aiPresetBcf'), $('aiPresetClasses'), $('aiClearBtn')];
+            const presets = [$('aiPresetBcf'), $('aiPresetClasses'), $('aiPresetNames'), $('aiClearBtn')];
             if (sendBtn) sendBtn.disabled = true;
             presets.forEach(b => { if (b) b.disabled = true; });
             const think = document.createElement('div');
@@ -11263,7 +11288,29 @@ ${componentXml || '    '}
             sendAiChat('Сформулируй черновик BCF по текущему выделению и контексту. Верни action draft_bcf.').catch(() => {});
         });
         $('aiPresetClasses')?.addEventListener('click', () => {
-            sendAiChat('Кратко перечисли топ IFC-классов из контекста и сколько элементов в индексе.').catch(() => {});
+            sendAiChat('Кратко перечисли топ IFC-классов из summary.topClasses и сколько элементов. Без выдуманных tools.').catch(() => {});
+        });
+        $('aiPresetNames')?.addEventListener('click', () => {
+            try {
+                if (!loadedModels.size) {
+                    aiAppendBubble('system', 'Сначала загрузите IFC.');
+                    return;
+                }
+                aiAppendBubble('system', 'Собираю наименования из Pset «Наименование»…');
+                const rows = aiListAllNames();
+                const withNomen = rows.filter(r => r.name && !aiIsJunkDisplayName(r.name, r.ifcClass));
+                const unique = [...new Set(withNomen.map(r => r.name))];
+                if (!unique.length) {
+                    aiAppendBubble('assistant', 'В модели не найдено заполненных «Наименование»/Name (часто у IFCBUILDINGELEMENTPROXY имя пустое в IFC Name и лежит только в Pset — проверьте свойства выделенного элемента).');
+                    return;
+                }
+                const maxShow = 400;
+                const list = unique.slice(0, maxShow).map((n, i) => `${i + 1}. ${n}`).join('\n');
+                const more = unique.length > maxShow ? `\n… и ещё ${unique.length - maxShow}` : '';
+                aiAppendBubble('assistant', `Наименований (уникальных): ${unique.length} из ${rows.length} элементов.\n\n${list}${more}`);
+            } catch (err) {
+                aiAppendBubble('system', `Ошибка сбора имён: ${err.message || err}`);
+            }
         });
         $('aiChatInput')?.addEventListener('keydown', e => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
