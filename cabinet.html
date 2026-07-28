@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Личный кабинет · BIM.LVA</title>
+    <meta name="description" content="Личный кабинет BIM.LVA: ваши приложения, скачивания и быстрый доступ к Composer.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js"></script>
+    <style>
+        :root {
+            --ink: #132033;
+            --ink-soft: #3a4a5c;
+            --paper: #f3f6f9;
+            --line: #c9d4e0;
+            --steel: #1f6f8b;
+            --signal: #1d9a6c;
+            --warm: #c45c26;
+            --nav: rgba(12, 22, 34, 0.92);
+            --white: #ffffff;
+            --shadow: 0 14px 40px rgba(19, 32, 51, 0.1);
+            --font-display: 'Syne', sans-serif;
+            --font-body: 'Source Sans 3', sans-serif;
+            --max: 1100px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: var(--font-body);
+            color: var(--ink-soft);
+            background:
+                radial-gradient(900px 500px at 0% 0%, rgba(31,111,139,.12), transparent 55%),
+                linear-gradient(180deg, #eef3f7, var(--paper));
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        a { color: inherit; text-decoration: none; }
+        button { font: inherit; cursor: pointer; border: none; background: none; }
+        .wrap { width: min(100% - 2rem, var(--max)); margin-inline: auto; }
+
+        .nav {
+            position: sticky; top: 0; z-index: 40;
+            background: var(--nav); backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255,255,255,.06);
+        }
+        .nav-inner {
+            display: flex; align-items: center; justify-content: space-between;
+            height: 60px; gap: 1rem;
+        }
+        .brand {
+            display: inline-flex; align-items: center; gap: .65rem;
+            color: #fff; font-family: var(--font-display); font-weight: 800; font-size: 1.05rem;
+        }
+        .brand-mark {
+            width: 32px; height: 32px; display: grid; place-items: center;
+            border-radius: 9px; background: linear-gradient(145deg, var(--steel), var(--signal)); color: #fff;
+        }
+        .nav-links { display: flex; gap: 1rem; align-items: center; }
+        .nav-links a { color: rgba(255,255,255,.72); font-size: .88rem; font-weight: 600; }
+        .nav-links a:hover, .nav-links a.on { color: #fff; }
+        .nav-end { display: flex; align-items: center; gap: .6rem; }
+
+        main { padding: 2.2rem 0 3.5rem; }
+
+        .hero-cab {
+            display: grid; gap: 1rem;
+            margin-bottom: 1.75rem;
+        }
+        .hero-cab h1 {
+            font-family: var(--font-display); font-size: clamp(1.6rem, 3vw, 2.1rem);
+            color: var(--ink); letter-spacing: -.02em;
+        }
+        .hero-cab p { max-width: 52ch; }
+        .user-card {
+            display: flex; flex-wrap: wrap; gap: .85rem 1.25rem; align-items: center;
+            padding: 1rem 1.15rem; border: 1px solid var(--line); border-radius: 14px;
+            background: var(--white); box-shadow: var(--shadow);
+        }
+        .user-card .avatar {
+            width: 44px; height: 44px; border-radius: 12px;
+            display: grid; place-items: center;
+            background: linear-gradient(145deg, var(--steel), var(--signal));
+            color: #fff; font-weight: 800; font-family: var(--font-display);
+        }
+        .user-card .meta strong { display: block; color: var(--ink); font-size: 1rem; }
+        .user-card .meta span { font-size: .85rem; color: var(--ink-soft); }
+        .badge {
+            font-size: .7rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+            padding: .25rem .55rem; border-radius: 999px;
+            background: #e8f6ef; color: #0f6b46; border: 1px solid #b8e4cf;
+        }
+        .badge.admin { background: #fff0e7; color: #a34812; border-color: #f0c2a8; }
+
+        .gate {
+            max-width: 440px; margin: 3rem auto; text-align: center;
+            padding: 2rem 1.5rem; border: 1px solid var(--line); border-radius: 16px;
+            background: var(--white); box-shadow: var(--shadow);
+        }
+        .gate h2 { font-family: var(--font-display); color: var(--ink); margin-bottom: .5rem; }
+        .gate p { margin-bottom: 1.25rem; }
+        .gate .actions { display: flex; gap: .6rem; justify-content: center; flex-wrap: wrap; }
+
+        .section-title {
+            font-family: var(--font-display); color: var(--ink);
+            font-size: 1.15rem; margin: 1.75rem 0 .85rem;
+        }
+        .apps {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: .9rem;
+        }
+        .app {
+            display: flex; flex-direction: column; gap: .65rem;
+            padding: 1.1rem; border: 1px solid var(--line); border-radius: 14px;
+            background: var(--white); box-shadow: var(--shadow);
+            transition: border-color .15s, transform .15s;
+        }
+        .app:hover { border-color: var(--steel); transform: translateY(-2px); }
+        .app-top { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem; }
+        .app-ico {
+            width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
+            background: #eaf4f8; color: var(--steel); font-size: 1rem;
+        }
+        .chip {
+            font-size: .68rem; font-weight: 800; text-transform: uppercase;
+            padding: .2rem .45rem; border-radius: 6px; border: 1px solid var(--line);
+            background: #f7f9fb; color: var(--ink-soft);
+        }
+        .chip.free { background: #e8f6ef; color: #0f6b46; border-color: #b8e4cf; }
+        .chip.pro { background: #fff0e7; color: #a34812; border-color: #f0c2a8; }
+        .app h3 { color: var(--ink); font-size: 1.02rem; font-family: var(--font-display); }
+        .app p { font-size: .88rem; flex: 1; }
+        .app .row { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .25rem; }
+
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+            padding: .55rem .9rem; border-radius: 10px; font-weight: 700; font-size: .86rem;
+            border: 1px solid transparent;
+        }
+        .btn-primary { background: var(--steel); color: #fff; }
+        .btn-primary:hover { background: #185a72; }
+        .btn-outline { background: #fff; border-color: var(--line); color: var(--ink); }
+        .btn-outline:hover { border-color: var(--steel); color: var(--steel); }
+        .btn-signal { background: var(--signal); color: #fff; }
+        .btn-signal:hover { background: #178557; }
+        .btn-ghost { color: rgba(255,255,255,.85); border: 1px solid rgba(255,255,255,.18); padding: .4rem .75rem; border-radius: 8px; font-size: .8rem; font-weight: 700; }
+        .btn-ghost:hover { background: rgba(255,255,255,.08); color: #fff; }
+
+        .quick {
+            display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .35rem;
+        }
+
+        footer {
+            border-top: 1px solid var(--line); padding: 1.25rem 0 2rem;
+            font-size: .85rem; color: var(--ink-soft);
+        }
+        footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+        footer a:hover { color: var(--steel); }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <nav class="nav glass-dark">
+        <div class="wrap nav-inner">
+            <a class="brand" href="index.html">
+                <span class="brand-mark"><i class="fa-solid fa-layer-group"></i></span>
+                BIM.LVA
+            </a>
+            <div class="nav-links">
+                <a href="index.html#apps">Приложения</a>
+                <a href="cabinet.html" class="on">Кабинет</a>
+            </div>
+            <div class="nav-end">
+                <a class="btn-ghost" href="index.html">На сайт</a>
+                <div data-bimlva-auth-slot></div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="wrap">
+        <div id="cabGate" class="gate">
+            <h2>Личный кабинет</h2>
+            <p>Войдите, чтобы открыть свои приложения: Composer, бесплатные плагины и быстрые ссылки.</p>
+            <div class="actions">
+                <button type="button" class="btn btn-primary" data-cab-login>Войти</button>
+                <button type="button" class="btn btn-outline" data-cab-register>Регистрация</button>
+            </div>
+        </div>
+
+        <div id="cabMain" class="hidden">
+            <div class="hero-cab">
+                <div>
+                    <h1>Личный кабинет</h1>
+                    <p>Ваши приложения BIM.LVA — в одном месте. Онлайн-инструменты открываются сразу; Pro-плагины — через заявку.</p>
+                </div>
+                <div class="user-card">
+                    <div class="avatar" id="cabAvatar">?</div>
+                    <div class="meta">
+                        <strong id="cabName">—</strong>
+                        <span id="cabEmail">—</span>
+                    </div>
+                    <span class="badge" id="cabBadge">Аккаунт</span>
+                    <div class="quick" style="margin-left:auto">
+                        <a class="btn btn-outline" href="index.html#apps">Витрина</a>
+                        <a class="btn btn-outline hidden" id="cabStats" href="stats.html">Статистика</a>
+                        <button type="button" class="btn btn-outline" id="cabLogout">Выйти</button>
+                    </div>
+                </div>
+            </div>
+
+            <h2 class="section-title">Онлайн</h2>
+            <div class="apps">
+                <article class="app">
+                    <div class="app-top">
+                        <div class="app-ico"><i class="fa-solid fa-cubes"></i></div>
+                        <span class="chip free">Free</span>
+                    </div>
+                    <h3>Composer IFC</h3>
+                    <p>Сводные модели в браузере: IFC, DXF, LandXML, FBX, GLB. Разрезы, BCF, коллизии, 4D, пакет экспертизы.</p>
+                    <div class="row">
+                        <a class="btn btn-signal" href="bim-lva-composer-ifc.html"><i class="fa-solid fa-arrow-up-right-from-square"></i> Открыть</a>
+                    </div>
+                </article>
+                <article class="app">
+                    <div class="app-top">
+                        <div class="app-ico"><i class="fa-solid fa-robot"></i></div>
+                        <span class="chip free">Local AI</span>
+                    </div>
+                    <h3>Composer AI</h3>
+                    <p>Тот же Composer + локальный Ollama. Данные не уходят в облако.</p>
+                    <div class="row">
+                        <a class="btn btn-signal" href="bim-lva-composer-ai.html"><i class="fa-solid fa-robot"></i> Открыть</a>
+                        <a class="btn btn-outline" href="AI-LOCAL.md">Инструкция</a>
+                    </div>
+                </article>
+            </div>
+
+            <h2 class="section-title">Скачать бесплатно</h2>
+            <div class="apps">
+                <article class="app">
+                    <div class="app-top">
+                        <div class="app-ico"><i class="fa-solid fa-stethoscope"></i></div>
+                        <span class="chip free">Free · C3D</span>
+                    </div>
+                    <h3>Доктор каталога</h3>
+                    <p>Валидатор XML-каталога Civil 3D: GUID, пути, BMP-превью.</p>
+                    <div class="row">
+                        <a class="btn btn-primary" href="https://disk.yandex.ru/d/BUnCY-BKS1yQuQ" target="_blank" rel="noopener"><i class="fa-solid fa-cloud-arrow-down"></i> Скачать .dll</a>
+                        <a class="btn btn-outline" href="index.html#apps">На витрине</a>
+                    </div>
+                </article>
+                <article class="app">
+                    <div class="app-top">
+                        <div class="app-ico"><i class="fa-solid fa-terminal"></i></div>
+                        <span class="chip free">Free · LISP</span>
+                    </div>
+                    <h3>LVA LISP Collection</h3>
+                    <p>50+ скриптов для AutoCAD / Civil 3D: нумерация, очистка, слои, контуры.</p>
+                    <div class="row">
+                        <a class="btn btn-primary" href="https://disk.yandex.ru/d/YOUR_LINK_HERE" target="_blank" rel="noopener"><i class="fa-solid fa-cloud-arrow-down"></i> Получить архив</a>
+                    </div>
+                </article>
+            </div>
+
+            <h2 class="section-title">Pro — запросить доступ</h2>
+            <div class="apps">
+                <article class="app">
+                    <div class="app-top"><div class="app-ico"><i class="fa-solid fa-list-check"></i></div><span class="chip pro">Pro</span></div>
+                    <h3>BIM Чекер</h3>
+                    <p>Проверка атрибутов Navisworks по Excel-матрице.</p>
+                    <div class="row"><a class="btn btn-outline" href="index.html#apps">К витрине / заявке</a></div>
+                </article>
+                <article class="app">
+                    <div class="app-top"><div class="app-ico"><i class="fa-solid fa-file-excel"></i></div><span class="chip pro">Pro</span></div>
+                    <h3>Matrix Builder</h3>
+                    <p>Слияние матриц ОТР/ПД в эталон.</p>
+                    <div class="row"><a class="btn btn-outline" href="index.html#apps">К витрине / заявке</a></div>
+                </article>
+                <article class="app">
+                    <div class="app-top"><div class="app-ico"><i class="fa-solid fa-bolt"></i></div><span class="chip pro">Pro</span></div>
+                    <h3>Clash Group Automator</h3>
+                    <p>Группировка коллизий Navisworks.</p>
+                    <div class="row"><a class="btn btn-outline" href="index.html#apps">К витрине / заявке</a></div>
+                </article>
+                <article class="app">
+                    <div class="app-top"><div class="app-ico"><i class="fa-solid fa-map"></i></div><span class="chip pro">Pro</span></div>
+                    <h3>KSI Mapper Ultimate</h3>
+                    <p>Коды КСИ и IFC-классы в Civil 3D.</p>
+                    <div class="row">
+                        <a class="btn btn-outline" href="plugin_ksi.html">Подробнее</a>
+                        <a class="btn btn-outline" href="index.html#apps">К витрине</a>
+                    </div>
+                </article>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <div class="wrap">
+            <span>BIM.LVA · личный кабинет</span>
+            <a href="index.html">← На главную</a>
+        </div>
+    </footer>
+
+    <script src="./stats.js"></script>
+    <script src="./auth-config.js"></script>
+    <script src="./auth.js"></script>
+    <script src="./auth-ui.js"></script>
+    <script>
+        (function () {
+            const gate = document.getElementById('cabGate');
+            const main = document.getElementById('cabMain');
+
+            function initials(user) {
+                const src = (user?.name || user?.email || '?').trim();
+                const parts = src.split(/[\s@.]+/).filter(Boolean);
+                return ((parts[0]?.[0] || '?') + (parts[1]?.[0] || '')).toUpperCase();
+            }
+
+            function render(user) {
+                if (!user) {
+                    gate.classList.remove('hidden');
+                    main.classList.add('hidden');
+                    return;
+                }
+                gate.classList.add('hidden');
+                main.classList.remove('hidden');
+                document.getElementById('cabAvatar').textContent = initials(user);
+                document.getElementById('cabName').textContent = user.name || 'Пользователь';
+                document.getElementById('cabEmail').textContent = user.email || '';
+                const badge = document.getElementById('cabBadge');
+                badge.textContent = user.isAdmin ? 'Admin' : 'Аккаунт';
+                badge.classList.toggle('admin', !!user.isAdmin);
+                document.getElementById('cabStats').classList.toggle('hidden', !user.isAdmin);
+            }
+
+            document.querySelector('[data-cab-login]')?.addEventListener('click', () => {
+                window.BimLvaAuthUI?.open('login');
+            });
+            document.querySelector('[data-cab-register]')?.addEventListener('click', () => {
+                window.BimLvaAuthUI?.open('register');
+            });
+            document.getElementById('cabLogout')?.addEventListener('click', async () => {
+                await window.BimLvaAuth?.logout?.();
+            });
+
+            function boot() {
+                const auth = window.BimLvaAuth;
+                if (!auth) return;
+                render(auth.getUser?.());
+                auth.onChange?.(render);
+                window.BimLvaStats?.trackPage?.('cabinet');
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 0));
+            } else {
+                setTimeout(boot, 0);
+            }
+            window.addEventListener('bimlva:auth', (e) => render(e.detail?.user || null));
+        })();
+    </script>
+</body>
+</html>

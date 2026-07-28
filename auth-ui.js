@@ -93,6 +93,32 @@
     .bimlva-auth-note { font-size: 12px; color: #6b7684; line-height: 1.4; }
     .bimlva-auth-error { font-size: 12px; color: #d43c59; min-height: 16px; }
     .bimlva-auth-ok { font-size: 12px; color: #168c63; }
+    .bimlva-auth-menu-wrap { position: relative; display: inline-flex; }
+    .bimlva-auth-dropdown {
+      position: absolute; top: calc(100% + 6px); right: 0; z-index: 2100;
+      min-width: 220px; padding: 6px;
+      background: #fff; color: #1c2733;
+      border: 1px solid #d2d9e2; border-radius: 12px;
+      box-shadow: 0 14px 36px rgba(15,23,42,.18);
+      display: none;
+    }
+    .bimlva-auth-dropdown.show { display: block; }
+    .bimlva-auth-dropdown a,
+    .bimlva-auth-dropdown button {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      text-align: left; border: 0; background: transparent;
+      padding: 9px 10px; border-radius: 8px;
+      font: inherit; font-size: 13px; font-weight: 650; color: #1c2733;
+      cursor: pointer; text-decoration: none;
+    }
+    .bimlva-auth-dropdown a:hover,
+    .bimlva-auth-dropdown button:hover { background: #f2f5f8; }
+    .bimlva-auth-dropdown .sep {
+      height: 1px; background: #e8edf3; margin: 4px 6px;
+    }
+    .bimlva-auth-dropdown .muted {
+      padding: 6px 10px 4px; font-size: 11px; color: #6b7684; font-weight: 600;
+    }
   `;
   document.head.appendChild(style);
 
@@ -224,12 +250,23 @@
     const btnClass = onDarkNav ? 'bimlva-auth-btn' : 'bimlva-auth-btn light';
 
     const html = user
-      ? `${user.isAdmin ? `<a class="${btnClass}" href="stats.html" title="Статистика (только admin)">📊 <span class="bimlva-auth-stats-label">Статистика</span></a>` : ''}
-         <button type="button" class="${btnClass}" data-auth-menu title="${escapeHtml((user.name ? user.name + ' · ' : '') + (user.email || '')}${user.isAdmin ? ' · admin' : '')}">
-           <span class="bimlva-auth-user">${escapeHtml(user.name || user.email || 'Аккаунт')}</span>
-           <span aria-hidden="true">▾</span>
-         </button>`
-      : `<button type="button" class="${btnClass}" data-auth-open>Войти</button>
+      ? `<div class="bimlva-auth-menu-wrap">
+           <button type="button" class="${btnClass}" data-auth-menu aria-haspopup="true" aria-expanded="false" title="${escapeHtml((user.name ? user.name + ' · ' : '') + (user.email || '') + (user.isAdmin ? ' · admin' : ''))}">
+             <span class="bimlva-auth-user">${escapeHtml(user.name || user.email || 'Аккаунт')}</span>
+             <span aria-hidden="true">▾</span>
+           </button>
+           <div class="bimlva-auth-dropdown" data-auth-dropdown>
+             <div class="muted">Личный кабинет</div>
+             <a href="cabinet.html"><span aria-hidden="true">▦</span> Мои приложения</a>
+             <a href="bim-lva-composer-ifc.html"><span aria-hidden="true">▣</span> Composer IFC</a>
+             <a href="bim-lva-composer-ai.html"><span aria-hidden="true">🤖</span> Composer AI</a>
+             ${user.isAdmin ? `<a href="stats.html"><span aria-hidden="true">📊</span> <span class="bimlva-auth-stats-label">Статистика</span></a>` : ''}
+             <div class="sep"></div>
+             <button type="button" data-auth-logout><span aria-hidden="true">↩</span> Выйти</button>
+           </div>
+         </div>`
+      : `<a class="${btnClass}" href="cabinet.html" title="Личный кабинет">Кабинет</a>
+         <button type="button" class="${btnClass}" data-auth-open>Войти</button>
          <button type="button" class="${btnClass}" data-auth-register>Регистрация</button>`;
 
     if (slots.length) {
@@ -254,15 +291,37 @@
     bindSlot(host, user);
   }
 
+  function closeAllDropdowns() {
+    document.querySelectorAll('[data-auth-dropdown].show').forEach((el) => {
+      el.classList.remove('show');
+      el.previousElementSibling?.setAttribute?.('aria-expanded', 'false');
+    });
+  }
+
   function bindSlot(root, user) {
     root.querySelector('[data-auth-open]')?.addEventListener('click', () => openAuth('login'));
     root.querySelector('[data-auth-register]')?.addEventListener('click', () => openAuth('register'));
-    root.querySelector('[data-auth-menu]')?.addEventListener('click', async () => {
-      const name = user?.name || user?.email || '';
-      const ok = confirm(`${name}\n${user?.email || ''}\n\nВыйти из аккаунта?`);
-      if (ok) await window.BimLvaAuth.logout();
+    const menuBtn = root.querySelector('[data-auth-menu]');
+    const dropdown = root.querySelector('[data-auth-dropdown]');
+    menuBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = !dropdown?.classList.contains('show');
+      closeAllDropdowns();
+      if (open && dropdown) {
+        dropdown.classList.add('show');
+        menuBtn.setAttribute('aria-expanded', 'true');
+      }
+    });
+    root.querySelector('[data-auth-logout]')?.addEventListener('click', async () => {
+      closeAllDropdowns();
+      await window.BimLvaAuth.logout();
     });
   }
+
+  document.addEventListener('click', () => closeAllDropdowns());
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAllDropdowns();
+  });
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
