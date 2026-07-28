@@ -5061,20 +5061,36 @@ uniform vec3 uBatchSelColor;
         function detectIfcLengthToMetersFromText(text) {
             if (!text) return 1;
             const head = text.slice(0, Math.min(text.length, 2_500_000));
-            // IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.) или с другим порядком enum
+
+            // 1) SI LENGTHUNIT — главный источник (Tekla часто ещё объявляет FOOT, но не использует его)
             const si = [...head.matchAll(/IFCSIUNIT\s*\(([^;]*)\)/gi)];
+            let siLengthScale = null;
             for (const m of si) {
                 const body = m[1].toUpperCase();
                 if (!body.includes('LENGTHUNIT')) continue;
-                if (body.includes('.MILLI.')) return 0.001;
-                if (body.includes('.CENTI.')) return 0.01;
-                if (body.includes('.DECI.')) return 0.1;
-                if (body.includes('.KILO.')) return 1000;
-                if (body.includes('.METRE.') || body.includes('.METER.')) return 1;
+                if (body.includes('.MILLI.')) { siLengthScale = 0.001; break; }
+                if (body.includes('.CENTI.')) { siLengthScale = 0.01; break; }
+                if (body.includes('.DECI.')) { siLengthScale = 0.1; break; }
+                if (body.includes('.KILO.')) { siLengthScale = 1000; break; }
+                if (body.includes('.METRE.') || body.includes('.METER.')) { siLengthScale = 1; break; }
             }
-            if (/IFCCONVERSIONBASEDUNIT\s*\([^;]*LENGTHUNIT[^;]*'(")?inch\1?/i.test(head)) return 0.0254;
-            if (/IFCCONVERSIONBASEDUNIT\s*\([^;]*LENGTHUNIT[^;]*'(")?foot\1?/i.test(head)) return 0.3048;
-            if (/IFCCONVERSIONBASEDUNIT\s*\([^;]*LENGTHUNIT[^;]*FOOT/i.test(head)) return 0.3048;
+            if (siLengthScale != null) return siLengthScale;
+
+            // 2) Conversion-based только если SI length нет.
+            // Важно: не брать FOOT просто потому что сущность объявлена — у Tekla она часто «лишняя».
+            const assignment = head.match(/IFCUNITASSIGNMENT\s*\(\s*\(([^)]*)\)/i);
+            const assignedRefs = assignment
+                ? new Set([...(assignment[1].matchAll(/#(\d+)/g))].map((x) => x[1]))
+                : null;
+            const conv = [...head.matchAll(/#(\d+)\s*=\s*IFCCONVERSIONBASEDUNIT\s*\(([^;]*)\)/gi)];
+            for (const m of conv) {
+                const id = m[1];
+                const body = m[2];
+                if (!/LENGTHUNIT/i.test(body)) continue;
+                if (assignedRefs && !assignedRefs.has(id)) continue;
+                if (/\binch\b/i.test(body)) return 0.0254;
+                if (/\bfoot\b/i.test(body) || /\bFOOT\b/.test(body)) return 0.3048;
+            }
             return 1;
         }
 
@@ -5766,6 +5782,103 @@ uniform vec3 uBatchSelColor;
             return schema;
         }
 
+        function countIfcBooleanOps(text) {
+            if (!text) return 0;
+            const m = String(text).match(/IFCBOOLEANRESULT\s*\(/gi);
+            return m ? m.length : 0;
+        }
+
+        /**
+         * Быстрая проверка STEP до OpenModel: обрыв файла / нет DATA — частая причина
+         * «не открывается» у больших экспортов Tekla.
+         */
+        function validateIfcStepFile(fileName, bytes) {
+            const n = bytes?.length || 0;
+            if (n < 64) {
+                throw new Error(`${fileName}: файл пустой или слишком короткий.`);
+            }
+            const head = new TextDecoder('utf-8').decode(bytes.subarray(0, Math.min(n, 512_000)));
+            const tail = new TextDecoder('utf-8').decode(bytes.subarray(Math.max(0, n - 8_192)));
+            if (!/ISO-10303-21/i.test(head)) {
+                throw new Error(`${fileName}: это не STEP/IFC (нет ISO-10303-21 в начале).`);
+            }
+            if (!/FILE_SCHEMA\s*\(/i.test(head)) {
+                throw new Error(`${fileName}: в HEADER нет FILE_SCHEMA — файл повреждён или обрезан.`);
+            }
+            if (!/\bDATA\s*;/i.test(head) && !/\bDATA\s*;/i.test(tail)) {
+                // DATA может быть далеко — ищем маркеры в хвосте/середине через sample
+                const midAt = Math.min(Math.floor(n / 2), Math.max(0, n - 64_000));
+                const mid = new TextDecoder('utf-8').decode(bytes.subarray(midAt, Math.min(n, midAt + 64_000)));
+                if (!/\bDATA\s*;/i.test(head) && !/\bDATA\s*;/i.test(mid) && !/\bDATA\s*;/i.test(tail)) {
+                    throw new Error(`${fileName}: нет секции DATA — файл обрезан при сохранении/скачивании.`);
+                }
+            }
+            if (!/END-ISO-10303-21\s*;/i.test(tail)) {
+                throw new Error(
+                    `${fileName}: файл обрезан (нет END-ISO-10303-21 в конце).\n` +
+                    `Так бывает при незавершённом экспорте из Tekla или битой копии.\n` +
+                    `Экспортируйте IFC заново (IFC2X3 / IFC4 / IFC4X3) и проверьте размер файла.`
+                );
+            }
+            return {
+                schema: detectIfcSchemaFromText(head),
+                booleanOps: countIfcBooleanOps(head) // только начало; ниже пересчитаем шире
+            };
+        }
+
+        function sampleIfcBooleanOps(bytes) {
+            // Считаем boolean не только в шапке: у Tekla их тысячи в DATA
+            const n = bytes.length;
+            const chunks = [];
+            chunks.push(bytes.subarray(0, Math.min(n, 1_000_000)));
+            if (n > 2_000_000) {
+                const mid = Math.floor(n / 2);
+                chunks.push(bytes.subarray(mid, Math.min(n, mid + 1_000_000)));
+            }
+            if (n > 1_000_000) {
+                chunks.push(bytes.subarray(Math.max(0, n - 1_000_000)));
+            }
+            const dec = new TextDecoder('utf-8');
+            let total = 0;
+            for (const c of chunks) total += countIfcBooleanOps(dec.decode(c));
+            return total;
+        }
+
+        async function streamIfcMeshes(modelID) {
+            const fragments = [];
+            let meshErrors = 0;
+            try {
+                ifcAPI.StreamAllMeshes(modelID, (flatMesh) => {
+                    try {
+                        const expressID = flatMesh.expressID;
+                        const placed = flatMesh.geometries;
+                        for (let i = 0; i < placed.size(); i++) {
+                            try {
+                                const pg = placed.get(i);
+                                const geom = getBufferGeometry(modelID, pg);
+                                const col = pg.color;
+                                const hex = new THREE.Color(col.x, col.y, col.z).getHex();
+                                const opacity = col.w;
+                                const matrix = new THREE.Matrix4().fromArray(pg.flatTransformation);
+                                fragments.push({ expressID, geom, matrix, hex, opacity });
+                            } catch (geomError) {
+                                meshErrors++;
+                                console.warn('Пропуск геометрии', geomError);
+                            }
+                        }
+                    } catch (meshError) {
+                        meshErrors++;
+                        console.warn('Пропуск меша', meshError);
+                    }
+                });
+            } catch (streamError) {
+                if (!fragments.length) throw streamError;
+                console.warn('Геометрия частично загружена:', streamError);
+                meshErrors++;
+            }
+            return { fragments, meshErrors };
+        }
+
         async function loadSingleIFC(file) {
             showLoader('ЧТЕНИЕ ФАЙЛА', file.name);
             await new Promise(r => setTimeout(r, 20));
@@ -5775,22 +5888,33 @@ uniform vec3 uBatchSelColor;
             try {
                 data = new Uint8Array(await file.arrayBuffer());
 
-                const headerPreview = new TextDecoder('utf-8').decode(
-                    data.subarray(0, Math.min(data.length, 256_000))
+                const headPreview = new TextDecoder('utf-8').decode(
+                    data.subarray(0, Math.min(data.length, 512_000))
                 );
-                const detectedSchema = assertSupportedIfcSchema(file.name, headerPreview);
+                validateIfcStepFile(file.name, data);
+                const detectedSchema = assertSupportedIfcSchema(file.name, headPreview);
+                const booleanOps = sampleIfcBooleanOps(data);
+                // Tekla CSG: быстрые bool часто дают 0 мешей — для таких файлов выключаем FAST_BOOLS
+                const preferExactBools = booleanOps >= 8;
 
-                // Геометрию сначала — пик памяти WASM ниже, чем OpenModel+полный текстовый индекс одновременно.
-                // USE_FAST_BOOLS снижает риск abort на сложных boolean-операциях.
-                // COORDINATE_TO_ORIGIN: false — общий сдвиг делаем сами (общий origin для нескольких IFC).
                 const openSettings = {
                     COORDINATE_TO_ORIGIN: false,
-                    USE_FAST_BOOLS: true,
+                    USE_FAST_BOOLS: !preferExactBools,
                     MEMORY_LIMIT: 512 * 1024 * 1024
                 };
+
+                showLoader(
+                    'ОТКРЫТИЕ IFC',
+                    preferExactBools
+                        ? `Схема ${detectedSchema || 'IFC'} · CSG/boolean (${booleanOps}+)…`
+                        : `Схема ${detectedSchema || 'IFC'}…`
+                );
+                await new Promise(r => setTimeout(r, 10));
+
                 modelID = ifcAPI.OpenModel(data, openSettings);
-                const modData = new IFCModelData(modelID, file.name);
+                let modData = new IFCModelData(modelID, file.name);
                 if (detectedSchema) modData.ifcSchema = detectedSchema;
+                modData.booleanOpsHint = booleanOps;
                 loadedModels.set(modelID, modData);
 
                 showLoader('ИНДЕКСАЦИЯ СВОЙСТВ', 'Поиск атрибутов...');
@@ -5801,39 +5925,40 @@ uniform vec3 uBatchSelColor;
                     console.warn('Pset index:', psetError);
                 }
 
-                showLoader('ГЕОМЕТРИЯ', 'Извлечение мешей...');
+                showLoader('ГЕОМЕТРИЯ', preferExactBools ? 'CSG/boolean (точнее, медленнее)…' : 'Извлечение мешей...');
                 await new Promise(r => setTimeout(r, 10));
 
-                const fragments = [];
-                let meshErrors = 0;
-                try {
-                    ifcAPI.StreamAllMeshes(modelID, (flatMesh) => {
-                        try {
-                            const expressID = flatMesh.expressID;
-                            const placed = flatMesh.geometries;
-                            for (let i = 0; i < placed.size(); i++) {
-                                try {
-                                    const pg = placed.get(i);
-                                    const geom = getBufferGeometry(modelID, pg);
-                                    const col = pg.color;
-                                    const hex = new THREE.Color(col.x, col.y, col.z).getHex();
-                                    const opacity = col.w;
-                                    const matrix = new THREE.Matrix4().fromArray(pg.flatTransformation);
-                                    fragments.push({ expressID, geom, matrix, hex, opacity });
-                                } catch (geomError) {
-                                    meshErrors++;
-                                    console.warn('Пропуск геометрии', geomError);
-                                }
-                            }
-                        } catch (meshError) {
-                            meshErrors++;
-                            console.warn('Пропуск меша', meshError);
-                        }
-                    });
-                } catch (streamError) {
-                    if (!fragments.length) throw streamError;
-                    console.warn('Геометрия частично загружена:', streamError);
-                    meshErrors++;
+                let { fragments, meshErrors } = await streamIfcMeshes(modelID);
+
+                // Пустая геометрия при FAST_BOOLS — повторяем без ускорения boolean (типичный Tekla)
+                if (!fragments.length && openSettings.USE_FAST_BOOLS) {
+                    console.warn(`[BIM.LVA] ${file.name}: 0 мешей при USE_FAST_BOOLS — повтор без ускорения`);
+                    showLoader('ГЕОМЕТРИЯ', 'Повтор без ускорения boolean…');
+                    await new Promise(r => setTimeout(r, 10));
+                    try { ifcAPI.CloseModel(modelID); } catch (_) {}
+                    loadedModels.delete(modelID);
+                    try {
+                        globalGroup.remove(modData.group);
+                        disposeModelBatches(modData);
+                    } catch (_) {}
+                    openSettings.USE_FAST_BOOLS = false;
+                    modelID = ifcAPI.OpenModel(data, openSettings);
+                    const retryData = new IFCModelData(modelID, file.name);
+                    if (detectedSchema) retryData.ifcSchema = detectedSchema;
+                    retryData.booleanOpsHint = booleanOps;
+                    modData = retryData;
+                    loadedModels.set(modelID, modData);
+                    try { buildPsetIndex(modData); } catch (_) {}
+                    ({ fragments, meshErrors } = await streamIfcMeshes(modelID));
+                }
+
+                if (!fragments.length) {
+                    throw new Error(
+                        `${file.name}: IFC открыт (схема ${detectedSchema || 'IFC'}), но геометрия не извлечена.\n` +
+                        `Частая причина — сложные CSG/boolean из Tekla (в файле ~${booleanOps} boolean).\n` +
+                        `Попробуйте в Tekla: Export → IFC без лишних вырезов / Coordination View, ` +
+                        `или экспортируйте IFC4 с упрощённой геометрией.`
+                    );
                 }
 
                 showLoader('ОПТИМИЗАЦИЯ', `${fragments.length.toLocaleString('ru-RU')} фрагментов…`);
