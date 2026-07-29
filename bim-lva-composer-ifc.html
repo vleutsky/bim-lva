@@ -2415,7 +2415,7 @@
             <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
                 <button class="btn" id="clashRecheckBtn" title="Перепроверить сохранённые пары по GlobalId">↻ Перепроверить по GUID</button>
                 <button class="btn" id="clashExportBtn" title="Экспорт отчёта JSON с GlobalId">⬇ JSON</button>
-                <button class="btn" id="clashExportExcelBtn" title="Экспорт отчёта в Excel (.xls)">⬇ Excel</button>
+                <button class="btn" id="clashExportExcelBtn" title="Excel: сводка, группировка по элементам/классам и детали">⬇ Excel</button>
             </div>
             <div class="modal-actions">
                 <button class="btn" id="cancelClash">Закрыть</button>
@@ -10440,23 +10440,172 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 .replace(/"/g, '&quot;');
         }
 
-        function clashReportToSpreadsheetXml(report) {
-            const rows = [
+        function spreadsheetRowsToXmlTable(rows) {
+            return rows.map((row) => {
+                const cells = row.map((cell) => {
+                    const isNum = typeof cell === 'number'
+                        || (typeof cell === 'string'
+                            && cell !== ''
+                            && Number.isFinite(Number(cell))
+                            && !/[A-Za-z_\-]/.test(cell));
+                    const type = isNum ? 'Number' : 'String';
+                    return `<Cell><Data ss:Type="${type}">${escapeXmlSpreadsheet(cell)}</Data></Cell>`;
+                }).join('');
+                return `<Row>${cells}</Row>`;
+            }).join('');
+        }
+
+        function clashElementGroupKey(ref, side, filename) {
+            const gid = ref?.ifcGlobalId ? String(ref.ifcGlobalId) : '';
+            if (gid) return `${side}|gid:${gid}`;
+            return `${side}|file:${filename || ''}|eid:${ref?.expressID ?? ''}`;
+        }
+
+        function buildClashExcelSheets(report) {
+            const pairs = report.pairs || [];
+            const fileA = report.modelA?.filename || '';
+            const fileB = report.modelB?.filename || '';
+
+            // --- Группировка по элементам ---
+            const byElement = new Map();
+            const bumpElement = (ref, side, filename, classPair, status) => {
+                const key = clashElementGroupKey(ref, side, filename);
+                let row = byElement.get(key);
+                if (!row) {
+                    row = {
+                        side,
+                        file: filename,
+                        globalId: ref?.ifcGlobalId || '',
+                        expressID: ref?.expressID ?? '',
+                        ifcClass: ref?.ifcClass || '',
+                        name: ref?.name || '',
+                        clashes: 0,
+                        open: 0,
+                        resolved: 0,
+                        missing: 0,
+                        partners: new Set(),
+                        classPairs: new Set()
+                    };
+                    byElement.set(key, row);
+                }
+                row.clashes += 1;
+                const st = status || 'open';
+                if (st === 'open') row.open += 1;
+                else if (st === 'resolved') row.resolved += 1;
+                else if (st === 'missing') row.missing += 1;
+                if (classPair) row.classPairs.add(classPair);
+            };
+
+            for (const p of pairs) {
+                const a = p.a || {};
+                const b = p.b || {};
+                bumpElement(a, 'A', fileA, p.classPair, p.status);
+                bumpElement(b, 'B', fileB, p.classPair, p.status);
+                // partner counts for A/B
+                const keyA = clashElementGroupKey(a, 'A', fileA);
+                const keyB = clashElementGroupKey(b, 'B', fileB);
+                const partnerA = b.ifcGlobalId || `${fileB}#${b.expressID ?? ''}`;
+                const partnerB = a.ifcGlobalId || `${fileA}#${a.expressID ?? ''}`;
+                byElement.get(keyA)?.partners.add(partnerA);
+                byElement.get(keyB)?.partners.add(partnerB);
+            }
+
+            const elementRows = [
+                ['side', 'file', 'globalId', 'expressID', 'class', 'name',
+                 'clashes', 'partners', 'open', 'resolved', 'missing', 'classPairs']
+            ];
+            [...byElement.values()]
+                .sort((x, y) => y.clashes - x.clashes || String(x.name).localeCompare(String(y.name), 'ru'))
+                .forEach((r) => {
+                    elementRows.push([
+                        r.side,
+                        r.file,
+                        r.globalId,
+                        r.expressID,
+                        r.ifcClass,
+                        r.name,
+                        r.clashes,
+                        r.partners.size,
+                        r.open,
+                        r.resolved,
+                        r.missing,
+                        [...r.classPairs].slice(0, 12).join(' | ')
+                    ]);
+                });
+
+            // --- Группировка по IFC-классу ---
+            const byClass = new Map();
+            for (const r of byElement.values()) {
+                const cls = r.ifcClass || 'UNKNOWN';
+                let g = byClass.get(cls);
+                if (!g) {
+                    g = { ifcClass: cls, elements: 0, clashes: 0 };
+                    byClass.set(cls, g);
+                }
+                g.elements += 1;
+                g.clashes += r.clashes;
+            }
+            const classRows = [
+                ['class', 'elements', 'clashes']
+            ];
+            [...byClass.values()]
+                .sort((x, y) => y.clashes - x.clashes || x.ifcClass.localeCompare(y.ifcClass))
+                .forEach((g) => classRows.push([g.ifcClass, g.elements, g.clashes]));
+
+            // --- Группировка по паре классов / разделов ---
+            const byPair = new Map();
+            for (const p of pairs) {
+                const label = p.classPair || '?↔?';
+                let g = byPair.get(label);
+                if (!g) {
+                    g = { label, count: 0, open: 0, resolved: 0, missing: 0 };
+                    byPair.set(label, g);
+                }
+                g.count += 1;
+                const st = p.status || 'open';
+                if (st === 'open') g.open += 1;
+                else if (st === 'resolved') g.resolved += 1;
+                else if (st === 'missing') g.missing += 1;
+            }
+            const pairGroupRows = [
+                ['classPair', 'count', 'open', 'resolved', 'missing']
+            ];
+            [...byPair.values()]
+                .sort((x, y) => y.count - x.count || x.label.localeCompare(y.label, 'ru'))
+                .forEach((g) => pairGroupRows.push([g.label, g.count, g.open, g.resolved, g.missing]));
+
+            // --- Сводка ---
+            const summaryRows = [
+                ['metric', 'value'],
+                ['created', report.created || ''],
+                ['preset', report.classPresetLabel || report.classPreset || ''],
+                ['modelA', fileA],
+                ['modelB', fileB],
+                ['pairs_total', pairs.length],
+                ['elements_unique', byElement.size],
+                ['classes_unique', byClass.size],
+                ['classPairs_unique', byPair.size],
+                ['tolerance_A', report.tolerance ?? ''],
+                ['tolerance_B', report.toleranceB ?? '']
+            ];
+
+            // --- Детали пар ---
+            const detailRows = [
                 ['status', 'pair', 'a_file', 'a_globalId', 'a_expressID', 'a_class', 'a_name',
                  'b_file', 'b_globalId', 'b_expressID', 'b_class', 'b_name', 'foundAt']
             ];
-            for (const p of report.pairs || []) {
+            for (const p of pairs) {
                 const a = p.a || {};
                 const b = p.b || {};
-                rows.push([
+                detailRows.push([
                     p.status || '',
                     p.classPair || '',
-                    report.modelA?.filename || '',
+                    fileA,
                     a.ifcGlobalId || '',
                     a.expressID ?? '',
                     a.ifcClass || '',
                     a.name || '',
-                    report.modelB?.filename || '',
+                    fileB,
                     b.ifcGlobalId || '',
                     b.expressID ?? '',
                     b.ifcClass || '',
@@ -10464,18 +10613,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     p.foundAt || report.created || ''
                 ]);
             }
-            const body = rows.map((row) => {
-                const cells = row.map((cell) => {
-                    const isNum = typeof cell === 'number' || (typeof cell === 'string' && cell !== '' && Number.isFinite(Number(cell)) && !/[A-Za-z_\-]/.test(cell));
-                    const type = isNum ? 'Number' : 'String';
-                    return `<Cell><Data ss:Type="${type}">${escapeXmlSpreadsheet(cell)}</Data></Cell>`;
-                }).join('');
-                return `<Row>${cells}</Row>`;
-            }).join('');
+
+            return [
+                { name: 'Сводка', rows: summaryRows },
+                { name: 'По элементам', rows: elementRows },
+                { name: 'По классам', rows: classRows },
+                { name: 'По парам классов', rows: pairGroupRows },
+                { name: 'Детали', rows: detailRows }
+            ];
+        }
+
+        function clashReportToSpreadsheetXml(report) {
+            const sheets = buildClashExcelSheets(report);
+            const worksheets = sheets.map((sheet) => {
+                const safeName = String(sheet.name || 'Sheet').slice(0, 31).replace(/[\\/*?:\[\]]/g, '_');
+                return `<Worksheet ss:Name="${escapeXmlSpreadsheet(safeName)}"><Table>${spreadsheetRowsToXmlTable(sheet.rows)}</Table></Worksheet>`;
+            }).join('\r\n');
             return `<?xml version="1.0"?>\r\n<?mso-application progid="Excel.Sheet"?>\r\n` +
                 `<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" ` +
                 `xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\r\n` +
-                `<Worksheet ss:Name="Clashes"><Table>${body}</Table></Worksheet>\r\n` +
+                `${worksheets}\r\n` +
                 `</Workbook>`;
         }
 
@@ -16540,8 +16697,8 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.07.29f',
-            buildId: 'ac2b110',
+            version: '2026.07.29g',
+            buildId: '357168b',
             released: '2026-07-29',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -16549,7 +16706,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.07.29f: окно коллизий плавающее/перетаскиваемое — сцена видна при просмотре пары.'
+                '2026.07.29g: Excel коллизий — листы «По элементам» / классам / парам с количеством.'
             ]
         };
 
@@ -16593,7 +16750,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=78').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=79').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
