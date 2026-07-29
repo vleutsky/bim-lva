@@ -5268,6 +5268,55 @@ uniform vec3 uBatchSelColor;
         }
 
         /**
+         * web-ifc часто уже вшивает LENGTHUNIT в flatTransformation
+         * (локальная геометрия в мм, мир в метрах → |world|/|local| ≈ 0.001).
+         * Повторный ×0.001 сжимает модель в пыль: дерево есть, в 3D «пусто».
+         */
+        function estimateIfcFragmentsBakedLengthScale(fragments, maxSamples = 48) {
+            const ratios = [];
+            const localSize = new THREE.Vector3();
+            const worldSize = new THREE.Vector3();
+            for (let i = 0; i < (fragments?.length || 0) && ratios.length < maxSamples; i++) {
+                const frag = fragments[i];
+                const geom = frag && frag.geom;
+                if (!geom || !frag.matrix) continue;
+                const pos = geom.getAttribute && geom.getAttribute('position');
+                if (!pos || !pos.count || pos.count < 3) continue;
+                try {
+                    if (!geom.boundingBox) geom.computeBoundingBox();
+                    const local = geom.boundingBox;
+                    if (!local || local.isEmpty()) continue;
+                    local.getSize(localSize);
+                    const ls = localSize.length();
+                    if (!(ls > 1e-9)) continue;
+                    const world = local.clone().applyMatrix4(frag.matrix);
+                    if (!world || world.isEmpty()) continue;
+                    world.getSize(worldSize);
+                    const ws = worldSize.length();
+                    if (!(ws > 1e-12) || !Number.isFinite(ws)) continue;
+                    ratios.push(ws / ls);
+                } catch (_) {}
+            }
+            if (!ratios.length) return null;
+            ratios.sort((a, b) => a - b);
+            return ratios[Math.floor(ratios.length / 2)];
+        }
+
+        function resolveIfcLengthScaleToApply(fragments, declaredScale) {
+            const declared = Number(declaredScale);
+            if (!(declared > 0) || Math.abs(declared - 1) < 1e-12) return 1;
+            const baked = estimateIfcFragmentsBakedLengthScale(fragments);
+            if (baked != null && Number.isFinite(baked) && baked > 0) {
+                const rel = baked / declared;
+                // Матрицы уже содержат declared (типичный Tekla mm → m в web-ifc)
+                if (rel > 0.25 && rel < 4) return 1;
+                // Матрицы без пересчёта единиц (baked ≈ 1) — применяем declared
+                if (baked > 0.25 && baked < 4) return declared;
+            }
+            return declared;
+        }
+
+        /**
          * Эвристика мм→м для файлов без явных единиц (DXF/FBX/STL…).
          * Геодезия в метрах редко даёт |center| > 2e7; в мм 20 км уже 2e7.
          */
@@ -6234,10 +6283,13 @@ uniform vec3 uBatchSelColor;
                 await new Promise(r => setTimeout(r, 10));
 
                 // IFC часто в мм, LandXML/Civil — в метрах. Приводим к метрам до origin.
+                // Но web-ifc обычно уже перевёл placement в метры — не масштабируем дважды.
                 const rawPreview = new TextDecoder('utf-8').decode(
                     data.subarray(0, Math.min(data.length, 2_500_000))
                 );
-                const lengthToMeters = detectIfcLengthToMeters(modelID, rawPreview);
+                const declaredLengthToMeters = detectIfcLengthToMeters(modelID, rawPreview);
+                const lengthToMeters = resolveIfcLengthScaleToApply(fragments, declaredLengthToMeters);
+                modData.ifcDeclaredLengthToMeters = declaredLengthToMeters;
                 if (scaleIfcFragmentsToMeters(fragments, lengthToMeters)) {
                     modData.lengthToMeters = lengthToMeters;
                     console.info(
@@ -6245,6 +6297,13 @@ uniform vec3 uBatchSelColor;
                     );
                     showLoader('ЕДИНИЦЫ', `IFC → метры (×${lengthToMeters})…`);
                     await new Promise(r => setTimeout(r, 10));
+                } else {
+                    modData.lengthToMeters = 1;
+                    if (declaredLengthToMeters && Math.abs(declaredLengthToMeters - 1) > 1e-12) {
+                        console.info(
+                            `[BIM.LVA] IFC: declared ×${declaredLengthToMeters}, но web-ifc уже в метрах — повторный scale пропущен.`
+                        );
+                    }
                 }
 
                 const rebased = rebaseLargeCoordinateFragments(fragments, {
@@ -15941,8 +16000,8 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.07.29b',
-            buildId: '6a28ccb',
+            version: '2026.07.29c',
+            buildId: 'tekla-units',
             released: '2026-07-29',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -15950,7 +16009,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.07.29b: кнопка «О продукте»; Tekla IFC2X3 — COORDINATE_TO_ORIGIN до OpenModel + retry пустых CSG-мешей.'
+                '2026.07.29c: не масштабировать IFC×0.001 повторно (web-ifc уже в метрах) — иначе Tekla «дерево есть, 3D пусто».'
             ]
         };
 
@@ -15994,7 +16053,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=74').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=75').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
