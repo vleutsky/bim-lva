@@ -809,6 +809,32 @@
         }
         .clash-pair-row:hover { border-color: var(--blue); }
         .clash-pair-row .clash-pair-acts { display: flex; gap: 4px; flex-shrink: 0; }
+        .clash-progress {
+            margin-top: 8px;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .clash-progress.show { display: flex; }
+        .clash-progress-track {
+            height: 10px;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--panel-2) 88%, #fff);
+            border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+            overflow: hidden;
+        }
+        .clash-progress-fill {
+            height: 100%;
+            width: 0%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 75%, #1a6b5a), var(--accent));
+            transition: width .1s linear;
+        }
+        .clash-progress-label {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 12px;
+            color: var(--txt-dim);
+        }
 
 
         /* ---- generic panel ---- */
@@ -2275,17 +2301,55 @@
     </div>
 
     <div class="modal-backdrop" id="clashModal">
-        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(560px,100%)">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(640px,100%)">
             <h3>Умные коллизии 2.0 (AABB)</h3>
-            <div class="bulk-note">Пары классов + допуск. Клик по паре — изоляция; «BCF» — заметка. Пары по <b>IFC GlobalId</b>. Не заменяет точный clash detection.</div>
+            <div class="bulk-note">Пары классов по разделам (АР / КР / КМ / КЖ / ОВ / ВК / ЭО / СС / ТХ) + допуск. Клик по паре — изоляция; «BCF» — заметка. Пары по <b>IFC GlobalId</b>. Не заменяет точный clash detection.</div>
             <div class="prop small"><div class="k">Модель A</div><select class="editInput" id="clashModelA"></select></div>
             <div class="prop small"><div class="k">Модель B</div><select class="editInput" id="clashModelB"></select></div>
             <div class="prop small"><div class="k">Пары классов</div>
                 <select class="editInput" id="clashClassPreset">
-                    <option value="all">Все классы</option>
-                    <option value="pipe-struct">Трубы ↔ Конструкции</option>
-                    <option value="duct-struct">Воздуховоды ↔ Конструкции</option>
-                    <option value="cable-struct">Кабели ↔ Конструкции</option>
+                    <option value="matrix">Полная матрица разделов</option>
+                    <option value="all">Все классы (без фильтра)</option>
+                    <optgroup label="АР ↔ …">
+                        <option value="ar-kr">АР ↔ КР</option>
+                        <option value="ar-km">АР ↔ КМ</option>
+                        <option value="ar-kj">АР ↔ КЖ</option>
+                        <option value="ar-ov">АР ↔ ОВ</option>
+                        <option value="ar-vk">АР ↔ ВК</option>
+                        <option value="ar-eo">АР ↔ ЭО</option>
+                        <option value="ar-ss">АР ↔ СС</option>
+                        <option value="ar-tx">АР ↔ ТХ</option>
+                    </optgroup>
+                    <optgroup label="КР / КМ / КЖ">
+                        <option value="kr-km">КР ↔ КМ</option>
+                        <option value="kr-kj">КР ↔ КЖ</option>
+                        <option value="km-kj">КМ ↔ КЖ</option>
+                        <option value="kr-ov">КР ↔ ОВ</option>
+                        <option value="km-ov">КМ ↔ ОВ</option>
+                        <option value="kj-ov">КЖ ↔ ОВ</option>
+                        <option value="kr-vk">КР ↔ ВК</option>
+                        <option value="km-vk">КМ ↔ ВК</option>
+                        <option value="kj-vk">КЖ ↔ ВК</option>
+                        <option value="kr-eo">КР ↔ ЭО</option>
+                        <option value="km-eo">КМ ↔ ЭО</option>
+                        <option value="kj-eo">КЖ ↔ ЭО</option>
+                    </optgroup>
+                    <optgroup label="Инженерия">
+                        <option value="ov-vk">ОВ ↔ ВК</option>
+                        <option value="ov-eo">ОВ ↔ ЭО</option>
+                        <option value="ov-ss">ОВ ↔ СС</option>
+                        <option value="vk-eo">ВК ↔ ЭО</option>
+                        <option value="vk-ss">ВК ↔ СС</option>
+                        <option value="eo-ss">ЭО ↔ СС</option>
+                        <option value="tx-ov">ТХ ↔ ОВ</option>
+                        <option value="tx-vk">ТХ ↔ ВК</option>
+                        <option value="tx-eo">ТХ ↔ ЭО</option>
+                    </optgroup>
+                    <optgroup label="Быстрые">
+                        <option value="pipe-struct">Трубы ↔ Конструкции</option>
+                        <option value="duct-struct">Воздуховоды ↔ Конструкции</option>
+                        <option value="cable-struct">Кабели ↔ Конструкции</option>
+                    </optgroup>
                     <option value="custom">Свои классы…</option>
                 </select>
             </div>
@@ -2295,11 +2359,18 @@
             </div>
             <div class="prop small"><div class="k">Допуск A (м)</div><input class="editInput" id="clashTolerance" type="number" step="0.01" value="0.01" title="Расширение габарита стороны A"></div>
             <div class="prop small"><div class="k">Допуск B (м)</div><input class="editInput" id="clashToleranceB" type="number" step="0.01" value="0.01" title="Расширение габарита стороны B"></div>
+            <div class="clash-progress" id="clashProgressWrap" aria-live="polite">
+                <div class="clash-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="clashProgressTrack">
+                    <div class="clash-progress-fill" id="clashProgressFill"></div>
+                </div>
+                <div class="clash-progress-label" id="clashProgressLabel">0%</div>
+            </div>
             <div class="bulk-note" id="clashStatus">Выберите две разные модели и запустите проверку.</div>
             <div id="clashReportList" class="bulk-note" style="margin-top:8px;max-height:220px;overflow:auto"></div>
             <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
                 <button class="btn" id="clashRecheckBtn" title="Перепроверить сохранённые пары по GlobalId">↻ Перепроверить по GUID</button>
                 <button class="btn" id="clashExportBtn" title="Экспорт отчёта JSON с GlobalId">⬇ JSON</button>
+                <button class="btn" id="clashExportExcelBtn" title="Экспорт отчёта в Excel (.xls)">⬇ Excel</button>
             </div>
             <div class="modal-actions">
                 <button class="btn" id="cancelClash">Закрыть</button>
@@ -10107,20 +10178,127 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }).join('');
         }
 
-        const CLASH_CLASS_PRESETS = {
-            'pipe-struct': {
-                a: ['PIPESEGMENT', 'PIPEFITTING', 'FLOWSEGMENT', 'FLOWFITTING', 'PIPE'],
-                b: ['BEAM', 'COLUMN', 'WALL', 'WALLSTANDARDCASE', 'SLAB', 'MEMBER', 'PLATE', 'FOOTING', 'PILE']
+        const CLASH_DISCIPLINES = {
+            AR: {
+                label: 'АР',
+                classes: [
+                    'WALL', 'WALLSTANDARDCASE', 'SLAB', 'ROOF', 'DOOR', 'WINDOW', 'CURTAINWALL',
+                    'RAILING', 'STAIR', 'STAIRFLIGHT', 'RAMP', 'RAMPFLIGHT', 'COVERING',
+                    'FURNISHINGELEMENT', 'BUILDINGELEMENTPROXY', 'SPACE', 'OPENINGELEMENT'
+                ]
             },
-            'duct-struct': {
-                a: ['DUCTSEGMENT', 'DUCTFITTING', 'DUCTSILENCER', 'AIRTERMINAL'],
-                b: ['BEAM', 'COLUMN', 'WALL', 'WALLSTANDARDCASE', 'SLAB', 'MEMBER', 'PLATE']
+            KR: {
+                label: 'КР',
+                classes: [
+                    'BEAM', 'COLUMN', 'MEMBER', 'PLATE', 'SLAB', 'WALL', 'WALLSTANDARDCASE',
+                    'FOOTING', 'PILE', 'REINFORCINGBAR', 'REINFORCINGMESH', 'TENDON', 'TENDONANCHOR',
+                    'ELEMENTASSEMBLY', 'BUILDINGELEMENTPROXY'
+                ]
             },
-            'cable-struct': {
-                a: ['CABLECARRIERSEGMENT', 'CABLECARRIERFITTING', 'CABLESEGMENT', 'WIRESEGMENT'],
-                b: ['BEAM', 'COLUMN', 'WALL', 'WALLSTANDARDCASE', 'SLAB', 'MEMBER']
+            KM: {
+                label: 'КМ',
+                classes: [
+                    'BEAM', 'COLUMN', 'MEMBER', 'PLATE', 'FASTENER', 'MECHANICALFASTENER',
+                    'ELEMENTASSEMBLY', 'FOOTING', 'PILE', 'BUILDINGELEMENTPROXY'
+                ]
+            },
+            KJ: {
+                label: 'КЖ',
+                classes: [
+                    'BEAM', 'COLUMN', 'SLAB', 'WALL', 'WALLSTANDARDCASE', 'FOOTING', 'PILE',
+                    'REINFORCINGBAR', 'REINFORCINGMESH', 'TENDON', 'TENDONANCHOR', 'MEMBER',
+                    'BUILDINGELEMENTPROXY'
+                ]
+            },
+            OV: {
+                label: 'ОВ',
+                classes: [
+                    'DUCTSEGMENT', 'DUCTFITTING', 'DUCTSILENCER', 'AIRTERMINAL', 'DAMPER',
+                    'FLOWTERMINAL', 'FLOWSEGMENT', 'FLOWFITTING', 'FLOWCONTROLLER',
+                    'FLOWMOVINGDEVICE', 'FLOWSTORAGEDEVICE', 'FAN', 'CHILLER', 'BOILER',
+                    'COIL', 'ENERGYCONVERSIONDEVICE', 'UNITARYEQUIPMENT'
+                ]
+            },
+            VK: {
+                label: 'ВК',
+                classes: [
+                    'PIPESEGMENT', 'PIPEFITTING', 'PIPE', 'FLOWSEGMENT', 'FLOWFITTING',
+                    'FLOWTERMINAL', 'SANITARYTERMINAL', 'WASTETERMINAL', 'INTERCEPTOR',
+                    'TANK', 'PUMP', 'FLOWCONTROLLER', 'FLOWMOVINGDEVICE'
+                ]
+            },
+            EO: {
+                label: 'ЭО',
+                classes: [
+                    'CABLESEGMENT', 'CABLECARRIERSEGMENT', 'CABLECARRIERFITTING', 'WIRESEGMENT',
+                    'LIGHTFIXTURE', 'LAMP', 'ELECTRICAPPLIANCE', 'ELECTRICDISTRIBUTIONBOARD',
+                    'ELECTRICFLOWSTORAGEDEVICE', 'ELECTRICGENERATOR', 'ELECTRICMOTOR',
+                    'SWITCHINGDEVICE', 'OUTLET', 'PROTECTIVEDEVICE', 'TRANSFORMER'
+                ]
+            },
+            SS: {
+                label: 'СС',
+                classes: [
+                    'CABLESEGMENT', 'CABLECARRIERSEGMENT', 'CABLECARRIERFITTING',
+                    'COMMUNICATIONSAPPLIANCE', 'AUDIOVISUALAPPLIANCE', 'ALARM', 'SENSOR',
+                    'CONTROLLER', 'ACTUATOR', 'FIREDETECTION'
+                ]
+            },
+            TX: {
+                label: 'ТХ',
+                classes: [
+                    'UNITARYEQUIPMENT', 'TRANSPORT', 'TANK', 'VESSEL', 'ENGINEQUIPMENT',
+                    'BUILDINGELEMENTPROXY', 'ELEMENTASSEMBLY', 'FLOWMOVINGDEVICE'
+                ]
             }
         };
+
+        const CLASH_STRUCT_CLASSES = [
+            'BEAM', 'COLUMN', 'WALL', 'WALLSTANDARDCASE', 'SLAB', 'MEMBER', 'PLATE', 'FOOTING', 'PILE'
+        ];
+
+        const CLASH_CLASS_PRESETS = {
+            'pipe-struct': {
+                label: 'Трубы ↔ Конструкции',
+                a: ['PIPESEGMENT', 'PIPEFITTING', 'FLOWSEGMENT', 'FLOWFITTING', 'PIPE'],
+                b: CLASH_STRUCT_CLASSES
+            },
+            'duct-struct': {
+                label: 'Воздуховоды ↔ Конструкции',
+                a: ['DUCTSEGMENT', 'DUCTFITTING', 'DUCTSILENCER', 'AIRTERMINAL'],
+                b: CLASH_STRUCT_CLASSES
+            },
+            'cable-struct': {
+                label: 'Кабели ↔ Конструкции',
+                a: ['CABLECARRIERSEGMENT', 'CABLECARRIERFITTING', 'CABLESEGMENT', 'WIRESEGMENT'],
+                b: CLASH_STRUCT_CLASSES
+            }
+        };
+
+        const CLASH_MATRIX_ORDER = ['AR', 'KR', 'KM', 'KJ', 'OV', 'VK', 'EO', 'SS', 'TX'];
+
+        function clashDisciplinePairKey(aKey, bKey) {
+            return `${String(aKey).toLowerCase()}-${String(bKey).toLowerCase()}`;
+        }
+
+        (function registerDisciplinePairPresets() {
+            for (let i = 0; i < CLASH_MATRIX_ORDER.length; i++) {
+                for (let j = i + 1; j < CLASH_MATRIX_ORDER.length; j++) {
+                    const aKey = CLASH_MATRIX_ORDER[i];
+                    const bKey = CLASH_MATRIX_ORDER[j];
+                    const a = CLASH_DISCIPLINES[aKey];
+                    const b = CLASH_DISCIPLINES[bKey];
+                    const key = clashDisciplinePairKey(aKey, bKey);
+                    CLASH_CLASS_PRESETS[key] = {
+                        label: `${a.label} ↔ ${b.label}`,
+                        a: a.classes,
+                        b: b.classes,
+                        disciplineA: a.label,
+                        disciplineB: b.label
+                    };
+                }
+            }
+        })();
 
         function parseClashClassList(str) {
             return String(str || '')
@@ -10129,18 +10307,142 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 .filter(Boolean);
         }
 
-        function getClashClassFilter() {
-            const preset = $('clashClassPreset')?.value || 'all';
+        function buildClashMatrixSpecs() {
+            const specs = [];
+            for (let i = 0; i < CLASH_MATRIX_ORDER.length; i++) {
+                for (let j = i + 1; j < CLASH_MATRIX_ORDER.length; j++) {
+                    const aKey = CLASH_MATRIX_ORDER[i];
+                    const bKey = CLASH_MATRIX_ORDER[j];
+                    const a = CLASH_DISCIPLINES[aKey];
+                    const b = CLASH_DISCIPLINES[bKey];
+                    specs.push({
+                        label: `${a.label} ↔ ${b.label}`,
+                        a: new Set(a.classes),
+                        b: new Set(b.classes)
+                    });
+                }
+            }
+            return specs;
+        }
+
+        /** null = без фильтра; иначе список {label, a:Set, b:Set} */
+        function getClashCheckSpecs() {
+            const preset = $('clashClassPreset')?.value || 'matrix';
             if (preset === 'all') return null;
+            if (preset === 'matrix') return buildClashMatrixSpecs();
             if (preset === 'custom') {
-                return {
+                return [{
+                    label: 'custom',
                     a: new Set(parseClashClassList($('clashClassesA')?.value)),
                     b: new Set(parseClashClassList($('clashClassesB')?.value))
-                };
+                }];
             }
             const p = CLASH_CLASS_PRESETS[preset];
             if (!p) return null;
-            return { a: new Set(p.a), b: new Set(p.b) };
+            return [{
+                label: p.label || preset,
+                a: new Set(p.a),
+                b: new Set(p.b)
+            }];
+        }
+
+        function clashClassAllowed(cls, specs, side) {
+            if (!specs) return true;
+            return specs.some((s) => s[side] && s[side].has(cls));
+        }
+
+        function matchClashSpecLabel(clsA, clsB, specs) {
+            if (!specs) return `${clsA}↔${clsB}`;
+            for (const s of specs) {
+                if (s.a.has(clsA) && s.b.has(clsB)) {
+                    return `${s.label} · ${clsA}↔${clsB}`;
+                }
+            }
+            return null;
+        }
+
+        function setClashProgress(ratio, label) {
+            const wrap = $('clashProgressWrap');
+            const fill = $('clashProgressFill');
+            const lab = $('clashProgressLabel');
+            const track = $('clashProgressTrack');
+            if (!wrap || !fill) return;
+            wrap.classList.add('show');
+            const r = Math.max(0, Math.min(1, Number(ratio) || 0));
+            const pct = Math.round(r * 100);
+            fill.style.width = `${Math.max(2, pct)}%`;
+            if (lab) lab.textContent = label ? `${pct}% · ${label}` : `${pct}%`;
+            if (track) {
+                track.setAttribute('aria-valuenow', String(pct));
+                track.setAttribute('aria-valuetext', lab?.textContent || `${pct}%`);
+            }
+        }
+
+        function hideClashProgress() {
+            const wrap = $('clashProgressWrap');
+            if (wrap) wrap.classList.remove('show');
+        }
+
+        function yieldToUi() {
+            return new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
+        function escapeXmlSpreadsheet(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function clashReportToSpreadsheetXml(report) {
+            const rows = [
+                ['status', 'pair', 'a_file', 'a_globalId', 'a_expressID', 'a_class', 'a_name',
+                 'b_file', 'b_globalId', 'b_expressID', 'b_class', 'b_name', 'foundAt']
+            ];
+            for (const p of report.pairs || []) {
+                const a = p.a || {};
+                const b = p.b || {};
+                rows.push([
+                    p.status || '',
+                    p.classPair || '',
+                    report.modelA?.filename || '',
+                    a.ifcGlobalId || '',
+                    a.expressID ?? '',
+                    a.ifcClass || '',
+                    a.name || '',
+                    report.modelB?.filename || '',
+                    b.ifcGlobalId || '',
+                    b.expressID ?? '',
+                    b.ifcClass || '',
+                    b.name || '',
+                    p.foundAt || report.created || ''
+                ]);
+            }
+            const body = rows.map((row) => {
+                const cells = row.map((cell) => {
+                    const isNum = typeof cell === 'number' || (typeof cell === 'string' && cell !== '' && Number.isFinite(Number(cell)) && !/[A-Za-z_\-]/.test(cell));
+                    const type = isNum ? 'Number' : 'String';
+                    return `<Cell><Data ss:Type="${type}">${escapeXmlSpreadsheet(cell)}</Data></Cell>`;
+                }).join('');
+                return `<Row>${cells}</Row>`;
+            }).join('');
+            return `<?xml version="1.0"?>\r\n<?mso-application progid="Excel.Sheet"?>\r\n` +
+                `<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" ` +
+                `xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\r\n` +
+                `<Worksheet ss:Name="Clashes"><Table>${body}</Table></Worksheet>\r\n` +
+                `</Workbook>`;
+        }
+
+        function downloadClashReportExcel(report) {
+            const xml = clashReportToSpreadsheetXml(report);
+            const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `clash-guid-${(report.created || '').slice(0, 10)}.xls`;
+            a.click();
+            URL.revokeObjectURL(url);
         }
 
         function elementIfcClass(mod, eid) {
@@ -10257,7 +10559,9 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 isolateClashPair(pair);
             }
         });
-        $('runClash').addEventListener('click', () => {
+        $('runClash').addEventListener('click', async () => {
+            const runBtn = $('runClash');
+            if (runBtn?.dataset.busy === '1') return;
             const idA = Number($('clashModelA').value);
             const idB = Number($('clashModelB').value);
             const tolA = parseFloat($('clashTolerance').value) || 0;
@@ -10266,71 +10570,136 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const modA = loadedModels.get(idA);
             const modB = loadedModels.get(idB);
             if (!modA || !modB) return;
-            const classFilter = getClashClassFilter();
-            if (classFilter && (!classFilter.a.size || !classFilter.b.size)) {
-                alert('Укажите классы A и B для фильтра.');
-                return;
-            }
-            showLoader('КОЛЛИЗИИ', 'Проверка AABB…');
-            const boxesA = [];
-            for (const eid of modA.meshesByID.keys()) {
-                const cls = elementIfcClass(modA, eid);
-                if (classFilter && !classFilter.a.has(cls)) continue;
-                const box = getElementWorldBox(modA, eid);
-                if (box) boxesA.push({ expressID: eid, box: expandBoxByTol(box, tolA), ref: makeElementRef(modA, eid), cls });
-            }
-            const hits = [];
-            const pairs = [];
-            const seen = new Set();
-            for (const eid of modB.meshesByID.keys()) {
-                const clsB = elementIfcClass(modB, eid);
-                if (classFilter && !classFilter.b.has(clsB)) continue;
-                const boxRaw = getElementWorldBox(modB, eid);
-                if (!boxRaw) continue;
-                const boxB = expandBoxByTol(boxRaw, tolB);
-                const refB = makeElementRef(modB, eid);
-                for (const a of boxesA) {
-                    if (!boxesOverlap(a.box, boxB, 0)) continue;
-                    const key = `${a.ref?.ifcGlobalId || a.expressID}::${refB?.ifcGlobalId || eid}`;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    hits.push({ modelID: idB, expressID: eid });
-                    hits.push({ modelID: idA, expressID: a.expressID });
-                    pairs.push({
-                        a: a.ref,
-                        b: refB,
-                        status: 'open',
-                        classPair: `${a.cls || '?'}↔${clsB}`,
-                        foundAt: new Date().toISOString()
-                    });
+            const specs = getClashCheckSpecs();
+            if (specs) {
+                const empty = specs.some((s) => !s.a.size || !s.b.size);
+                if (empty) {
+                    alert('Укажите классы A и B для фильтра.');
+                    return;
                 }
             }
-            hideLoader();
-            const unique = uniqueSelectionItems(hits);
-            const withGid = pairs.filter(p => p.a?.ifcGlobalId && p.b?.ifcGlobalId).length;
-            const preset = $('clashClassPreset')?.value || 'all';
-            $('clashStatus').textContent = unique.length
-                ? `Найдено пар: ${pairs.length} (элементов: ${unique.length}). Фильтр: ${preset}. GlobalId: ${withGid}.`
-                : 'Пересечений AABB не найдено (с учётом фильтра классов).';
-            if (pairs.length) {
-                clashReports.unshift({
-                    id: newClashReportId(),
-                    created: new Date().toISOString(),
-                    tolerance: tolA,
-                    toleranceB: tolB,
-                    classPreset: preset,
-                    modelA: modelIdentityMeta(modA),
-                    modelB: modelIdentityMeta(modB),
-                    pairs
-                });
-                saveClashReports();
-                renderClashReportList();
+            const preset = $('clashClassPreset')?.value || 'matrix';
+            if (runBtn) {
+                runBtn.dataset.busy = '1';
+                runBtn.disabled = true;
             }
-            trackUsage('run_clash', { hits: unique.length, pairs: pairs.length, withGid, preset });
-            selectMultiple(unique);
-            // оставляем модалку открытой — можно кликнуть пару
+            const cancelBtn = $('cancelClash');
+            if (cancelBtn) cancelBtn.disabled = true;
+
+            try {
+                setClashProgress(0.02, 'Сбор элементов модели A…');
+                showLoader('КОЛЛИЗИИ', 'Сбор элементов A…', { ratio: 0.02 });
+                await yieldToUi();
+
+                const boxesA = [];
+                const eidsA = [...modA.meshesByID.keys()];
+                for (let i = 0; i < eidsA.length; i++) {
+                    const eid = eidsA[i];
+                    const cls = elementIfcClass(modA, eid);
+                    if (!clashClassAllowed(cls, specs, 'a')) continue;
+                    const box = getElementWorldBox(modA, eid);
+                    if (box) {
+                        boxesA.push({
+                            expressID: eid,
+                            box: expandBoxByTol(box, tolA),
+                            ref: makeElementRef(modA, eid),
+                            cls
+                        });
+                    }
+                    if (i % 40 === 0 || i === eidsA.length - 1) {
+                        const r = 0.05 + 0.25 * ((i + 1) / Math.max(1, eidsA.length));
+                        setClashProgress(r, `Модель A: ${i + 1}/${eidsA.length}`);
+                        showLoader('КОЛЛИЗИИ', `Модель A: ${i + 1}/${eidsA.length}`, { ratio: r });
+                        await yieldToUi();
+                    }
+                }
+
+                setClashProgress(0.32, `Сверка с моделью B (A: ${boxesA.length})…`);
+                showLoader('КОЛЛИЗИИ', 'Сверка AABB…', { ratio: 0.32 });
+                await yieldToUi();
+
+                const hits = [];
+                const pairs = [];
+                const seen = new Set();
+                const eidsB = [...modB.meshesByID.keys()];
+                let checkedB = 0;
+                for (let i = 0; i < eidsB.length; i++) {
+                    const eid = eidsB[i];
+                    const clsB = elementIfcClass(modB, eid);
+                    if (!clashClassAllowed(clsB, specs, 'b')) continue;
+                    checkedB++;
+                    const boxRaw = getElementWorldBox(modB, eid);
+                    if (!boxRaw) continue;
+                    const boxB = expandBoxByTol(boxRaw, tolB);
+                    const refB = makeElementRef(modB, eid);
+                    for (const a of boxesA) {
+                        if (!boxesOverlap(a.box, boxB, 0)) continue;
+                        const label = matchClashSpecLabel(a.cls, clsB, specs);
+                        if (specs && !label) continue;
+                        const key = `${a.ref?.ifcGlobalId || a.expressID}::${refB?.ifcGlobalId || eid}`;
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        hits.push({ modelID: idB, expressID: eid });
+                        hits.push({ modelID: idA, expressID: a.expressID });
+                        pairs.push({
+                            a: a.ref,
+                            b: refB,
+                            status: 'open',
+                            classPair: label || `${a.cls || '?'}↔${clsB}`,
+                            foundAt: new Date().toISOString()
+                        });
+                    }
+                    if (i % 20 === 0 || i === eidsB.length - 1) {
+                        const r = 0.32 + 0.63 * ((i + 1) / Math.max(1, eidsB.length));
+                        setClashProgress(r, `Модель B: ${i + 1}/${eidsB.length} · пар: ${pairs.length}`);
+                        showLoader('КОЛЛИЗИИ', `B ${i + 1}/${eidsB.length} · пар ${pairs.length}`, { ratio: r });
+                        await yieldToUi();
+                    }
+                }
+
+                setClashProgress(0.97, 'Формирование отчёта…');
+                showLoader('КОЛЛИЗИИ', 'Отчёт…', { ratio: 0.97 });
+                await yieldToUi();
+
+                const unique = uniqueSelectionItems(hits);
+                const withGid = pairs.filter(p => p.a?.ifcGlobalId && p.b?.ifcGlobalId).length;
+                const presetLabel = $('clashClassPreset')?.selectedOptions?.[0]?.textContent?.trim() || preset;
+                $('clashStatus').textContent = pairs.length
+                    ? `Найдено пар: ${pairs.length} (элементов: ${unique.length}). Фильтр: ${presetLabel}. GlobalId: ${withGid}. A:${boxesA.length} B-кандидатов:${checkedB}.`
+                    : `Пересечений AABB не найдено (фильтр: ${presetLabel}). A:${boxesA.length} B-кандидатов:${checkedB}.`;
+                if (pairs.length) {
+                    clashReports.unshift({
+                        id: newClashReportId(),
+                        created: new Date().toISOString(),
+                        tolerance: tolA,
+                        toleranceB: tolB,
+                        classPreset: preset,
+                        classPresetLabel: presetLabel,
+                        modelA: modelIdentityMeta(modA),
+                        modelB: modelIdentityMeta(modB),
+                        pairs
+                    });
+                    saveClashReports();
+                    renderClashReportList();
+                }
+                trackUsage('run_clash', { hits: unique.length, pairs: pairs.length, withGid, preset });
+                selectMultiple(unique);
+                setClashProgress(1, pairs.length ? `Готово · ${pairs.length} пар` : 'Готово · пересечений нет');
+            } catch (err) {
+                console.error(err);
+                $('clashStatus').textContent = 'Ошибка проверки: ' + (err?.message || err);
+                alert('Ошибка проверки коллизий: ' + (err?.message || err));
+            } finally {
+                hideLoader();
+                if (runBtn) {
+                    runBtn.dataset.busy = '0';
+                    runBtn.disabled = false;
+                }
+                if (cancelBtn) cancelBtn.disabled = false;
+                setTimeout(() => hideClashProgress(), 1200);
+            }
         });
-        $('clashRecheckBtn')?.addEventListener('click', () => {
+        $('clashRecheckBtn')?.addEventListener('click', async () => {
             const report = clashReports[0];
             if (!report?.pairs?.length) {
                 alert('Нет сохранённого отчёта. Сначала запустите проверку.');
@@ -10339,29 +10708,42 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const tol = parseFloat($('clashTolerance').value) || report.tolerance || 0;
             let open = 0, resolved = 0, missing = 0;
             const select = [];
-            report.pairs.forEach(p => {
-                const r = boxesStillClash(p.a, p.b, tol);
-                if (r.missing) {
-                    p.status = 'missing';
-                    missing++;
-                    return;
+            const total = report.pairs.length;
+            setClashProgress(0, 'Перепроверка…');
+            showLoader('КОЛЛИЗИИ', 'Перепроверка по GlobalId…', { ratio: 0 });
+            try {
+                for (let i = 0; i < report.pairs.length; i++) {
+                    const p = report.pairs[i];
+                    const r = boxesStillClash(p.a, p.b, tol);
+                    if (r.missing) {
+                        p.status = 'missing';
+                        missing++;
+                    } else if (r.ok) {
+                        p.status = 'open';
+                        open++;
+                        select.push(...r.items);
+                    } else {
+                        p.status = 'resolved';
+                        resolved++;
+                    }
+                    if (i % 25 === 0 || i === total - 1) {
+                        const ratio = (i + 1) / total;
+                        setClashProgress(ratio, `Перепроверка ${i + 1}/${total}`);
+                        showLoader('КОЛЛИЗИИ', `Перепроверка ${i + 1}/${total}`, { ratio });
+                        await yieldToUi();
+                    }
                 }
-                if (r.ok) {
-                    p.status = 'open';
-                    open++;
-                    select.push(...r.items);
-                } else {
-                    p.status = 'resolved';
-                    resolved++;
-                }
-            });
-            report.recheckedAt = new Date().toISOString();
-            saveClashReports();
-            renderClashReportList();
-            selectMultiple(uniqueSelectionItems(select));
-            $('clashStatus').textContent =
-                `Перепроверка по GlobalId: open ${open}, resolved ${resolved}, missing ${missing}.`;
-            trackUsage('clash_recheck', { open, resolved, missing });
+                report.recheckedAt = new Date().toISOString();
+                saveClashReports();
+                renderClashReportList();
+                selectMultiple(uniqueSelectionItems(select));
+                $('clashStatus').textContent =
+                    `Перепроверка по GlobalId: open ${open}, resolved ${resolved}, missing ${missing}.`;
+                trackUsage('clash_recheck', { open, resolved, missing });
+            } finally {
+                hideLoader();
+                setTimeout(() => hideClashProgress(), 800);
+            }
         });
         $('clashExportBtn')?.addEventListener('click', () => {
             const report = clashReports[0];
@@ -10376,6 +10758,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             a.download = `clash-guid-${(report.created || '').slice(0, 10)}.json`;
             a.click();
             URL.revokeObjectURL(url);
+        });
+        $('clashExportExcelBtn')?.addEventListener('click', () => {
+            const report = clashReports[0];
+            if (!report) {
+                alert('Нет отчёта для экспорта.');
+                return;
+            }
+            try {
+                downloadClashReportExcel(report);
+                trackUsage('clash_export_excel', { pairs: report.pairs?.length || 0 });
+            } catch (err) {
+                console.error(err);
+                alert('Не удалось выгрузить Excel: ' + (err?.message || err));
+            }
         });
 
         function collectIfcClasses() {
@@ -16001,8 +16397,8 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.07.29d',
-            buildId: '97b5b96',
+            version: '2026.07.29e',
+            buildId: 'clash-matrix',
             released: '2026-07-29',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -16010,7 +16406,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.07.29d: attribute float expressId в batch-шейдере (иначе WebGL 1282 и пустой 3D на больших IFC).'
+                '2026.07.29e: коллизии — матрица АР/КР/КМ/КЖ/ОВ/ВК/ЭО/СС/ТХ, прогресс-бар, экспорт Excel.'
             ]
         };
 
@@ -16054,7 +16450,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=76').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=77').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
