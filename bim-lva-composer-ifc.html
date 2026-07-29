@@ -1729,6 +1729,18 @@
             gap: 6px;
             margin-top: 10px;
         }
+        .props-io-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .props-io-actions .btn {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-size: 12px;
+            padding: 6px 8px;
+        }
 
         .modal-backdrop {
             position: fixed;
@@ -2166,6 +2178,11 @@
                 <div class="stat-row" title="Элементы с геометрией в сцене (уникальные ExpressID), не строки файла">Всего элементов <b id="sElems">0</b></div>
                 <div class="stat-row">Выделено <b id="sSelected" style="color:var(--accent)">0</b></div>
                 <div class="stat-row" style="font-size:11px;color:var(--dim);margin-top:6px" id="composerBuildTag">build: —</div>
+                <div class="props-io-actions">
+                    <button type="button" class="btn" id="btnPropsExportExcel" title="Экспорт редактируемых характеристик (имя, Pset, параметры) в Excel. Выделение → выбранные; иначе все IFC с геометрией">⬇ Excel</button>
+                    <button type="button" class="btn" id="btnPropsImportExcel" title="Импорт характеристик из Excel/CSV и запись в IFC">⬆ Excel</button>
+                    <input type="file" id="propsImportFile" accept=".xls,.xlsx,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+                </div>
             </div>
             <div class="props" id="props">
                 <div class="empty">Выделите элемент для просмотра.</div>
@@ -10461,6 +10478,463 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return `${side}|file:${filename || ''}|eid:${ref?.expressID ?? ''}`;
         }
 
+        const PROPS_EXCEL_HEADERS = [
+            'file', 'globalId', 'expressID', 'class', 'elementName',
+            'pset', 'prop', 'value', 'valueType', 'editable', 'psetId', 'propId'
+        ];
+
+        function collectElementEditablePropRows(mod, expressID) {
+            const out = [];
+            if (!mod || mod.isFBX || !mod.ifcIndex || expressID == null) return out;
+            const ref = makeElementRef(mod, expressID) || {};
+            const entity = getEntityParts(mod, expressID);
+            const entityName = entity
+                ? unquoteStepString(entity.args[2] || '')
+                : (ref.name || '');
+            const ifcClass = (ref.ifcClass || entity?.className || '')
+                .toString().replace(/^IFC/i, '');
+            const base = {
+                file: mod.filename || '',
+                globalId: ref.ifcGlobalId || '',
+                expressID,
+                class: ifcClass,
+                elementName: entityName
+            };
+            // Имя элемента — редактируемое поле
+            out.push({
+                ...base,
+                pset: '__ENTITY__',
+                prop: 'Name',
+                value: entityName,
+                valueType: 'IFCLABEL',
+                editable: 1,
+                psetId: '',
+                propId: ''
+            });
+            const psetIds = mod.psetIndex?.get(expressID) || [];
+            for (const psetId of psetIds) {
+                const rawPset = getEntityParts(mod, psetId);
+                let psetName = rawPset
+                    ? (unquoteStepString(rawPset.args[2] || '') || 'PropertySet')
+                    : 'PropertySet';
+                if (!rawPset) {
+                    try {
+                        const apiPset = ifcAPI.GetLine(mod.modelID, psetId, true);
+                        psetName = readVal(apiPset?.Name) || psetName;
+                    } catch (_) {}
+                }
+                const propIds = getPsetPropertyIds(mod, psetId);
+                for (const propId of propIds) {
+                    const rawProperty = getEntityParts(mod, propId);
+                    if (!rawProperty) continue;
+                    const propName = unquoteStepString(rawProperty.args[0] || '') || '';
+                    const canEdit = rawProperty.className === 'IFCPROPERTYSINGLEVALUE';
+                    if (!canEdit) continue;
+                    const rawValue = unwrapIfcValue(rawProperty.args[2]);
+                    out.push({
+                        ...base,
+                        pset: psetName,
+                        prop: propName,
+                        value: rawValue?.value ?? '',
+                        valueType: rawValue?.type || 'IFCLABEL',
+                        editable: 1,
+                        psetId,
+                        propId
+                    });
+                }
+            }
+            return out;
+        }
+
+        function propRowToArray(row) {
+            return PROPS_EXCEL_HEADERS.map((h) => row[h] ?? '');
+        }
+
+        function buildPropertiesExcelRows(items) {
+            const rows = [PROPS_EXCEL_HEADERS.slice()];
+            const seen = new Set();
+            for (const item of items || []) {
+                const mod = loadedModels.get(item.modelID);
+                if (!mod || mod.isFBX || !mod.ifcIndex) continue;
+                const key = `${item.modelID}:${item.expressID}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                for (const row of collectElementEditablePropRows(mod, item.expressID)) {
+                    rows.push(propRowToArray(row));
+                }
+            }
+            return rows;
+        }
+
+        function getPropsExportItems() {
+            const editableSel = getEditableSelection().filter((item) => {
+                const mod = loadedModels.get(item.modelID);
+                return mod && (mod.meshesByID.has(item.expressID) || mod.searchCache?.has(item.expressID));
+            });
+            if (editableSel.length) return editableSel;
+            const all = [];
+            for (const mod of loadedModels.values()) {
+                if (mod.isFBX || !mod.ifcIndex) continue;
+                for (const eid of mod.meshesByID.keys()) {
+                    all.push({ modelID: mod.modelID, expressID: eid });
+                }
+            }
+            return all;
+        }
+
+        function downloadWorkbookSheets(sheets, filename) {
+            const worksheets = sheets.map((sheet) => {
+                const safeName = String(sheet.name || 'Sheet').slice(0, 31).replace(/[\\/*?:\[\]]/g, '_');
+                return `<Worksheet ss:Name="${escapeXmlSpreadsheet(safeName)}"><Table>${spreadsheetRowsToXmlTable(sheet.rows)}</Table></Worksheet>`;
+            }).join('\r\n');
+            const xml = `<?xml version="1.0"?>\r\n<?mso-application progid="Excel.Sheet"?>\r\n` +
+                `<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" ` +
+                `xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\r\n` +
+                `${worksheets}\r\n` +
+                `</Workbook>`;
+            const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function exportPropertiesExcel(items, filenameHint) {
+            const rows = buildPropertiesExcelRows(items);
+            if (rows.length <= 1) {
+                alert('Нет редактируемых IFC-характеристик для экспорта.');
+                return false;
+            }
+            const nElements = new Set(
+                rows.slice(1).map((r) => `${r[0]}|${r[1] || r[2]}`)
+            ).size;
+            downloadWorkbookSheets(
+                [
+                    { name: 'Свойства', rows },
+                    {
+                        name: 'Инструкция',
+                        rows: [
+                            ['field', 'note'],
+                            ['globalId', 'Главный ключ сопоставления при импорте'],
+                            ['pset=__ENTITY__ / prop=Name', 'Имя IFC-элемента (args Name)'],
+                            ['value / valueType', 'Меняйте value; valueType лучше не трогать'],
+                            ['psetId / propId', 'Служебные id текущей сессии — не обязательны, если есть globalId+pset+prop'],
+                            ['editable', 'Импортируются только строки с editable=1']
+                        ]
+                    }
+                ],
+                filenameHint || `bim-lva-props-${nElements}.xls`
+            );
+            trackUsage('props_export_excel', { rows: rows.length - 1, elements: nElements });
+            return true;
+        }
+
+        function parseCsvPropsText(text) {
+            const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim() !== '');
+            if (!lines.length) return [];
+            const splitLine = (line) => {
+                const out = [];
+                let cur = '';
+                let inQ = false;
+                for (let i = 0; i < line.length; i++) {
+                    const ch = line[i];
+                    if (ch === '"') {
+                        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+                        else inQ = !inQ;
+                        continue;
+                    }
+                    if (!inQ && (ch === ';' || ch === ',' || ch === '\t')) {
+                        out.push(cur);
+                        cur = '';
+                        continue;
+                    }
+                    cur += ch;
+                }
+                out.push(cur);
+                return out;
+            };
+            const header = splitLine(lines[0]).map((h) => h.trim());
+            const rows = [];
+            for (let i = 1; i < lines.length; i++) {
+                const cols = splitLine(lines[i]);
+                const obj = {};
+                header.forEach((h, idx) => { obj[h] = cols[idx] ?? ''; });
+                rows.push(obj);
+            }
+            return rows;
+        }
+
+        function parseSpreadsheetMlProps(xmlText) {
+            const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+            const worksheets = [...doc.getElementsByTagNameNS('*', 'Worksheet')];
+            if (!worksheets.length) return [];
+            let sheet = worksheets.find((w) => {
+                const name = w.getAttribute('ss:Name') || w.getAttribute('Name') || '';
+                return /свойств|propert/i.test(name);
+            }) || worksheets[0];
+            const table = sheet.getElementsByTagNameNS('*', 'Table')[0];
+            if (!table) return [];
+            const rowEls = [...table.getElementsByTagNameNS('*', 'Row')];
+            if (!rowEls.length) return [];
+            const readRow = (rowEl) => {
+                const cells = [];
+                let col = 1;
+                for (const cell of rowEl.getElementsByTagNameNS('*', 'Cell')) {
+                    const idx = parseInt(cell.getAttribute('ss:Index') || cell.getAttribute('Index') || '', 10);
+                    if (Number.isFinite(idx) && idx > col) {
+                        while (col < idx) { cells.push(''); col++; }
+                    }
+                    const data = cell.getElementsByTagNameNS('*', 'Data')[0];
+                    cells.push(data ? (data.textContent || '') : '');
+                    col++;
+                }
+                return cells;
+            };
+            const header = readRow(rowEls[0]).map((h) => String(h || '').trim());
+            const rows = [];
+            for (let i = 1; i < rowEls.length; i++) {
+                const cols = readRow(rowEls[i]);
+                if (!cols.some((c) => String(c).trim() !== '')) continue;
+                const obj = {};
+                header.forEach((h, idx) => { if (h) obj[h] = cols[idx] ?? ''; });
+                rows.push(obj);
+            }
+            return rows;
+        }
+
+        async function parseXlsxProps(arrayBuffer) {
+            const JSZip = await ensureJSZip();
+            const zip = await JSZip.loadAsync(arrayBuffer);
+            const shared = [];
+            const ssFile = zip.file('xl/sharedStrings.xml');
+            if (ssFile) {
+                const ssXml = await ssFile.async('string');
+                const ssDoc = new DOMParser().parseFromString(ssXml, 'application/xml');
+                [...ssDoc.getElementsByTagName('si')].forEach((si) => {
+                    shared.push(si.textContent || '');
+                });
+            }
+            const wbXml = await zip.file('xl/workbook.xml').async('string');
+            const wbDoc = new DOMParser().parseFromString(wbXml, 'application/xml');
+            const sheets = [...wbDoc.getElementsByTagName('sheet')].map((s) => ({
+                name: s.getAttribute('name') || '',
+                rid: s.getAttribute('r:id') || s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')
+            }));
+            const relXml = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+            const relDoc = new DOMParser().parseFromString(relXml, 'application/xml');
+            const ridToTarget = new Map();
+            [...relDoc.getElementsByTagName('Relationship')].forEach((r) => {
+                ridToTarget.set(r.getAttribute('Id'), r.getAttribute('Target'));
+            });
+            let target = null;
+            const preferred = sheets.find((s) => /свойств|propert/i.test(s.name)) || sheets[0];
+            if (preferred?.rid && ridToTarget.has(preferred.rid)) {
+                target = ridToTarget.get(preferred.rid);
+            }
+            if (!target) target = 'worksheets/sheet1.xml';
+            if (target.startsWith('/')) target = target.slice(1);
+            if (!target.startsWith('xl/')) target = 'xl/' + target.replace(/^\.\//, '');
+            const sheetXml = await zip.file(target).async('string');
+            const sheetDoc = new DOMParser().parseFromString(sheetXml, 'application/xml');
+            const rowMap = new Map(); // r -> Map(c -> value)
+            const cellRef = (ref) => {
+                const m = String(ref || '').match(/^([A-Z]+)(\d+)$/i);
+                if (!m) return null;
+                let col = 0;
+                for (const ch of m[1].toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64);
+                return { c: col, r: parseInt(m[2], 10) };
+            };
+            [...sheetDoc.getElementsByTagName('c')].forEach((c) => {
+                const pos = cellRef(c.getAttribute('r'));
+                if (!pos) return;
+                const t = c.getAttribute('t');
+                const vEl = c.getElementsByTagName('v')[0];
+                let val = vEl ? (vEl.textContent || '') : '';
+                if (t === 's') val = shared[parseInt(val, 10)] ?? '';
+                if (t === 'inlineStr') {
+                    const tEl = c.getElementsByTagName('t')[0];
+                    val = tEl ? (tEl.textContent || '') : '';
+                }
+                if (!rowMap.has(pos.r)) rowMap.set(pos.r, new Map());
+                rowMap.get(pos.r).set(pos.c, val);
+            });
+            const rowNums = [...rowMap.keys()].sort((a, b) => a - b);
+            if (!rowNums.length) return [];
+            const headerRow = rowMap.get(rowNums[0]);
+            const maxCol = Math.max(...headerRow.keys());
+            const header = [];
+            for (let c = 1; c <= maxCol; c++) header.push(String(headerRow.get(c) || '').trim());
+            const rows = [];
+            for (const r of rowNums.slice(1)) {
+                const map = rowMap.get(r);
+                const obj = {};
+                let any = false;
+                header.forEach((h, idx) => {
+                    if (!h) return;
+                    const val = map.get(idx + 1) ?? '';
+                    if (String(val).trim() !== '') any = true;
+                    obj[h] = val;
+                });
+                if (any) rows.push(obj);
+            }
+            return rows;
+        }
+
+        async function parsePropsImportFile(file) {
+            const name = String(file.name || '').toLowerCase();
+            const buf = await file.arrayBuffer();
+            if (name.endsWith('.csv') || name.endsWith('.tsv') || file.type.includes('csv')) {
+                return parseCsvPropsText(new TextDecoder('utf-8').decode(buf));
+            }
+            if (name.endsWith('.xlsx')) {
+                return parseXlsxProps(buf);
+            }
+            // .xls SpreadsheetML or fallback text
+            const text = new TextDecoder('utf-8').decode(buf);
+            if (text.includes('Workbook') || text.includes('ss:Worksheet') || text.includes('<Worksheet')) {
+                return parseSpreadsheetMlProps(text);
+            }
+            return parseCsvPropsText(text);
+        }
+
+        function resolvePropsImportTarget(row) {
+            const gid = String(row.globalId || '').trim();
+            const file = String(row.file || '').trim().toLowerCase();
+            const expressID = Number(row.expressID);
+            if (gid) {
+                for (const mod of loadedModels.values()) {
+                    if (mod.isFBX || !mod.ifcIndex) continue;
+                    if (mod.expressByGlobalId?.has(gid)) {
+                        return { mod, expressID: mod.expressByGlobalId.get(gid) };
+                    }
+                }
+            }
+            if (file) {
+                for (const mod of loadedModels.values()) {
+                    if (mod.isFBX || !mod.ifcIndex) continue;
+                    if (String(mod.filename || '').toLowerCase() !== file) continue;
+                    if (Number.isFinite(expressID) && (mod.meshesByID.has(expressID) || mod.searchCache?.has(expressID))) {
+                        return { mod, expressID };
+                    }
+                }
+            }
+            if (Number.isFinite(expressID)) {
+                for (const mod of loadedModels.values()) {
+                    if (mod.isFBX || !mod.ifcIndex) continue;
+                    if (mod.meshesByID.has(expressID) || mod.searchCache?.has(expressID)) {
+                        return { mod, expressID };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function applyImportedPropertyRows(rows) {
+            let applied = 0;
+            let skipped = 0;
+            let missing = 0;
+            const errors = [];
+            const byModel = new Map();
+
+            for (const row of rows) {
+                if (String(row.editable ?? '1') === '0') { skipped++; continue; }
+                const pset = String(row.pset || '').trim();
+                const prop = String(row.prop || '').trim();
+                if (!pset || !prop) { skipped++; continue; }
+                const target = resolvePropsImportTarget(row);
+                if (!target) { missing++; continue; }
+                const key = target.mod.modelID;
+                if (!byModel.has(key)) byModel.set(key, []);
+                byModel.get(key).push({ ...row, pset, prop, _target: target });
+            }
+
+            byModel.forEach((list) => {
+                const mod = list[0]._target.mod;
+                const batch = createIfcEditBatch(mod);
+                let nextId = getMaxExpressId(mod);
+                const touchedEntities = new Set();
+
+                for (const row of list) {
+                    const { expressID } = row._target;
+                    const value = row.value ?? '';
+                    const valueType = String(row.valueType || 'IFCLABEL');
+
+                    if (row.pset === '__ENTITY__' && /^name$/i.test(row.prop)) {
+                        const newName = String(value || row.elementName || '').trim();
+                        if (!newName) { skipped++; continue; }
+                        if (batch.setAttr(expressID, 2, `'${encodeStepString(newName)}'`)) {
+                            applied++;
+                            touchedEntities.add(expressID);
+                            document.querySelectorAll(`.trow[data-mid="${mod.modelID}"][data-eid="${expressID}"] .tlabel`)
+                                .forEach((label) => { label.textContent = newName; });
+                            const search = mod.searchCache.get(expressID) || '';
+                            mod.searchCache.set(expressID, `${search} ${newName}`.toLowerCase());
+                        } else {
+                            errors.push(`Name #${expressID}`);
+                        }
+                        continue;
+                    }
+
+                    let propId = Number(row.propId);
+                    let psetId = Number(row.psetId);
+                    if (!Number.isFinite(propId) || !getEntityParts(mod, propId)) {
+                        propId = NaN;
+                    }
+                    if (!Number.isFinite(psetId) || !getEntityParts(mod, psetId)) {
+                        psetId = findPsetByName(mod, expressID, row.pset) || NaN;
+                    }
+                    if (!Number.isFinite(propId) && Number.isFinite(psetId)) {
+                        propId = findPropertyByName(mod, psetId, row.prop, batch) || NaN;
+                    }
+
+                    if (Number.isFinite(propId)) {
+                        const property = batch.entity(propId) || getEntityParts(mod, propId);
+                        if (!property || property.className !== 'IFCPROPERTYSINGLEVALUE') {
+                            skipped++;
+                            continue;
+                        }
+                        // sync prop name if changed
+                        const currentName = unquoteStepString(property.args[0] || '');
+                        if (row.prop && row.prop !== currentName) {
+                            batch.setAttr(propId, 0, `'${encodeStepString(row.prop)}'`);
+                        }
+                        const oldValue = unwrapIfcValue(property.args[2]);
+                        batch.setAttr(propId, 2, wrapIfcValueLike(oldValue?.type || valueType, value));
+                        applied++;
+                        continue;
+                    }
+
+                    // create missing pset/prop
+                    if (!row.pset || !row.prop) { skipped++; continue; }
+                    propId = ++nextId;
+                    batch.append(
+                        `#${propId}=IFCPROPERTYSINGLEVALUE('${encodeStepString(row.prop)}',$,${wrapIfcValueLike(valueType, value)},$);`
+                    );
+                    if (Number.isFinite(psetId)) {
+                        const refs = getPsetPropertyIds(mod, psetId, batch);
+                        batch.setAttr(psetId, 4, `(${refs.map((id) => '#' + id).concat('#' + propId).join(',')})`);
+                    } else {
+                        psetId = ++nextId;
+                        const relationId = ++nextId;
+                        batch.append(
+                            `#${psetId}=IFCPROPERTYSET('${ifcGuid()}',$,'${encodeStepString(row.pset)}',$,(#${propId}));`
+                        );
+                        batch.append(
+                            `#${relationId}=IFCRELDEFINESBYPROPERTIES('${ifcGuid()}',$,$,$,(#${expressID}),#${psetId});`
+                        );
+                        if (!mod.psetIndex.has(expressID)) mod.psetIndex.set(expressID, []);
+                        mod.psetIndex.get(expressID).push(psetId);
+                    }
+                    applied++;
+                }
+                batch.commit();
+            });
+
+            return { applied, skipped, missing, errors };
+        }
+
         function buildClashExcelSheets(report) {
             const pairs = report.pairs || [];
             const fileA = report.modelA?.filename || '';
@@ -10614,11 +11088,29 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 ]);
             }
 
+            // --- Редактируемые свойства элементов из отчёта ---
+            const propItems = [];
+            const seenProp = new Set();
+            for (const p of pairs) {
+                for (const side of ['a', 'b']) {
+                    const ref = p[side];
+                    if (!ref) continue;
+                    const resolved = resolveElementRef(ref);
+                    if (!resolved) continue;
+                    const key = `${resolved.modelID}:${resolved.expressID}`;
+                    if (seenProp.has(key)) continue;
+                    seenProp.add(key);
+                    propItems.push(resolved);
+                }
+            }
+            const propRows = buildPropertiesExcelRows(propItems);
+
             return [
                 { name: 'Сводка', rows: summaryRows },
                 { name: 'По элементам', rows: elementRows },
                 { name: 'По классам', rows: classRows },
                 { name: 'По парам классов', rows: pairGroupRows },
+                { name: 'Свойства', rows: propRows },
                 { name: 'Детали', rows: detailRows }
             ];
         }
@@ -11296,6 +11788,64 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             selectMultiple(added.length ? added : removed);
             $('compareModal').classList.remove('show');
             trackUsage('compare_ifc', { added: added.length, removed: removed.length });
+        });
+
+        $('btnPropsExportExcel')?.addEventListener('click', () => {
+            const items = getPropsExportItems();
+            if (!items.length) {
+                alert('Нет IFC-элементов для экспорта характеристик.');
+                return;
+            }
+            if (!selectedItems.length && items.length > 1500) {
+                if (!confirm(`Выделить ничего не выбрано — выгрузить все ${items.length} элементов с геометрией?`)) return;
+            }
+            showLoader('EXCEL', 'Сбор характеристик…');
+            setTimeout(() => {
+                try {
+                    exportPropertiesExcel(items);
+                } catch (err) {
+                    console.error(err);
+                    alert('Не удалось выгрузить Excel: ' + (err?.message || err));
+                } finally {
+                    hideLoader();
+                }
+            }, 20);
+        });
+        $('btnPropsImportExcel')?.addEventListener('click', () => {
+            $('propsImportFile')?.click();
+        });
+        $('propsImportFile')?.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            showLoader('EXCEL', 'Импорт характеристик…');
+            try {
+                const rows = await parsePropsImportFile(file);
+                if (!rows.length) {
+                    alert('В файле нет строк свойств.');
+                    return;
+                }
+                if (!confirm(`Импортировать характеристики из «${file.name}» (${rows.length} строк)?\nИзменения попадут в IFC; затем «Экспорт IFC» для сохранения файла.`)) {
+                    return;
+                }
+                const result = applyImportedPropertyRows(rows);
+                trackUsage('props_import_excel', result);
+                const first = selectedItems[0];
+                if (first) {
+                    const mod = loadedModels.get(first.modelID);
+                    if (mod && !mod.isFBX) showProps(first.modelID, first.expressID, selectedItems.length);
+                }
+                alert(
+                    `Импорт завершён.\nЗаписано: ${result.applied}\nПропущено: ${result.skipped}\nНе найдено элементов: ${result.missing}` +
+                    (result.errors.length ? `\nОшибки: ${result.errors.slice(0, 5).join('; ')}` : '') +
+                    `\n\nНажмите «Экспорт IFC», чтобы скачать изменённые файлы.`
+                );
+            } catch (err) {
+                console.error(err);
+                alert('Ошибка импорта: ' + (err?.message || err));
+            } finally {
+                hideLoader();
+            }
         });
 
         $('btnSchedule').addEventListener('click', () => {
@@ -16697,8 +17247,8 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.07.29g',
-            buildId: '357168b',
+            version: '2026.07.29h',
+            buildId: 'e552c86',
             released: '2026-07-29',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -16706,7 +17256,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.07.29g: Excel коллизий — листы «По элементам» / классам / парам с количеством.'
+                '2026.07.29h: свойства IFC — Excel экспорт/импорт в панели; в отчёте коллизий лист «Свойства».'
             ]
         };
 
@@ -16750,7 +17300,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=79').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=80').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
