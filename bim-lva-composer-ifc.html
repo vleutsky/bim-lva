@@ -1910,7 +1910,7 @@
             <div class="dot"></div>
             <div>
                 <b>BIM.LVA</b>
-                <small>Composer IFC</small>
+                <small id="brandVersionLabel">Composer IFC · v…</small>
             </div>
         </div>
 
@@ -2000,6 +2000,10 @@
 
         <div class="tb-aside">
             <div class="tb-rail tb-rail-end">
+                <div class="tb-seg">
+                    <button type="button" class="btn" id="btnAbout" title="О продукте, разработчик и версия сборки">ℹ</button>
+                </div>
+                <div class="tb-sep" aria-hidden="true"></div>
                 <div class="tb-seg tb-auth" data-bimlva-auth-slot></div>
                 <div class="tb-sep" aria-hidden="true"></div>
                 <div class="tb-seg">
@@ -2252,6 +2256,20 @@
             </div>
             <div class="modal-actions">
                 <button class="btn load-btn" id="closeProprietaryHint">Понятно</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="aboutModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="aboutModalTitle" style="width:min(520px,100%)">
+            <h3 id="aboutModalTitle">О продукте</h3>
+            <div class="bulk-note" id="aboutModalBody" style="line-height:1.55">
+                Загрузка сведений…
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
+                <button type="button" class="btn" id="aboutCopyBtn" title="Скопировать версию в буфер">⧉ Копировать версию</button>
+                <a class="btn" id="aboutSiteLink" href="https://vleutsky.github.io/bim-lva/" target="_blank" rel="noopener">Сайт BIM.LVA</a>
+                <button type="button" class="btn load-btn" id="closeAboutModal">Закрыть</button>
             </div>
         </div>
     </div>
@@ -15919,13 +15937,83 @@ ${componentXml || '    '}
             }
         }, 0);
 
+        // Версия сборки: меняйте APP_VERSION при каждом релизе на Pages.
+        // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
+        const COMPOSER_ABOUT = {
+            product: 'BIM.LVA Composer IFC',
+            version: '2026.07.29b',
+            buildId: 'about-ui',
+            released: '2026-07-29',
+            developer: 'Владимир Леуцкий',
+            site: 'https://vleutsky.github.io/bim-lva/',
+            composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
+            notes: [
+                'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.07.29b: кнопка «О продукте»; Tekla IFC2X3 — COORDINATE_TO_ORIGIN до OpenModel + retry пустых CSG-мешей.'
+            ]
+        };
+
+        function composerVersionLabel() {
+            return `v${COMPOSER_ABOUT.version} · ${COMPOSER_ABOUT.buildId}`;
+        }
+
+        function fillAboutModal() {
+            const body = $('aboutModalBody');
+            if (!body) return;
+            const notes = COMPOSER_ABOUT.notes.map((n) => `<li>${n}</li>`).join('');
+            body.innerHTML = `
+                <div class="prop small"><div class="k">Продукт</div><div>${COMPOSER_ABOUT.product}</div></div>
+                <div class="prop small"><div class="k">Версия</div><div><b>${COMPOSER_ABOUT.version}</b></div></div>
+                <div class="prop small"><div class="k">Сборка</div><div><code>${COMPOSER_ABOUT.buildId}</code> · ${COMPOSER_ABOUT.released}</div></div>
+                <div class="prop small"><div class="k">Разработчик</div><div>${COMPOSER_ABOUT.developer}</div></div>
+                <div class="prop small"><div class="k">Страница</div><div><a href="${COMPOSER_ABOUT.composerUrl}" target="_blank" rel="noopener">${COMPOSER_ABOUT.composerUrl}</a></div></div>
+                <div style="margin-top:10px"><b>Что внутри</b></div>
+                <ul style="margin:6px 0 0 18px">${notes}</ul>
+                <div class="bulk-note" style="margin-top:10px">Если версия на экране старая — <b>Ctrl+F5</b> (жёсткое обновление), чтобы сбросить кэш Pages/SW.</div>
+            `;
+            const site = $('aboutSiteLink');
+            if (site) site.href = COMPOSER_ABOUT.site;
+        }
+
+        function openAboutModal() {
+            fillAboutModal();
+            $('aboutModal')?.classList.add('show');
+        }
+
+        function closeAboutModal() {
+            $('aboutModal')?.classList.remove('show');
+        }
+
+        (function initAboutUi() {
+            const label = $('brandVersionLabel');
+            if (label) label.textContent = `Composer IFC · ${composerVersionLabel()}`;
+            document.title = `${COMPOSER_ABOUT.product} · ${composerVersionLabel()}`;
+            console.info(`[BIM.LVA] ${COMPOSER_ABOUT.product} ${composerVersionLabel()}`);
+        })();
+
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=64').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=74').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
         }
+
+        $('btnAbout')?.addEventListener('click', openAboutModal);
+        $('closeAboutModal')?.addEventListener('click', closeAboutModal);
+        $('aboutCopyBtn')?.addEventListener('click', async () => {
+            const text = `${COMPOSER_ABOUT.product} ${composerVersionLabel()} (${COMPOSER_ABOUT.released})`;
+            try {
+                await navigator.clipboard.writeText(text);
+                alert('Скопировано:\n' + text);
+            } catch (_) {
+                prompt('Скопируйте версию:', text);
+            }
+        });
+        $('aboutModal')?.addEventListener('click', (e) => {
+            if (e.target === $('aboutModal')) closeAboutModal();
+        });
 
         $('btnProprietaryHint').addEventListener('click', () => $('proprietaryModal').classList.add('show'));
         $('closeProprietaryHint').addEventListener('click', () => $('proprietaryModal').classList.remove('show'));
