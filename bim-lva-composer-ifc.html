@@ -1770,6 +1770,48 @@
             margin-top: 14px;
         }
 
+        /* Плавающая панель коллизий: сцена кликабельна, окно можно таскать */
+        .modal-backdrop.floating-panel {
+            background: transparent;
+            backdrop-filter: none;
+            pointer-events: none;
+            align-items: flex-start;
+            justify-content: flex-end;
+            padding: 72px 16px 16px;
+        }
+        .modal-backdrop.floating-panel .modal-card {
+            pointer-events: auto;
+            position: fixed;
+            margin: 0;
+            max-height: calc(100vh - 96px);
+            box-shadow: 0 18px 55px rgba(31, 43, 56, .32);
+            touch-action: none;
+        }
+        .modal-card .modal-drag-handle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            cursor: grab;
+            user-select: none;
+            margin: -6px -6px 8px;
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            background: color-mix(in srgb, var(--panel-2) 70%, #fff);
+        }
+        .modal-card .modal-drag-handle:active { cursor: grabbing; }
+        .modal-card .modal-drag-handle h3 {
+            margin: 0;
+            flex: 1;
+            min-width: 0;
+        }
+        .modal-card .modal-drag-hint {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 10px;
+            color: var(--txt-dim);
+            white-space: nowrap;
+        }
+
         .pgroup {
             margin-top: 14px;
         }
@@ -2300,9 +2342,12 @@
         </div>
     </div>
 
-    <div class="modal-backdrop" id="clashModal">
-        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(640px,100%)">
-            <h3>Умные коллизии 2.0 (AABB)</h3>
+    <div class="modal-backdrop floating-panel" id="clashModal">
+        <div class="modal-card" id="clashModalCard" role="dialog" aria-modal="true" style="width:min(420px,92vw)">
+            <div class="modal-drag-handle" id="clashModalDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Умные коллизии 2.0 (AABB)</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
+            </div>
             <div class="bulk-note">Пары классов по разделам (АР / КР / КМ / КЖ / ОВ / ВК / ЭО / СС / ТХ) + допуск. Клик по паре — изоляция; «BCF» — заметка. Пары по <b>IFC GlobalId</b>. Не заменяет точный clash detection.</div>
             <div class="prop small"><div class="k">Модель A</div><select class="editInput" id="clashModelA"></select></div>
             <div class="prop small"><div class="k">Модель B</div><select class="editInput" id="clashModelB"></select></div>
@@ -10533,14 +10578,109 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return 'clash-' + Date.now().toString(36);
         }
 
-        $('btnClash').addEventListener('click', () => {
+        function getClashModalCard() {
+            return $('clashModalCard') || $('clashModal')?.querySelector('.modal-card');
+        }
+
+        function clampClashModalPosition(left, top) {
+            const card = getClashModalCard();
+            if (!card) return { left, top };
+            const w = card.offsetWidth || 420;
+            const h = card.offsetHeight || 320;
+            const maxL = Math.max(8, window.innerWidth - w - 8);
+            const maxT = Math.max(8, window.innerHeight - Math.min(h, window.innerHeight - 16) - 8);
+            return {
+                left: Math.max(8, Math.min(left, maxL)),
+                top: Math.max(8, Math.min(top, maxT))
+            };
+        }
+
+        function setClashModalPosition(left, top) {
+            const card = getClashModalCard();
+            if (!card) return;
+            const p = clampClashModalPosition(left, top);
+            card.style.left = `${p.left}px`;
+            card.style.top = `${p.top}px`;
+            card.style.right = 'auto';
+            card.style.bottom = 'auto';
+        }
+
+        function resetClashModalPosition() {
+            const card = getClashModalCard();
+            if (!card) return;
+            card.style.left = '';
+            card.style.top = '';
+            card.style.right = '';
+            card.style.bottom = '';
+        }
+
+        /** Уводим панель вправо, чтобы был виден зум к паре */
+        function parkClashModalAside() {
+            const card = getClashModalCard();
+            if (!card) return;
+            const w = card.offsetWidth || 420;
+            const left = Math.max(8, window.innerWidth - w - 16);
+            const top = 72;
+            setClashModalPosition(left, top);
+        }
+
+        function openClashModal() {
             fillModelSelect($('clashModelA'));
             fillModelSelect($('clashModelB'));
             renderClashReportList();
-            $('clashModal').classList.add('show');
-        });
-        $('cancelClash').addEventListener('click', () => $('clashModal').classList.remove('show'));
-        $('clashModal').addEventListener('click', e => { if (e.target === $('clashModal')) $('clashModal').classList.remove('show'); });
+            resetClashModalPosition();
+            $('clashModal')?.classList.add('show');
+            // стартовая позиция справа — сцена сразу видна
+            requestAnimationFrame(() => parkClashModalAside());
+        }
+
+        function closeClashModal() {
+            $('clashModal')?.classList.remove('show');
+            resetClashModalPosition();
+        }
+
+        (function initClashModalDrag() {
+            const handle = $('clashModalDrag');
+            const card = getClashModalCard();
+            if (!handle || !card) return;
+            let dragging = false;
+            let ptrId = null;
+            let startX = 0, startY = 0, origL = 0, origT = 0;
+
+            handle.addEventListener('pointerdown', (e) => {
+                if (e.button != null && e.button !== 0) return;
+                if (e.target.closest('button, a, input, select, textarea, label')) return;
+                dragging = true;
+                ptrId = e.pointerId;
+                try { handle.setPointerCapture(ptrId); } catch (_) {}
+                const rect = card.getBoundingClientRect();
+                startX = e.clientX;
+                startY = e.clientY;
+                origL = rect.left;
+                origT = rect.top;
+                setClashModalPosition(origL, origT);
+                e.preventDefault();
+            });
+
+            handle.addEventListener('pointermove', (e) => {
+                if (!dragging || (ptrId != null && e.pointerId !== ptrId)) return;
+                setClashModalPosition(origL + (e.clientX - startX), origT + (e.clientY - startY));
+            });
+
+            const stop = (e) => {
+                if (!dragging) return;
+                if (ptrId != null && e?.pointerId != null && e.pointerId !== ptrId) return;
+                dragging = false;
+                try { if (ptrId != null) handle.releasePointerCapture(ptrId); } catch (_) {}
+                ptrId = null;
+            };
+            handle.addEventListener('pointerup', stop);
+            handle.addEventListener('pointercancel', stop);
+        })();
+
+        $('btnClash').addEventListener('click', openClashModal);
+        $('cancelClash').addEventListener('click', closeClashModal);
+        // backdrop прозрачный и pointer-events:none — клик по сцене не закрывает окно
         $('clashClassPreset')?.addEventListener('change', () => {
             const custom = $('clashClassPreset').value === 'custom';
             if ($('clashCustomClasses')) $('clashCustomClasses').hidden = !custom;
@@ -10553,9 +10693,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!pair) return;
             if (btn?.dataset.clashAct === 'bcf') {
                 createBcfFromClashPair(pair);
+                parkClashModalAside();
                 return;
             }
             if (btn?.dataset.clashAct === 'iso' || row) {
+                parkClashModalAside();
                 isolateClashPair(pair);
             }
         });
@@ -16397,8 +16539,8 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.07.29e',
-            buildId: 'eebd2ab',
+            version: '2026.07.29f',
+            buildId: 'clash-float',
             released: '2026-07-29',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -16406,7 +16548,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.07.29e: коллизии — матрица АР/КР/КМ/КЖ/ОВ/ВК/ЭО/СС/ТХ, прогресс-бар, экспорт Excel.'
+                '2026.07.29f: окно коллизий плавающее/перетаскиваемое — сцена видна при просмотре пары.'
             ]
         };
 
@@ -16450,7 +16592,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=77').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=78').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
