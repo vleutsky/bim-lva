@@ -4974,6 +4974,7 @@ uniform vec3 uBatchSelColor;
             const byKey = new Map();
             fragments.forEach(frag => {
                 if (modData.hiddenIds.has(frag.expressID)) return;
+                if (!isFragmentMeshRenderable(frag)) return;
                 const appearance = modData.appearanceByID.get(frag.expressID);
                 const hex = appearance?.color ?? frag.hex;
                 const opacity = appearance?.opacity ?? frag.opacity;
@@ -5020,6 +5021,10 @@ uniform vec3 uBatchSelColor;
         function addIndividualIfcMeshes(modData, fragments) {
             modData.batched = false;
             fragments.forEach(frag => {
+                if (!isFragmentMeshRenderable(frag)) {
+                    disposeFragmentMesh(frag);
+                    return;
+                }
                 const mat = createIfcMaterial(frag.hex, frag.opacity);
                 mat.clippingPlanes = getActiveClipPlanes();
                 const mesh = new THREE.Mesh(frag.geom, mat);
@@ -5958,7 +5963,84 @@ uniform vec3 uBatchSelColor;
             return total;
         }
 
-        async function streamIfcMeshes(modelID) {
+        function sampleIfcCartesianPointExtents(ifcText, maxSamples = 80) {
+    const out = { maxAbs: 0, samples: 0, looksLikeMillimetres: false };
+    if (!ifcText) return out;
+    const re = /IFCCARTESIANPOINT\s*\(\s*\(([^)]*)\)/gi;
+    let m;
+    while ((m = re.exec(ifcText)) && out.samples < maxSamples) {
+      const nums = String(m[1] || '')
+        .split(',')
+        .map((p) => Number(String(p).trim()))
+        .filter((n) => Number.isFinite(n));
+      if (!nums.length) continue;
+      out.samples += 1;
+      for (const n of nums) out.maxAbs = Math.max(out.maxAbs, Math.abs(n));
+    }
+    out.looksLikeMillimetres = out.maxAbs >= 1e5;
+    return out;
+  }
+
+  function shouldForceCoordinateToOrigin({
+    coordExtents,
+    lengthToMeters,
+    isTekla,
+    isIfc2x3,
+    booleanOpsCount
+  } = {}) {
+    const maxAbs = Number(coordExtents && coordExtents.maxAbs) || 0;
+    if (!(maxAbs > 0)) return false;
+    const toM = Number(lengthToMeters);
+    const scale = Number.isFinite(toM) && toM > 0 ? toM : (coordExtents.looksLikeMillimetres ? 0.001 : 1);
+    const worldMeters = maxAbs * scale;
+    if (worldMeters >= LARGE_COORD_THRESHOLD) return true;
+    // Tekla IFC2X3 CoordinationView often keeps a huge site origin and many CSG
+    // DIFFERENCE ops. web-ifc float tessellation then yields empty fragments while
+    // the spatial tree still lists products — zoom/focus silently no-ops.
+    if (isTekla && isIfc2x3 && (Number(booleanOpsCount) || 0) >= 8 && worldMeters >= 50) {
+      return true;
+    }
+    return false;
+  }
+
+  function isFragmentMeshRenderable(mesh) {
+    // Stream-фрагменты хранят BufferGeometry в `.geom`, batch/individual — в `.geometry`.
+    const geometry = mesh && (mesh.geometry || mesh.geom);
+    if (!geometry) return false;
+    try {
+      const pos = geometry.getAttribute && geometry.getAttribute('position');
+      if (!pos || !pos.count || pos.count < 3) return false;
+      if (!geometry.boundingBox) geometry.computeBoundingBox();
+      const box = geometry.boundingBox;
+      if (!box || box.isEmpty()) return false;
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      if (!(size.lengthSq() > 1e-18)) return false;
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      if (![center.x, center.y, center.z, size.x, size.y, size.z].every(Number.isFinite)) return false;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function disposeFragmentMesh(mesh) {
+    try {
+      const geometry = mesh && (mesh.geometry || mesh.geom);
+      if (geometry && typeof geometry.dispose === 'function') geometry.dispose();
+    } catch (_) {}
+    try {
+      const mats = mesh && mesh.material;
+      if (!mats) return;
+      const list = Array.isArray(mats) ? mats : [mats];
+      for (const m of list) {
+        if (m && typeof m.dispose === 'function') m.dispose();
+      }
+    } catch (_) {}
+  }
+
+  async function streamIfcMeshes(modelID) {
             const fragments = [];
             let meshErrors = 0;
             try {
@@ -6010,12 +6092,32 @@ uniform vec3 uBatchSelColor;
                 const booleanOps = sampleIfcBooleanOps(data);
                 // Tekla CSG: быстрые bool часто дают 0 мешей — для таких файлов выключаем FAST_BOOLS
                 const preferExactBools = booleanOps >= 8;
+                // mm + крупный SITE_ORIGIN: COORDINATE_TO_ORIGIN нужен ДО OpenModel,
+                // иначе float32-CSG даёт пустые меши (дерево есть, в 3D ничего нет).
+                const lengthToMetersEstimate = detectIfcLengthToMetersFromText(headPreview) || 0.001;
+                const coordExtents = sampleIfcCartesianPointExtents(headPreview);
+                const isTekla = /TEKLA\s+STRUCTURES/i.test(headPreview);
+                const isIfc2x3 = String(detectedSchema || '').toUpperCase().includes('IFC2X3');
+                let forceCoordinateToOrigin = shouldForceCoordinateToOrigin({
+                    coordExtents,
+                    lengthToMeters: lengthToMetersEstimate,
+                    isTekla,
+                    isIfc2x3,
+                    booleanOpsCount: booleanOps
+                });
 
                 const openSettings = {
-                    COORDINATE_TO_ORIGIN: false,
+                    COORDINATE_TO_ORIGIN: forceCoordinateToOrigin,
                     USE_FAST_BOOLS: !preferExactBools,
                     MEMORY_LIMIT: 512 * 1024 * 1024
                 };
+                if (forceCoordinateToOrigin) {
+                    console.info(
+                        `[BIM.LVA] ${file.name}: COORDINATE_TO_ORIGIN=true ` +
+                        `(maxAbs=${Math.round(coordExtents.maxAbs)}, ~${Math.round(coordExtents.maxAbs * lengthToMetersEstimate)} м, ` +
+                        `boolean≈${booleanOps}, Tekla=${isTekla}, ${detectedSchema || 'IFC'})`
+                    );
+                }
 
                 showLoader(
                     'ОТКРЫТИЕ IFC',
@@ -6029,6 +6131,7 @@ uniform vec3 uBatchSelColor;
                 let modData = new IFCModelData(modelID, file.name);
                 if (detectedSchema) modData.ifcSchema = detectedSchema;
                 modData.booleanOpsHint = booleanOps;
+                modData.coordinateToOrigin = !!openSettings.COORDINATE_TO_ORIGIN;
                 loadedModels.set(modelID, modData);
 
                 showLoader('ИНДЕКСАЦИЯ СВОЙСТВ', 'Поиск атрибутов...');
@@ -6044,10 +6147,12 @@ uniform vec3 uBatchSelColor;
 
                 let { fragments, meshErrors } = await streamIfcMeshes(modelID);
 
-                // Пустая геометрия при FAST_BOOLS — повторяем без ускорения boolean (типичный Tekla)
-                if (!fragments.length && openSettings.USE_FAST_BOOLS) {
-                    console.warn(`[BIM.LVA] ${file.name}: 0 мешей при USE_FAST_BOOLS — повтор без ускорения`);
-                    showLoader('ГЕОМЕТРИЯ', 'Повтор без ускорения boolean…');
+                const countUsableFragments = (frags) =>
+                    (frags || []).reduce((n, f) => n + (isFragmentMeshRenderable(f) ? 1 : 0), 0);
+
+                async function reopenAndRestream(nextSettings, reasonLabel) {
+                    console.warn(`[BIM.LVA] ${file.name}: ${reasonLabel}`);
+                    showLoader('ГЕОМЕТРИЯ', reasonLabel);
                     await new Promise(r => setTimeout(r, 10));
                     try { ifcAPI.CloseModel(modelID); } catch (_) {}
                     loadedModels.delete(modelID);
@@ -6055,15 +6160,47 @@ uniform vec3 uBatchSelColor;
                         globalGroup.remove(modData.group);
                         disposeModelBatches(modData);
                     } catch (_) {}
-                    openSettings.USE_FAST_BOOLS = false;
+                    Object.assign(openSettings, nextSettings);
                     modelID = ifcAPI.OpenModel(data, openSettings);
                     const retryData = new IFCModelData(modelID, file.name);
                     if (detectedSchema) retryData.ifcSchema = detectedSchema;
                     retryData.booleanOpsHint = booleanOps;
+                    retryData.coordinateToOrigin = !!openSettings.COORDINATE_TO_ORIGIN;
                     modData = retryData;
                     loadedModels.set(modelID, modData);
                     try { buildPsetIndex(modData); } catch (_) {}
-                    ({ fragments, meshErrors } = await streamIfcMeshes(modelID));
+                    return streamIfcMeshes(modelID);
+                }
+
+                let usableCount = countUsableFragments(fragments);
+                // Пустая/дегенерированная геометрия при FAST_BOOLS — повтор без ускорения boolean
+                if (usableCount === 0 && openSettings.USE_FAST_BOOLS) {
+                    ({ fragments, meshErrors } = await reopenAndRestream(
+                        { USE_FAST_BOOLS: false },
+                        'Повтор без ускорения boolean…'
+                    ));
+                    usableCount = countUsableFragments(fragments);
+                }
+                // Крупный origin / float32-CSG: если ещё пусто и CTO не был включён — OpenModel с COORDINATE_TO_ORIGIN
+                if (usableCount === 0 && !openSettings.COORDINATE_TO_ORIGIN) {
+                    forceCoordinateToOrigin = true;
+                    ({ fragments, meshErrors } = await reopenAndRestream(
+                        { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: false },
+                        'Повтор с COORDINATE_TO_ORIGIN…'
+                    ));
+                    usableCount = countUsableFragments(fragments);
+                }
+
+                if (fragments.length) {
+                    const kept = [];
+                    for (const frag of fragments) {
+                        if (isFragmentMeshRenderable(frag)) kept.push(frag);
+                        else {
+                            disposeFragmentMesh(frag);
+                            meshErrors++;
+                        }
+                    }
+                    fragments = kept;
                 }
 
                 if (!fragments.length) {
@@ -13105,8 +13242,32 @@ ${componentXml || '    '}
 
         function focusOnList(items) {
             const box = getSelectionBounds(items);
-            if (box.isEmpty()) return;
-            frameBox(box);
+            if (!box.isEmpty()) {
+                frameBox(box);
+                return;
+            }
+            // Пустой bbox выделенного элемента (нет usable mesh) — кадрируем модель/сцену
+            const fallback = new THREE.Box3();
+            const modelIds = new Set((items || []).map((i) => i.modelID).filter((id) => id != null));
+            for (const modelID of modelIds) {
+                const mod = loadedModels.get(modelID);
+                if (!mod || !mod.group) continue;
+                try {
+                    mod.group.updateWorldMatrix(true, true);
+                    const mb = new THREE.Box3().setFromObject(mod.group);
+                    if (!mb.isEmpty()) fallback.union(mb);
+                } catch (_) {}
+            }
+            if (fallback.isEmpty()) {
+                expandBoxFromVisibleMeshes(fallback);
+            }
+            if (fallback.isEmpty()) {
+                try {
+                    const gb = new THREE.Box3().setFromObject(globalGroup);
+                    if (!gb.isEmpty()) fallback.union(gb);
+                } catch (_) {}
+            }
+            if (!fallback.isEmpty()) frameBox(fallback);
         }
 
         function focusOn(modelID, expressID) {
