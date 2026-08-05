@@ -115,6 +115,15 @@ async function main() {
         path.join(OUT, 'jszip', 'jszip.min.js')
     );
 
+    // --- dwgdxf: DWG → DXF в браузере (движок acadrust, MIT) ---
+    // Загрузчик ищет wasm по `new URL('./wasm', import.meta.url)`, поэтому
+    // раскладку dist/ надо сохранить: index.js и рядом каталог wasm/.
+    const dwgDist = path.join(pkgDir('dwgdxf'), 'dist');
+    await copy(path.join(dwgDist, 'index.js'), path.join(OUT, 'dwgdxf', 'index.js'));
+    for (const f of ['dwgdxf.js', 'dwgdxf_bg.wasm']) {
+        await copy(path.join(dwgDist, 'wasm', f), path.join(OUT, 'dwgdxf', 'wasm', f));
+    }
+
     // --- geotiff: тянет pako/lerc/zstddec, поэтому бандлим ---
     await build({
         entryPoints: [require.resolve('geotiff')],
@@ -145,7 +154,7 @@ async function main() {
     await vendorFonts();
 
     const versions = {};
-    for (const p of ['three', 'three-mesh-bvh', 'web-ifc', 'geotiff', 'qrcode', '@supabase/supabase-js', 'jszip']) {
+    for (const p of ['three', 'three-mesh-bvh', 'web-ifc', 'geotiff', 'qrcode', '@supabase/supabase-js', 'jszip', 'dwgdxf']) {
         versions[p] = await pkgVersion(p);
     }
     await fs.writeFile(

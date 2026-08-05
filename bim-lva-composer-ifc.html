@@ -2166,7 +2166,7 @@
                 <div class="tb-seg tb-auth" data-bimlva-auth-slot></div>
                 <div class="tb-sep" aria-hidden="true"></div>
                 <div class="tb-seg">
-                    <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.xml,.glb,.obj,.stl" multiple>
+                    <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.dwg,.xml,.glb,.obj,.stl" multiple>
                     <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="IFC (IFC2X3 / IFC4 / IFC4X3), ASCII DXF, LandXML/Civil XML, FBX, GLB, OBJ, STL. RVT/Tekla/Plant — только через экспорт в IFC"><span class="tb-ico">⬆</span><span class="tb-txt">Локально</span></label>
                     <div class="tb-menu" id="menuMore">
                         <button type="button" class="tb-menu-btn tb-more-btn" aria-haspopup="true" aria-expanded="false" title="Другие источники и действия">⋯</button>
@@ -2214,11 +2214,13 @@
             <p>
                 <b>Поддерживаемые форматы:</b><br>
                 <b>IFC</b> — схемы <b>IFC2X3</b>, <b>IFC4</b>, <b>IFC4X3</b><br>
-                <b>ASCII DXF</b> — 3DFACE / MESH / TIN / 3DSOLID→mesh<br>
+                <b>DWG</b> — R13…2018, с раскрытием блоков<br>
+                <b>ASCII DXF</b> — 3DFACE / MESH / TIN / 3DSOLID→mesh, блоки<br>
                 <b>LandXML / Civil 3D</b> (.xml: TIN, коридоры, трассы, точки, сети труб)<br>
                 <b>FBX</b>, <b>GLB</b>, <b>OBJ</b>, <b>STL</b>
                 <br><br>
-                <span style="opacity:.85">Не открываются напрямую: DWG, GLTF (с внешними .bin), PLY, DAE, 3DS, RVT, Tekla, Plant&nbsp;3D — экспортируйте в IFC или DXF/GLB.</span><br>
+                <span style="opacity:.85">Не открываются напрямую: GLTF (с внешними .bin), PLY, DAE, 3DS, Tekla, Plant&nbsp;3D — экспортируйте в IFC или DXF/GLB.<br>
+                <b>RVT</b> (Revit) хранит геометрию в закрытом формате: в браузере её не прочитать ничем — экспортируйте в IFC.</span><br>
                 <span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span>
             </p>
         </div>
@@ -2910,7 +2912,8 @@
             "three/addons/": "./assets/vendor/three/addons/",
             "three-mesh-bvh": "./assets/vendor/three-mesh-bvh/index.module.js",
             "web-ifc": "./assets/vendor/web-ifc/web-ifc-api.js",
-            "geotiff": "./assets/vendor/geotiff/geotiff.js"
+            "geotiff": "./assets/vendor/geotiff/geotiff.js",
+            "dwgdxf": "./assets/vendor/dwgdxf/index.js"
         }
     }
     </script>
@@ -3384,7 +3387,30 @@
                 for (const m of allMeshes) if (m.geometry?.boundsTree) n++;
                 return n;
             },
-            get modelCount() { return typeof loadedModels !== 'undefined' ? loadedModels.size : 0; }
+            get modelCount() { return typeof loadedModels !== 'undefined' ? loadedModels.size : 0; },
+            /** Вершин во всей сцене — грубая мера объёма загруженной геометрии. */
+            get vertexCount() {
+                let n = 0;
+                scene.traverse(obj => { n += obj.geometry?.attributes?.position?.count || 0; });
+                return n;
+            },
+            /** Габарит каждой загруженной модели по отдельности, в метрах сцены. */
+            get modelBounds() {
+                const out = [];
+                for (const mod of (typeof loadedModels !== 'undefined' ? loadedModels.values() : [])) {
+                    if (!mod.group) continue;
+                    const box = new THREE.Box3().setFromObject(mod.group);
+                    if (box.isEmpty()) continue;
+                    out.push({
+                        file: mod.filename || '',
+                        format: mod.format || '',
+                        sizeX: box.max.x - box.min.x,
+                        sizeY: box.max.y - box.min.y,
+                        sizeZ: box.max.z - box.min.z
+                    });
+                }
+                return out;
+            }
         });
         renderer.setPixelRatio(basePixelRatio);
         renderer.setClearColor(0xf3f5f7, 1);
@@ -4940,8 +4966,13 @@
                     else if (ext === 'stl') await loadSingleSTL(file);
                     else if (ext === 'gltf') {
                         skipped.push(`${file.name} (нужен GLB: внешние .bin/.gltf не поддерживаются)`);
-                    } else if (ext === 'dwg') {
-                        skipped.push(`${file.name} (DWG не поддерживается — сохраните как ASCII DXF)`);
+                    } else if (ext === 'dwg') await loadSingleDWG(file);
+                    else if (ext === 'rvt' || ext === 'rfa' || ext === 'rte') {
+                        skipped.push(
+                            `${file.name} — файлы Revit содержат геометрию в закрытом формате, ` +
+                            `прочитать её в браузере нельзя. В Revit: Файл → Экспорт → IFC ` +
+                            `(или CAD-форматы → DWG для планов).`
+                        );
                     } else if (ext === 'ply' || ext === 'dae' || ext === '3ds') {
                         skipped.push(`${file.name} (формат снят с поддержки — используйте IFC / DXF / GLB / OBJ / STL)`);
                     } else skipped.push(file.name);
@@ -6968,6 +6999,151 @@ uniform vec3 uBatchSelColor;
             }
         }
 
+        /** Предел вложенности блоков: защита от самоссылающихся определений. */
+        const DXF_INSERT_MAX_DEPTH = 12;
+        /** Предел числа сущностей после раскрытия: защита от комбинаторного взрыва. */
+        const DXF_INSERT_MAX_ENTITIES = 2_000_000;
+
+        /** Дуга → ломаная: поворот и неравномерный масштаб превращают окружность
+         *  в эллипс, а рендер всё равно бьёт дуги на отрезки. */
+        function dxfArcToPolyline(arc) {
+            const sweep = arc.end - arc.start;
+            const steps = Math.max(12, Math.ceil(Math.abs(sweep) / 7.5));
+            const points = [];
+            for (let i = 0; i <= steps; i++) {
+                const a = THREE.MathUtils.degToRad(arc.start + (sweep * i) / steps);
+                points.push([
+                    arc.cx + Math.cos(a) * arc.radius,
+                    arc.cy + Math.sin(a) * arc.radius,
+                    arc.cz
+                ]);
+            }
+            return { type: 'polyline', layer: arc.layer, points, closed: false };
+        }
+
+        /**
+         * Раскрывает INSERT/MINSERT: содержимое блока переносится в чертёж с
+         * учётом смещения, масштаба, поворота и вложенности.
+         *
+         * Без этого блоки просто терялись — а в реальных чертежах в них лежит
+         * половина содержимого: оси, штампы, оборудование, повторяющиеся узлы.
+         */
+        function expandDxfInserts(entities, blocks) {
+            if (!blocks?.size) return entities.filter(e => e.type !== 'insert');
+
+            const out = [];
+            let budgetHit = false;
+
+            /** @param {number[]} v точка в координатах блока */
+            const place = (v, o) => {
+                const x = (v[0] - o.base[0]) * o.scale[0];
+                const y = (v[1] - o.base[1]) * o.scale[1];
+                const z = (v[2] - o.base[2]) * o.scale[2];
+                return [
+                    o.at[0] + x * o.cos - y * o.sin,
+                    o.at[1] + x * o.sin + y * o.cos,
+                    o.at[2] + z
+                ];
+            };
+
+            function emit(entity, o, depth, stack) {
+                if (out.length >= DXF_INSERT_MAX_ENTITIES) { budgetHit = true; return; }
+
+                if (entity.type === 'insert') {
+                    if (depth >= DXF_INSERT_MAX_DEPTH || stack.has(entity.name)) return;
+                    const block = blocks.get(entity.name);
+                    if (!block) return; // ссылка на несуществующий блок — молча пропускаем
+
+                    const rot = ((o ? o.rotationDeg : 0) + entity.rotation) * Math.PI / 180;
+                    const at = o ? place(entity.at, o) : entity.at.slice();
+                    const inner = {
+                        base: block.base,
+                        scale: o
+                            ? [entity.scale[0] * o.scale[0], entity.scale[1] * o.scale[1], entity.scale[2] * o.scale[2]]
+                            : entity.scale.slice(),
+                        at,
+                        cos: Math.cos(rot),
+                        sin: Math.sin(rot),
+                        rotationDeg: (o ? o.rotationDeg : 0) + entity.rotation,
+                        layer: entity.layer
+                    };
+
+                    stack.add(entity.name);
+                    // MINSERT: решётка копий вдоль повёрнутых осей блока
+                    const cols = Math.max(1, entity.cols | 0);
+                    const rows = Math.max(1, entity.rows | 0);
+                    for (let c = 0; c < cols; c++) {
+                        for (let r = 0; r < rows; r++) {
+                            const dx = c * entity.colSpacing;
+                            const dy = r * entity.rowSpacing;
+                            const step = (c || r)
+                                ? {
+                                    ...inner,
+                                    at: [
+                                        inner.at[0] + dx * inner.cos - dy * inner.sin,
+                                        inner.at[1] + dx * inner.sin + dy * inner.cos,
+                                        inner.at[2]
+                                    ]
+                                }
+                                : inner;
+                            for (const child of block.entities) emit(child, step, depth + 1, stack);
+                        }
+                    }
+                    stack.delete(entity.name);
+                    return;
+                }
+
+                if (!o) { out.push(entity); return; }
+
+                // Слой «0» внутри блока наследуется от вставки — правило DXF,
+                // без него содержимое блоков красится в один цвет.
+                const layer = entity.layer === '0' ? o.layer : entity.layer;
+                const src = entity.type === 'arc' ? dxfArcToPolyline(entity) : entity;
+
+                switch (src.type) {
+                    case 'line': {
+                        const a = place([src.values[0], src.values[1], src.values[2]], o);
+                        const b = place([src.values[3], src.values[4], src.values[5]], o);
+                        out.push({ type: 'line', layer, values: [...a, ...b] });
+                        break;
+                    }
+                    case 'polyline':
+                        out.push({ type: 'polyline', layer, closed: src.closed, points: src.points.map(pt => place(pt, o)) });
+                        break;
+                    case 'point':
+                        out.push({ type: 'point', layer, point: place(src.point, o) });
+                        break;
+                    case 'face':
+                        out.push({ type: 'face', layer, points: src.points.map(pt => place(pt, o)) });
+                        break;
+                    case 'mesh':
+                        out.push({ type: 'mesh', layer, faces: src.faces, vertices: src.vertices.map(pt => place(pt, o)) });
+                        break;
+                    default:
+                        break; // тип без координат — переносить нечего
+                }
+            }
+
+            for (const entity of entities) emit(entity, null, 0, new Set());
+            if (budgetHit) {
+                console.warn(`[BIM.LVA] DXF: раскрытие блоков остановлено на ${DXF_INSERT_MAX_ENTITIES} сущностях.`);
+            }
+            return out;
+        }
+
+        /** Коды $INSUNITS → метры. 0 — «единицы не заданы», масштаб неизвестен. */
+        const DXF_INSUNITS = {
+            1: { scale: 0.0254, name: 'дюймы' },
+            2: { scale: 0.3048, name: 'футы' },
+            4: { scale: 0.001, name: 'миллиметры' },
+            5: { scale: 0.01, name: 'сантиметры' },
+            6: { scale: 1, name: 'метры' },
+            7: { scale: 1000, name: 'километры' },
+            10: { scale: 0.9144, name: 'ярды' },
+            14: { scale: 0.1, name: 'дециметры' },
+            21: { scale: 1200 / 3937, name: 'футы US Survey' }
+        };
+
         function parseAsciiDXF(text) {
             if (text.slice(0, 22).includes('AutoCAD Binary DXF')) {
                 throw new Error('Бинарный DXF не поддерживается. Сохраните файл как ASCII DXF.');
@@ -6981,7 +7157,6 @@ uniform vec3 uBatchSelColor;
 
             const entities = [];
             const seenTypes = new Set();
-            let inEntities = false;
 
             const firstNumber = (data, code) => {
                 const found = data.find(item => item.code === code);
@@ -7077,16 +7252,18 @@ uniform vec3 uBatchSelColor;
                 return null;
             };
 
-            for (let i = 0; i < pairs.length;) {
+            /**
+             * Читает секцию сущностей, начиная с `start`, до ENDSEC.
+             * Секции ENTITIES и BLOCKS устроены одинаково, поэтому обе идут
+             * через этот код. Если передан `blocks`, встреченные BLOCK/ENDBLK
+             * переключают приёмник: содержимое блока копится отдельно и
+             * попадёт в чертёж только через INSERT.
+             */
+            function scanEntitySection(start, defaultSink, blocks) {
+                let sink = defaultSink;
+                let i = start;
+                while (i < pairs.length) {
                 const pair = pairs[i++];
-                if (!inEntities) {
-                    if (pair.code === 0 && pair.value === 'SECTION' &&
-                        pairs[i] && pairs[i].code === 2 && pairs[i].value === 'ENTITIES') {
-                        inEntities = true;
-                        i++;
-                    }
-                    continue;
-                }
                 if (pair.code === 0 && pair.value === 'ENDSEC') break;
                 if (pair.code !== 0) continue;
 
@@ -7095,6 +7272,22 @@ uniform vec3 uBatchSelColor;
                 const data = [];
                 while (i < pairs.length && pairs[i].code !== 0) data.push(pairs[i++]);
                 const layer = layerOf(data);
+
+                if (blocks) {
+                    if (type === 'BLOCK') {
+                        const name = data.find(item => item.code === 2)?.value || '';
+                        const base = [firstNumber(data, 10) || 0, firstNumber(data, 20) || 0, firstNumber(data, 30) || 0];
+                        sink = [];
+                        // Имя может повториться — выигрывает последнее определение,
+                        // как и в самом AutoCAD.
+                        if (name) blocks.set(name, { base, entities: sink });
+                        continue;
+                    }
+                    if (type === 'ENDBLK') { sink = null; continue; }
+                    if (!sink) continue; // мусор между блоками
+                }
+
+                const entities = sink;
 
                 if (type === 'POLYLINE') {
                     const flags = firstNumber(data, 70) || 0;
@@ -7201,11 +7394,63 @@ uniform vec3 uBatchSelColor;
                         [firstNumber(data, 13), firstNumber(data, 23), firstNumber(data, 33) || 0]
                     ].filter(p => p.every(Number.isFinite));
                     if (corners.length >= 3) entities.push({ type: 'face', layer, points: corners });
+                } else if (type === 'INSERT' || type === 'MINSERT') {
+                    const name = data.find(item => item.code === 2)?.value || '';
+                    if (name) {
+                        entities.push({
+                            type: 'insert',
+                            layer,
+                            name,
+                            at: [firstNumber(data, 10) || 0, firstNumber(data, 20) || 0, firstNumber(data, 30) || 0],
+                            scale: [
+                                firstNumber(data, 41) ?? 1,
+                                firstNumber(data, 42) ?? 1,
+                                firstNumber(data, 43) ?? 1
+                            ],
+                            rotation: firstNumber(data, 50) || 0,
+                            // MINSERT — прямоугольная решётка копий одной вставкой
+                            cols: type === 'MINSERT' ? (firstInt(data, 70) || 1) : 1,
+                            rows: type === 'MINSERT' ? (firstInt(data, 71) || 1) : 1,
+                            colSpacing: firstNumber(data, 44) || 0,
+                            rowSpacing: firstNumber(data, 45) || 0
+                        });
+                    }
+                }
+                }
+                return i;
+            }
+
+            // $INSUNITS из HEADER: единицы чертежа, заданные автором. Точное
+            // значение всегда лучше эвристики по габаритам — без него план
+            // здания в миллиметрах приезжает в сцену километровым.
+            let insUnits = 0;
+            for (let i = 0; i + 2 < pairs.length; i++) {
+                if (pairs[i].code === 9 && pairs[i].value === '$INSUNITS') {
+                    const val = pairs.slice(i + 1, i + 4).find(item => item.code === 70);
+                    if (val) insUnits = parseInt(val.value, 10) || 0;
+                    break;
                 }
             }
 
-            entities._seenTypes = [...seenTypes];
-            return entities;
+            // Секции идут в файле в произвольном порядке, а BLOCKS нужна раньше
+            // ENTITIES — поэтому сначала находим обе, потом читаем.
+            const blocks = new Map();
+            let blocksAt = -1;
+            let entitiesAt = -1;
+            for (let i = 0; i + 2 < pairs.length; i++) {
+                if (pairs[i].code !== 0 || pairs[i].value !== 'SECTION') continue;
+                if (pairs[i + 1].code !== 2) continue;
+                if (pairs[i + 1].value === 'BLOCKS') blocksAt = i + 2;
+                else if (pairs[i + 1].value === 'ENTITIES') entitiesAt = i + 2;
+            }
+            if (blocksAt >= 0) scanEntitySection(blocksAt, null, blocks);
+            if (entitiesAt >= 0) scanEntitySection(entitiesAt, entities, null);
+
+            const expanded = expandDxfInserts(entities, blocks);
+            expanded._seenTypes = [...seenTypes];
+            expanded._blockCount = blocks.size;
+            expanded._insUnits = insUnits;
+            return expanded;
         }
 
         function dxfLayerColor(layerName) {
@@ -7391,10 +7636,15 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return parsed;
         }
 
-        async function loadSingleDXF(file) {
-            showLoader('ЧТЕНИЕ DXF', file.name);
+        /**
+         * @param file исходный файл
+         * @param preparedText DXF-текст, если он уже получен (например из DWG)
+         */
+        async function loadSingleDXF(file, preparedText) {
+            const label = preparedText ? 'DWG' : 'DXF';
+            showLoader(`ЧТЕНИЕ ${label}`, file.name);
             try {
-                const text = await file.text();
+                const text = preparedText ?? await file.text();
                 const entities = parseAsciiDXF(text);
                 const seen = entities._seenTypes || [];
                 const needsAcis = seen.some(t => /^(3DSOLID|BODY|REGION|SURFACE)$/i.test(t));
@@ -7447,12 +7697,87 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 showLoader('ГЕОМЕТРИЯ DXF', 'Построение объектов…');
                 const root = buildDXFRoot(entities, file.name);
                 if (!root.children.length) throw new Error('DXF прочитан, но геометрия пуста.');
-                await addExternalModel(file, 'DXF', root);
+
+                const units = DXF_INSUNITS[entities._insUnits];
+                if (units) {
+                    if (scaleObject3DToMeters(root, units.scale)) {
+                        console.info(`[BIM.LVA] ${label}: единицы чертежа — ${units.name}, ×${units.scale} → метры`);
+                    }
+                } else {
+                    // $INSUNITS = 0. Догадываться нельзя: 168 000 единиц — это и
+                    // здание в миллиметрах, и трасса в метрах. Говорим прямо.
+                    const box = new THREE.Box3().setFromObject(root);
+                    const span = box.isEmpty() ? 0 : box.getSize(new THREE.Vector3()).length();
+                    if (span > 10000) {
+                        notify(
+                            `${file.name}: единицы в файле не заданы, размер принят как ${Math.round(span)} м. ` +
+                            `Если чертёж в миллиметрах, он окажется в 1000 раз крупнее — задайте масштаб ` +
+                            `в «Выравнивании моделей» или сохраните из CAD с указанием единиц.`
+                        );
+                    }
+                }
+                await addExternalModel(file, label, root);
                 hideLoader();
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                notifyError('Ошибка DXF: ' + error.message);
+                notifyError(`Ошибка ${label}: ` + error.message);
+            }
+        }
+
+        // ---- DWG ----
+        // Формат закрытый и бинарный, разбирать его самим нечем. Конвертируем в
+        // DXF движком acadrust (wasm, MIT) и дальше идём общим путём DXF.
+        // Модуль тяжёлый (~800 КБ wasm), поэтому подключается только по факту
+        // открытия .dwg, а не при загрузке страницы.
+        let dwgConverterPromise = null;
+
+        function ensureDwgConverter() {
+            if (!dwgConverterPromise) {
+                dwgConverterPromise = import('dwgdxf').catch(err => {
+                    dwgConverterPromise = null; // дать шанс повторной попытке
+                    throw new Error(`конвертер DWG не загрузился (${err.message || err})`);
+                });
+            }
+            return dwgConverterPromise;
+        }
+
+        /** Версия из первых 6 байт: AC1015 = 2000, AC1032 = 2018 и т.д. */
+        const DWG_RELEASES = {
+            AC1012: 'R13', AC1014: 'R14', AC1015: '2000', AC1018: '2004',
+            AC1021: '2007', AC1024: '2010', AC1027: '2013', AC1032: '2018'
+        };
+
+        function dwgVersionLabel(bytes) {
+            const tag = new TextDecoder('ascii').decode(bytes.subarray(0, 6));
+            return DWG_RELEASES[tag] ? `AutoCAD ${DWG_RELEASES[tag]}` : tag;
+        }
+
+        async function loadSingleDWG(file) {
+            showLoader('ЧТЕНИЕ DWG', file.name);
+            try {
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                if (bytes.length < 6 || !/^AC10\d\d$/.test(new TextDecoder('ascii').decode(bytes.subarray(0, 6)))) {
+                    throw new Error('это не похоже на DWG — нет сигнатуры AC10xx в начале файла');
+                }
+                const version = dwgVersionLabel(bytes);
+
+                showLoader('DWG → DXF', `${version}: подготовка конвертера…`);
+                const { convertDwgToDxf } = await ensureDwgConverter();
+
+                showLoader('DWG → DXF', `${version}: преобразование…`);
+                await yieldToUi();
+                const dxfBytes = await convertDwgToDxf(bytes);
+                if (!dxfBytes?.length) throw new Error('конвертер вернул пустой DXF');
+
+                // DXF из DWG бывает не в UTF-8 (кириллица в старых чертежах),
+                // поэтому не роняем разбор на некорректных байтах.
+                const text = new TextDecoder('utf-8', { fatal: false }).decode(dxfBytes);
+                await loadSingleDXF(file, text);
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                notifyError('Ошибка DWG: ' + (error.message || error));
             }
         }
 
@@ -15387,7 +15712,7 @@ ${componentXml || '    '}
         });
 
         // --- Яндекс.Диск (публичная папка как «сервер» моделей) ---
-        const YA_SUPPORTED_EXT = /\.(ifc|fbx|dxf|xml|glb|obj|stl|tif|tiff|gtiff|ecw|jpg|jpeg|png|jgw|pgw|tfw|wld|eww)$/i;
+        const YA_SUPPORTED_EXT = /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|tif|tiff|gtiff|ecw|jpg|jpeg|png|jgw|pgw|tfw|wld|eww)$/i;
         const YA_RASTER_EXT = /\.(tif|tiff|gtiff|ecw|jpg|jpeg|png)$/i;
         const YA_WORLD_EXT = /\.(jgw|pgw|tfw|wld|eww)$/i;
         const YA_STORAGE_KEY = 'bimlva_yandex_public_link';
@@ -16170,14 +16495,16 @@ ${componentXml || '    '}
             stage.classList.remove('dragover'); 
         }));
         stage.addEventListener('drop', e => {
-            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx|dxf|xml|glb|obj|stl)$/i.test(f.name));
+            // rvt/rfa/rte пропускаем дальше намеренно: пусть диспетчер объяснит,
+            // почему Revit не открыть, вместо молчаливого отсева.
+            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|rvt|rfa|rte)$/i.test(f.name));
             if (files.length) {
                 loadSourceHint = 'drag_drop';
                 handleFiles(files).finally(() => { loadSourceHint = 'local'; });
             } else notifyError(
                 'Поддерживаются:\n' +
                 '• IFC (схемы IFC2X3, IFC4, IFC4X3)\n' +
-                '• ASCII DXF, LandXML/Civil XML (.xml)\n' +
+                '• DWG (R13…2018), ASCII DXF, LandXML/Civil XML (.xml)\n' +
                 '• FBX, GLB, OBJ, STL'
             );
         });
