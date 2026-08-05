@@ -119,6 +119,46 @@ async function checkPicking(page) {
     return { ok: false };
 }
 
+/**
+ * Уведомления заменили alert(): проверяем и механизм, и реальный путь из UI.
+ * Кнопка «Ведомость» без выделения обязана показать сообщение об ошибке —
+ * раньше это был блокирующий alert.
+ */
+async function checkNotifications(page) {
+    const api = await page.evaluate(() => typeof window.BimLvaNotify?.error === 'function');
+    if (!api) {
+        problems.push('window.BimLvaNotify недоступен — уведомления не поднялись');
+        return null;
+    }
+
+    await page.evaluate(() => window.BimLvaNotify.error('Проверка уведомлений'));
+    const shown = await page
+        .waitForFunction(
+            () => [...document.querySelectorAll('.toast.is-error .toast-text')]
+                .some((t) => t.textContent.includes('Проверка уведомлений')),
+            { timeout: 3000 }
+        )
+        .then(() => true)
+        .catch(() => false);
+    if (!shown) problems.push('уведомление через BimLvaNotify не появилось');
+
+    // Реальный путь: экспорт ведомости без выделения. Кнопка живёт в свёрнутой
+    // панели, поэтому дёргаем обработчик напрямую, а не мышью.
+    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
+    await page.evaluate(() => document.getElementById('btnSchedule').click());
+    const fromUi = await page
+        .waitForFunction(
+            () => [...document.querySelectorAll('.toast .toast-text')]
+                .some((t) => /ведомост/i.test(t.textContent)),
+            { timeout: 3000 }
+        )
+        .then(() => true)
+        .catch(() => false);
+    if (!fromUi) problems.push('кнопка «Ведомость» без выделения не показала уведомление');
+
+    return { api: true, shown, fromUi };
+}
+
 async function main() {
     const { server, port } = await startServer();
     const browser = await chromium.launch({
@@ -161,6 +201,7 @@ async function main() {
     // строится по порогу, и путь пикинга через дерево остался бы непроверенным.
     let ifcLoaded = null;
     let pick = null;
+    let toast = null;
     if (PAGE === 'bim-lva-composer-ifc.html') {
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
         await fs.writeFile(fixture, makeGridIfc(2100, 50, 3));
@@ -175,7 +216,12 @@ async function main() {
                 .then(() => true)
                 .catch(() => false);
             if (!ifcLoaded) problems.push('IFC не загрузился: дерево модели осталось пустым');
-            else pick = await checkPicking(page);
+            else {
+                // Уведомления проверяем до пикинга: «Ведомость» ругается только
+                // когда ничего не выделено.
+                toast = await checkNotifications(page);
+                pick = await checkPicking(page);
+            }
         } finally {
             await fs.rm(fixture, { force: true });
         }
@@ -209,6 +255,7 @@ async function main() {
     if (ifcLoaded !== null) console.log(`IFC:       ${ifcLoaded ? `загружен, узлов дерева ${state.treeItems}` : 'НЕ загрузился'}`);
     if (state.meshCount >= 0) console.log(`мешей:     ${state.meshCount}, с BVH: ${state.bvhCount}`);
     if (pick) console.log(`пикинг:    ${pick.ok ? `элемент выбран (${pick.label})` : 'НЕ РАБОТАЕТ'}`);
+    if (toast) console.log(`тосты:     API ${toast.shown ? 'ок' : 'НЕТ'}, из UI ${toast.fromUi ? 'ок' : 'НЕТ'}`);
 
     if (external.length) {
         // Не ошибка теста: сеть наружу (Supabase, Яндекс.Диск) тут недоступна.

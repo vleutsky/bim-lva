@@ -1982,6 +1982,85 @@
             opacity: .35;
             margin: 0 2px;
         }
+
+        /* ---- Уведомления ---- */
+        /* Заменяют alert(): тот блокировал вкладку, не давал скопировать текст
+           ошибки и вставал поперёк длинных операций вроде импорта. */
+        .toasts {
+            position: fixed;
+            right: 16px;
+            bottom: 42px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: flex-end;
+            max-width: min(420px, calc(100vw - 32px));
+            pointer-events: none;
+        }
+
+        .toast {
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-left: 3px solid var(--blue);
+            border-radius: 4px;
+            background: var(--panel);
+            color: var(--txt);
+            box-shadow: 0 6px 20px rgba(28, 39, 51, .16);
+            font-size: var(--panel-font);
+            line-height: 1.45;
+            animation: toast-in .16s ease-out;
+        }
+
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .toast { animation: none; }
+        }
+
+        .toast.is-ok { border-left-color: var(--ok); }
+        .toast.is-error { border-left-color: var(--err); }
+
+        /* Текст выделяемый: сообщение об ошибке нужно уметь скопировать
+           в задачу или письмо — в alert это было невозможно. */
+        .toast .toast-text {
+            flex: 1;
+            user-select: text;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .toast .toast-count {
+            flex: none;
+            align-self: center;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: var(--panel-2);
+            color: var(--txt-dim);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: var(--panel-font-sm);
+        }
+
+        .toast .toast-close {
+            flex: none;
+            border: 0;
+            background: none;
+            color: var(--txt-dim);
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 0 2px;
+        }
+
+        .toast .toast-close:hover { color: var(--txt); }
     </style>
 </head>
 <body>
@@ -2883,6 +2962,91 @@
             try { window.BimLvaStats?.track?.(event, props); } catch (_) {}
         }
         try { window.BimLvaStats?.trackPage?.('composer'); } catch (_) {}
+
+        // ---- Уведомления ----
+        // Пришли на смену alert(): тот замораживал вкладку до нажатия «ОК»,
+        // не давал скопировать текст ошибки и всплывал поверх длинных операций.
+        const TOAST_TIMEOUT = { info: 5000, ok: 4000, error: 12000 };
+        let toastLayer = null;
+        /** Последний тост: повтор того же текста наращивает счётчик, а не копится стопкой. */
+        let lastToast = null;
+
+        function getToastLayer() {
+            if (!toastLayer || !toastLayer.isConnected) {
+                toastLayer = document.createElement('div');
+                toastLayer.className = 'toasts';
+                toastLayer.setAttribute('role', 'status');
+                toastLayer.setAttribute('aria-live', 'polite');
+                document.body.appendChild(toastLayer);
+            }
+            return toastLayer;
+        }
+
+        function dismissToast(entry) {
+            if (lastToast === entry) lastToast = null;
+            clearTimeout(entry.timer);
+            entry.el.remove();
+        }
+
+        /**
+         * Неблокирующее сообщение пользователю.
+         * @param {string} message текст; переносы строк сохраняются
+         * @param {'info'|'ok'|'error'} type влияет на цвет и время показа
+         */
+        function notify(message, type = 'info') {
+            const text = String(message ?? '').trim();
+            if (!text) return;
+
+            if (lastToast && lastToast.text === text && lastToast.type === type) {
+                lastToast.count++;
+                lastToast.countEl.textContent = `×${lastToast.count}`;
+                lastToast.countEl.hidden = false;
+                clearTimeout(lastToast.timer);
+                lastToast.timer = setTimeout(() => dismissToast(lastToast), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
+                return;
+            }
+
+            const el = document.createElement('div');
+            el.className = `toast${type === 'ok' ? ' is-ok' : type === 'error' ? ' is-error' : ''}`;
+
+            const textEl = document.createElement('div');
+            textEl.className = 'toast-text';
+            textEl.textContent = text;
+
+            const countEl = document.createElement('span');
+            countEl.className = 'toast-count';
+            countEl.hidden = true;
+
+            const close = document.createElement('button');
+            close.className = 'toast-close';
+            close.type = 'button';
+            close.textContent = '×';
+            close.title = 'Закрыть';
+
+            el.append(textEl, countEl, close);
+            getToastLayer().appendChild(el);
+
+            const entry = { el, text, type, count: 1, countEl, timer: null };
+            close.addEventListener('click', () => dismissToast(entry));
+            entry.timer = setTimeout(() => dismissToast(entry), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
+            lastToast = entry;
+        }
+
+        const notifyOk = (message) => notify(message, 'ok');
+        const notifyError = (message) => notify(message, 'error');
+
+        // Доступно соседним скриптам (auth-ui, bcf-sync), чтобы и они не звали alert.
+        window.BimLvaNotify = { notify, ok: notifyOk, error: notifyError };
+
+        // Раньше сбой в обработчике не оставлял следа: вьювер просто замирал, а
+        // пользователь видел статичную картинку и не знал, что произошло.
+        window.addEventListener('error', (ev) => {
+            notifyError(`Сбой: ${ev.message || 'неизвестная ошибка'}`);
+        });
+        window.addEventListener('unhandledrejection', (ev) => {
+            const reason = ev.reason?.message || ev.reason || 'неизвестная ошибка';
+            notifyError(`Необработанный сбой: ${reason}`);
+        });
 
         (function initToolbarMenus() {
             const menus = Array.from(document.querySelectorAll('.tb-menu'));
@@ -3904,7 +4068,7 @@
                 if (box.isEmpty()) {
                     isClipping = false;
                     $('btnClip').classList.remove('on');
-                    alert('Нет геометрии для установки разреза. Загрузите модель или выделите элементы.');
+                    notifyError('Нет геометрии для установки разреза. Загрузите модель или выделите элементы.');
                     return;
                 }
                 placeClipGizmoFromBounds(box);
@@ -4725,7 +4889,7 @@
         }).catch(e => {
             console.error(e);
             $('engineStatus').textContent = 'ошибка движка';
-            alert('Не удалось инициализировать IFC-движок (WebAssembly). Проверьте интернет и обновите страницу.');
+            notifyError('Не удалось инициализировать IFC-движок (WebAssembly). Проверьте интернет и обновите страницу.');
         });
 
         // --- Загрузка ---
@@ -4797,9 +4961,9 @@
                 await new Promise(r => setTimeout(r, 80));
             }
 
-            if (skipped.length) alert('Пропущено (формат не поддержан): ' + skipped.join(', '));
+            if (skipped.length) notifyError('Пропущено (формат не поддержан): ' + skipped.join(', '));
             if (failed.length) {
-                alert(
+                notifyError(
                     `Не удалось загрузить ${failed.length} файл(ов):\n\n` +
                     failed.slice(0, 8).join('\n') +
                     (failed.length > 8 ? `\n…и ещё ${failed.length - 8}` : '') +
@@ -6679,7 +6843,7 @@ uniform vec3 uBatchSelColor;
             } catch (e) {
                 console.error(e);
                 hideLoader();
-                alert('Ошибка FBX: ' + e.message);
+                notifyError('Ошибка FBX: ' + e.message);
             }
         }
 
@@ -6697,7 +6861,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert(`Ошибка ${extension.toUpperCase()}: ${error.message}. Для GLTF внешние .bin/текстуры не поддерживаются — используйте GLB.`);
+                notifyError(`Ошибка ${extension.toUpperCase()}: ${error.message}. Для GLTF внешние .bin/текстуры не поддерживаются — используйте GLB.`);
             }
         }
 
@@ -6711,7 +6875,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка OBJ: ' + error.message);
+                notifyError('Ошибка OBJ: ' + error.message);
             }
         }
 
@@ -6733,7 +6897,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка STL: ' + error.message);
+                notifyError('Ошибка STL: ' + error.message);
             }
         }
 
@@ -6771,7 +6935,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка PLY: ' + error.message);
+                notifyError('Ошибка PLY: ' + error.message);
             }
         }
 
@@ -6786,7 +6950,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка DAE: ' + error.message);
+                notifyError('Ошибка DAE: ' + error.message);
             }
         }
 
@@ -6800,7 +6964,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка 3DS: ' + error.message);
+                notifyError('Ошибка 3DS: ' + error.message);
             }
         }
 
@@ -7288,7 +7452,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка DXF: ' + error.message);
+                notifyError('Ошибка DXF: ' + error.message);
             }
         }
 
@@ -8316,7 +8480,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка LandXML: ' + error.message);
+                notifyError('Ошибка LandXML: ' + error.message);
             }
         }
 
@@ -9307,7 +9471,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function applyAppearanceToSelection(appearance, items = getSelectedGeometryItems()) {
             if (!items.length) {
-                alert('Нет элементов с поверхностной геометрией для оформления.');
+                notifyError('Нет элементов с поверхностной геометрией для оформления.');
                 return 0;
             }
             items.forEach(item => {
@@ -9371,7 +9535,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (count) {
                 appearanceDraftTexture = null;
                 appearanceDraftTextureName = '';
-                alert(`Оформление применено к ${count} элементам.`);
+                notifyOk(`Оформление применено к ${count} элементам.`);
                 const first = selectedItems[0];
                 if (first) {
                     const mod0 = loadedModels.get(first.modelID);
@@ -9394,7 +9558,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             });
             appearanceDraftTexture = null;
             appearanceDraftTextureName = '';
-            alert(`Исходное оформление восстановлено для ${items.length} элементов.`);
+            notifyOk(`Исходное оформление восстановлено для ${items.length} элементов.`);
             const first = selectedItems[0];
             if (first) {
                 const mod0 = loadedModels.get(first.modelID);
@@ -9411,14 +9575,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 texture.colorSpace = THREE.SRGBColorSpace;
                 appearanceDraftTexture = texture;
                 appearanceDraftTextureName = file.name;
-                alert(`Текстура «${file.name}» загружена. Нажмите «Применить оформление».`);
+                notifyOk(`Текстура «${file.name}» загружена. Нажмите «Применить оформление».`);
                 const first = selectedItems[0];
                 if (first) {
                     const mod0 = loadedModels.get(first.modelID);
                     if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
                     else showProps(first.modelID, first.expressID, selectedItems.length);
                 }
-            }, undefined, err => alert('Не удалось загрузить изображение: ' + err.message));
+            }, undefined, err => notifyError('Не удалось загрузить изображение: ' + err.message));
         }
 
         // --- SELECTION (Только подсветка, без прозрачности) ---
@@ -9897,7 +10061,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         $('btnIsolate').addEventListener('click', () => {
             if (!selectedItems.length) {
-                alert('Сначала выделите элементы для изоляции.');
+                notifyError('Сначала выделите элементы для изоляции.');
                 return;
             }
             const keep = new Set(selectedItems.map(selectionKey));
@@ -10236,14 +10400,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const pset = $('colorByPset').value;
                 const prop = $('colorByProp').value.trim();
                 if (!prop) {
-                    alert('Укажите имя параметра.');
+                    notifyError('Укажите имя параметра.');
                     return;
                 }
                 colorByState = { mode: 'pset', pset, prop, title: `Pset: ${prop}` };
                 n = applyColorByFromState(colorByState);
             }
             closeColorByModal();
-            if (!n) alert('Нет IFC-элементов для раскраски.');
+            if (!n) notifyError('Нет IFC-элементов для раскраски.');
             else trackUsage('color_by_apply', { mode, count: n });
         });
 
@@ -10810,7 +10974,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         function exportPropertiesExcel(items, filenameHint) {
             const rows = buildPropertiesExcelRows(items);
             if (rows.length <= 1) {
-                alert('Нет редактируемых IFC-характеристик для экспорта.');
+                notifyError('Нет редактируемых IFC-характеристик для экспорта.');
                 return false;
             }
             const nElements = new Set(
@@ -11366,7 +11530,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (ra) items.push(ra);
             if (rb) items.push(rb);
             if (!items.length) {
-                alert('Элементы пары не найдены в загруженных моделях.');
+                notifyError('Элементы пары не найдены в загруженных моделях.');
                 return;
             }
             try { parkClashModalAside(); } catch (_) {}
@@ -11381,7 +11545,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const rb = resolveElementRef(pair.b);
             const items = [ra, rb].filter(Boolean);
             if (!items.length) {
-                alert('Элементы пары не найдены.');
+                notifyError('Элементы пары не найдены.');
                 return;
             }
             selectMultiple(items);
@@ -11414,7 +11578,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             bcfTopics.push(topic);
             try { renderBcfList(); syncBcfMarkers(); } catch (_) {}
             trackUsage('clash_to_bcf');
-            alert('BCF-заметка создана. Откройте «BCF-заметки» для правки.');
+            notifyOk('BCF-заметка создана. Откройте «BCF-заметки» для правки.');
         }
 
         function boxesStillClash(refA, refB, tol) {
@@ -11564,7 +11728,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const idB = Number($('clashModelB').value);
             const tolA = parseFloat($('clashTolerance').value) || 0;
             const tolB = parseFloat($('clashToleranceB')?.value) || tolA;
-            if (idA === idB) { alert('Выберите две разные модели.'); return; }
+            if (idA === idB) { notifyError('Выберите две разные модели.'); return; }
             const modA = loadedModels.get(idA);
             const modB = loadedModels.get(idB);
             if (!modA || !modB) return;
@@ -11572,7 +11736,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (specs) {
                 const empty = specs.some((s) => !s.a.size || !s.b.size);
                 if (empty) {
-                    alert('Укажите классы A и B для фильтра.');
+                    notifyError('Укажите классы A и B для фильтра.');
                     return;
                 }
             }
@@ -11693,7 +11857,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             } catch (err) {
                 console.error(err);
                 $('clashStatus').textContent = 'Ошибка проверки: ' + (err?.message || err);
-                alert('Ошибка проверки коллизий: ' + (err?.message || err));
+                notifyError('Ошибка проверки коллизий: ' + (err?.message || err));
             } finally {
                 hideLoader();
                 if (runBtn) {
@@ -11707,7 +11871,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('clashRecheckBtn')?.addEventListener('click', async () => {
             const report = clashReports[0];
             if (!report?.pairs?.length) {
-                alert('Нет сохранённого отчёта. Сначала запустите проверку.');
+                notifyError('Нет сохранённого отчёта. Сначала запустите проверку.');
                 return;
             }
             const tol = parseFloat($('clashTolerance').value) || report.tolerance || 0;
@@ -11753,7 +11917,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('clashExportBtn')?.addEventListener('click', () => {
             const report = clashReports[0];
             if (!report) {
-                alert('Нет отчёта для экспорта.');
+                notifyError('Нет отчёта для экспорта.');
                 return;
             }
             const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
@@ -11767,7 +11931,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('clashExportExcelBtn')?.addEventListener('click', () => {
             const report = clashReports[0];
             if (!report) {
-                alert('Нет отчёта для экспорта.');
+                notifyError('Нет отчёта для экспорта.');
                 return;
             }
             try {
@@ -11775,7 +11939,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 trackUsage('clash_export_excel', { pairs: report.pairs?.length || 0 });
             } catch (err) {
                 console.error(err);
-                alert('Не удалось выгрузить Excel: ' + (err?.message || err));
+                notifyError('Не удалось выгрузить Excel: ' + (err?.message || err));
             }
         });
 
@@ -11986,7 +12150,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('runCompare').addEventListener('click', () => {
             const idA = Number($('compareModelA').value);
             const idB = Number($('compareModelB').value);
-            if (idA === idB) { alert('Выберите два разных IFC.'); return; }
+            if (idA === idB) { notifyError('Выберите два разных IFC.'); return; }
             const modA = loadedModels.get(idA);
             const modB = loadedModels.get(idB);
             const mapA = new Map();
@@ -12006,7 +12170,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('btnPropsExportExcel')?.addEventListener('click', () => {
             const items = getPropsExportItems();
             if (!items.length) {
-                alert('Нет IFC-элементов для экспорта характеристик.');
+                notifyError('Нет IFC-элементов для экспорта характеристик.');
                 return;
             }
             if (!selectedItems.length && items.length > 1500) {
@@ -12018,7 +12182,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     exportPropertiesExcel(items);
                 } catch (err) {
                     console.error(err);
-                    alert('Не удалось выгрузить Excel: ' + (err?.message || err));
+                    notifyError('Не удалось выгрузить Excel: ' + (err?.message || err));
                 } finally {
                     hideLoader();
                 }
@@ -12035,7 +12199,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             try {
                 const rows = await parsePropsImportFile(file);
                 if (!rows.length) {
-                    alert('В файле нет строк свойств.');
+                    notifyError('В файле нет строк свойств.');
                     return;
                 }
                 if (!confirm(`Импортировать характеристики из «${file.name}» (${rows.length} строк)?\nИзменения попадут в IFC; затем «Экспорт IFC» для сохранения файла.`)) {
@@ -12048,14 +12212,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     const mod = loadedModels.get(first.modelID);
                     if (mod && !mod.isFBX) showProps(first.modelID, first.expressID, selectedItems.length);
                 }
-                alert(
+                notifyOk(
                     `Импорт завершён.\nЗаписано: ${result.applied}\nПропущено: ${result.skipped}\nНе найдено элементов: ${result.missing}` +
                     (result.errors.length ? `\nОшибки: ${result.errors.slice(0, 5).join('; ')}` : '') +
                     `\n\nНажмите «Экспорт IFC», чтобы скачать изменённые файлы.`
                 );
             } catch (err) {
                 console.error(err);
-                alert('Ошибка импорта: ' + (err?.message || err));
+                notifyError('Ошибка импорта: ' + (err?.message || err));
             } finally {
                 hideLoader();
             }
@@ -12064,7 +12228,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('btnSchedule').addEventListener('click', () => {
             const items = selectedItems.length ? selectedItems : [];
             if (!items.length) {
-                alert('Выделите элементы для ведомости.');
+                notifyError('Выделите элементы для ведомости.');
                 return;
             }
             const rows = [['model', 'expressID', 'class', 'name', 'file']];
@@ -12215,7 +12379,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             try {
                 await navigator.clipboard.writeText(url);
                 if (!silent) {
-                    alert(
+                    notifyOk(
                         `Пакет экспертизы скопирован.\n` +
                         `BCF: ${(state.bcf || []).length} · фильтр классов: ${state.classFilter ? state.classFilter.length : 'все'} · color-by: ${state.colorBy ? 'да' : 'нет'}.`
                     );
@@ -12368,7 +12532,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const sel = $('alignProfileSelect');
             if (!sel) return;
             if (!list.length) {
-                alert('Нет трасс LandXML Alignment. Загрузите LandXML с Alignments.');
+                notifyError('Нет трасс LandXML Alignment. Загрузите LandXML с Alignments.');
                 return;
             }
             sel.innerHTML = list.map((it, i) =>
@@ -12433,7 +12597,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const pset = $('timeline4dPset')?.value || '';
             const prop = ($('timeline4dProp')?.value || '').trim();
             if (!prop) {
-                alert('Укажите имя параметра (StartDate, Phase…)');
+                notifyError('Укажите имя параметра (StartDate, Phase…)');
                 return;
             }
             const bucket = new Map(); // key -> {label, items:[]}
@@ -12561,7 +12725,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 $('qrViewModal').classList.add('show');
                 trackUsage('qr_view_open');
             } catch (err) {
-                alert('Не удалось создать QR: ' + (err.message || err));
+                notifyError('Не удалось создать QR: ' + (err.message || err));
             }
         }
 
@@ -12574,7 +12738,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const url = lastQrPack?.url || (await copyExpertisePackLink(true)).url;
             try {
                 await navigator.clipboard.writeText(url);
-                alert('Ссылка скопирована.');
+                notifyOk('Ссылка скопирована.');
             } catch (_) {
                 prompt('Ссылка:', url);
             }
@@ -13018,7 +13182,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         async function exportBcfZip() {
             if (!bcfTopics.length) {
-                alert('Нет заметок для экспорта.');
+                notifyError('Нет заметок для экспорта.');
                 return;
             }
             const JSZip = await ensureJSZip();
@@ -13102,7 +13266,7 @@ ${componentXml || '    '}
             const title = $('bcfTitle').value.trim() || 'Замечание';
             const comment = $('bcfComment').value.trim() || title;
             if (!bcfPickPoint) {
-                alert('Сначала поставьте точку на модели.');
+                notifyError('Сначала поставьте точку на модели.');
                 return;
             }
             const user = globalThis.BimLvaAuth?.getUser?.();
@@ -13144,13 +13308,13 @@ ${componentXml || '    '}
                             `Облако: код ${bcfCloudNotebook.share_code} · заметок: ${bcfTopics.length}`
                         );
                     })
-                    .catch(err => alert('Не удалось сохранить в облако: ' + (err.message || err)));
+                    .catch(err => notifyError('Не удалось сохранить в облако: ' + (err.message || err)));
                 return;
             }
             pushLocal();
         });
         $('bcfExportBtn').addEventListener('click', () => {
-            exportBcfZip().catch(err => alert('Ошибка экспорта BCF: ' + err.message));
+            exportBcfZip().catch(err => notifyError('Ошибка экспорта BCF: ' + err.message));
         });
         $('bcfImportBtn')?.addEventListener('click', () => {
             $('bcfImportFile')?.click();
@@ -13162,14 +13326,14 @@ ${componentXml || '    '}
             try {
                 const { added, skipped } = await importBcfZip(file);
                 if (!added && !skipped) {
-                    alert('В файле не найдено тем BCF.');
+                    notifyError('В файле не найдено тем BCF.');
                 } else if (!added) {
-                    alert(`Новых заметок нет (пропущено дублей/ошибок: ${skipped}).`);
+                    notifyError(`Новых заметок нет (пропущено дублей/ошибок: ${skipped}).`);
                 } else {
-                    alert(`Импортировано заметок: ${added}${skipped ? ` · пропущено: ${skipped}` : ''}.`);
+                    notifyOk(`Импортировано заметок: ${added}${skipped ? ` · пропущено: ${skipped}` : ''}.`);
                 }
             } catch (err) {
-                alert('Ошибка импорта BCF: ' + (err.message || err));
+                notifyError('Ошибка импорта BCF: ' + (err.message || err));
             } finally {
                 if (input) input.value = '';
             }
@@ -13180,12 +13344,12 @@ ${componentXml || '    '}
         $('bcfJoinBtn')?.addEventListener('click', async () => {
             const code = $('bcfShareCodeIn')?.value?.trim();
             if (!code) {
-                alert('Введите код обмена от автора заметок.');
+                notifyError('Введите код обмена от автора заметок.');
                 return;
             }
             const sync = globalThis.BimLvaBcfSync;
             if (!sync?.authReady()) {
-                alert('Сначала войдите в аккаунт (режим Supabase в auth-config.js).');
+                notifyError('Сначала войдите в аккаунт (режим Supabase в auth-config.js).');
                 return;
             }
             try {
@@ -13194,9 +13358,9 @@ ${componentXml || '    '}
                 sync.rememberNotebook(modelKey, nbId);
                 bcfCloudNotebook = await sync.fetchNotebook(nbId);
                 await refreshBcfFromCloud();
-                alert('Подключено. Заметки этого блокнота загружены.');
+                notifyOk('Подключено. Заметки этого блокнота загружены.');
             } catch (err) {
-                alert(err.message || String(err));
+                notifyError(err.message || String(err));
             }
         });
         globalThis.BimLvaAuth?.onChange?.(() => {
@@ -13217,7 +13381,7 @@ ${componentXml || '    '}
                 if (t?._cloudRowId && sync?.authReady()) {
                     sync.deleteTopic(t._cloudRowId)
                         .then(done)
-                        .catch(err => alert('Не удалось удалить в облаке: ' + (err.message || err)));
+                        .catch(err => notifyError('Не удалось удалить в облаке: ' + (err.message || err)));
                 } else done();
                 return;
             }
@@ -13307,7 +13471,7 @@ ${componentXml || '    '}
         $('openPropSearch').addEventListener('click', () => {
             const hasIfc = [...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
             if (!hasIfc) {
-                alert('Сначала загрузите хотя бы один IFC-файл.');
+                notifyError('Сначала загрузите хотя бы один IFC-файл.');
                 return;
             }
             $('propSearchModal').classList.add('show');
@@ -13328,11 +13492,11 @@ ${componentXml || '    '}
             const valueText = $('propSearchValue').value;
 
             if (!propertyName) {
-                alert('Укажите имя параметра (или его часть) для поиска.');
+                notifyError('Укажите имя параметра (или его часть) для поиска.');
                 return;
             }
             if ((valueMode === 'contains' || valueMode === 'exact') && !valueText.trim()) {
-                alert('Для выбранного режима значения укажите текст значения.');
+                notifyError('Для выбранного режима значения укажите текст значения.');
                 return;
             }
 
@@ -13345,13 +13509,13 @@ ${componentXml || '    '}
 
             closePropSearchModal();
             if (!found.length) {
-                alert('Совпадений не найдено. Проверьте имя Pset/параметра или режим значения.');
+                notifyError('Совпадений не найдено. Проверьте имя Pset/параметра или режим значения.');
                 return;
             }
             treeSelectionAnchor = null;
             selectMultiple(uniqueSelectionItems(found));
             trackUsage('ifc_prop_search', { matched: found.length, mode: valueMode });
-            alert(`Найдено и выделено элементов: ${found.length}. Откройте «Свойства» → «Массовое изменение IFC», чтобы переименовать параметр(ы)/Pset или заменить значения у всех найденных элементов сразу.`);
+            notify(`Найдено и выделено элементов: ${found.length}. Откройте «Свойства» → «Массовое изменение IFC», чтобы переименовать параметр(ы)/Pset или заменить значения у всех найденных элементов сразу.`);
         });
 
         function getSelectedIfcObjects() {
@@ -13375,7 +13539,7 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const modData = loadedModels.get(modelID);
             if (!modData || modData.isFBX || !modData.ifcIndex) {
-                alert('Пользовательские ветки можно создавать только внутри IFC-файла.');
+                notifyError('Пользовательские ветки можно создавать только внутри IFC-файла.');
                 return;
             }
             const label = row.querySelector('.tlabel');
@@ -13411,12 +13575,12 @@ ${componentXml || '    '}
             const propertyType = $('customBranchPropType').value;
 
             if (!branchName || !psetName || !propertyName) {
-                alert('Заполните название ветки, Pset и первого параметра.');
+                notifyError('Заполните название ветки, Pset и первого параметра.');
                 return;
             }
             if (!pendingBranchParent) {
                 closeBranchModal();
-                alert('Не удалось определить родительский раздел. Откройте форму повторно через ПКМ.');
+                notifyError('Не удалось определить родительский раздел. Откройте форму повторно через ПКМ.');
                 return;
             }
 
@@ -13461,7 +13625,7 @@ ${componentXml || '    '}
             pendingBranchParent = null;
             selectMultiple([{ modelID, expressID: groupID }]);
             trackUsage('ifc_create_branch', { elements: memberIDs.length });
-            alert(`Ветка «${branchName}» создана. Перемещено элементов: ${memberIDs.length}.`);
+            notifyOk(`Ветка «${branchName}» создана. Перемещено элементов: ${memberIDs.length}.`);
         });
 
         function closeNormalizeModal() {
@@ -13491,7 +13655,7 @@ ${componentXml || '    '}
                 normalizePlacements: $('normalizePlacements').checked
             };
             if (!options.projectName || !options.siteName || !options.buildingName || !options.storeyName) {
-                alert('Все четыре названия пространственной структуры обязательны.');
+                notifyError('Все четыре названия пространственной структуры обязательны.');
                 return;
             }
             const models = [...loadedModels.values()].filter(model => !model.isFBX && model.ifcIndex);
@@ -13518,7 +13682,7 @@ ${componentXml || '    '}
             let message = `Обработано IFC-файлов: ${summaries.length}. Элементов перенесено на этаж: ${changed}. Преобразовано в BuildingElementProxy: ${converted}.`;
             if (errors.length) message += `\n\nОшибки:\n${errors.join('\n')}`;
             message += '\n\nНажмите «Экспорт IFC», затем повторно откройте файл для отображения новой структуры.';
-            alert(message);
+            notifyOk(message);
         });
 
         $('treeSelectAll').addEventListener('click', () => {
@@ -13861,7 +14025,7 @@ ${componentXml || '    '}
             const predefinedType = propsBox.querySelector('#bulkPredefinedType').value.trim();
             if (!items.length) return;
             if (predefinedType && !/^\.[A-Z0-9_]+\.$/i.test(predefinedType)) {
-                alert('PredefinedType должен быть IFC-перечислением, например .NOTDEFINED.');
+                notifyError('PredefinedType должен быть IFC-перечислением, например .NOTDEFINED.');
                 return;
             }
             if (!confirm(`Изменить IFC-класс у ${items.length} элементов на ${className}?`)) return;
@@ -13900,7 +14064,7 @@ ${componentXml || '    '}
                 const search = modData.searchCache.get(item.expressID) || '';
                 modData.searchCache.set(item.expressID, `${search} ${className}`.toLowerCase());
             });
-            alert(`Класс изменён: ${changed}.${skipped ? ` Пропущено несовместимых сущностей: ${skipped}.` : ''}`);
+            notifyOk(`Класс изменён: ${changed}.${skipped ? ` Пропущено несовместимых сущностей: ${skipped}.` : ''}`);
         }
 
         function applyBulkPsetRename() {
@@ -13908,11 +14072,11 @@ ${componentXml || '    '}
             const oldName = propsBox.querySelector('#bulkPsetOldName').value.trim();
             const newName = propsBox.querySelector('#bulkPsetNewName').value.trim();
             if (!oldName || !newName) {
-                alert('Укажите текущее и новое имя Pset.');
+                notifyError('Укажите текущее и новое имя Pset.');
                 return;
             }
             if (oldName === newName) {
-                alert('Новое имя совпадает с текущим.');
+                notifyError('Новое имя совпадает с текущим.');
                 return;
             }
             if (!confirm(`Переименовать Pset «${oldName}» в «${newName}» у выбранных элементов?`)) return;
@@ -13940,14 +14104,14 @@ ${componentXml || '    '}
             batches.forEach(batch => batch.commit());
             const renamedPsets = [...renamedByModel.values()].reduce((sum, ids) => sum + ids.size, 0);
             if (!renamedPsets) {
-                alert(`Pset «${oldName}» у выбранных элементов не найден.`);
+                notifyError(`Pset «${oldName}» у выбранных элементов не найден.`);
                 return;
             }
             const first = selectedItems[0];
             if (first && !loadedModels.get(first.modelID).isFBX) {
                 showProps(first.modelID, first.expressID, selectedItems.length);
             }
-            alert(`Переименовано Pset: ${renamedPsets}. Связанных выбранных элементов: ${matchingElements}.`);
+            notifyOk(`Переименовано Pset: ${renamedPsets}. Связанных выбранных элементов: ${matchingElements}.`);
         }
 
         function applyBulkPropertyRename() {
@@ -13956,11 +14120,11 @@ ${componentXml || '    '}
             const oldName = propsBox.querySelector('#bulkPropertyOldName').value.trim();
             const newName = propsBox.querySelector('#bulkPropertyNewName').value.trim();
             if (!psetName || !oldName || !newName) {
-                alert('Укажите имя Pset, текущее и новое имя параметра.');
+                notifyError('Укажите имя Pset, текущее и новое имя параметра.');
                 return;
             }
             if (oldName === newName) {
-                alert('Новое имя параметра совпадает с текущим.');
+                notifyError('Новое имя параметра совпадает с текущим.');
                 return;
             }
             if (!confirm(`Переименовать параметр «${oldName}» в «${newName}» в наборе «${psetName}»?`)) return;
@@ -13989,14 +14153,14 @@ ${componentXml || '    '}
             batches.forEach(batch => batch.commit());
             const renamedProperties = [...renamedByModel.values()].reduce((sum, ids) => sum + ids.size, 0);
             if (!renamedProperties) {
-                alert(`Параметр «${oldName}» в Pset «${psetName}» у выбранных элементов не найден.`);
+                notifyError(`Параметр «${oldName}» в Pset «${psetName}» у выбранных элементов не найден.`);
                 return;
             }
             const first = selectedItems[0];
             if (first && !loadedModels.get(first.modelID).isFBX) {
                 showProps(first.modelID, first.expressID, selectedItems.length);
             }
-            alert(`Переименовано параметров: ${renamedProperties}. Связанных выбранных элементов: ${matchingElements}.`);
+            notifyOk(`Переименовано параметров: ${renamedProperties}. Связанных выбранных элементов: ${matchingElements}.`);
         }
 
         function replaceBulkText(current, find, replacement, mode) {
@@ -14038,15 +14202,15 @@ ${componentXml || '    '}
             const replaceValues = propsBox.querySelector('#bulkReplaceValues').checked;
 
             if (!replacePsetNames && !replacePropertyNames && !replaceValues) {
-                alert('Выберите хотя бы одну область замены.');
+                notifyError('Выберите хотя бы одну область замены.');
                 return;
             }
             if (mode !== 'all' && !find) {
-                alert('Введите искомый текст или выберите режим «Все выбранные поля целиком».');
+                notifyError('Введите искомый текст или выберите режим «Все выбранные поля целиком».');
                 return;
             }
             if ((replacePsetNames || replacePropertyNames) && mode === 'all' && !replacement.trim()) {
-                alert('Имена Pset и параметров не могут быть пустыми.');
+                notifyError('Имена Pset и параметров не могут быть пустыми.');
                 return;
             }
 
@@ -14123,14 +14287,14 @@ ${componentXml || '    '}
 
             const totalChanged = changedPsets + changedNames + changedValues;
             if (!totalChanged) {
-                alert(`Совпадений не найдено.${skipped ? ` Пропущено несовместимых значений: ${skipped}.` : ''}`);
+                notifyError(`Совпадений не найдено.${skipped ? ` Пропущено несовместимых значений: ${skipped}.` : ''}`);
                 return;
             }
             const first = selectedItems[0];
             if (first && !loadedModels.get(first.modelID).isFBX) {
                 showProps(first.modelID, first.expressID, selectedItems.length);
             }
-            alert(`Изменено: Pset — ${changedPsets}, имён параметров — ${changedNames}, значений — ${changedValues}.${skipped ? ` Пропущено: ${skipped}.` : ''}`);
+            notifyOk(`Изменено: Pset — ${changedPsets}, имён параметров — ${changedNames}, значений — ${changedValues}.${skipped ? ` Пропущено: ${skipped}.` : ''}`);
         }
 
         function saveAllPropertyEdits(button) {
@@ -14138,7 +14302,7 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const modData = loadedModels.get(modelID);
             if (!modData || !modData.ifcIndex) {
-                alert('Нет IFC-индекса для записи параметров.');
+                notifyError('Нет IFC-индекса для записи параметров.');
                 return;
             }
             const psetFilter = button.dataset.pset ? String(button.dataset.pset) : null;
@@ -14202,7 +14366,7 @@ ${componentXml || '    '}
             if (first) showProps(first.modelID, first.expressID, selectedItems.length);
             const msg = `Сохранено: имён Pset ${renamedPsets}, параметров ${renamedProps}, значений ${savedValues}` +
                 (renamedEntity ? `, имя элемента ${renamedEntity}` : '') + '.';
-            if (errors.length) alert(msg + '\n\nЗамечания:\n' + errors.slice(0, 6).join('\n'));
+            if (errors.length) notifyError(msg + '\n\nЗамечания:\n' + errors.slice(0, 6).join('\n'));
             else console.info('[BIM.LVA]', msg);
         }
 
@@ -14214,12 +14378,12 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-pset-name="${psetId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
-                alert('Имя Pset не может быть пустым.');
+                notifyError('Имя Pset не может быть пустым.');
                 return;
             }
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(psetId, 2, `'${encodeStepString(newName)}'`)) {
-                alert('Не удалось найти Pset в исходном IFC-файле.');
+                notifyError('Не удалось найти Pset в исходном IFC-файле.');
                 return;
             }
             batch.commit();
@@ -14235,12 +14399,12 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-entity-name="${expressID}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
-                alert('Имя IFC-объекта не может быть пустым.');
+                notifyError('Имя IFC-объекта не может быть пустым.');
                 return;
             }
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(expressID, 2, `'${encodeStepString(newName)}'`)) {
-                alert('Не удалось найти IFC-объект в исходном файле.');
+                notifyError('Не удалось найти IFC-объект в исходном файле.');
                 return;
             }
             batch.commit();
@@ -14259,12 +14423,12 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-property-name="${propId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
-                alert('Имя параметра не может быть пустым.');
+                notifyError('Имя параметра не может быть пустым.');
                 return;
             }
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(propId, 0, `'${encodeStepString(newName)}'`)) {
-                alert('Не удалось найти параметр в исходном IFC-файле.');
+                notifyError('Не удалось найти параметр в исходном IFC-файле.');
                 return;
             }
             batch.commit();
@@ -14280,7 +14444,7 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-property-value="${propId}"]`);
             const property = modData && getEntityParts(modData, propId);
             if (!property || property.className !== 'IFCPROPERTYSINGLEVALUE' || !input) {
-                alert('Это значение параметра нельзя изменить в текущем формате.');
+                notifyError('Это значение параметра нельзя изменить в текущем формате.');
                 return;
             }
             const currentValue = unwrapIfcValue(property.args[2]);
@@ -14299,7 +14463,7 @@ ${componentXml || '    '}
             const newType = propsBox.querySelector('#bulkPropertyType').value;
             const createMissing = propsBox.querySelector('#bulkCreateMissing').checked;
             if (!psetName || !propertyName) {
-                alert('Укажите имя Pset и имя параметра.');
+                notifyError('Укажите имя Pset и имя параметра.');
                 return;
             }
             if (!confirm(`Записать «${propertyName}» в ${items.length} IFC-элементов?`)) return;
@@ -14365,7 +14529,7 @@ ${componentXml || '    '}
                 });
                 batch.commit();
             });
-            alert(`Параметр записан: ${changed}.${skipped ? ` Пропущено без параметра: ${skipped}.` : ''}`);
+            notifyOk(`Параметр записан: ${changed}.${skipped ? ` Пропущено без параметра: ${skipped}.` : ''}`);
         }
 
         propsBox.addEventListener('click', e => {
@@ -14423,7 +14587,7 @@ ${componentXml || '    '}
                 appearanceDraftTexture = null;
                 appearanceDraftTextureName = '';
                 applyAppearanceToSelection({ ...readAppearanceFromPanel(), texture: null, clearTexture: true });
-                alert('Текстура снята с выбранных элементов.');
+                notifyOk('Текстура снята с выбранных элементов.');
                 const first = selectedItems[0];
                 if (first) {
                     const mod0 = loadedModels.get(first.modelID);
@@ -14578,7 +14742,7 @@ ${componentXml || '    '}
                 modData => !modData.isFBX && modData.edited && modData.ifcIndex
             );
             if (!editedModels.length) {
-                alert('Нет изменённых IFC-файлов для сохранения.');
+                notifyError('Нет изменённых IFC-файлов для сохранения.');
                 return;
             }
             trackUsage('export_ifc', { models: editedModels.length });
@@ -14681,7 +14845,7 @@ ${componentXml || '    '}
         $('btnMergeIFC').addEventListener('click', async () => {
             const models = [...loadedModels.values()].filter(m => !m.isFBX && m.ifcIndex);
             if (models.length < 2) {
-                alert('Для объединения нужно как минимум два загруженных IFC-файла.');
+                notifyError('Для объединения нужно как минимум два загруженных IFC-файла.');
                 return;
             }
             const names = models.map(m => ` · ${m.filename}`).join('\n');
@@ -14701,7 +14865,7 @@ ${componentXml || '    '}
                 mergedText = buildMergedIfcText(models, `Merged_${models.length}_files.ifc`);
             } catch (error) {
                 hideLoader();
-                alert('Ошибка объединения: ' + error.message);
+                notifyError('Ошибка объединения: ' + error.message);
                 return;
             }
 
@@ -14713,7 +14877,7 @@ ${componentXml || '    '}
             const newModel = [...loadedModels.values()].find(m => !m.isFBX && m.filename === mergedFile.name);
             if (newModel) newModel.edited = true;
             trackUsage('merge_ifc', { models: models.length });
-            alert(`Готово: ${models.length} файлов объединены в один IFC (загружен в просмотрщик и провалидирован движком). Нажмите «Экспорт IFC», чтобы скачать результат.`);
+            notifyOk(`Готово: ${models.length} файлов объединены в один IFC (загружен в просмотрщик и провалидирован движком). Нажмите «Экспорт IFC», чтобы скачать результат.`);
         });
 
         // --- Camera Tools (зум к курсору / фиксация на выделении) ---
@@ -15779,7 +15943,7 @@ ${componentXml || '    '}
         async function yaBrowsePublicLink() {
             const link = $('yaLink').value.trim();
             if (!link) {
-                alert('Вставьте публичную ссылку Яндекс.Диска (Поделиться → Скопировать ссылку).');
+                notifyError('Вставьте публичную ссылку Яндекс.Диска (Поделиться → Скопировать ссылку).');
                 return;
             }
             yaPublicKey = link;
@@ -15801,7 +15965,7 @@ ${componentXml || '    '}
             } catch (error) {
                 console.error(error);
                 trackUsage('yandex_browse_failed', { error: String(error.message || error).slice(0, 60) });
-                alert(
+                notifyError(
                     'Не удалось открыть ссылку Яндекс.Диска.\n\n' +
                     'Проверьте:\n' +
                     '1) ссылка публичная (Поделиться → доступ по ссылке);\n' +
@@ -15905,13 +16069,13 @@ ${componentXml || '    '}
             }
             hideLoader();
             if (errors.length) {
-                alert(
+                notifyError(
                     'Часть файлов не загрузилась:\n\n' +
                     errors.slice(0, 8).join('\n') +
                     '\n\nОбновите страницу Ctrl+F5 и попробуйте снова (по одному файлу, если пачка большая).'
                 );
             } else {
-                alert(`Загружено из облака: ${checks.length}`);
+                notifyOk(`Загружено из облака: ${checks.length}`);
             }
         }
 
@@ -15952,7 +16116,7 @@ ${componentXml || '    '}
                 hideLoader();
             } catch (error) {
                 hideLoader();
-                alert('Ошибка загрузки из облака: ' + (error.message || error));
+                notifyError('Ошибка загрузки из облака: ' + (error.message || error));
             }
         });
         $('yaLoadSelected').addEventListener('click', yaLoadCheckedFiles);
@@ -15973,7 +16137,7 @@ ${componentXml || '    '}
         $('applyGeoRaster').addEventListener('click', async () => {
             const files = [...$('geoRasterFile').files];
             if (!files.length) {
-                alert('Выберите ECW, GeoTIFF или JPEG/PNG вместе с world-файлом (.jgw / .pgw / .tfw / .eww).');
+                notifyError('Выберите ECW, GeoTIFF или JPEG/PNG вместе с world-файлом (.jgw / .pgw / .tfw / .eww).');
                 return;
             }
             try {
@@ -15988,11 +16152,11 @@ ${componentXml || '    '}
                 $('geoRasterFile').value = '';
                 if (allMeshes.length || geoRasterLayers.length) fitView();
                 trackUsage('model_load', { count: 1, source: 'local', types: 'raster' });
-                alert(`Геопривязанный растр добавлен. Всего слоёв: ${geoRasterLayers.length}.`);
+                notifyOk(`Геопривязанный растр добавлен. Всего слоёв: ${geoRasterLayers.length}.`);
             } catch (error) {
                 hideLoader();
                 trackUsage('load_georaster_failed', { error: String(error.message || error).slice(0, 60) });
-                alert('Ошибка георастра: ' + error.message);
+                notifyError('Ошибка георастра: ' + error.message);
             }
         });
 
@@ -16010,7 +16174,7 @@ ${componentXml || '    '}
             if (files.length) {
                 loadSourceHint = 'drag_drop';
                 handleFiles(files).finally(() => { loadSourceHint = 'local'; });
-            } else alert(
+            } else notifyError(
                 'Поддерживаются:\n' +
                 '• IFC (схемы IFC2X3, IFC4, IFC4X3)\n' +
                 '• ASCII DXF, LandXML/Civil XML (.xml)\n' +
@@ -16130,7 +16294,7 @@ ${componentXml || '    '}
             const fileRoot = treeContextRow && treeContextRow.closest('.file-root');
             const fileRow = fileRoot && fileRoot.firstElementChild;
             if (!fileRow || fileRow.dataset.mid === undefined) {
-                alert('Не удалось определить загруженный файл для этой ветки.');
+                notifyError('Не удалось определить загруженный файл для этой ветки.');
                 return;
             }
             const rawModelID = fileRow.dataset.mid;
@@ -16147,7 +16311,7 @@ ${componentXml || '    '}
 
         $('ctxRenameBranch').addEventListener('click', () => {
             if (!treeContextRow || !treeContextRow.dataset.eid) {
-                alert('Эта ветка является служебной группировкой по IFC-классу. Для её изменения измените класс входящих в неё элементов.');
+                notifyError('Эта ветка является служебной группировкой по IFC-классу. Для её изменения измените класс входящих в неё элементов.');
                 return;
             }
             const rawModelID = treeContextRow.dataset.mid;
@@ -16155,7 +16319,7 @@ ${componentXml || '    '}
             const expressID = parseInt(treeContextRow.dataset.eid, 10);
             const modData = loadedModels.get(modelID);
             if (!modData || modData.isFBX || !modData.ifcIndex) {
-                alert('Переименование веток доступно только для IFC.');
+                notifyError('Переименование веток доступно только для IFC.');
                 return;
             }
             const label = treeContextRow.querySelector('.tlabel');
@@ -16165,7 +16329,7 @@ ${componentXml || '    '}
 
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(expressID, 2, `'${encodeStepString(newName.trim())}'`)) {
-                alert('Не удалось найти эту ветку в исходном IFC-файле.');
+                notifyError('Не удалось найти эту ветку в исходном IFC-файле.');
                 return;
             }
             batch.commit();
@@ -16655,7 +16819,7 @@ ${componentXml || '    '}
             readTourSettingsFromUi();
             const box = getSceneContentBox();
             if (box.isEmpty()) {
-                alert('Сначала загрузите модель.');
+                notifyError('Сначала загрузите модель.');
                 return;
             }
             const size = box.getSize(new THREE.Vector3());
@@ -16915,7 +17079,7 @@ ${componentXml || '    '}
 
         async function startDriveMode() {
             if (!loadedModels.size) {
-                alert('Сначала загрузите модель.');
+                notifyError('Сначала загрузите модель.');
                 return;
             }
             readTourSettingsFromUi();
@@ -17097,7 +17261,7 @@ ${componentXml || '    '}
                 return;
             }
             if (tourWaypoints.length < 2) {
-                alert('Нужны минимум 2 точки маршрута (Авто-маршрут или клики).');
+                notifyError('Нужны минимум 2 точки маршрута (Авто-маршрут или клики).');
                 return;
             }
             tourCurve = new THREE.CatmullRomCurve3(
@@ -17525,7 +17689,7 @@ ${componentXml || '    '}
             const text = `${COMPOSER_ABOUT.product} ${composerVersionLabel()} (${COMPOSER_ABOUT.released})`;
             try {
                 await navigator.clipboard.writeText(text);
-                alert('Скопировано:\n' + text);
+                notifyOk('Скопировано:\n' + text);
             } catch (_) {
                 prompt('Скопируйте версию:', text);
             }
