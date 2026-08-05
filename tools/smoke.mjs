@@ -9,6 +9,7 @@
  */
 import { chromium } from 'playwright';
 import { makeGridIfc } from './fixtures/make-grid-ifc.mjs';
+import { makeBlocksDxf } from './fixtures/make-blocks-dxf.mjs';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -177,6 +178,54 @@ async function checkClash(page) {
     return { pairs, ms: Date.now() - started };
 }
 
+/**
+ * Раскрытие блоков DXF: у фикстуры габарит посчитан руками, поэтому проверяем
+ * не «что-то появилось», а что вставки встали ровно туда, куда должны —
+ * со своим смещением, масштабом, поворотом и вложенностью.
+ * Без раскрытия блоков чертёж был бы пуст: собственных сущностей в нём нет.
+ */
+async function checkDxfBlocks(page) {
+    const { text, expected } = makeBlocksDxf();
+    const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-blocks.dxf');
+    await fs.writeFile(fixture, text);
+    try {
+        const before = await page.evaluate(() => window.BimLvaDebug?.modelCount ?? 0);
+        await page.setInputFiles('#localFileInput', fixture);
+        const loaded = await page
+            .waitForFunction((n) => (window.BimLvaDebug?.modelCount ?? 0) > n, before, { timeout: 60_000 })
+            .then(() => true)
+            .catch(() => false);
+        if (!loaded) {
+            problems.push('DXF с блоками не загрузился');
+            return null;
+        }
+        // Именно эта модель: в сцене уже лежат IFC из предыдущих проверок.
+        const bounds = await page.evaluate(
+            () => (window.BimLvaDebug?.modelBounds || []).find((m) => /smoke-blocks\.dxf$/i.test(m.file)) || null
+        );
+        if (!bounds) {
+            problems.push('DXF с блоками загрузился, но геометрии в сцене нет — вставки не раскрылись');
+            return null;
+        }
+        // Модель могла быть смещена к нулю сцены, поэтому сверяем размеры, а не
+        // абсолютные координаты.
+        const gotW = bounds.sizeX;
+        const gotH = bounds.sizeY;
+        const wantW = expected.maxX - expected.minX;
+        const wantH = expected.maxY - expected.minY;
+        const ok = Math.abs(gotW - wantW) < 0.01 && Math.abs(gotH - wantH) < 0.01;
+        if (!ok) {
+            problems.push(
+                `блоки DXF раскрыты неверно: габарит ${gotW.toFixed(2)}×${gotH.toFixed(2)}, ` +
+                `ожидался ${wantW}×${wantH}`
+            );
+        }
+        return { ok, size: `${gotW.toFixed(1)}×${gotH.toFixed(1)}` };
+    } finally {
+        await fs.rm(fixture, { force: true });
+    }
+}
+
 async function main() {
     const { server, port } = await startStaticServer(ROOT);
     const browser = await chromium.launch({
@@ -221,6 +270,7 @@ async function main() {
     let pick = null;
     let toast = null;
     let clash = null;
+    let dxfBlocks = null;
     // Любая сборка Composer, включая тестовую копию, а не только основной файл.
     if (/^bim-lva-composer-ifc.*\.html$/.test(PAGE)) {
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
@@ -253,6 +303,7 @@ async function main() {
                         { timeout: 90_000 }
                     ).catch(() => problems.push('вторая модель не загрузилась'));
                     clash = await checkClash(page);
+                    dxfBlocks = await checkDxfBlocks(page);
                 } finally {
                     await fs.rm(second, { force: true });
                 }
@@ -292,6 +343,7 @@ async function main() {
     if (pick) console.log(`пикинг:    ${pick.ok ? `элемент выбран (${pick.label})` : 'НЕ РАБОТАЕТ'}`);
     if (toast) console.log(`тосты:     API ${toast.shown ? 'ок' : 'НЕТ'}, из UI ${toast.fromUi ? 'ок' : 'НЕТ'}`);
     if (clash) console.log(`коллизии:  пар ${clash.pairs}, за ${clash.ms} мс`);
+    if (dxfBlocks) console.log(`блоки DXF: ${dxfBlocks.ok ? `раскрыты верно, габарит ${dxfBlocks.size}` : 'ОШИБКА'}`);
 
     if (external.length) {
         // Не ошибка теста: сеть наружу (Supabase, Яндекс.Диск) тут недоступна.
