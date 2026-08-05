@@ -2853,7 +2853,15 @@
         import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
         import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
         import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+        import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
         import * as WebIFC from 'web-ifc';
+
+        // Штатный raycast three перебирает треугольники линейно. На смёрженных
+        // батчах это сотни тысяч проверок на каждый клик, наведение и шаг
+        // drive-режима. BVH заменяет перебор обходом дерева.
+        THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+        THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+        THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
         const WASM_PATH = "./assets/vendor/web-ifc/";
         const TYPE_NAMES = {};
@@ -3147,6 +3155,73 @@
         let sceneNeedsRender = true;
         let allMeshes = [];
         const markNeedsRender = () => { sceneNeedsRender = true; };
+
+        // ---- Цели для raycast ----
+        // Ниже этого порога дерево строить дороже, чем разом перебрать треугольники.
+        const BVH_MIN_TRIANGLES = 4000;
+
+        /**
+         * Строит BVH под меш один раз и лениво — на первом raycast по нему.
+         * Не при сборке батчей: батчи пересобираются на каждом скрытии, покраске
+         * и изоляции, и большая часть пересборок до пикинга просто не доживает.
+         */
+        function ensureBoundsTree(mesh) {
+            const geom = mesh.geometry;
+            if (!geom || geom.boundsTree || geom._bvhSkip) return;
+            const idx = geom.index;
+            const tris = (idx ? idx.count : (geom.attributes?.position?.count || 0)) / 3;
+            if (tris < BVH_MIN_TRIANGLES) { geom._bvhSkip = true; return; }
+            try {
+                geom.computeBoundsTree();
+            } catch (err) {
+                // Битая геометрия не должна ронять клик — просто останемся на переборе.
+                geom._bvhSkip = true;
+                console.warn('BVH не построен, raycast линейный', err);
+            }
+        }
+
+        /**
+         * Заполняет `out` видимыми мешами под raycast. Раньше на каждый клик и
+         * каждое движение колеса вызывался allMeshes.filter(...) — новый массив
+         * на десятки тысяч элементов в обработчике события.
+         */
+        function collectRaycastTargets(out, predicate) {
+            out.length = 0;
+            for (let i = 0; i < allMeshes.length; i++) {
+                const mesh = allMeshes[i];
+                if (!mesh.visible) continue;
+                if (predicate && !predicate(mesh)) continue;
+                ensureBoundsTree(mesh);
+                out.push(mesh);
+            }
+            return out;
+        }
+
+        // Свой буфер на каждую точку вызова: общий затирался бы, если один raycast
+        // случится внутри другого.
+        const _pickRayTargets = [];
+        const _zoomRayTargets = [];
+        const _driveRayTargets = [];
+        const _terrainRayTargets = [];
+
+        /** Меши-подложки: растр геопривязки и служебные оверлеи в пикинге не участвуют. */
+        const isPickableGeometry = (mesh) =>
+            !mesh.userData?.isGeoRaster && !mesh.userData?.isOverlay;
+
+        /**
+         * Счётчики сцены для поддержки и дымового теста — только чтение.
+         * Весь вьювер живёт в области видимости модуля, снаружи его состояние
+         * иначе не посмотреть: ни «сколько мешей», ни «построен ли BVH».
+         */
+        window.BimLvaDebug = Object.freeze({
+            get meshCount() { return allMeshes.length; },
+            get bvhCount() {
+                let n = 0;
+                for (const m of allMeshes) if (m.geometry?.boundsTree) n++;
+                return n;
+            },
+            get modelCount() { return typeof loadedModels !== 'undefined' ? loadedModels.size : 0; }
+        });
         renderer.setPixelRatio(basePixelRatio);
         renderer.setClearColor(0xf3f5f7, 1);
         
@@ -3501,7 +3576,10 @@
             if (!allMeshes.length) return fallbackZ;
             const raycaster = new THREE.Raycaster();
             raycaster.set(new THREE.Vector3(x, y, 1e7), new THREE.Vector3(0, 0, -1));
-            const hits = raycaster.intersectObjects(allMeshes.filter(m => m.visible && !m.userData.isGeoRaster), false);
+            const hits = raycaster.intersectObjects(
+                collectRaycastTargets(_terrainRayTargets, m => !m.userData?.isGeoRaster),
+                false
+            );
             return hits.length ? hits[0].point.z : fallbackZ;
         }
 
@@ -5082,6 +5160,9 @@ uniform vec3 uBatchSelColor;
             (modData.batchMeshes || []).forEach(mesh => {
                 modData.group.remove(mesh);
                 allMeshes = allMeshes.filter(m => m !== mesh);
+                // Батчи пересобираются часто, а BVH — это отдельные буферы:
+                // отпускаем их сразу, не дожидаясь сборщика мусора.
+                mesh.geometry?.disposeBoundsTree?.();
                 mesh.geometry?.dispose();
                 mesh.material?.dispose();
             });
@@ -9520,8 +9601,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             raycaster.setFromCamera(pointer, camera);
             raycaster.params.Line = { threshold: 0.5 };
             raycaster.params.Points = { threshold: 0.5 };
-            const visibleMeshes = allMeshes.filter(m => m.visible);
-            const hits = raycaster.intersectObjects(visibleMeshes, false);
+            const hits = raycaster.intersectObjects(collectRaycastTargets(_pickRayTargets), false);
             const validHits = isClipping ? hits.filter(h => pointPassesClipping(h.point)) : hits;
             return validHits[0] || null;
         }
@@ -14755,7 +14835,7 @@ ${componentXml || '    '}
             if (canRaycast && allMeshes.length) {
                 lastZoomRaycastAt = now;
                 const hits = zoomRaycaster.intersectObjects(
-                    allMeshes.filter(m => m.visible && !m.userData.isGeoRaster && !m.userData.isOverlay),
+                    collectRaycastTargets(_zoomRayTargets, isPickableGeometry),
                     false
                 );
                 if (hits.length) {
@@ -16689,7 +16769,7 @@ ${componentXml || '    '}
             _driveRayO.set(x, y, 80000);
             _driveRay.set(_driveRayO, _driveDown);
             const hits = _driveRay.intersectObjects(
-                allMeshes.filter(m => m.visible && !m.userData?.isGeoRaster && !m.userData?.isOverlay),
+                collectRaycastTargets(_driveRayTargets, isPickableGeometry),
                 false
             );
             if (hits.length) return hits[0].point.z;

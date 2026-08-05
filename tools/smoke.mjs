@@ -8,6 +8,7 @@
  * Запуск: npm run smoke
  */
 import { chromium } from 'playwright';
+import { makeGridIfc } from './fixtures/make-grid-ifc.mjs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
@@ -77,6 +78,47 @@ async function resolveChromium() {
     return undefined;
 }
 
+/**
+ * Кликает по геометрии и проверяет, что элемент выбрался. Это главная
+ * регрессия при переходе на BVH: выделение батча читает expressId по
+ * `hit.face.a`, а дерево переупорядочивает индексный буфер.
+ * Точку ищем от центра холста по расходящейся сетке — где именно в кадре
+ * окажется геометрия после fitView, тест знать не должен.
+ */
+async function checkPicking(page) {
+    const box = await page.locator('#stage canvas').boundingBox();
+    if (!box) {
+        problems.push('не найден холст для клика');
+        return null;
+    }
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const offsets = [0, 0.08, -0.08, 0.16, -0.16];
+
+    for (const dx of offsets) {
+        for (const dy of offsets) {
+            await page.mouse.click(cx + dx * box.width, cy + dy * box.height);
+            // Панель свойств перерисовывается не в обработчике клика — ждём её.
+            const hit = await page
+                .waitForFunction(
+                    () => {
+                        const t = document.querySelector('#props')?.textContent || '';
+                        return /ExpressID/i.test(t) ? t : false;
+                    },
+                    { timeout: 2000 }
+                )
+                .then((h) => h.jsonValue())
+                .catch(() => null);
+            if (hit) {
+                const id = /ExpressID\s*(\d+)/i.exec(hit)?.[1] || '?';
+                return { ok: true, label: `ExpressID ${id}` };
+            }
+        }
+    }
+    problems.push('клик по геометрии не выделил ни одного элемента');
+    return { ok: false };
+}
+
 async function main() {
     const { server, port } = await startServer();
     const browser = await chromium.launch({
@@ -115,26 +157,47 @@ async function main() {
 
     // Загружаем настоящий IFC: это единственный способ проверить, что wasm
     // web-ifc отдаётся с локального пути и геометрия действительно строится.
+    // Модель — сетка коробок: на одной коробке (12 треугольников) BVH не
+    // строится по порогу, и путь пикинга через дерево остался бы непроверенным.
     let ifcLoaded = null;
+    let pick = null;
     if (PAGE === 'bim-lva-composer-ifc.html') {
-        await page.setInputFiles('#localFileInput', path.join(ROOT, 'tools', 'fixtures', 'smoke-box.ifc'));
-        ifcLoaded = await page
-            .waitForFunction(
-                () => document.querySelectorAll('#tree [data-file-root]').length > 0 &&
-                    document.querySelectorAll('#tree .tlabel').length > 1,
-                { timeout: 90_000 }
-            )
-            .then(() => true)
-            .catch(() => false);
-        if (!ifcLoaded) problems.push('IFC не загрузился: дерево модели осталось пустым');
+        const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
+        await fs.writeFile(fixture, makeGridIfc(2100, 50, 3));
+        try {
+            await page.setInputFiles('#localFileInput', fixture);
+            ifcLoaded = await page
+                .waitForFunction(
+                    () => document.querySelectorAll('#tree [data-file-root]').length > 0 &&
+                        document.querySelectorAll('#tree .tlabel').length > 1,
+                    { timeout: 90_000 }
+                )
+                .then(() => true)
+                .catch(() => false);
+            if (!ifcLoaded) problems.push('IFC не загрузился: дерево модели осталось пустым');
+            else pick = await checkPicking(page);
+        } finally {
+            await fs.rm(fixture, { force: true });
+        }
     }
 
     const state = await page.evaluate(() => ({
         canvas: !!document.querySelector('#stage canvas'),
         fps: document.getElementById('fps')?.textContent || '',
         fontFamily: getComputedStyle(document.body).fontFamily,
-        treeItems: document.querySelectorAll('#tree .tlabel').length
+        treeItems: document.querySelectorAll('#tree .tlabel').length,
+        meshCount: window.BimLvaDebug?.meshCount ?? -1,
+        bvhCount: window.BimLvaDebug?.bvhCount ?? -1
     }));
+
+    if (state.bvhCount === 0) {
+        problems.push('BVH не построен ни на одном меше — пикинг остался линейным перебором');
+    }
+
+    if (process.env.SMOKE_SHOT) {
+        await page.screenshot({ path: process.env.SMOKE_SHOT, fullPage: false });
+        console.log(`скриншот:  ${process.env.SMOKE_SHOT}`);
+    }
 
     await browser.close();
     server.close();
@@ -144,6 +207,8 @@ async function main() {
     console.log(`FPS-метка: ${state.fps || '—'}`);
     console.log(`шрифт:     ${state.fontFamily}`);
     if (ifcLoaded !== null) console.log(`IFC:       ${ifcLoaded ? `загружен, узлов дерева ${state.treeItems}` : 'НЕ загрузился'}`);
+    if (state.meshCount >= 0) console.log(`мешей:     ${state.meshCount}, с BVH: ${state.bvhCount}`);
+    if (pick) console.log(`пикинг:    ${pick.ok ? `элемент выбран (${pick.label})` : 'НЕ РАБОТАЕТ'}`);
 
     if (external.length) {
         // Не ошибка теста: сеть наружу (Supabase, Яндекс.Диск) тут недоступна.
