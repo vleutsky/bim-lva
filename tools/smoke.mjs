@@ -159,6 +159,61 @@ async function checkNotifications(page) {
     return { api: true, shown, fromUi };
 }
 
+/**
+ * Прогон проверки коллизий на двух перекрывающихся моделях.
+ * Коллизии переведены с полного перебора A×B на пространственную сетку —
+ * здесь проверяется, что в реальном UI она находит пары, а не молчит.
+ */
+async function checkClash(page) {
+    // Списки моделей наполняются при открытии панели, а не при загрузке файла.
+    await page.evaluate(() => document.getElementById('btnClash').click());
+    await page.waitForTimeout(300);
+
+    const ready = await page.evaluate(() => {
+        const a = document.getElementById('clashModelA');
+        const b = document.getElementById('clashModelB');
+        if (!a || !b || a.options.length < 2) return false;
+        a.selectedIndex = 0;
+        b.selectedIndex = 1;
+        a.dispatchEvent(new Event('change', { bubbles: true }));
+        b.dispatchEvent(new Event('change', { bubbles: true }));
+        // Пресет «все классы»: сетка не должна зависеть от фильтра.
+        const preset = document.getElementById('clashClassPreset');
+        if (preset) {
+            const all = [...preset.options].find((o) => /все/i.test(o.textContent));
+            if (all) { preset.value = all.value; preset.dispatchEvent(new Event('change', { bubbles: true })); }
+        }
+        return true;
+    });
+    if (!ready) {
+        problems.push('в списках коллизий меньше двух моделей — проверку не запустить');
+        return null;
+    }
+
+    const started = Date.now();
+    await page.evaluate(() => document.getElementById('runClash').click());
+    const status = await page
+        .waitForFunction(
+            () => {
+                const t = document.getElementById('clashStatus')?.textContent || '';
+                return /Найдено пар|не найдено/i.test(t) ? t : false;
+            },
+            { timeout: 120_000 }
+        )
+        .then((h) => h.jsonValue())
+        .catch(() => null);
+
+    if (!status) {
+        problems.push('проверка коллизий не завершилась');
+        return null;
+    }
+    const pairs = Number(/Найдено пар:\s*(\d+)/i.exec(status)?.[1] || 0);
+    if (!pairs) {
+        problems.push(`коллизии не найдены на заведомо пересекающихся моделях: ${status}`);
+    }
+    return { pairs, ms: Date.now() - started };
+}
+
 async function main() {
     const { server, port } = await startServer();
     const browser = await chromium.launch({
@@ -202,6 +257,7 @@ async function main() {
     let ifcLoaded = null;
     let pick = null;
     let toast = null;
+    let clash = null;
     if (PAGE === 'bim-lva-composer-ifc.html') {
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
         await fs.writeFile(fixture, makeGridIfc(2100, 50, 3));
@@ -217,10 +273,25 @@ async function main() {
                 .catch(() => false);
             if (!ifcLoaded) problems.push('IFC не загрузился: дерево модели осталось пустым');
             else {
-                // Уведомления проверяем до пикинга: «Ведомость» ругается только
-                // когда ничего не выделено.
+                // Порядок важен: «Ведомость» ругается только когда ничего не
+                // выделено, а прогон коллизий выделяет тысячи элементов —
+                // поэтому уведомления идут первыми, коллизии последними.
                 toast = await checkNotifications(page);
                 pick = await checkPicking(page);
+
+                // Вторая модель в тех же координатах — заведомые пересечения.
+                const second = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid-b.ifc');
+                await fs.writeFile(second, makeGridIfc(300, 20, 3));
+                try {
+                    await page.setInputFiles('#localFileInput', second);
+                    await page.waitForFunction(
+                        () => document.querySelectorAll('#tree [data-file-root]').length > 1,
+                        { timeout: 90_000 }
+                    ).catch(() => problems.push('вторая модель не загрузилась'));
+                    clash = await checkClash(page);
+                } finally {
+                    await fs.rm(second, { force: true });
+                }
             }
         } finally {
             await fs.rm(fixture, { force: true });
@@ -256,6 +327,7 @@ async function main() {
     if (state.meshCount >= 0) console.log(`мешей:     ${state.meshCount}, с BVH: ${state.bvhCount}`);
     if (pick) console.log(`пикинг:    ${pick.ok ? `элемент выбран (${pick.label})` : 'НЕ РАБОТАЕТ'}`);
     if (toast) console.log(`тосты:     API ${toast.shown ? 'ок' : 'НЕТ'}, из UI ${toast.fromUi ? 'ок' : 'НЕТ'}`);
+    if (clash) console.log(`коллизии:  пар ${clash.pairs}, за ${clash.ms} мс`);
 
     if (external.length) {
         // Не ошибка теста: сеть наружу (Supabase, Яндекс.Диск) тут недоступна.
