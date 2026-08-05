@@ -221,7 +221,8 @@ async function main() {
     let pick = null;
     let toast = null;
     let clash = null;
-    if (PAGE === 'bim-lva-composer-ifc.html') {
+    // Любая сборка Composer, включая тестовую копию, а не только основной файл.
+    if (/^bim-lva-composer-ifc.*\.html$/.test(PAGE)) {
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
         await fs.writeFile(fixture, makeGridIfc(2100, 50, 3));
         try {
