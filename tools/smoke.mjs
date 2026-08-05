@@ -189,22 +189,20 @@ async function checkDxfBlocks(page) {
     const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-blocks.dxf');
     await fs.writeFile(fixture, text);
     try {
-        const before = await page.evaluate(() => window.BimLvaDebug?.modelCount ?? 0);
         await page.setInputFiles('#localFileInput', fixture);
-        const loaded = await page
-            .waitForFunction((n) => (window.BimLvaDebug?.modelCount ?? 0) > n, before, { timeout: 60_000 })
-            .then(() => true)
-            .catch(() => false);
-        if (!loaded) {
-            problems.push('DXF с блоками не загрузился');
-            return null;
-        }
-        // Именно эта модель: в сцене уже лежат IFC из предыдущих проверок.
-        const bounds = await page.evaluate(
-            () => (window.BimLvaDebug?.modelBounds || []).find((m) => /smoke-blocks\.dxf$/i.test(m.file)) || null
-        );
+        // Ждём именно габарит, а не счётчик моделей: модель попадает в список
+        // раньше, чем её группа наполняется геометрией, и проверка успевала
+        // спросить размеры у пустой группы.
+        const bounds = await page
+            .waitForFunction(
+                () => (window.BimLvaDebug?.modelBounds || [])
+                    .find((m) => /smoke-blocks\.dxf$/i.test(m.file)) || false,
+                { timeout: 60_000 }
+            )
+            .then((h) => h.jsonValue())
+            .catch(() => null);
         if (!bounds) {
-            problems.push('DXF с блоками загрузился, но геометрии в сцене нет — вставки не раскрылись');
+            problems.push('DXF с блоками не загрузился или вставки не раскрылись — геометрии в сцене нет');
             return null;
         }
         // Модель могла быть смещена к нулю сцены, поэтому сверяем размеры, а не
