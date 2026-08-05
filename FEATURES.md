@@ -60,8 +60,12 @@
   Версии видны в `assets/vendor/VERSIONS.json`.
 - На CDN осознанно оставлены pyodide (DXF через ezdxf) и gdal3.js (ECW) —
   десятки мегабайт ради редкой операции.
+- `npm run serve` — локальный просмотр на http://127.0.0.1:8080. Двойным щелчком
+  по файлу вьювер не открыть: ES-модули, importmap и wasm требуют HTTP.
 - `npm run smoke` — дымовой тест в Chromium: страница, загрузка IFC, пикинг,
   уведомления, прогон коллизий. Гоняйте перед merge в `main`.
+- Pages отдаёт `main`. Ветка с правками на `https://vleutsky.github.io/bim-lva/`
+  не появится, пока её не влить — preview-URL для веток у Pages нет.
 - `node tools/bench-pick.mjs [N]` — замер отклика на клик.
 - `bim-lva-composer-ai.html` пока остался на CDN: вендоры и BVH в него не
   переносились.

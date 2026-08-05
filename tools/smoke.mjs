@@ -9,50 +9,13 @@
  */
 import { chromium } from 'playwright';
 import { makeGridIfc } from './fixtures/make-grid-ifc.mjs';
-import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { startStaticServer } from './static-server.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PAGE = process.env.SMOKE_PAGE || 'bim-lva-composer-ifc.html';
-
-const MIME = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'text/javascript; charset=utf-8',
-    '.mjs': 'text/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.webmanifest': 'application/manifest+json; charset=utf-8',
-    '.wasm': 'application/wasm',
-    '.woff2': 'font/woff2',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon'
-};
-
-function startServer() {
-    const server = createServer(async (req, res) => {
-        const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '');
-        const file = path.join(ROOT, rel || 'index.html');
-        // Никаких выходов за корень репозитория.
-        if (!file.startsWith(ROOT)) {
-            res.writeHead(403).end('forbidden');
-            return;
-        }
-        try {
-            const body = await fs.readFile(file);
-            res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-            res.end(body);
-        } catch {
-            res.writeHead(404).end('not found');
-        }
-    });
-    return new Promise((resolve) => {
-        server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
-    });
-}
 
 /** Внешние сервисы (Яндекс.Диск, Supabase) в дымовом тесте не участвуют. */
 function isLocal(url, port) {
@@ -215,7 +178,7 @@ async function checkClash(page) {
 }
 
 async function main() {
-    const { server, port } = await startServer();
+    const { server, port } = await startStaticServer(ROOT);
     const browser = await chromium.launch({
         executablePath: await resolveChromium(),
         args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader']

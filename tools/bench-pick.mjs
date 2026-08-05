@@ -14,41 +14,14 @@
  */
 import { chromium } from 'playwright';
 import { makeGridIfc } from './fixtures/make-grid-ifc.mjs';
-import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { startStaticServer } from './static-server.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const COUNT = Number(process.argv[2]) || 6000;
 const CLICKS = 40;
-
-const MIME = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'text/javascript; charset=utf-8',
-    '.mjs': 'text/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.webmanifest': 'application/manifest+json; charset=utf-8',
-    '.wasm': 'application/wasm',
-    '.woff2': 'font/woff2'
-};
-
-function startServer() {
-    const server = createServer(async (req, res) => {
-        const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '');
-        const file = path.join(ROOT, rel || 'index.html');
-        if (!file.startsWith(ROOT)) return void res.writeHead(403).end('forbidden');
-        try {
-            const body = await fs.readFile(file);
-            res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-            res.end(body);
-        } catch {
-            res.writeHead(404).end('not found');
-        }
-    });
-    return new Promise((r) => server.listen(0, '127.0.0.1', () => r({ server, port: server.address().port })));
-}
 
 async function resolveChromium() {
     const base = process.env.PLAYWRIGHT_BROWSERS_PATH;
@@ -61,7 +34,7 @@ async function resolveChromium() {
     return undefined;
 }
 
-const { server, port } = await startServer();
+const { server, port } = await startStaticServer(ROOT);
 const browser = await chromium.launch({
     executablePath: await resolveChromium(),
     args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader']
