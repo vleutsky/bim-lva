@@ -10194,6 +10194,131 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             );
         }
 
+        // ---- Пространственный индекс для коллизий ----
+        // Без него сверка двух моделей — полный перебор A×B (20k × 20k = 400 млн
+        // проверок бокса). Равномерная сетка по боксам A сводит это к «B против
+        // своих ячеек»: O(A + B×k), где k — соседей в ячейке.
+        /** Потолок шагов сетки по самой длинной оси (защита от дробления на геодезии). */
+        const CLASH_GRID_MAX_STEPS = 512;
+        /** Элемент, покрывающий больше ячеек, уходит в отдельный список (длинные трубы, оси). */
+        const CLASH_GRID_MAX_CELLS_PER_ITEM = 256;
+
+        function clashGridCellIndex(value, origin, cell, maxIndex) {
+            const i = Math.floor((value - origin) / cell);
+            return i < 0 ? 0 : (i > maxIndex ? maxIndex : i);
+        }
+
+        /**
+         * Строит сетку по элементам A (`[{ expressID, box, ref, cls }]`).
+         * Размер ячейки — медианный габарит элемента: мелочь не плодит ячейки,
+         * крупное не собирает всё в одну.
+         */
+        function buildClashGrid(items) {
+            if (!items?.length) return null;
+            const bounds = new THREE.Box3();
+            const size = new THREE.Vector3();
+            const dims = [];
+            for (const it of items) {
+                bounds.union(it.box);
+                it.box.getSize(size);
+                dims.push(Math.max(size.x, size.y, size.z));
+            }
+            if (bounds.isEmpty()) return null;
+            bounds.getSize(size);
+            const span = Math.max(size.x, size.y, size.z) || 1;
+
+            dims.sort((a, b) => a - b);
+            let cell = dims[dims.length >> 1];
+            if (!(cell > 0) || !Number.isFinite(cell)) cell = span / 64;
+            cell = Math.max(cell, span / CLASH_GRID_MAX_STEPS);
+
+            const grid = {
+                items,
+                cell,
+                origin: bounds.min.clone(),
+                nx: Math.floor(size.x / cell),
+                ny: Math.floor(size.y / cell),
+                nz: Math.floor(size.z / cell),
+                cells: new Map(),
+                oversized: [],
+                stamps: new Int32Array(items.length),
+                stamp: 0
+            };
+
+            for (let i = 0; i < items.length; i++) {
+                const b = items[i].box;
+                const x0 = clashGridCellIndex(b.min.x, grid.origin.x, cell, grid.nx);
+                const x1 = clashGridCellIndex(b.max.x, grid.origin.x, cell, grid.nx);
+                const y0 = clashGridCellIndex(b.min.y, grid.origin.y, cell, grid.ny);
+                const y1 = clashGridCellIndex(b.max.y, grid.origin.y, cell, grid.ny);
+                const z0 = clashGridCellIndex(b.min.z, grid.origin.z, cell, grid.nz);
+                const z1 = clashGridCellIndex(b.max.z, grid.origin.z, cell, grid.nz);
+                const covered = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+                if (covered > CLASH_GRID_MAX_CELLS_PER_ITEM) {
+                    grid.oversized.push(i);
+                    continue;
+                }
+                for (let x = x0; x <= x1; x++) {
+                    for (let y = y0; y <= y1; y++) {
+                        for (let z = z0; z <= z1; z++) {
+                            const key = `${x}|${y}|${z}`;
+                            let bucket = grid.cells.get(key);
+                            if (!bucket) grid.cells.set(key, bucket = []);
+                            bucket.push(i);
+                        }
+                    }
+                }
+            }
+            return grid;
+        }
+
+        /**
+         * Кандидаты A для бокса B — в `out` (переиспользуемый массив, без аллокаций).
+         * Дедупликация через штампы: элемент из нескольких ячеек попадёт один раз.
+         */
+        function queryClashGrid(grid, box, out) {
+            out.length = 0;
+            if (!grid) return out;
+            const { cell, origin, stamps } = grid;
+            const stamp = ++grid.stamp;
+            // Бокс B целиком вне сетки — только «длинные» элементы могут дотянуться.
+            const inside = !(
+                box.max.x < origin.x || box.max.y < origin.y || box.max.z < origin.z ||
+                box.min.x > origin.x + (grid.nx + 1) * cell ||
+                box.min.y > origin.y + (grid.ny + 1) * cell ||
+                box.min.z > origin.z + (grid.nz + 1) * cell
+            );
+            if (inside) {
+                const x0 = clashGridCellIndex(box.min.x, origin.x, cell, grid.nx);
+                const x1 = clashGridCellIndex(box.max.x, origin.x, cell, grid.nx);
+                const y0 = clashGridCellIndex(box.min.y, origin.y, cell, grid.ny);
+                const y1 = clashGridCellIndex(box.max.y, origin.y, cell, grid.ny);
+                const z0 = clashGridCellIndex(box.min.z, origin.z, cell, grid.nz);
+                const z1 = clashGridCellIndex(box.max.z, origin.z, cell, grid.nz);
+                for (let x = x0; x <= x1; x++) {
+                    for (let y = y0; y <= y1; y++) {
+                        for (let z = z0; z <= z1; z++) {
+                            const bucket = grid.cells.get(`${x}|${y}|${z}`);
+                            if (!bucket) continue;
+                            for (let n = 0; n < bucket.length; n++) {
+                                const idx = bucket[n];
+                                if (stamps[idx] === stamp) continue;
+                                stamps[idx] = stamp;
+                                out.push(grid.items[idx]);
+                            }
+                        }
+                    }
+                }
+            }
+            for (let n = 0; n < grid.oversized.length; n++) {
+                const idx = grid.oversized[n];
+                if (stamps[idx] === stamp) continue;
+                stamps[idx] = stamp;
+                out.push(grid.items[idx]);
+            }
+            return out;
+        }
+
         const CLASH_REPORTS_KEY = 'bimlva_clash_reports_v1';
         let clashReports = [];
         try { clashReports = JSON.parse(localStorage.getItem(CLASH_REPORTS_KEY) || '[]'); } catch (_) { clashReports = []; }
@@ -11406,6 +11531,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     }
                 }
 
+                setClashProgress(0.30, `Индекс модели A (${boxesA.length})…`);
+                showLoader('КОЛЛИЗИИ', 'Пространственный индекс A…', { ratio: 0.30 });
+                await yieldToUi();
+                const gridA = buildClashGrid(boxesA);
+
                 setClashProgress(0.32, `Сверка с моделью B (A: ${boxesA.length})…`);
                 showLoader('КОЛЛИЗИИ', 'Сверка AABB…', { ratio: 0.32 });
                 await yieldToUi();
@@ -11414,6 +11544,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const pairs = [];
                 const seen = new Set();
                 const eidsB = [...modB.meshesByID.keys()];
+                const candidatesA = [];
                 let checkedB = 0;
                 for (let i = 0; i < eidsB.length; i++) {
                     const eid = eidsB[i];
@@ -11424,7 +11555,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (!boxRaw) continue;
                     const boxB = expandBoxByTol(boxRaw, tolB);
                     const refB = makeElementRef(modB, eid);
-                    for (const a of boxesA) {
+                    queryClashGrid(gridA, boxB, candidatesA);
+                    for (const a of candidatesA) {
                         if (!boxesOverlap(a.box, boxB, 0)) continue;
                         const label = matchClashSpecLabel(a.cls, clsB, specs);
                         if (specs && !label) continue;
