@@ -50,3 +50,18 @@
 - Ветка: `cursor/ifc-bulk-edit-37f9` → периодически merge в `main`
 - Браузер-only: без серверного Revit/Tekla SDK
 - ИИ только через localhost bridge; Pages — для стабильного Composer
+
+## Вендоры и проверки
+
+- Зависимости лежат локально в `assets/vendor/` — three, three-mesh-bvh,
+  web-ifc (+ wasm), geotiff, jszip, qrcode, supabase, шрифты. Сайт остаётся
+  статикой: `assets/vendor/` коммитится, шага сборки при деплое нет.
+- Пересобрать после смены версии в `package.json`: `npm ci && npm run vendor`.
+  Версии видны в `assets/vendor/VERSIONS.json`.
+- На CDN осознанно оставлены pyodide (DXF через ezdxf) и gdal3.js (ECW) —
+  десятки мегабайт ради редкой операции.
+- `npm run smoke` — дымовой тест в Chromium: страница, загрузка IFC, пикинг,
+  уведомления, прогон коллизий. Гоняйте перед merge в `main`.
+- `node tools/bench-pick.mjs [N]` — замер отклика на клик.
+- `bim-lva-composer-ai.html` пока остался на CDN: вендоры и BVH в него не
+  переносились.
