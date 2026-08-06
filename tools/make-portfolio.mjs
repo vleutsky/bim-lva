@@ -49,8 +49,8 @@ html = replaceOnce(
 );
 html = replaceOnce(
     html,
-    '<meta name="description" content="Презентация авторских BIM-приложений: Composer IFC, Composer AI, плагины Civil 3D, Navisworks и Plant 3D от Владимира Леуцкого.">',
-    '<meta name="description" content="Портфолио: браузерный просмотрщик сводных IFC-моделей, плагины Civil 3D, Navisworks и Plant 3D, автоматизация проектирования инфраструктуры.">\n    <meta name="robots" content="noindex">',
+    '<meta name="description" content="Презентация авторских BIM-приложений: Composer IFC, Composer AI, плагины Civil 3D и Navisworks от Владимира Леуцкого.">',
+    '<meta name="description" content="Портфолио: браузерный просмотрщик сводных IFC-моделей, плагины Civil 3D и Navisworks, автоматизация проектирования инфраструктуры.">\n    <meta name="robots" content="noindex">',
     'описание страницы'
 );
 
