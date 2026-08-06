@@ -9,17 +9,50 @@
 (function (global) {
     'use strict';
 
-    /** Продукты, на которые можно запросить лицензию. */
+    /**
+     * Продукты, на которые можно запросить лицензию.
+     *
+     * Единственное место, где этот список задан: добавляете ленту или плагин —
+     * правите здесь, и он появляется и в кабинете, и в панели выпуска.
+     *
+     * `code` попадает в лицензионный ключ и по нему плагин решает, ему ли
+     * ключ выдан. Менять код у выпущенного продукта нельзя: выданные ключи
+     * перестанут подходить.
+     */
     const PRODUCTS = [
-        { code: 'ksi-mapper', title: 'KSI Mapper Ultimate' },
-        { code: 'bim-checker', title: 'BIM Чекер (Navisworks)' },
-        { code: 'matrix-builder', title: 'LVA BIM Matrix Builder' },
-        { code: 'clash-group', title: 'Clash Group Automator' },
-        { code: 'surface-cutter', title: 'SurfaceCutter Pro' },
-        { code: 'plant3d-link', title: 'Plant 3D Data Link' }
+        { code: 'lva-suite', title: 'Весь набор LVA (все ленты)', group: 'Комплект' },
+
+        { code: 'lva-genplan', title: 'LVA · Генплан', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-nvk', title: 'LVA · НВК', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-props', title: 'LVA · Свойства', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-bim-ifc', title: 'LVA · BIM/IFC', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-constructor', title: 'LVA · Конструктор', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-coordination', title: 'LVA · Координация', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-bim-bridge', title: 'LVA · BIM Bridge', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-electrica', title: 'LVA · Электрика', group: 'Ленты Civil 3D / AutoCAD' },
+        { code: 'lva-networks', title: 'LVA · Сети связи', group: 'Ленты Civil 3D / AutoCAD' },
+
+        { code: 'ksi-mapper', title: 'KSI Mapper Ultimate', group: 'Отдельные плагины' },
+        { code: 'bim-checker', title: 'BIM Чекер (Navisworks)', group: 'Отдельные плагины' },
+        { code: 'matrix-builder', title: 'LVA BIM Matrix Builder', group: 'Отдельные плагины' },
+        { code: 'clash-group', title: 'Clash Group Automator', group: 'Отдельные плагины' },
+        { code: 'surface-cutter', title: 'SurfaceCutter Pro', group: 'Отдельные плагины' },
+        { code: 'plant3d-link', title: 'Plant 3D Data Link', group: 'Отдельные плагины' }
     ];
 
     const productTitle = (code) => PRODUCTS.find((p) => p.code === code)?.title || code;
+
+    /** Продукты по разделам, в порядке объявления — для выпадающего списка. */
+    function productGroups() {
+        const out = [];
+        for (const item of PRODUCTS) {
+            const name = item.group || 'Продукты';
+            let bucket = out.find((g) => g.name === name);
+            if (!bucket) out.push((bucket = { name, items: [] }));
+            bucket.items.push(item);
+        }
+        return out;
+    }
 
     function client() {
         const auth = global.BimLvaAuth;
@@ -142,6 +175,7 @@
     global.BimLvaLicenses = {
         PRODUCTS,
         productTitle,
+        productGroups,
         listMyRequests,
         listMyLicenses,
         createRequest,
