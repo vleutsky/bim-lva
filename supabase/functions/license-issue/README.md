@@ -49,11 +49,19 @@ SQL Editor → выполнить `20260806140000_licenses_lic_format.sql`. До
 
 ### Шаг 5. Ключи
 
+На Windows удобнее PowerShell — он не требует ни Node, ни openssl:
+
+```
+.\tools\New-LvaWebKey.ps1 -Years 10
+```
+
+Через Node (нужен openssl — есть в составе Git for Windows):
+
 ```
 node tools/make-license-keys.mjs 10
 ```
 
-Кладёт в `license-keys/` (каталог в `.gitignore`):
+Оба кладут в `license-keys/` (каталог в `.gitignore`):
 
 | файл | куда |
 |---|---|
