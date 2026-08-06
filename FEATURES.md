@@ -62,7 +62,7 @@
 ## Вендоры и проверки
 
 - Зависимости лежат локально в `assets/vendor/` — three, three-mesh-bvh,
-  web-ifc (+ wasm), geotiff, jszip, qrcode, supabase, шрифты. Сайт остаётся
+  web-ifc (+ wasm), geotiff, jszip, qrcode, dwgdxf (+ wasm), supabase, шрифты. Сайт остаётся
   статикой: `assets/vendor/` коммитится, шага сборки при деплое нет.
 - Пересобрать после смены версии в `package.json`: `npm ci && npm run vendor`.
   Версии видны в `assets/vendor/VERSIONS.json`.
@@ -79,8 +79,9 @@
   резюме.
 - `npm run smoke` — дымовой тест в Chromium: страница, загрузка IFC, пикинг,
   уведомления, прогон коллизий. Гоняйте перед merge в `main`.
-- Pages отдаёт `main`. Ветка с правками на `https://vleutsky.github.io/bim-lva/`
-  не появится, пока её не влить — preview-URL для веток у Pages нет.
+- Pages отдаёт `main`; preview-URL для веток у Pages нет. Правки вьювера сначала
+  живут в `bim-lva-composer-ifc-preview.html` (`npm run preview`), и только
+  после проверки — в рабочем файле.
 - `node tools/bench-pick.mjs [N]` — замер отклика на клик.
 - `bim-lva-composer-ai.html` пока остался на CDN: вендоры и BVH в него не
   переносились.

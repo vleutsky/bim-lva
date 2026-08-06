@@ -6,10 +6,10 @@
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
     <title>BIM.LVA Composer IFC · Сводные модели</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js"></script>
+    <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
+         офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
+    <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
+    <script src="./assets/vendor/supabase-js/supabase.js"></script>
     <style>
         :root {
             --bg: #edf1f5;
@@ -1982,6 +1982,85 @@
             opacity: .35;
             margin: 0 2px;
         }
+
+        /* ---- Уведомления ---- */
+        /* Заменяют alert(): тот блокировал вкладку, не давал скопировать текст
+           ошибки и вставал поперёк длинных операций вроде импорта. */
+        .toasts {
+            position: fixed;
+            right: 16px;
+            bottom: 42px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: flex-end;
+            max-width: min(420px, calc(100vw - 32px));
+            pointer-events: none;
+        }
+
+        .toast {
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-left: 3px solid var(--blue);
+            border-radius: 4px;
+            background: var(--panel);
+            color: var(--txt);
+            box-shadow: 0 6px 20px rgba(28, 39, 51, .16);
+            font-size: var(--panel-font);
+            line-height: 1.45;
+            animation: toast-in .16s ease-out;
+        }
+
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .toast { animation: none; }
+        }
+
+        .toast.is-ok { border-left-color: var(--ok); }
+        .toast.is-error { border-left-color: var(--err); }
+
+        /* Текст выделяемый: сообщение об ошибке нужно уметь скопировать
+           в задачу или письмо — в alert это было невозможно. */
+        .toast .toast-text {
+            flex: 1;
+            user-select: text;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .toast .toast-count {
+            flex: none;
+            align-self: center;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: var(--panel-2);
+            color: var(--txt-dim);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: var(--panel-font-sm);
+        }
+
+        .toast .toast-close {
+            flex: none;
+            border: 0;
+            background: none;
+            color: var(--txt-dim);
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 0 2px;
+        }
+
+        .toast .toast-close:hover { color: var(--txt); }
     </style>
 </head>
 <body>
@@ -2087,7 +2166,7 @@
                 <div class="tb-seg tb-auth" data-bimlva-auth-slot></div>
                 <div class="tb-sep" aria-hidden="true"></div>
                 <div class="tb-seg">
-                    <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.xml,.glb,.obj,.stl" multiple>
+                    <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.dwg,.xml,.glb,.obj,.stl" multiple>
                     <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="IFC (IFC2X3 / IFC4 / IFC4X3), ASCII DXF, LandXML/Civil XML, FBX, GLB, OBJ, STL. RVT/Tekla/Plant — только через экспорт в IFC"><span class="tb-ico">⬆</span><span class="tb-txt">Локально</span></label>
                     <div class="tb-menu" id="menuMore">
                         <button type="button" class="tb-menu-btn tb-more-btn" aria-haspopup="true" aria-expanded="false" title="Другие источники и действия">⋯</button>
@@ -2135,11 +2214,13 @@
             <p>
                 <b>Поддерживаемые форматы:</b><br>
                 <b>IFC</b> — схемы <b>IFC2X3</b>, <b>IFC4</b>, <b>IFC4X3</b><br>
-                <b>ASCII DXF</b> — 3DFACE / MESH / TIN / 3DSOLID→mesh<br>
+                <b>DWG</b> — R13…2018, с раскрытием блоков<br>
+                <b>ASCII DXF</b> — 3DFACE / MESH / TIN / 3DSOLID→mesh, блоки<br>
                 <b>LandXML / Civil 3D</b> (.xml: TIN, коридоры, трассы, точки, сети труб)<br>
                 <b>FBX</b>, <b>GLB</b>, <b>OBJ</b>, <b>STL</b>
                 <br><br>
-                <span style="opacity:.85">Не открываются напрямую: DWG, GLTF (с внешними .bin), PLY, DAE, 3DS, RVT, Tekla, Plant&nbsp;3D — экспортируйте в IFC или DXF/GLB.</span><br>
+                <span style="opacity:.85">Не открываются напрямую: GLTF (с внешними .bin), PLY, DAE, 3DS, Tekla, Plant&nbsp;3D — экспортируйте в IFC или DXF/GLB.<br>
+                <b>RVT</b> (Revit) хранит геометрию в закрытом формате: в браузере её не прочитать ничем — экспортируйте в IFC.</span><br>
                 <span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span>
             </p>
         </div>
@@ -2827,10 +2908,12 @@
     <script type="importmap">
     {
         "imports": {
-            "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
-            "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/",
-            "web-ifc": "https://unpkg.com/web-ifc@0.0.57/web-ifc-api.js",
-            "geotiff": "https://unpkg.com/geotiff@2.1.3/dist-module/geotiff.js"
+            "three": "./assets/vendor/three/three.module.js",
+            "three/addons/": "./assets/vendor/three/addons/",
+            "three-mesh-bvh": "./assets/vendor/three-mesh-bvh/index.module.js",
+            "web-ifc": "./assets/vendor/web-ifc/web-ifc-api.js",
+            "geotiff": "./assets/vendor/geotiff/geotiff.js",
+            "dwgdxf": "./assets/vendor/dwgdxf/index.js"
         }
     }
     </script>
@@ -2852,9 +2935,17 @@
         import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
         import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
         import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+        import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
         import * as WebIFC from 'web-ifc';
 
-        const WASM_PATH = "https://unpkg.com/web-ifc@0.0.57/";
+        // Штатный raycast three перебирает треугольники линейно. На смёрженных
+        // батчах это сотни тысяч проверок на каждый клик, наведение и шаг
+        // drive-режима. BVH заменяет перебор обходом дерева.
+        THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+        THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+        THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+        const WASM_PATH = "./assets/vendor/web-ifc/";
         const TYPE_NAMES = {};
         
         for (const k in WebIFC) { 
@@ -2874,6 +2965,91 @@
             try { window.BimLvaStats?.track?.(event, props); } catch (_) {}
         }
         try { window.BimLvaStats?.trackPage?.('composer'); } catch (_) {}
+
+        // ---- Уведомления ----
+        // Пришли на смену alert(): тот замораживал вкладку до нажатия «ОК»,
+        // не давал скопировать текст ошибки и всплывал поверх длинных операций.
+        const TOAST_TIMEOUT = { info: 5000, ok: 4000, error: 12000 };
+        let toastLayer = null;
+        /** Последний тост: повтор того же текста наращивает счётчик, а не копится стопкой. */
+        let lastToast = null;
+
+        function getToastLayer() {
+            if (!toastLayer || !toastLayer.isConnected) {
+                toastLayer = document.createElement('div');
+                toastLayer.className = 'toasts';
+                toastLayer.setAttribute('role', 'status');
+                toastLayer.setAttribute('aria-live', 'polite');
+                document.body.appendChild(toastLayer);
+            }
+            return toastLayer;
+        }
+
+        function dismissToast(entry) {
+            if (lastToast === entry) lastToast = null;
+            clearTimeout(entry.timer);
+            entry.el.remove();
+        }
+
+        /**
+         * Неблокирующее сообщение пользователю.
+         * @param {string} message текст; переносы строк сохраняются
+         * @param {'info'|'ok'|'error'} type влияет на цвет и время показа
+         */
+        function notify(message, type = 'info') {
+            const text = String(message ?? '').trim();
+            if (!text) return;
+
+            if (lastToast && lastToast.text === text && lastToast.type === type) {
+                lastToast.count++;
+                lastToast.countEl.textContent = `×${lastToast.count}`;
+                lastToast.countEl.hidden = false;
+                clearTimeout(lastToast.timer);
+                lastToast.timer = setTimeout(() => dismissToast(lastToast), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
+                return;
+            }
+
+            const el = document.createElement('div');
+            el.className = `toast${type === 'ok' ? ' is-ok' : type === 'error' ? ' is-error' : ''}`;
+
+            const textEl = document.createElement('div');
+            textEl.className = 'toast-text';
+            textEl.textContent = text;
+
+            const countEl = document.createElement('span');
+            countEl.className = 'toast-count';
+            countEl.hidden = true;
+
+            const close = document.createElement('button');
+            close.className = 'toast-close';
+            close.type = 'button';
+            close.textContent = '×';
+            close.title = 'Закрыть';
+
+            el.append(textEl, countEl, close);
+            getToastLayer().appendChild(el);
+
+            const entry = { el, text, type, count: 1, countEl, timer: null };
+            close.addEventListener('click', () => dismissToast(entry));
+            entry.timer = setTimeout(() => dismissToast(entry), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
+            lastToast = entry;
+        }
+
+        const notifyOk = (message) => notify(message, 'ok');
+        const notifyError = (message) => notify(message, 'error');
+
+        // Доступно соседним скриптам (auth-ui, bcf-sync), чтобы и они не звали alert.
+        window.BimLvaNotify = { notify, ok: notifyOk, error: notifyError };
+
+        // Раньше сбой в обработчике не оставлял следа: вьювер просто замирал, а
+        // пользователь видел статичную картинку и не знал, что произошло.
+        window.addEventListener('error', (ev) => {
+            notifyError(`Сбой: ${ev.message || 'неизвестная ошибка'}`);
+        });
+        window.addEventListener('unhandledrejection', (ev) => {
+            const reason = ev.reason?.message || ev.reason || 'неизвестная ошибка';
+            notifyError(`Необработанный сбой: ${reason}`);
+        });
 
         (function initToolbarMenus() {
             const menus = Array.from(document.querySelectorAll('.tb-menu'));
@@ -3146,6 +3322,96 @@
         let sceneNeedsRender = true;
         let allMeshes = [];
         const markNeedsRender = () => { sceneNeedsRender = true; };
+
+        // ---- Цели для raycast ----
+        // Ниже этого порога дерево строить дороже, чем разом перебрать треугольники.
+        const BVH_MIN_TRIANGLES = 4000;
+
+        /**
+         * Строит BVH под меш один раз и лениво — на первом raycast по нему.
+         * Не при сборке батчей: батчи пересобираются на каждом скрытии, покраске
+         * и изоляции, и большая часть пересборок до пикинга просто не доживает.
+         */
+        function ensureBoundsTree(mesh) {
+            const geom = mesh.geometry;
+            if (!geom || geom.boundsTree || geom._bvhSkip) return;
+            const idx = geom.index;
+            const tris = (idx ? idx.count : (geom.attributes?.position?.count || 0)) / 3;
+            if (tris < BVH_MIN_TRIANGLES) { geom._bvhSkip = true; return; }
+            try {
+                geom.computeBoundsTree();
+            } catch (err) {
+                // Битая геометрия не должна ронять клик — просто останемся на переборе.
+                geom._bvhSkip = true;
+                console.warn('BVH не построен, raycast линейный', err);
+            }
+        }
+
+        /**
+         * Заполняет `out` видимыми мешами под raycast. Раньше на каждый клик и
+         * каждое движение колеса вызывался allMeshes.filter(...) — новый массив
+         * на десятки тысяч элементов в обработчике события.
+         */
+        function collectRaycastTargets(out, predicate) {
+            out.length = 0;
+            for (let i = 0; i < allMeshes.length; i++) {
+                const mesh = allMeshes[i];
+                if (!mesh.visible) continue;
+                if (predicate && !predicate(mesh)) continue;
+                ensureBoundsTree(mesh);
+                out.push(mesh);
+            }
+            return out;
+        }
+
+        // Свой буфер на каждую точку вызова: общий затирался бы, если один raycast
+        // случится внутри другого.
+        const _pickRayTargets = [];
+        const _zoomRayTargets = [];
+        const _driveRayTargets = [];
+        const _terrainRayTargets = [];
+
+        /** Меши-подложки: растр геопривязки и служебные оверлеи в пикинге не участвуют. */
+        const isPickableGeometry = (mesh) =>
+            !mesh.userData?.isGeoRaster && !mesh.userData?.isOverlay;
+
+        /**
+         * Счётчики сцены для поддержки и дымового теста — только чтение.
+         * Весь вьювер живёт в области видимости модуля, снаружи его состояние
+         * иначе не посмотреть: ни «сколько мешей», ни «построен ли BVH».
+         */
+        window.BimLvaDebug = Object.freeze({
+            get meshCount() { return allMeshes.length; },
+            get bvhCount() {
+                let n = 0;
+                for (const m of allMeshes) if (m.geometry?.boundsTree) n++;
+                return n;
+            },
+            get modelCount() { return typeof loadedModels !== 'undefined' ? loadedModels.size : 0; },
+            /** Вершин во всей сцене — грубая мера объёма загруженной геометрии. */
+            get vertexCount() {
+                let n = 0;
+                scene.traverse(obj => { n += obj.geometry?.attributes?.position?.count || 0; });
+                return n;
+            },
+            /** Габарит каждой загруженной модели по отдельности, в метрах сцены. */
+            get modelBounds() {
+                const out = [];
+                for (const mod of (typeof loadedModels !== 'undefined' ? loadedModels.values() : [])) {
+                    if (!mod.group) continue;
+                    const box = new THREE.Box3().setFromObject(mod.group);
+                    if (box.isEmpty()) continue;
+                    out.push({
+                        file: mod.filename || '',
+                        format: mod.format || '',
+                        sizeX: box.max.x - box.min.x,
+                        sizeY: box.max.y - box.min.y,
+                        sizeZ: box.max.z - box.min.z
+                    });
+                }
+                return out;
+            }
+        });
         renderer.setPixelRatio(basePixelRatio);
         renderer.setClearColor(0xf3f5f7, 1);
         
@@ -3500,7 +3766,10 @@
             if (!allMeshes.length) return fallbackZ;
             const raycaster = new THREE.Raycaster();
             raycaster.set(new THREE.Vector3(x, y, 1e7), new THREE.Vector3(0, 0, -1));
-            const hits = raycaster.intersectObjects(allMeshes.filter(m => m.visible && !m.userData.isGeoRaster), false);
+            const hits = raycaster.intersectObjects(
+                collectRaycastTargets(_terrainRayTargets, m => !m.userData?.isGeoRaster),
+                false
+            );
             return hits.length ? hits[0].point.z : fallbackZ;
         }
 
@@ -3825,7 +4094,7 @@
                 if (box.isEmpty()) {
                     isClipping = false;
                     $('btnClip').classList.remove('on');
-                    alert('Нет геометрии для установки разреза. Загрузите модель или выделите элементы.');
+                    notifyError('Нет геометрии для установки разреза. Загрузите модель или выделите элементы.');
                     return;
                 }
                 placeClipGizmoFromBounds(box);
@@ -4646,7 +4915,7 @@
         }).catch(e => {
             console.error(e);
             $('engineStatus').textContent = 'ошибка движка';
-            alert('Не удалось инициализировать IFC-движок (WebAssembly). Проверьте интернет и обновите страницу.');
+            notifyError('Не удалось инициализировать IFC-движок (WebAssembly). Проверьте интернет и обновите страницу.');
         });
 
         // --- Загрузка ---
@@ -4697,8 +4966,13 @@
                     else if (ext === 'stl') await loadSingleSTL(file);
                     else if (ext === 'gltf') {
                         skipped.push(`${file.name} (нужен GLB: внешние .bin/.gltf не поддерживаются)`);
-                    } else if (ext === 'dwg') {
-                        skipped.push(`${file.name} (DWG не поддерживается — сохраните как ASCII DXF)`);
+                    } else if (ext === 'dwg') await loadSingleDWG(file);
+                    else if (ext === 'rvt' || ext === 'rfa' || ext === 'rte') {
+                        skipped.push(
+                            `${file.name} — файлы Revit содержат геометрию в закрытом формате, ` +
+                            `прочитать её в браузере нельзя. В Revit: Файл → Экспорт → IFC ` +
+                            `(или CAD-форматы → DWG для планов).`
+                        );
                     } else if (ext === 'ply' || ext === 'dae' || ext === '3ds') {
                         skipped.push(`${file.name} (формат снят с поддержки — используйте IFC / DXF / GLB / OBJ / STL)`);
                     } else skipped.push(file.name);
@@ -4718,9 +4992,9 @@
                 await new Promise(r => setTimeout(r, 80));
             }
 
-            if (skipped.length) alert('Пропущено (формат не поддержан): ' + skipped.join(', '));
+            if (skipped.length) notifyError('Пропущено (формат не поддержан): ' + skipped.join(', '));
             if (failed.length) {
-                alert(
+                notifyError(
                     `Не удалось загрузить ${failed.length} файл(ов):\n\n` +
                     failed.slice(0, 8).join('\n') +
                     (failed.length > 8 ? `\n…и ещё ${failed.length - 8}` : '') +
@@ -5081,6 +5355,9 @@ uniform vec3 uBatchSelColor;
             (modData.batchMeshes || []).forEach(mesh => {
                 modData.group.remove(mesh);
                 allMeshes = allMeshes.filter(m => m !== mesh);
+                // Батчи пересобираются часто, а BVH — это отдельные буферы:
+                // отпускаем их сразу, не дожидаясь сборщика мусора.
+                mesh.geometry?.disposeBoundsTree?.();
                 mesh.geometry?.dispose();
                 mesh.material?.dispose();
             });
@@ -6597,7 +6874,7 @@ uniform vec3 uBatchSelColor;
             } catch (e) {
                 console.error(e);
                 hideLoader();
-                alert('Ошибка FBX: ' + e.message);
+                notifyError('Ошибка FBX: ' + e.message);
             }
         }
 
@@ -6615,7 +6892,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert(`Ошибка ${extension.toUpperCase()}: ${error.message}. Для GLTF внешние .bin/текстуры не поддерживаются — используйте GLB.`);
+                notifyError(`Ошибка ${extension.toUpperCase()}: ${error.message}. Для GLTF внешние .bin/текстуры не поддерживаются — используйте GLB.`);
             }
         }
 
@@ -6629,7 +6906,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка OBJ: ' + error.message);
+                notifyError('Ошибка OBJ: ' + error.message);
             }
         }
 
@@ -6651,7 +6928,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка STL: ' + error.message);
+                notifyError('Ошибка STL: ' + error.message);
             }
         }
 
@@ -6689,7 +6966,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка PLY: ' + error.message);
+                notifyError('Ошибка PLY: ' + error.message);
             }
         }
 
@@ -6704,7 +6981,7 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка DAE: ' + error.message);
+                notifyError('Ошибка DAE: ' + error.message);
             }
         }
 
@@ -6718,9 +6995,154 @@ uniform vec3 uBatchSelColor;
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка 3DS: ' + error.message);
+                notifyError('Ошибка 3DS: ' + error.message);
             }
         }
+
+        /** Предел вложенности блоков: защита от самоссылающихся определений. */
+        const DXF_INSERT_MAX_DEPTH = 12;
+        /** Предел числа сущностей после раскрытия: защита от комбинаторного взрыва. */
+        const DXF_INSERT_MAX_ENTITIES = 2_000_000;
+
+        /** Дуга → ломаная: поворот и неравномерный масштаб превращают окружность
+         *  в эллипс, а рендер всё равно бьёт дуги на отрезки. */
+        function dxfArcToPolyline(arc) {
+            const sweep = arc.end - arc.start;
+            const steps = Math.max(12, Math.ceil(Math.abs(sweep) / 7.5));
+            const points = [];
+            for (let i = 0; i <= steps; i++) {
+                const a = THREE.MathUtils.degToRad(arc.start + (sweep * i) / steps);
+                points.push([
+                    arc.cx + Math.cos(a) * arc.radius,
+                    arc.cy + Math.sin(a) * arc.radius,
+                    arc.cz
+                ]);
+            }
+            return { type: 'polyline', layer: arc.layer, points, closed: false };
+        }
+
+        /**
+         * Раскрывает INSERT/MINSERT: содержимое блока переносится в чертёж с
+         * учётом смещения, масштаба, поворота и вложенности.
+         *
+         * Без этого блоки просто терялись — а в реальных чертежах в них лежит
+         * половина содержимого: оси, штампы, оборудование, повторяющиеся узлы.
+         */
+        function expandDxfInserts(entities, blocks) {
+            if (!blocks?.size) return entities.filter(e => e.type !== 'insert');
+
+            const out = [];
+            let budgetHit = false;
+
+            /** @param {number[]} v точка в координатах блока */
+            const place = (v, o) => {
+                const x = (v[0] - o.base[0]) * o.scale[0];
+                const y = (v[1] - o.base[1]) * o.scale[1];
+                const z = (v[2] - o.base[2]) * o.scale[2];
+                return [
+                    o.at[0] + x * o.cos - y * o.sin,
+                    o.at[1] + x * o.sin + y * o.cos,
+                    o.at[2] + z
+                ];
+            };
+
+            function emit(entity, o, depth, stack) {
+                if (out.length >= DXF_INSERT_MAX_ENTITIES) { budgetHit = true; return; }
+
+                if (entity.type === 'insert') {
+                    if (depth >= DXF_INSERT_MAX_DEPTH || stack.has(entity.name)) return;
+                    const block = blocks.get(entity.name);
+                    if (!block) return; // ссылка на несуществующий блок — молча пропускаем
+
+                    const rot = ((o ? o.rotationDeg : 0) + entity.rotation) * Math.PI / 180;
+                    const at = o ? place(entity.at, o) : entity.at.slice();
+                    const inner = {
+                        base: block.base,
+                        scale: o
+                            ? [entity.scale[0] * o.scale[0], entity.scale[1] * o.scale[1], entity.scale[2] * o.scale[2]]
+                            : entity.scale.slice(),
+                        at,
+                        cos: Math.cos(rot),
+                        sin: Math.sin(rot),
+                        rotationDeg: (o ? o.rotationDeg : 0) + entity.rotation,
+                        layer: entity.layer
+                    };
+
+                    stack.add(entity.name);
+                    // MINSERT: решётка копий вдоль повёрнутых осей блока
+                    const cols = Math.max(1, entity.cols | 0);
+                    const rows = Math.max(1, entity.rows | 0);
+                    for (let c = 0; c < cols; c++) {
+                        for (let r = 0; r < rows; r++) {
+                            const dx = c * entity.colSpacing;
+                            const dy = r * entity.rowSpacing;
+                            const step = (c || r)
+                                ? {
+                                    ...inner,
+                                    at: [
+                                        inner.at[0] + dx * inner.cos - dy * inner.sin,
+                                        inner.at[1] + dx * inner.sin + dy * inner.cos,
+                                        inner.at[2]
+                                    ]
+                                }
+                                : inner;
+                            for (const child of block.entities) emit(child, step, depth + 1, stack);
+                        }
+                    }
+                    stack.delete(entity.name);
+                    return;
+                }
+
+                if (!o) { out.push(entity); return; }
+
+                // Слой «0» внутри блока наследуется от вставки — правило DXF,
+                // без него содержимое блоков красится в один цвет.
+                const layer = entity.layer === '0' ? o.layer : entity.layer;
+                const src = entity.type === 'arc' ? dxfArcToPolyline(entity) : entity;
+
+                switch (src.type) {
+                    case 'line': {
+                        const a = place([src.values[0], src.values[1], src.values[2]], o);
+                        const b = place([src.values[3], src.values[4], src.values[5]], o);
+                        out.push({ type: 'line', layer, values: [...a, ...b] });
+                        break;
+                    }
+                    case 'polyline':
+                        out.push({ type: 'polyline', layer, closed: src.closed, points: src.points.map(pt => place(pt, o)) });
+                        break;
+                    case 'point':
+                        out.push({ type: 'point', layer, point: place(src.point, o) });
+                        break;
+                    case 'face':
+                        out.push({ type: 'face', layer, points: src.points.map(pt => place(pt, o)) });
+                        break;
+                    case 'mesh':
+                        out.push({ type: 'mesh', layer, faces: src.faces, vertices: src.vertices.map(pt => place(pt, o)) });
+                        break;
+                    default:
+                        break; // тип без координат — переносить нечего
+                }
+            }
+
+            for (const entity of entities) emit(entity, null, 0, new Set());
+            if (budgetHit) {
+                console.warn(`[BIM.LVA] DXF: раскрытие блоков остановлено на ${DXF_INSERT_MAX_ENTITIES} сущностях.`);
+            }
+            return out;
+        }
+
+        /** Коды $INSUNITS → метры. 0 — «единицы не заданы», масштаб неизвестен. */
+        const DXF_INSUNITS = {
+            1: { scale: 0.0254, name: 'дюймы' },
+            2: { scale: 0.3048, name: 'футы' },
+            4: { scale: 0.001, name: 'миллиметры' },
+            5: { scale: 0.01, name: 'сантиметры' },
+            6: { scale: 1, name: 'метры' },
+            7: { scale: 1000, name: 'километры' },
+            10: { scale: 0.9144, name: 'ярды' },
+            14: { scale: 0.1, name: 'дециметры' },
+            21: { scale: 1200 / 3937, name: 'футы US Survey' }
+        };
 
         function parseAsciiDXF(text) {
             if (text.slice(0, 22).includes('AutoCAD Binary DXF')) {
@@ -6735,7 +7157,6 @@ uniform vec3 uBatchSelColor;
 
             const entities = [];
             const seenTypes = new Set();
-            let inEntities = false;
 
             const firstNumber = (data, code) => {
                 const found = data.find(item => item.code === code);
@@ -6831,16 +7252,18 @@ uniform vec3 uBatchSelColor;
                 return null;
             };
 
-            for (let i = 0; i < pairs.length;) {
+            /**
+             * Читает секцию сущностей, начиная с `start`, до ENDSEC.
+             * Секции ENTITIES и BLOCKS устроены одинаково, поэтому обе идут
+             * через этот код. Если передан `blocks`, встреченные BLOCK/ENDBLK
+             * переключают приёмник: содержимое блока копится отдельно и
+             * попадёт в чертёж только через INSERT.
+             */
+            function scanEntitySection(start, defaultSink, blocks) {
+                let sink = defaultSink;
+                let i = start;
+                while (i < pairs.length) {
                 const pair = pairs[i++];
-                if (!inEntities) {
-                    if (pair.code === 0 && pair.value === 'SECTION' &&
-                        pairs[i] && pairs[i].code === 2 && pairs[i].value === 'ENTITIES') {
-                        inEntities = true;
-                        i++;
-                    }
-                    continue;
-                }
                 if (pair.code === 0 && pair.value === 'ENDSEC') break;
                 if (pair.code !== 0) continue;
 
@@ -6849,6 +7272,22 @@ uniform vec3 uBatchSelColor;
                 const data = [];
                 while (i < pairs.length && pairs[i].code !== 0) data.push(pairs[i++]);
                 const layer = layerOf(data);
+
+                if (blocks) {
+                    if (type === 'BLOCK') {
+                        const name = data.find(item => item.code === 2)?.value || '';
+                        const base = [firstNumber(data, 10) || 0, firstNumber(data, 20) || 0, firstNumber(data, 30) || 0];
+                        sink = [];
+                        // Имя может повториться — выигрывает последнее определение,
+                        // как и в самом AutoCAD.
+                        if (name) blocks.set(name, { base, entities: sink });
+                        continue;
+                    }
+                    if (type === 'ENDBLK') { sink = null; continue; }
+                    if (!sink) continue; // мусор между блоками
+                }
+
+                const entities = sink;
 
                 if (type === 'POLYLINE') {
                     const flags = firstNumber(data, 70) || 0;
@@ -6955,11 +7394,63 @@ uniform vec3 uBatchSelColor;
                         [firstNumber(data, 13), firstNumber(data, 23), firstNumber(data, 33) || 0]
                     ].filter(p => p.every(Number.isFinite));
                     if (corners.length >= 3) entities.push({ type: 'face', layer, points: corners });
+                } else if (type === 'INSERT' || type === 'MINSERT') {
+                    const name = data.find(item => item.code === 2)?.value || '';
+                    if (name) {
+                        entities.push({
+                            type: 'insert',
+                            layer,
+                            name,
+                            at: [firstNumber(data, 10) || 0, firstNumber(data, 20) || 0, firstNumber(data, 30) || 0],
+                            scale: [
+                                firstNumber(data, 41) ?? 1,
+                                firstNumber(data, 42) ?? 1,
+                                firstNumber(data, 43) ?? 1
+                            ],
+                            rotation: firstNumber(data, 50) || 0,
+                            // MINSERT — прямоугольная решётка копий одной вставкой
+                            cols: type === 'MINSERT' ? (firstInt(data, 70) || 1) : 1,
+                            rows: type === 'MINSERT' ? (firstInt(data, 71) || 1) : 1,
+                            colSpacing: firstNumber(data, 44) || 0,
+                            rowSpacing: firstNumber(data, 45) || 0
+                        });
+                    }
+                }
+                }
+                return i;
+            }
+
+            // $INSUNITS из HEADER: единицы чертежа, заданные автором. Точное
+            // значение всегда лучше эвристики по габаритам — без него план
+            // здания в миллиметрах приезжает в сцену километровым.
+            let insUnits = 0;
+            for (let i = 0; i + 2 < pairs.length; i++) {
+                if (pairs[i].code === 9 && pairs[i].value === '$INSUNITS') {
+                    const val = pairs.slice(i + 1, i + 4).find(item => item.code === 70);
+                    if (val) insUnits = parseInt(val.value, 10) || 0;
+                    break;
                 }
             }
 
-            entities._seenTypes = [...seenTypes];
-            return entities;
+            // Секции идут в файле в произвольном порядке, а BLOCKS нужна раньше
+            // ENTITIES — поэтому сначала находим обе, потом читаем.
+            const blocks = new Map();
+            let blocksAt = -1;
+            let entitiesAt = -1;
+            for (let i = 0; i + 2 < pairs.length; i++) {
+                if (pairs[i].code !== 0 || pairs[i].value !== 'SECTION') continue;
+                if (pairs[i + 1].code !== 2) continue;
+                if (pairs[i + 1].value === 'BLOCKS') blocksAt = i + 2;
+                else if (pairs[i + 1].value === 'ENTITIES') entitiesAt = i + 2;
+            }
+            if (blocksAt >= 0) scanEntitySection(blocksAt, null, blocks);
+            if (entitiesAt >= 0) scanEntitySection(entitiesAt, entities, null);
+
+            const expanded = expandDxfInserts(entities, blocks);
+            expanded._seenTypes = [...seenTypes];
+            expanded._blockCount = blocks.size;
+            expanded._insUnits = insUnits;
+            return expanded;
         }
 
         function dxfLayerColor(layerName) {
@@ -7145,10 +7636,15 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return parsed;
         }
 
-        async function loadSingleDXF(file) {
-            showLoader('ЧТЕНИЕ DXF', file.name);
+        /**
+         * @param file исходный файл
+         * @param preparedText DXF-текст, если он уже получен (например из DWG)
+         */
+        async function loadSingleDXF(file, preparedText) {
+            const label = preparedText ? 'DWG' : 'DXF';
+            showLoader(`ЧТЕНИЕ ${label}`, file.name);
             try {
-                const text = await file.text();
+                const text = preparedText ?? await file.text();
                 const entities = parseAsciiDXF(text);
                 const seen = entities._seenTypes || [];
                 const needsAcis = seen.some(t => /^(3DSOLID|BODY|REGION|SURFACE)$/i.test(t));
@@ -7201,12 +7697,87 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 showLoader('ГЕОМЕТРИЯ DXF', 'Построение объектов…');
                 const root = buildDXFRoot(entities, file.name);
                 if (!root.children.length) throw new Error('DXF прочитан, но геометрия пуста.');
-                await addExternalModel(file, 'DXF', root);
+
+                const units = DXF_INSUNITS[entities._insUnits];
+                if (units) {
+                    if (scaleObject3DToMeters(root, units.scale)) {
+                        console.info(`[BIM.LVA] ${label}: единицы чертежа — ${units.name}, ×${units.scale} → метры`);
+                    }
+                } else {
+                    // $INSUNITS = 0. Догадываться нельзя: 168 000 единиц — это и
+                    // здание в миллиметрах, и трасса в метрах. Говорим прямо.
+                    const box = new THREE.Box3().setFromObject(root);
+                    const span = box.isEmpty() ? 0 : box.getSize(new THREE.Vector3()).length();
+                    if (span > 10000) {
+                        notify(
+                            `${file.name}: единицы в файле не заданы, размер принят как ${Math.round(span)} м. ` +
+                            `Если чертёж в миллиметрах, он окажется в 1000 раз крупнее — задайте масштаб ` +
+                            `в «Выравнивании моделей» или сохраните из CAD с указанием единиц.`
+                        );
+                    }
+                }
+                await addExternalModel(file, label, root);
                 hideLoader();
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка DXF: ' + error.message);
+                notifyError(`Ошибка ${label}: ` + error.message);
+            }
+        }
+
+        // ---- DWG ----
+        // Формат закрытый и бинарный, разбирать его самим нечем. Конвертируем в
+        // DXF движком acadrust (wasm, MIT) и дальше идём общим путём DXF.
+        // Модуль тяжёлый (~800 КБ wasm), поэтому подключается только по факту
+        // открытия .dwg, а не при загрузке страницы.
+        let dwgConverterPromise = null;
+
+        function ensureDwgConverter() {
+            if (!dwgConverterPromise) {
+                dwgConverterPromise = import('dwgdxf').catch(err => {
+                    dwgConverterPromise = null; // дать шанс повторной попытке
+                    throw new Error(`конвертер DWG не загрузился (${err.message || err})`);
+                });
+            }
+            return dwgConverterPromise;
+        }
+
+        /** Версия из первых 6 байт: AC1015 = 2000, AC1032 = 2018 и т.д. */
+        const DWG_RELEASES = {
+            AC1012: 'R13', AC1014: 'R14', AC1015: '2000', AC1018: '2004',
+            AC1021: '2007', AC1024: '2010', AC1027: '2013', AC1032: '2018'
+        };
+
+        function dwgVersionLabel(bytes) {
+            const tag = new TextDecoder('ascii').decode(bytes.subarray(0, 6));
+            return DWG_RELEASES[tag] ? `AutoCAD ${DWG_RELEASES[tag]}` : tag;
+        }
+
+        async function loadSingleDWG(file) {
+            showLoader('ЧТЕНИЕ DWG', file.name);
+            try {
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                if (bytes.length < 6 || !/^AC10\d\d$/.test(new TextDecoder('ascii').decode(bytes.subarray(0, 6)))) {
+                    throw new Error('это не похоже на DWG — нет сигнатуры AC10xx в начале файла');
+                }
+                const version = dwgVersionLabel(bytes);
+
+                showLoader('DWG → DXF', `${version}: подготовка конвертера…`);
+                const { convertDwgToDxf } = await ensureDwgConverter();
+
+                showLoader('DWG → DXF', `${version}: преобразование…`);
+                await yieldToUi();
+                const dxfBytes = await convertDwgToDxf(bytes);
+                if (!dxfBytes?.length) throw new Error('конвертер вернул пустой DXF');
+
+                // DXF из DWG бывает не в UTF-8 (кириллица в старых чертежах),
+                // поэтому не роняем разбор на некорректных байтах.
+                const text = new TextDecoder('utf-8', { fatal: false }).decode(dxfBytes);
+                await loadSingleDXF(file, text);
+            } catch (error) {
+                console.error(error);
+                hideLoader();
+                notifyError('Ошибка DWG: ' + (error.message || error));
             }
         }
 
@@ -8234,7 +8805,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             } catch (error) {
                 console.error(error);
                 hideLoader();
-                alert('Ошибка LandXML: ' + error.message);
+                notifyError('Ошибка LandXML: ' + error.message);
             }
         }
 
@@ -9225,7 +9796,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function applyAppearanceToSelection(appearance, items = getSelectedGeometryItems()) {
             if (!items.length) {
-                alert('Нет элементов с поверхностной геометрией для оформления.');
+                notifyError('Нет элементов с поверхностной геометрией для оформления.');
                 return 0;
             }
             items.forEach(item => {
@@ -9289,7 +9860,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (count) {
                 appearanceDraftTexture = null;
                 appearanceDraftTextureName = '';
-                alert(`Оформление применено к ${count} элементам.`);
+                notifyOk(`Оформление применено к ${count} элементам.`);
                 const first = selectedItems[0];
                 if (first) {
                     const mod0 = loadedModels.get(first.modelID);
@@ -9312,7 +9883,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             });
             appearanceDraftTexture = null;
             appearanceDraftTextureName = '';
-            alert(`Исходное оформление восстановлено для ${items.length} элементов.`);
+            notifyOk(`Исходное оформление восстановлено для ${items.length} элементов.`);
             const first = selectedItems[0];
             if (first) {
                 const mod0 = loadedModels.get(first.modelID);
@@ -9329,14 +9900,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 texture.colorSpace = THREE.SRGBColorSpace;
                 appearanceDraftTexture = texture;
                 appearanceDraftTextureName = file.name;
-                alert(`Текстура «${file.name}» загружена. Нажмите «Применить оформление».`);
+                notifyOk(`Текстура «${file.name}» загружена. Нажмите «Применить оформление».`);
                 const first = selectedItems[0];
                 if (first) {
                     const mod0 = loadedModels.get(first.modelID);
                     if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
                     else showProps(first.modelID, first.expressID, selectedItems.length);
                 }
-            }, undefined, err => alert('Не удалось загрузить изображение: ' + err.message));
+            }, undefined, err => notifyError('Не удалось загрузить изображение: ' + err.message));
         }
 
         // --- SELECTION (Только подсветка, без прозрачности) ---
@@ -9519,8 +10090,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             raycaster.setFromCamera(pointer, camera);
             raycaster.params.Line = { threshold: 0.5 };
             raycaster.params.Points = { threshold: 0.5 };
-            const visibleMeshes = allMeshes.filter(m => m.visible);
-            const hits = raycaster.intersectObjects(visibleMeshes, false);
+            const hits = raycaster.intersectObjects(collectRaycastTargets(_pickRayTargets), false);
             const validHits = isClipping ? hits.filter(h => pointPassesClipping(h.point)) : hits;
             return validHits[0] || null;
         }
@@ -9816,7 +10386,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         $('btnIsolate').addEventListener('click', () => {
             if (!selectedItems.length) {
-                alert('Сначала выделите элементы для изоляции.');
+                notifyError('Сначала выделите элементы для изоляции.');
                 return;
             }
             const keep = new Set(selectedItems.map(selectionKey));
@@ -10155,14 +10725,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const pset = $('colorByPset').value;
                 const prop = $('colorByProp').value.trim();
                 if (!prop) {
-                    alert('Укажите имя параметра.');
+                    notifyError('Укажите имя параметра.');
                     return;
                 }
                 colorByState = { mode: 'pset', pset, prop, title: `Pset: ${prop}` };
                 n = applyColorByFromState(colorByState);
             }
             closeColorByModal();
-            if (!n) alert('Нет IFC-элементов для раскраски.');
+            if (!n) notifyError('Нет IFC-элементов для раскраски.');
             else trackUsage('color_by_apply', { mode, count: n });
         });
 
@@ -10192,6 +10762,131 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 a.max.y < b.min.y - tol || a.min.y > b.max.y + tol ||
                 a.max.z < b.min.z - tol || a.min.z > b.max.z + tol
             );
+        }
+
+        // ---- Пространственный индекс для коллизий ----
+        // Без него сверка двух моделей — полный перебор A×B (20k × 20k = 400 млн
+        // проверок бокса). Равномерная сетка по боксам A сводит это к «B против
+        // своих ячеек»: O(A + B×k), где k — соседей в ячейке.
+        /** Потолок шагов сетки по самой длинной оси (защита от дробления на геодезии). */
+        const CLASH_GRID_MAX_STEPS = 512;
+        /** Элемент, покрывающий больше ячеек, уходит в отдельный список (длинные трубы, оси). */
+        const CLASH_GRID_MAX_CELLS_PER_ITEM = 256;
+
+        function clashGridCellIndex(value, origin, cell, maxIndex) {
+            const i = Math.floor((value - origin) / cell);
+            return i < 0 ? 0 : (i > maxIndex ? maxIndex : i);
+        }
+
+        /**
+         * Строит сетку по элементам A (`[{ expressID, box, ref, cls }]`).
+         * Размер ячейки — медианный габарит элемента: мелочь не плодит ячейки,
+         * крупное не собирает всё в одну.
+         */
+        function buildClashGrid(items) {
+            if (!items?.length) return null;
+            const bounds = new THREE.Box3();
+            const size = new THREE.Vector3();
+            const dims = [];
+            for (const it of items) {
+                bounds.union(it.box);
+                it.box.getSize(size);
+                dims.push(Math.max(size.x, size.y, size.z));
+            }
+            if (bounds.isEmpty()) return null;
+            bounds.getSize(size);
+            const span = Math.max(size.x, size.y, size.z) || 1;
+
+            dims.sort((a, b) => a - b);
+            let cell = dims[dims.length >> 1];
+            if (!(cell > 0) || !Number.isFinite(cell)) cell = span / 64;
+            cell = Math.max(cell, span / CLASH_GRID_MAX_STEPS);
+
+            const grid = {
+                items,
+                cell,
+                origin: bounds.min.clone(),
+                nx: Math.floor(size.x / cell),
+                ny: Math.floor(size.y / cell),
+                nz: Math.floor(size.z / cell),
+                cells: new Map(),
+                oversized: [],
+                stamps: new Int32Array(items.length),
+                stamp: 0
+            };
+
+            for (let i = 0; i < items.length; i++) {
+                const b = items[i].box;
+                const x0 = clashGridCellIndex(b.min.x, grid.origin.x, cell, grid.nx);
+                const x1 = clashGridCellIndex(b.max.x, grid.origin.x, cell, grid.nx);
+                const y0 = clashGridCellIndex(b.min.y, grid.origin.y, cell, grid.ny);
+                const y1 = clashGridCellIndex(b.max.y, grid.origin.y, cell, grid.ny);
+                const z0 = clashGridCellIndex(b.min.z, grid.origin.z, cell, grid.nz);
+                const z1 = clashGridCellIndex(b.max.z, grid.origin.z, cell, grid.nz);
+                const covered = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+                if (covered > CLASH_GRID_MAX_CELLS_PER_ITEM) {
+                    grid.oversized.push(i);
+                    continue;
+                }
+                for (let x = x0; x <= x1; x++) {
+                    for (let y = y0; y <= y1; y++) {
+                        for (let z = z0; z <= z1; z++) {
+                            const key = `${x}|${y}|${z}`;
+                            let bucket = grid.cells.get(key);
+                            if (!bucket) grid.cells.set(key, bucket = []);
+                            bucket.push(i);
+                        }
+                    }
+                }
+            }
+            return grid;
+        }
+
+        /**
+         * Кандидаты A для бокса B — в `out` (переиспользуемый массив, без аллокаций).
+         * Дедупликация через штампы: элемент из нескольких ячеек попадёт один раз.
+         */
+        function queryClashGrid(grid, box, out) {
+            out.length = 0;
+            if (!grid) return out;
+            const { cell, origin, stamps } = grid;
+            const stamp = ++grid.stamp;
+            // Бокс B целиком вне сетки — только «длинные» элементы могут дотянуться.
+            const inside = !(
+                box.max.x < origin.x || box.max.y < origin.y || box.max.z < origin.z ||
+                box.min.x > origin.x + (grid.nx + 1) * cell ||
+                box.min.y > origin.y + (grid.ny + 1) * cell ||
+                box.min.z > origin.z + (grid.nz + 1) * cell
+            );
+            if (inside) {
+                const x0 = clashGridCellIndex(box.min.x, origin.x, cell, grid.nx);
+                const x1 = clashGridCellIndex(box.max.x, origin.x, cell, grid.nx);
+                const y0 = clashGridCellIndex(box.min.y, origin.y, cell, grid.ny);
+                const y1 = clashGridCellIndex(box.max.y, origin.y, cell, grid.ny);
+                const z0 = clashGridCellIndex(box.min.z, origin.z, cell, grid.nz);
+                const z1 = clashGridCellIndex(box.max.z, origin.z, cell, grid.nz);
+                for (let x = x0; x <= x1; x++) {
+                    for (let y = y0; y <= y1; y++) {
+                        for (let z = z0; z <= z1; z++) {
+                            const bucket = grid.cells.get(`${x}|${y}|${z}`);
+                            if (!bucket) continue;
+                            for (let n = 0; n < bucket.length; n++) {
+                                const idx = bucket[n];
+                                if (stamps[idx] === stamp) continue;
+                                stamps[idx] = stamp;
+                                out.push(grid.items[idx]);
+                            }
+                        }
+                    }
+                }
+            }
+            for (let n = 0; n < grid.oversized.length; n++) {
+                const idx = grid.oversized[n];
+                if (stamps[idx] === stamp) continue;
+                stamps[idx] = stamp;
+                out.push(grid.items[idx]);
+            }
+            return out;
         }
 
         const CLASH_REPORTS_KEY = 'bimlva_clash_reports_v1';
@@ -10604,7 +11299,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         function exportPropertiesExcel(items, filenameHint) {
             const rows = buildPropertiesExcelRows(items);
             if (rows.length <= 1) {
-                alert('Нет редактируемых IFC-характеристик для экспорта.');
+                notifyError('Нет редактируемых IFC-характеристик для экспорта.');
                 return false;
             }
             const nElements = new Set(
@@ -11160,7 +11855,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (ra) items.push(ra);
             if (rb) items.push(rb);
             if (!items.length) {
-                alert('Элементы пары не найдены в загруженных моделях.');
+                notifyError('Элементы пары не найдены в загруженных моделях.');
                 return;
             }
             try { parkClashModalAside(); } catch (_) {}
@@ -11175,7 +11870,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const rb = resolveElementRef(pair.b);
             const items = [ra, rb].filter(Boolean);
             if (!items.length) {
-                alert('Элементы пары не найдены.');
+                notifyError('Элементы пары не найдены.');
                 return;
             }
             selectMultiple(items);
@@ -11208,7 +11903,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             bcfTopics.push(topic);
             try { renderBcfList(); syncBcfMarkers(); } catch (_) {}
             trackUsage('clash_to_bcf');
-            alert('BCF-заметка создана. Откройте «BCF-заметки» для правки.');
+            notifyOk('BCF-заметка создана. Откройте «BCF-заметки» для правки.');
         }
 
         function boxesStillClash(refA, refB, tol) {
@@ -11358,7 +12053,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const idB = Number($('clashModelB').value);
             const tolA = parseFloat($('clashTolerance').value) || 0;
             const tolB = parseFloat($('clashToleranceB')?.value) || tolA;
-            if (idA === idB) { alert('Выберите две разные модели.'); return; }
+            if (idA === idB) { notifyError('Выберите две разные модели.'); return; }
             const modA = loadedModels.get(idA);
             const modB = loadedModels.get(idB);
             if (!modA || !modB) return;
@@ -11366,7 +12061,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (specs) {
                 const empty = specs.some((s) => !s.a.size || !s.b.size);
                 if (empty) {
-                    alert('Укажите классы A и B для фильтра.');
+                    notifyError('Укажите классы A и B для фильтра.');
                     return;
                 }
             }
@@ -11406,6 +12101,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     }
                 }
 
+                setClashProgress(0.30, `Индекс модели A (${boxesA.length})…`);
+                showLoader('КОЛЛИЗИИ', 'Пространственный индекс A…', { ratio: 0.30 });
+                await yieldToUi();
+                const gridA = buildClashGrid(boxesA);
+
                 setClashProgress(0.32, `Сверка с моделью B (A: ${boxesA.length})…`);
                 showLoader('КОЛЛИЗИИ', 'Сверка AABB…', { ratio: 0.32 });
                 await yieldToUi();
@@ -11414,6 +12114,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const pairs = [];
                 const seen = new Set();
                 const eidsB = [...modB.meshesByID.keys()];
+                const candidatesA = [];
                 let checkedB = 0;
                 for (let i = 0; i < eidsB.length; i++) {
                     const eid = eidsB[i];
@@ -11424,7 +12125,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (!boxRaw) continue;
                     const boxB = expandBoxByTol(boxRaw, tolB);
                     const refB = makeElementRef(modB, eid);
-                    for (const a of boxesA) {
+                    queryClashGrid(gridA, boxB, candidatesA);
+                    for (const a of candidatesA) {
                         if (!boxesOverlap(a.box, boxB, 0)) continue;
                         const label = matchClashSpecLabel(a.cls, clsB, specs);
                         if (specs && !label) continue;
@@ -11480,7 +12182,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             } catch (err) {
                 console.error(err);
                 $('clashStatus').textContent = 'Ошибка проверки: ' + (err?.message || err);
-                alert('Ошибка проверки коллизий: ' + (err?.message || err));
+                notifyError('Ошибка проверки коллизий: ' + (err?.message || err));
             } finally {
                 hideLoader();
                 if (runBtn) {
@@ -11494,7 +12196,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('clashRecheckBtn')?.addEventListener('click', async () => {
             const report = clashReports[0];
             if (!report?.pairs?.length) {
-                alert('Нет сохранённого отчёта. Сначала запустите проверку.');
+                notifyError('Нет сохранённого отчёта. Сначала запустите проверку.');
                 return;
             }
             const tol = parseFloat($('clashTolerance').value) || report.tolerance || 0;
@@ -11540,7 +12242,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('clashExportBtn')?.addEventListener('click', () => {
             const report = clashReports[0];
             if (!report) {
-                alert('Нет отчёта для экспорта.');
+                notifyError('Нет отчёта для экспорта.');
                 return;
             }
             const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
@@ -11554,7 +12256,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('clashExportExcelBtn')?.addEventListener('click', () => {
             const report = clashReports[0];
             if (!report) {
-                alert('Нет отчёта для экспорта.');
+                notifyError('Нет отчёта для экспорта.');
                 return;
             }
             try {
@@ -11562,7 +12264,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 trackUsage('clash_export_excel', { pairs: report.pairs?.length || 0 });
             } catch (err) {
                 console.error(err);
-                alert('Не удалось выгрузить Excel: ' + (err?.message || err));
+                notifyError('Не удалось выгрузить Excel: ' + (err?.message || err));
             }
         });
 
@@ -11773,7 +12475,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('runCompare').addEventListener('click', () => {
             const idA = Number($('compareModelA').value);
             const idB = Number($('compareModelB').value);
-            if (idA === idB) { alert('Выберите два разных IFC.'); return; }
+            if (idA === idB) { notifyError('Выберите два разных IFC.'); return; }
             const modA = loadedModels.get(idA);
             const modB = loadedModels.get(idB);
             const mapA = new Map();
@@ -11793,7 +12495,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('btnPropsExportExcel')?.addEventListener('click', () => {
             const items = getPropsExportItems();
             if (!items.length) {
-                alert('Нет IFC-элементов для экспорта характеристик.');
+                notifyError('Нет IFC-элементов для экспорта характеристик.');
                 return;
             }
             if (!selectedItems.length && items.length > 1500) {
@@ -11805,7 +12507,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     exportPropertiesExcel(items);
                 } catch (err) {
                     console.error(err);
-                    alert('Не удалось выгрузить Excel: ' + (err?.message || err));
+                    notifyError('Не удалось выгрузить Excel: ' + (err?.message || err));
                 } finally {
                     hideLoader();
                 }
@@ -11822,7 +12524,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             try {
                 const rows = await parsePropsImportFile(file);
                 if (!rows.length) {
-                    alert('В файле нет строк свойств.');
+                    notifyError('В файле нет строк свойств.');
                     return;
                 }
                 if (!confirm(`Импортировать характеристики из «${file.name}» (${rows.length} строк)?\nИзменения попадут в IFC; затем «Экспорт IFC» для сохранения файла.`)) {
@@ -11835,14 +12537,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     const mod = loadedModels.get(first.modelID);
                     if (mod && !mod.isFBX) showProps(first.modelID, first.expressID, selectedItems.length);
                 }
-                alert(
+                notifyOk(
                     `Импорт завершён.\nЗаписано: ${result.applied}\nПропущено: ${result.skipped}\nНе найдено элементов: ${result.missing}` +
                     (result.errors.length ? `\nОшибки: ${result.errors.slice(0, 5).join('; ')}` : '') +
                     `\n\nНажмите «Экспорт IFC», чтобы скачать изменённые файлы.`
                 );
             } catch (err) {
                 console.error(err);
-                alert('Ошибка импорта: ' + (err?.message || err));
+                notifyError('Ошибка импорта: ' + (err?.message || err));
             } finally {
                 hideLoader();
             }
@@ -11851,7 +12553,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         $('btnSchedule').addEventListener('click', () => {
             const items = selectedItems.length ? selectedItems : [];
             if (!items.length) {
-                alert('Выделите элементы для ведомости.');
+                notifyError('Выделите элементы для ведомости.');
                 return;
             }
             const rows = [['model', 'expressID', 'class', 'name', 'file']];
@@ -12002,7 +12704,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             try {
                 await navigator.clipboard.writeText(url);
                 if (!silent) {
-                    alert(
+                    notifyOk(
                         `Пакет экспертизы скопирован.\n` +
                         `BCF: ${(state.bcf || []).length} · фильтр классов: ${state.classFilter ? state.classFilter.length : 'все'} · color-by: ${state.colorBy ? 'да' : 'нет'}.`
                     );
@@ -12155,7 +12857,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const sel = $('alignProfileSelect');
             if (!sel) return;
             if (!list.length) {
-                alert('Нет трасс LandXML Alignment. Загрузите LandXML с Alignments.');
+                notifyError('Нет трасс LandXML Alignment. Загрузите LandXML с Alignments.');
                 return;
             }
             sel.innerHTML = list.map((it, i) =>
@@ -12220,7 +12922,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const pset = $('timeline4dPset')?.value || '';
             const prop = ($('timeline4dProp')?.value || '').trim();
             if (!prop) {
-                alert('Укажите имя параметра (StartDate, Phase…)');
+                notifyError('Укажите имя параметра (StartDate, Phase…)');
                 return;
             }
             const bucket = new Map(); // key -> {label, items:[]}
@@ -12316,7 +13018,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         async function ensureQrLib() {
             if (globalThis.QRCode?.toCanvas) return;
-            await loadScriptOnce('https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js');
+            await loadScriptOnce('./assets/vendor/qrcode/qrcode.min.js');
             if (!globalThis.QRCode?.toCanvas) throw new Error('QRCode lib недоступна');
         }
 
@@ -12348,7 +13050,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 $('qrViewModal').classList.add('show');
                 trackUsage('qr_view_open');
             } catch (err) {
-                alert('Не удалось создать QR: ' + (err.message || err));
+                notifyError('Не удалось создать QR: ' + (err.message || err));
             }
         }
 
@@ -12361,7 +13063,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const url = lastQrPack?.url || (await copyExpertisePackLink(true)).url;
             try {
                 await navigator.clipboard.writeText(url);
-                alert('Ссылка скопирована.');
+                notifyOk('Ссылка скопирована.');
             } catch (_) {
                 prompt('Ссылка:', url);
             }
@@ -12578,7 +13280,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         async function ensureJSZip() {
             if (globalThis.JSZip) return globalThis.JSZip;
-            await loadScriptOnce('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+            await loadScriptOnce('./assets/vendor/jszip/jszip.min.js');
             if (!globalThis.JSZip) throw new Error('JSZip не загрузился');
             return globalThis.JSZip;
         }
@@ -12805,7 +13507,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         async function exportBcfZip() {
             if (!bcfTopics.length) {
-                alert('Нет заметок для экспорта.');
+                notifyError('Нет заметок для экспорта.');
                 return;
             }
             const JSZip = await ensureJSZip();
@@ -12889,7 +13591,7 @@ ${componentXml || '    '}
             const title = $('bcfTitle').value.trim() || 'Замечание';
             const comment = $('bcfComment').value.trim() || title;
             if (!bcfPickPoint) {
-                alert('Сначала поставьте точку на модели.');
+                notifyError('Сначала поставьте точку на модели.');
                 return;
             }
             const user = globalThis.BimLvaAuth?.getUser?.();
@@ -12931,13 +13633,13 @@ ${componentXml || '    '}
                             `Облако: код ${bcfCloudNotebook.share_code} · заметок: ${bcfTopics.length}`
                         );
                     })
-                    .catch(err => alert('Не удалось сохранить в облако: ' + (err.message || err)));
+                    .catch(err => notifyError('Не удалось сохранить в облако: ' + (err.message || err)));
                 return;
             }
             pushLocal();
         });
         $('bcfExportBtn').addEventListener('click', () => {
-            exportBcfZip().catch(err => alert('Ошибка экспорта BCF: ' + err.message));
+            exportBcfZip().catch(err => notifyError('Ошибка экспорта BCF: ' + err.message));
         });
         $('bcfImportBtn')?.addEventListener('click', () => {
             $('bcfImportFile')?.click();
@@ -12949,14 +13651,14 @@ ${componentXml || '    '}
             try {
                 const { added, skipped } = await importBcfZip(file);
                 if (!added && !skipped) {
-                    alert('В файле не найдено тем BCF.');
+                    notifyError('В файле не найдено тем BCF.');
                 } else if (!added) {
-                    alert(`Новых заметок нет (пропущено дублей/ошибок: ${skipped}).`);
+                    notifyError(`Новых заметок нет (пропущено дублей/ошибок: ${skipped}).`);
                 } else {
-                    alert(`Импортировано заметок: ${added}${skipped ? ` · пропущено: ${skipped}` : ''}.`);
+                    notifyOk(`Импортировано заметок: ${added}${skipped ? ` · пропущено: ${skipped}` : ''}.`);
                 }
             } catch (err) {
-                alert('Ошибка импорта BCF: ' + (err.message || err));
+                notifyError('Ошибка импорта BCF: ' + (err.message || err));
             } finally {
                 if (input) input.value = '';
             }
@@ -12967,12 +13669,12 @@ ${componentXml || '    '}
         $('bcfJoinBtn')?.addEventListener('click', async () => {
             const code = $('bcfShareCodeIn')?.value?.trim();
             if (!code) {
-                alert('Введите код обмена от автора заметок.');
+                notifyError('Введите код обмена от автора заметок.');
                 return;
             }
             const sync = globalThis.BimLvaBcfSync;
             if (!sync?.authReady()) {
-                alert('Сначала войдите в аккаунт (режим Supabase в auth-config.js).');
+                notifyError('Сначала войдите в аккаунт (режим Supabase в auth-config.js).');
                 return;
             }
             try {
@@ -12981,9 +13683,9 @@ ${componentXml || '    '}
                 sync.rememberNotebook(modelKey, nbId);
                 bcfCloudNotebook = await sync.fetchNotebook(nbId);
                 await refreshBcfFromCloud();
-                alert('Подключено. Заметки этого блокнота загружены.');
+                notifyOk('Подключено. Заметки этого блокнота загружены.');
             } catch (err) {
-                alert(err.message || String(err));
+                notifyError(err.message || String(err));
             }
         });
         globalThis.BimLvaAuth?.onChange?.(() => {
@@ -13004,7 +13706,7 @@ ${componentXml || '    '}
                 if (t?._cloudRowId && sync?.authReady()) {
                     sync.deleteTopic(t._cloudRowId)
                         .then(done)
-                        .catch(err => alert('Не удалось удалить в облаке: ' + (err.message || err)));
+                        .catch(err => notifyError('Не удалось удалить в облаке: ' + (err.message || err)));
                 } else done();
                 return;
             }
@@ -13094,7 +13796,7 @@ ${componentXml || '    '}
         $('openPropSearch').addEventListener('click', () => {
             const hasIfc = [...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
             if (!hasIfc) {
-                alert('Сначала загрузите хотя бы один IFC-файл.');
+                notifyError('Сначала загрузите хотя бы один IFC-файл.');
                 return;
             }
             $('propSearchModal').classList.add('show');
@@ -13115,11 +13817,11 @@ ${componentXml || '    '}
             const valueText = $('propSearchValue').value;
 
             if (!propertyName) {
-                alert('Укажите имя параметра (или его часть) для поиска.');
+                notifyError('Укажите имя параметра (или его часть) для поиска.');
                 return;
             }
             if ((valueMode === 'contains' || valueMode === 'exact') && !valueText.trim()) {
-                alert('Для выбранного режима значения укажите текст значения.');
+                notifyError('Для выбранного режима значения укажите текст значения.');
                 return;
             }
 
@@ -13132,13 +13834,13 @@ ${componentXml || '    '}
 
             closePropSearchModal();
             if (!found.length) {
-                alert('Совпадений не найдено. Проверьте имя Pset/параметра или режим значения.');
+                notifyError('Совпадений не найдено. Проверьте имя Pset/параметра или режим значения.');
                 return;
             }
             treeSelectionAnchor = null;
             selectMultiple(uniqueSelectionItems(found));
             trackUsage('ifc_prop_search', { matched: found.length, mode: valueMode });
-            alert(`Найдено и выделено элементов: ${found.length}. Откройте «Свойства» → «Массовое изменение IFC», чтобы переименовать параметр(ы)/Pset или заменить значения у всех найденных элементов сразу.`);
+            notify(`Найдено и выделено элементов: ${found.length}. Откройте «Свойства» → «Массовое изменение IFC», чтобы переименовать параметр(ы)/Pset или заменить значения у всех найденных элементов сразу.`);
         });
 
         function getSelectedIfcObjects() {
@@ -13162,7 +13864,7 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const modData = loadedModels.get(modelID);
             if (!modData || modData.isFBX || !modData.ifcIndex) {
-                alert('Пользовательские ветки можно создавать только внутри IFC-файла.');
+                notifyError('Пользовательские ветки можно создавать только внутри IFC-файла.');
                 return;
             }
             const label = row.querySelector('.tlabel');
@@ -13198,12 +13900,12 @@ ${componentXml || '    '}
             const propertyType = $('customBranchPropType').value;
 
             if (!branchName || !psetName || !propertyName) {
-                alert('Заполните название ветки, Pset и первого параметра.');
+                notifyError('Заполните название ветки, Pset и первого параметра.');
                 return;
             }
             if (!pendingBranchParent) {
                 closeBranchModal();
-                alert('Не удалось определить родительский раздел. Откройте форму повторно через ПКМ.');
+                notifyError('Не удалось определить родительский раздел. Откройте форму повторно через ПКМ.');
                 return;
             }
 
@@ -13248,7 +13950,7 @@ ${componentXml || '    '}
             pendingBranchParent = null;
             selectMultiple([{ modelID, expressID: groupID }]);
             trackUsage('ifc_create_branch', { elements: memberIDs.length });
-            alert(`Ветка «${branchName}» создана. Перемещено элементов: ${memberIDs.length}.`);
+            notifyOk(`Ветка «${branchName}» создана. Перемещено элементов: ${memberIDs.length}.`);
         });
 
         function closeNormalizeModal() {
@@ -13278,7 +13980,7 @@ ${componentXml || '    '}
                 normalizePlacements: $('normalizePlacements').checked
             };
             if (!options.projectName || !options.siteName || !options.buildingName || !options.storeyName) {
-                alert('Все четыре названия пространственной структуры обязательны.');
+                notifyError('Все четыре названия пространственной структуры обязательны.');
                 return;
             }
             const models = [...loadedModels.values()].filter(model => !model.isFBX && model.ifcIndex);
@@ -13305,7 +14007,7 @@ ${componentXml || '    '}
             let message = `Обработано IFC-файлов: ${summaries.length}. Элементов перенесено на этаж: ${changed}. Преобразовано в BuildingElementProxy: ${converted}.`;
             if (errors.length) message += `\n\nОшибки:\n${errors.join('\n')}`;
             message += '\n\nНажмите «Экспорт IFC», затем повторно откройте файл для отображения новой структуры.';
-            alert(message);
+            notifyOk(message);
         });
 
         $('treeSelectAll').addEventListener('click', () => {
@@ -13648,7 +14350,7 @@ ${componentXml || '    '}
             const predefinedType = propsBox.querySelector('#bulkPredefinedType').value.trim();
             if (!items.length) return;
             if (predefinedType && !/^\.[A-Z0-9_]+\.$/i.test(predefinedType)) {
-                alert('PredefinedType должен быть IFC-перечислением, например .NOTDEFINED.');
+                notifyError('PredefinedType должен быть IFC-перечислением, например .NOTDEFINED.');
                 return;
             }
             if (!confirm(`Изменить IFC-класс у ${items.length} элементов на ${className}?`)) return;
@@ -13687,7 +14389,7 @@ ${componentXml || '    '}
                 const search = modData.searchCache.get(item.expressID) || '';
                 modData.searchCache.set(item.expressID, `${search} ${className}`.toLowerCase());
             });
-            alert(`Класс изменён: ${changed}.${skipped ? ` Пропущено несовместимых сущностей: ${skipped}.` : ''}`);
+            notifyOk(`Класс изменён: ${changed}.${skipped ? ` Пропущено несовместимых сущностей: ${skipped}.` : ''}`);
         }
 
         function applyBulkPsetRename() {
@@ -13695,11 +14397,11 @@ ${componentXml || '    '}
             const oldName = propsBox.querySelector('#bulkPsetOldName').value.trim();
             const newName = propsBox.querySelector('#bulkPsetNewName').value.trim();
             if (!oldName || !newName) {
-                alert('Укажите текущее и новое имя Pset.');
+                notifyError('Укажите текущее и новое имя Pset.');
                 return;
             }
             if (oldName === newName) {
-                alert('Новое имя совпадает с текущим.');
+                notifyError('Новое имя совпадает с текущим.');
                 return;
             }
             if (!confirm(`Переименовать Pset «${oldName}» в «${newName}» у выбранных элементов?`)) return;
@@ -13727,14 +14429,14 @@ ${componentXml || '    '}
             batches.forEach(batch => batch.commit());
             const renamedPsets = [...renamedByModel.values()].reduce((sum, ids) => sum + ids.size, 0);
             if (!renamedPsets) {
-                alert(`Pset «${oldName}» у выбранных элементов не найден.`);
+                notifyError(`Pset «${oldName}» у выбранных элементов не найден.`);
                 return;
             }
             const first = selectedItems[0];
             if (first && !loadedModels.get(first.modelID).isFBX) {
                 showProps(first.modelID, first.expressID, selectedItems.length);
             }
-            alert(`Переименовано Pset: ${renamedPsets}. Связанных выбранных элементов: ${matchingElements}.`);
+            notifyOk(`Переименовано Pset: ${renamedPsets}. Связанных выбранных элементов: ${matchingElements}.`);
         }
 
         function applyBulkPropertyRename() {
@@ -13743,11 +14445,11 @@ ${componentXml || '    '}
             const oldName = propsBox.querySelector('#bulkPropertyOldName').value.trim();
             const newName = propsBox.querySelector('#bulkPropertyNewName').value.trim();
             if (!psetName || !oldName || !newName) {
-                alert('Укажите имя Pset, текущее и новое имя параметра.');
+                notifyError('Укажите имя Pset, текущее и новое имя параметра.');
                 return;
             }
             if (oldName === newName) {
-                alert('Новое имя параметра совпадает с текущим.');
+                notifyError('Новое имя параметра совпадает с текущим.');
                 return;
             }
             if (!confirm(`Переименовать параметр «${oldName}» в «${newName}» в наборе «${psetName}»?`)) return;
@@ -13776,14 +14478,14 @@ ${componentXml || '    '}
             batches.forEach(batch => batch.commit());
             const renamedProperties = [...renamedByModel.values()].reduce((sum, ids) => sum + ids.size, 0);
             if (!renamedProperties) {
-                alert(`Параметр «${oldName}» в Pset «${psetName}» у выбранных элементов не найден.`);
+                notifyError(`Параметр «${oldName}» в Pset «${psetName}» у выбранных элементов не найден.`);
                 return;
             }
             const first = selectedItems[0];
             if (first && !loadedModels.get(first.modelID).isFBX) {
                 showProps(first.modelID, first.expressID, selectedItems.length);
             }
-            alert(`Переименовано параметров: ${renamedProperties}. Связанных выбранных элементов: ${matchingElements}.`);
+            notifyOk(`Переименовано параметров: ${renamedProperties}. Связанных выбранных элементов: ${matchingElements}.`);
         }
 
         function replaceBulkText(current, find, replacement, mode) {
@@ -13825,15 +14527,15 @@ ${componentXml || '    '}
             const replaceValues = propsBox.querySelector('#bulkReplaceValues').checked;
 
             if (!replacePsetNames && !replacePropertyNames && !replaceValues) {
-                alert('Выберите хотя бы одну область замены.');
+                notifyError('Выберите хотя бы одну область замены.');
                 return;
             }
             if (mode !== 'all' && !find) {
-                alert('Введите искомый текст или выберите режим «Все выбранные поля целиком».');
+                notifyError('Введите искомый текст или выберите режим «Все выбранные поля целиком».');
                 return;
             }
             if ((replacePsetNames || replacePropertyNames) && mode === 'all' && !replacement.trim()) {
-                alert('Имена Pset и параметров не могут быть пустыми.');
+                notifyError('Имена Pset и параметров не могут быть пустыми.');
                 return;
             }
 
@@ -13910,14 +14612,14 @@ ${componentXml || '    '}
 
             const totalChanged = changedPsets + changedNames + changedValues;
             if (!totalChanged) {
-                alert(`Совпадений не найдено.${skipped ? ` Пропущено несовместимых значений: ${skipped}.` : ''}`);
+                notifyError(`Совпадений не найдено.${skipped ? ` Пропущено несовместимых значений: ${skipped}.` : ''}`);
                 return;
             }
             const first = selectedItems[0];
             if (first && !loadedModels.get(first.modelID).isFBX) {
                 showProps(first.modelID, first.expressID, selectedItems.length);
             }
-            alert(`Изменено: Pset — ${changedPsets}, имён параметров — ${changedNames}, значений — ${changedValues}.${skipped ? ` Пропущено: ${skipped}.` : ''}`);
+            notifyOk(`Изменено: Pset — ${changedPsets}, имён параметров — ${changedNames}, значений — ${changedValues}.${skipped ? ` Пропущено: ${skipped}.` : ''}`);
         }
 
         function saveAllPropertyEdits(button) {
@@ -13925,7 +14627,7 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const modData = loadedModels.get(modelID);
             if (!modData || !modData.ifcIndex) {
-                alert('Нет IFC-индекса для записи параметров.');
+                notifyError('Нет IFC-индекса для записи параметров.');
                 return;
             }
             const psetFilter = button.dataset.pset ? String(button.dataset.pset) : null;
@@ -13989,7 +14691,7 @@ ${componentXml || '    '}
             if (first) showProps(first.modelID, first.expressID, selectedItems.length);
             const msg = `Сохранено: имён Pset ${renamedPsets}, параметров ${renamedProps}, значений ${savedValues}` +
                 (renamedEntity ? `, имя элемента ${renamedEntity}` : '') + '.';
-            if (errors.length) alert(msg + '\n\nЗамечания:\n' + errors.slice(0, 6).join('\n'));
+            if (errors.length) notifyError(msg + '\n\nЗамечания:\n' + errors.slice(0, 6).join('\n'));
             else console.info('[BIM.LVA]', msg);
         }
 
@@ -14001,12 +14703,12 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-pset-name="${psetId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
-                alert('Имя Pset не может быть пустым.');
+                notifyError('Имя Pset не может быть пустым.');
                 return;
             }
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(psetId, 2, `'${encodeStepString(newName)}'`)) {
-                alert('Не удалось найти Pset в исходном IFC-файле.');
+                notifyError('Не удалось найти Pset в исходном IFC-файле.');
                 return;
             }
             batch.commit();
@@ -14022,12 +14724,12 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-entity-name="${expressID}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
-                alert('Имя IFC-объекта не может быть пустым.');
+                notifyError('Имя IFC-объекта не может быть пустым.');
                 return;
             }
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(expressID, 2, `'${encodeStepString(newName)}'`)) {
-                alert('Не удалось найти IFC-объект в исходном файле.');
+                notifyError('Не удалось найти IFC-объект в исходном файле.');
                 return;
             }
             batch.commit();
@@ -14046,12 +14748,12 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-property-name="${propId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
-                alert('Имя параметра не может быть пустым.');
+                notifyError('Имя параметра не может быть пустым.');
                 return;
             }
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(propId, 0, `'${encodeStepString(newName)}'`)) {
-                alert('Не удалось найти параметр в исходном IFC-файле.');
+                notifyError('Не удалось найти параметр в исходном IFC-файле.');
                 return;
             }
             batch.commit();
@@ -14067,7 +14769,7 @@ ${componentXml || '    '}
             const input = propsBox.querySelector(`[data-property-value="${propId}"]`);
             const property = modData && getEntityParts(modData, propId);
             if (!property || property.className !== 'IFCPROPERTYSINGLEVALUE' || !input) {
-                alert('Это значение параметра нельзя изменить в текущем формате.');
+                notifyError('Это значение параметра нельзя изменить в текущем формате.');
                 return;
             }
             const currentValue = unwrapIfcValue(property.args[2]);
@@ -14086,7 +14788,7 @@ ${componentXml || '    '}
             const newType = propsBox.querySelector('#bulkPropertyType').value;
             const createMissing = propsBox.querySelector('#bulkCreateMissing').checked;
             if (!psetName || !propertyName) {
-                alert('Укажите имя Pset и имя параметра.');
+                notifyError('Укажите имя Pset и имя параметра.');
                 return;
             }
             if (!confirm(`Записать «${propertyName}» в ${items.length} IFC-элементов?`)) return;
@@ -14152,7 +14854,7 @@ ${componentXml || '    '}
                 });
                 batch.commit();
             });
-            alert(`Параметр записан: ${changed}.${skipped ? ` Пропущено без параметра: ${skipped}.` : ''}`);
+            notifyOk(`Параметр записан: ${changed}.${skipped ? ` Пропущено без параметра: ${skipped}.` : ''}`);
         }
 
         propsBox.addEventListener('click', e => {
@@ -14210,7 +14912,7 @@ ${componentXml || '    '}
                 appearanceDraftTexture = null;
                 appearanceDraftTextureName = '';
                 applyAppearanceToSelection({ ...readAppearanceFromPanel(), texture: null, clearTexture: true });
-                alert('Текстура снята с выбранных элементов.');
+                notifyOk('Текстура снята с выбранных элементов.');
                 const first = selectedItems[0];
                 if (first) {
                     const mod0 = loadedModels.get(first.modelID);
@@ -14365,7 +15067,7 @@ ${componentXml || '    '}
                 modData => !modData.isFBX && modData.edited && modData.ifcIndex
             );
             if (!editedModels.length) {
-                alert('Нет изменённых IFC-файлов для сохранения.');
+                notifyError('Нет изменённых IFC-файлов для сохранения.');
                 return;
             }
             trackUsage('export_ifc', { models: editedModels.length });
@@ -14468,7 +15170,7 @@ ${componentXml || '    '}
         $('btnMergeIFC').addEventListener('click', async () => {
             const models = [...loadedModels.values()].filter(m => !m.isFBX && m.ifcIndex);
             if (models.length < 2) {
-                alert('Для объединения нужно как минимум два загруженных IFC-файла.');
+                notifyError('Для объединения нужно как минимум два загруженных IFC-файла.');
                 return;
             }
             const names = models.map(m => ` · ${m.filename}`).join('\n');
@@ -14488,7 +15190,7 @@ ${componentXml || '    '}
                 mergedText = buildMergedIfcText(models, `Merged_${models.length}_files.ifc`);
             } catch (error) {
                 hideLoader();
-                alert('Ошибка объединения: ' + error.message);
+                notifyError('Ошибка объединения: ' + error.message);
                 return;
             }
 
@@ -14500,7 +15202,7 @@ ${componentXml || '    '}
             const newModel = [...loadedModels.values()].find(m => !m.isFBX && m.filename === mergedFile.name);
             if (newModel) newModel.edited = true;
             trackUsage('merge_ifc', { models: models.length });
-            alert(`Готово: ${models.length} файлов объединены в один IFC (загружен в просмотрщик и провалидирован движком). Нажмите «Экспорт IFC», чтобы скачать результат.`);
+            notifyOk(`Готово: ${models.length} файлов объединены в один IFC (загружен в просмотрщик и провалидирован движком). Нажмите «Экспорт IFC», чтобы скачать результат.`);
         });
 
         // --- Camera Tools (зум к курсору / фиксация на выделении) ---
@@ -14622,7 +15324,7 @@ ${componentXml || '    '}
             if (canRaycast && allMeshes.length) {
                 lastZoomRaycastAt = now;
                 const hits = zoomRaycaster.intersectObjects(
-                    allMeshes.filter(m => m.visible && !m.userData.isGeoRaster && !m.userData.isOverlay),
+                    collectRaycastTargets(_zoomRayTargets, isPickableGeometry),
                     false
                 );
                 if (hits.length) {
@@ -15010,7 +15712,7 @@ ${componentXml || '    '}
         });
 
         // --- Яндекс.Диск (публичная папка как «сервер» моделей) ---
-        const YA_SUPPORTED_EXT = /\.(ifc|fbx|dxf|xml|glb|obj|stl|tif|tiff|gtiff|ecw|jpg|jpeg|png|jgw|pgw|tfw|wld|eww)$/i;
+        const YA_SUPPORTED_EXT = /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|tif|tiff|gtiff|ecw|jpg|jpeg|png|jgw|pgw|tfw|wld|eww)$/i;
         const YA_RASTER_EXT = /\.(tif|tiff|gtiff|ecw|jpg|jpeg|png)$/i;
         const YA_WORLD_EXT = /\.(jgw|pgw|tfw|wld|eww)$/i;
         const YA_STORAGE_KEY = 'bimlva_yandex_public_link';
@@ -15566,7 +16268,7 @@ ${componentXml || '    '}
         async function yaBrowsePublicLink() {
             const link = $('yaLink').value.trim();
             if (!link) {
-                alert('Вставьте публичную ссылку Яндекс.Диска (Поделиться → Скопировать ссылку).');
+                notifyError('Вставьте публичную ссылку Яндекс.Диска (Поделиться → Скопировать ссылку).');
                 return;
             }
             yaPublicKey = link;
@@ -15588,7 +16290,7 @@ ${componentXml || '    '}
             } catch (error) {
                 console.error(error);
                 trackUsage('yandex_browse_failed', { error: String(error.message || error).slice(0, 60) });
-                alert(
+                notifyError(
                     'Не удалось открыть ссылку Яндекс.Диска.\n\n' +
                     'Проверьте:\n' +
                     '1) ссылка публичная (Поделиться → доступ по ссылке);\n' +
@@ -15692,13 +16394,13 @@ ${componentXml || '    '}
             }
             hideLoader();
             if (errors.length) {
-                alert(
+                notifyError(
                     'Часть файлов не загрузилась:\n\n' +
                     errors.slice(0, 8).join('\n') +
                     '\n\nОбновите страницу Ctrl+F5 и попробуйте снова (по одному файлу, если пачка большая).'
                 );
             } else {
-                alert(`Загружено из облака: ${checks.length}`);
+                notifyOk(`Загружено из облака: ${checks.length}`);
             }
         }
 
@@ -15739,7 +16441,7 @@ ${componentXml || '    '}
                 hideLoader();
             } catch (error) {
                 hideLoader();
-                alert('Ошибка загрузки из облака: ' + (error.message || error));
+                notifyError('Ошибка загрузки из облака: ' + (error.message || error));
             }
         });
         $('yaLoadSelected').addEventListener('click', yaLoadCheckedFiles);
@@ -15760,7 +16462,7 @@ ${componentXml || '    '}
         $('applyGeoRaster').addEventListener('click', async () => {
             const files = [...$('geoRasterFile').files];
             if (!files.length) {
-                alert('Выберите ECW, GeoTIFF или JPEG/PNG вместе с world-файлом (.jgw / .pgw / .tfw / .eww).');
+                notifyError('Выберите ECW, GeoTIFF или JPEG/PNG вместе с world-файлом (.jgw / .pgw / .tfw / .eww).');
                 return;
             }
             try {
@@ -15775,11 +16477,11 @@ ${componentXml || '    '}
                 $('geoRasterFile').value = '';
                 if (allMeshes.length || geoRasterLayers.length) fitView();
                 trackUsage('model_load', { count: 1, source: 'local', types: 'raster' });
-                alert(`Геопривязанный растр добавлен. Всего слоёв: ${geoRasterLayers.length}.`);
+                notifyOk(`Геопривязанный растр добавлен. Всего слоёв: ${geoRasterLayers.length}.`);
             } catch (error) {
                 hideLoader();
                 trackUsage('load_georaster_failed', { error: String(error.message || error).slice(0, 60) });
-                alert('Ошибка георастра: ' + error.message);
+                notifyError('Ошибка георастра: ' + error.message);
             }
         });
 
@@ -15793,14 +16495,16 @@ ${componentXml || '    '}
             stage.classList.remove('dragover'); 
         }));
         stage.addEventListener('drop', e => {
-            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx|dxf|xml|glb|obj|stl)$/i.test(f.name));
+            // rvt/rfa/rte пропускаем дальше намеренно: пусть диспетчер объяснит,
+            // почему Revit не открыть, вместо молчаливого отсева.
+            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|rvt|rfa|rte)$/i.test(f.name));
             if (files.length) {
                 loadSourceHint = 'drag_drop';
                 handleFiles(files).finally(() => { loadSourceHint = 'local'; });
-            } else alert(
+            } else notifyError(
                 'Поддерживаются:\n' +
                 '• IFC (схемы IFC2X3, IFC4, IFC4X3)\n' +
-                '• ASCII DXF, LandXML/Civil XML (.xml)\n' +
+                '• DWG (R13…2018), ASCII DXF, LandXML/Civil XML (.xml)\n' +
                 '• FBX, GLB, OBJ, STL'
             );
         });
@@ -15917,7 +16621,7 @@ ${componentXml || '    '}
             const fileRoot = treeContextRow && treeContextRow.closest('.file-root');
             const fileRow = fileRoot && fileRoot.firstElementChild;
             if (!fileRow || fileRow.dataset.mid === undefined) {
-                alert('Не удалось определить загруженный файл для этой ветки.');
+                notifyError('Не удалось определить загруженный файл для этой ветки.');
                 return;
             }
             const rawModelID = fileRow.dataset.mid;
@@ -15934,7 +16638,7 @@ ${componentXml || '    '}
 
         $('ctxRenameBranch').addEventListener('click', () => {
             if (!treeContextRow || !treeContextRow.dataset.eid) {
-                alert('Эта ветка является служебной группировкой по IFC-классу. Для её изменения измените класс входящих в неё элементов.');
+                notifyError('Эта ветка является служебной группировкой по IFC-классу. Для её изменения измените класс входящих в неё элементов.');
                 return;
             }
             const rawModelID = treeContextRow.dataset.mid;
@@ -15942,7 +16646,7 @@ ${componentXml || '    '}
             const expressID = parseInt(treeContextRow.dataset.eid, 10);
             const modData = loadedModels.get(modelID);
             if (!modData || modData.isFBX || !modData.ifcIndex) {
-                alert('Переименование веток доступно только для IFC.');
+                notifyError('Переименование веток доступно только для IFC.');
                 return;
             }
             const label = treeContextRow.querySelector('.tlabel');
@@ -15952,7 +16656,7 @@ ${componentXml || '    '}
 
             const batch = createIfcEditBatch(modData);
             if (!batch.setAttr(expressID, 2, `'${encodeStepString(newName.trim())}'`)) {
-                alert('Не удалось найти эту ветку в исходном IFC-файле.');
+                notifyError('Не удалось найти эту ветку в исходном IFC-файле.');
                 return;
             }
             batch.commit();
@@ -16442,7 +17146,7 @@ ${componentXml || '    '}
             readTourSettingsFromUi();
             const box = getSceneContentBox();
             if (box.isEmpty()) {
-                alert('Сначала загрузите модель.');
+                notifyError('Сначала загрузите модель.');
                 return;
             }
             const size = box.getSize(new THREE.Vector3());
@@ -16556,7 +17260,7 @@ ${componentXml || '    '}
             _driveRayO.set(x, y, 80000);
             _driveRay.set(_driveRayO, _driveDown);
             const hits = _driveRay.intersectObjects(
-                allMeshes.filter(m => m.visible && !m.userData?.isGeoRaster && !m.userData?.isOverlay),
+                collectRaycastTargets(_driveRayTargets, isPickableGeometry),
                 false
             );
             if (hits.length) return hits[0].point.z;
@@ -16702,7 +17406,7 @@ ${componentXml || '    '}
 
         async function startDriveMode() {
             if (!loadedModels.size) {
-                alert('Сначала загрузите модель.');
+                notifyError('Сначала загрузите модель.');
                 return;
             }
             readTourSettingsFromUi();
@@ -16884,7 +17588,7 @@ ${componentXml || '    '}
                 return;
             }
             if (tourWaypoints.length < 2) {
-                alert('Нужны минимум 2 точки маршрута (Авто-маршрут или клики).');
+                notifyError('Нужны минимум 2 точки маршрута (Авто-маршрут или клики).');
                 return;
             }
             tourCurve = new THREE.CatmullRomCurve3(
@@ -17247,15 +17951,19 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.07.29h',
-            buildId: 'e552c86',
-            released: '2026-07-29',
+            version: '2026.08.05',
+            buildId: 'pending',
+            released: '2026-08-05',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.05: чтение DWG (R13…2018) и раскрытие блоков DXF/DWG; единицы чертежа из $INSUNITS.',
+                '2026.08.05: коллизии через пространственный индекс, пикинг через BVH — на больших моделях кратно быстрее.',
+                '2026.08.05: библиотеки загружаются с самого сайта, офлайн-режим наконец работает.',
+                '2026.08.05: сообщения вместо блокирующих окон — текст можно скопировать, работа не прерывается.',
                 '2026.07.29h: свойства IFC — Excel экспорт/импорт в панели; в отчёте коллизий лист «Свойства».'
             ]
         };
@@ -17300,7 +18008,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=80').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=81').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
@@ -17312,7 +18020,7 @@ ${componentXml || '    '}
             const text = `${COMPOSER_ABOUT.product} ${composerVersionLabel()} (${COMPOSER_ABOUT.released})`;
             try {
                 await navigator.clipboard.writeText(text);
-                alert('Скопировано:\n' + text);
+                notifyOk('Скопировано:\n' + text);
             } catch (_) {
                 prompt('Скопируйте версию:', text);
             }
