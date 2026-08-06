@@ -35,6 +35,18 @@ function replaceOnce(source, from, to, what) {
     return source.replace(from, to);
 }
 
+/**
+ * То же по шаблону — для строк, которые меняются от сборки к сборке:
+ * привязка к точному значению ломала бы генератор при каждом обновлении.
+ */
+function replaceOnceRe(source, re, to, what) {
+    const matches = source.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g'));
+    if (!matches || matches.length !== 1) {
+        throw new Error(`${what}: ожидалось 1 совпадение, найдено ${matches?.length ?? 0}. Обновите tools/make-preview.mjs.`);
+    }
+    return source.replace(re, to);
+}
+
 const BADGE_CSS = `
         /* ---- Метка тестовой сборки ---- */
         .preview-badge {
@@ -62,15 +74,9 @@ const sha = gitShortSha();
 // 1. Service worker не регистрируем. Он встаёт в корневую область видимости —
 //    ту же, что у рабочего Composer, — и регистрация другого скрипта в той же
 //    области заменила бы рабочую. Офлайн на копии из-за этого не проверить.
-html = replaceOnce(
+html = replaceOnceRe(
     html,
-    `        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=81').catch(err => {
-                    console.warn('SW register failed', err);
-                });
-            });
-        }`,
+    /        if \('serviceWorker' in navigator\) \{\n            window\.addEventListener\('load', \(\) => \{\n                navigator\.serviceWorker\.register\('\.\/sw-composer\.js\?v=\d+'\)\.catch\(err => \{\n                    console\.warn\('SW register failed', err\);\n                \}\);\n            \}\);\n        \}/,
     `        // Тестовая копия service worker не регистрирует: его область видимости —
         // корень сайта, та же, что у рабочего Composer, и регистрация другого
         // скрипта в ней заменила бы рабочую. Офлайн проверяйте на основной версии.`,
@@ -85,9 +91,9 @@ html = replaceOnce(
     `            product: 'BIM.LVA Composer IFC — ТЕСТ',`,
     'название продукта'
 );
-html = replaceOnce(
+html = replaceOnceRe(
     html,
-    `            buildId: 'e552c86',`,
+    /            buildId: '[^']*',/,
     `            buildId: '${sha}-preview',`,
     'идентификатор сборки'
 );
