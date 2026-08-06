@@ -14,7 +14,10 @@ import path from 'node:path';
 import { startStaticServer } from './static-server.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PAGES = ['index.html', 'portfolio.html', 'cabinet.html', 'case_inventor.html', 'plugin_ksi.html'];
+const PAGES = [
+    'index.html', 'portfolio.html', 'cabinet.html',
+    'license-admin.html', 'case_inventor.html', 'plugin_ksi.html'
+];
 
 /** Явные признаки незаполненного шаблона. */
 const PLACEHOLDERS = /YOUR_LINK_HERE|PLACEHOLDER|XXXXXX|example\.com|lorem ipsum|TODO/i;

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>Выпуск лицензий · BIM.LVA</title>
+    <link href="./assets/vendor/fonts/site.css" rel="stylesheet">
+    <script src="./assets/vendor/supabase-js/supabase.js"></script>
+    <style>
+        :root {
+            --ink: #132033;
+            --ink-soft: #55606c;
+            --paper: #f3f6f9;
+            --line: #d2d9e2;
+            --steel: #1f6f8b;
+            --ok: #168c63;
+            --err: #d43c59;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--paper);
+            color: var(--ink);
+            font-family: 'Source Sans 3', system-ui, sans-serif;
+            line-height: 1.5;
+        }
+        .wrap { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+        header.bar {
+            background: #16283d;
+            color: #fff;
+            padding: .85rem 0;
+        }
+        header.bar .wrap { padding-top: 0; padding-bottom: 0; display: flex; align-items: center; gap: 1rem; }
+        header.bar a { color: #cfe0ee; text-decoration: none; font-size: .9rem; }
+        header.bar strong { font-family: 'Syne', sans-serif; letter-spacing: .02em; }
+        h1 { font-family: 'Syne', sans-serif; font-size: 1.6rem; margin: 1.2rem 0 .3rem; }
+        h2 { font-family: 'Syne', sans-serif; font-size: 1.1rem; margin: 1.6rem 0 .6rem; }
+        p.lead { color: var(--ink-soft); margin-bottom: .5rem; }
+
+        .card {
+            background: #fff;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: .8rem;
+        }
+        .gate { text-align: center; padding: 3rem 1rem; }
+
+        .req-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+        .req-head strong { font-size: 1rem; }
+        .muted { color: var(--ink-soft); font-size: .85rem; }
+        .pill {
+            font-size: .74rem; padding: 1px 8px; border-radius: 10px;
+            background: #e8eef4; color: #3a4a5c;
+        }
+        .pill.ok { background: rgba(22,140,99,.14); color: #106b4b; }
+        .pill.no { background: rgba(212,60,89,.14); color: #b02a45; }
+
+        .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .7rem; }
+        button, input, select {
+            font: inherit;
+            padding: .45rem .7rem;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #fff;
+        }
+        button { cursor: pointer; }
+        button.primary { background: var(--steel); border-color: var(--steel); color: #fff; }
+        button.danger { color: var(--err); border-color: rgba(212,60,89,.4); }
+        button:disabled { opacity: .55; cursor: default; }
+        input.days { width: 6.5rem; }
+        input.note { flex: 1; min-width: 12rem; }
+
+        .key {
+            display: block; width: 100%; margin-top: .6rem; padding: .5rem;
+            border: 1px solid var(--line); border-radius: 6px; background: #f7f9fb;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: .72rem; word-break: break-all; resize: vertical;
+        }
+        .msg {
+            margin: .6rem 0; padding: .55rem .7rem; border-radius: 6px;
+            border-left: 3px solid var(--steel); background: rgba(31,111,139,.08);
+            font-size: .9rem; white-space: pre-wrap;
+        }
+        .msg.err { border-left-color: var(--err); background: rgba(212,60,89,.08); }
+        table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+        th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
+        th { color: var(--ink-soft); font-weight: 600; font-size: .8rem; }
+    </style>
+</head>
+<body>
+    <header class="bar">
+        <div class="wrap">
+            <strong>BIM.LVA</strong>
+            <a href="cabinet.html">← Кабинет</a>
+            <a href="index.html">На главную</a>
+        </div>
+    </header>
+
+    <main class="wrap">
+        <div id="gate" class="gate card">
+            <h1>Выпуск лицензий</h1>
+            <p class="lead" id="gateText">Проверяем доступ…</p>
+        </div>
+
+        <div id="panel" hidden>
+            <h1>Выпуск лицензий</h1>
+            <p class="lead">
+                Ключи подписывает Edge&nbsp;Function на сервере — секрет подписи сюда не попадает.
+                Эта страница только показывает заявки и просит сервер выдать ключ.
+            </p>
+            <div class="msg" id="msg" hidden></div>
+
+            <h2>Заявки на рассмотрении</h2>
+            <div id="pending"><p class="muted">Загрузка…</p></div>
+
+            <h2>Выданные лицензии</h2>
+            <div class="card"><div id="issued"><p class="muted">Загрузка…</p></div></div>
+        </div>
+    </main>
+
+    <script src="./auth-config.js"></script>
+    <script src="./auth.js"></script>
+    <script src="./licenses.js"></script>
+    <script>
+        (function () {
+            'use strict';
+            const gate = document.getElementById('gate');
+            const gateText = document.getElementById('gateText');
+            const panel = document.getElementById('panel');
+            const msgBox = document.getElementById('msg');
+
+            const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+            ));
+            const asDate = (iso) => (iso ? new Date(iso).toLocaleDateString('ru-RU') : '—');
+
+            function say(text, isError) {
+                msgBox.textContent = text;
+                msgBox.classList.toggle('err', !!isError);
+                msgBox.hidden = !text;
+            }
+
+            async function renderPending() {
+                const box = document.getElementById('pending');
+                const lic = window.BimLvaLicenses;
+                try {
+                    const rows = await lic.listAllRequests('new');
+                    if (!rows.length) {
+                        box.innerHTML = '<div class="card"><p class="muted">Новых заявок нет.</p></div>';
+                        return;
+                    }
+                    box.innerHTML = rows.map((r) => `
+                        <div class="card" data-req="${esc(r.id)}">
+                            <div class="req-head">
+                                <strong>${esc(lic.productTitle(r.product))}</strong>
+                                <span class="pill">заявка от ${asDate(r.created_at)}</span>
+                            </div>
+                            <p class="muted">${esc(r.full_name || '—')} · ${esc(r.email)}${r.org ? ' · ' + esc(r.org) : ''}</p>
+                            ${r.comment ? `<p class="muted">«${esc(r.comment)}»</p>` : ''}
+                            <div class="row">
+                                <label class="muted">Срок, дней
+                                    <input class="days" type="number" min="1" max="3650" value="365">
+                                </label>
+                                <input class="note" type="text" placeholder="Комментарий к решению (необязательно)">
+                                <button type="button" class="primary" data-act="issue">Выдать ключ</button>
+                                <button type="button" class="danger" data-act="reject">Отклонить</button>
+                            </div>
+                        </div>`).join('');
+                } catch (err) {
+                    box.innerHTML = `<div class="card"><p class="muted">${esc(err.message || err)}</p></div>`;
+                }
+            }
+
+            async function renderIssued() {
+                const box = document.getElementById('issued');
+                const lic = window.BimLvaLicenses;
+                try {
+                    const rows = await lic.listAllLicenses();
+                    if (!rows.length) {
+                        box.innerHTML = '<p class="muted">Пока не выдано ни одной.</p>';
+                        return;
+                    }
+                    box.innerHTML = `
+                        <table>
+                            <tr><th>Продукт</th><th>Кому</th><th>Выдана</th><th>Действует до</th><th></th><th></th></tr>
+                            ${rows.map((l) => {
+                                const dead = l.revoked_at || new Date(l.expires_at) < new Date();
+                                const label = l.revoked_at ? 'Отозвана' : dead ? 'Истекла' : 'Действует';
+                                const cls = l.revoked_at || dead ? 'no' : 'ok';
+                                return `<tr>
+                                    <td>${esc(lic.productTitle(l.product))}</td>
+                                    <td>${esc(l.email)}${l.org ? '<br><span class="muted">' + esc(l.org) + '</span>' : ''}</td>
+                                    <td>${asDate(l.issued_at)}</td>
+                                    <td>${asDate(l.expires_at)}</td>
+                                    <td><span class="pill ${cls}">${label}</span></td>
+                                    <td>${l.revoked_at ? '' :
+                                        `<button type="button" class="danger" data-revoke="${esc(l.id)}">Отозвать</button>`}</td>
+                                </tr>`;
+                            }).join('')}
+                        </table>`;
+                } catch (err) {
+                    box.innerHTML = `<p class="muted">${esc(err.message || err)}</p>`;
+                }
+            }
+
+            document.getElementById('pending').addEventListener('click', async (ev) => {
+                const btn = ev.target.closest('[data-act]');
+                if (!btn) return;
+                const card = btn.closest('[data-req]');
+                const id = card.dataset.req;
+                const note = card.querySelector('.note').value;
+                const days = Number(card.querySelector('.days').value) || 365;
+                const lic = window.BimLvaLicenses;
+
+                card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+                say('');
+                try {
+                    if (btn.dataset.act === 'issue') {
+                        const res = await lic.issueLicense(id, days, note);
+                        say('Ключ выпущен. Он уже виден пользователю в кабинете.');
+                        // Показываем здесь же: удобно скопировать в письмо.
+                        card.insertAdjacentHTML('beforeend',
+                            `<textarea class="key" rows="3" readonly onclick="this.select()">${esc(res.licenseKey)}</textarea>`);
+                        card.querySelectorAll('.row').forEach((r) => r.remove());
+                    } else {
+                        await lic.rejectRequest(id, note);
+                        say('Заявка отклонена.');
+                        card.remove();
+                    }
+                    await renderIssued();
+                } catch (err) {
+                    say(err.message || String(err), true);
+                    card.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                }
+            });
+
+            document.getElementById('issued').addEventListener('click', async (ev) => {
+                const btn = ev.target.closest('[data-revoke]');
+                if (!btn) return;
+                const note = prompt('Причина отзыва (попадёт в журнал):', '');
+                if (note === null) return;
+                btn.disabled = true;
+                say('');
+                try {
+                    await window.BimLvaLicenses.revokeLicense(btn.dataset.revoke, note);
+                    say('Лицензия помечена отозванной. Учтите: офлайн-проверка об этом не узнает — '
+                        + 'выданный ключ доработает до конца срока.');
+                    await renderIssued();
+                } catch (err) {
+                    say(err.message || String(err), true);
+                    btn.disabled = false;
+                }
+            });
+
+            async function boot() {
+                const auth = window.BimLvaAuth;
+                if (!auth) { gateText.textContent = 'Модуль авторизации не загрузился.'; return; }
+                await auth.init?.();
+
+                if (!auth.getUser?.()) {
+                    gateText.innerHTML = 'Сначала войдите в аккаунт — <a href="cabinet.html">личный кабинет</a>.';
+                    return;
+                }
+                // Показываем панель только админу. Это удобство, а не защита:
+                // выпустить ключ без прав всё равно не выйдет — решает сервер.
+                const ok = await window.BimLvaLicenses.isAdmin();
+                if (!ok) {
+                    gateText.textContent = 'У этого аккаунта нет прав на выпуск лицензий.';
+                    return;
+                }
+                gate.hidden = true;
+                panel.hidden = false;
+                await Promise.all([renderPending(), renderIssued()]);
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 0));
+            } else {
+                setTimeout(boot, 0);
+            }
+        })();
+    </script>
+</body>
+</html>
