@@ -74,11 +74,29 @@ select id, email, created_at from auth.users order by created_at desc limit 10;
 
 ### Шаг 4. Сгенерировать ключи подписи
 
-**На своей машине**, не в облаке и не в чужой сессии:
+**На своей машине**, не в облаке и не в чужой сессии. Два способа, результат
+одинаковый — выбирайте тот, где меньше возни.
+
+**Если есть Node и репозиторий:**
 
 ```
 node tools/make-license-keys.mjs
 ```
+
+**Без установки чего-либо** — через консоль браузера. Откройте свой сайт
+(любую страницу по https, на `about:blank` не сработает — Web Crypto требует
+защищённый контекст), нажмите F12 → Console и вставьте:
+
+```js
+const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+const spki = await crypto.subtle.exportKey('spki', kp.publicKey);
+console.log('LICENSE_SIGNING_KEY=' + b64(await crypto.subtle.exportKey('pkcs8', kp.privateKey)));
+console.log('публичный raw32 = ' + b64(new Uint8Array(spki).slice(-32).buffer));
+```
+
+Ключи рождаются в вашем браузере и никуда не отправляются. После того как
+скопируете — закройте вкладку и очистите консоль.
 
 Выведет три вещи:
 
@@ -134,10 +152,16 @@ supabase functions deploy license-issue
 CLI сам заберёт оба файла из `supabase/functions/license-issue/` и прочитает
 `config.toml` рядом с ними.
 
-**Через дашборд** — если редактор функций у вас умеет несколько файлов:
-Edge Functions → Create function → имя `license-issue` → создать в нём два
-файла с теми же именами и содержимым → Deploy. Если редактор одностраничный,
-используйте CLI: склеивать файлы вручную не надо, разойдутся.
+**Через дашборд — без установки CLI.** В репозитории лежит
+`supabase/functions/license-issue/bundled.ts`: та же функция, но одним файлом —
+модуль формата вклеен в неё скриптом `npm run edge-bundle`, а не руками.
+
+Edge Functions → **Create function** → имя ровно `license-issue` → удалить
+содержимое редактора → вставить `bundled.ts` целиком → **Deploy**.
+
+Тест `npm run test-license` сверяет сборку с исходниками: ключ из неё должен
+получаться байт в байт таким же. Правьте всегда исходники и пересобирайте —
+`bundled.ts` затирается при каждой сборке.
 
 `verify_jwt` оставьте включённым. Функция всё равно проверяет вызывающего сама,
 но пусть неавторизованные запросы отсекаются раньше, до вашего кода.

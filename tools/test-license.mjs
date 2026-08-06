@@ -9,6 +9,7 @@
  * Запуск: npm run test-license
  */
 import { generateKeyPairSync } from 'node:crypto';
+import fs from 'node:fs/promises';
 import {
     importSigningKey,
     importVerifyKey,
@@ -100,6 +101,35 @@ for (const [name, value] of [
 // Пробелы по краям — обычное дело при копировании из письма.
 const padded = await verifyLicense(`  ${key}\n`, verKey);
 check('терпит пробелы вокруг скопированного ключа', padded.ok, padded.reason || '');
+
+// --- однофайловая сборка для дашборда ---
+// Её вклеивает механический скрипт; если он что-то потеряет или исказит,
+// ключи начнут расходиться с проверкой — а заметит это клиент, а не мы.
+const bundled = await fs.readFile(
+    new URL('../supabase/functions/license-issue/bundled.ts', import.meta.url), 'utf8'
+);
+const START = '// ---- начало вклеенного license-format.js ----';
+const END = '// ---- конец вклеенного license-format.js ----';
+if (!bundled.includes(START) || !bundled.includes(END)) {
+    check('в bundled.ts есть вклеенный модуль формата', false);
+} else {
+    const inner = bundled.slice(bundled.indexOf(START) + START.length, bundled.indexOf(END));
+    const tmp = new URL('./_bundled-format.check.mjs', import.meta.url);
+    await fs.writeFile(tmp, inner + '\nexport { signLicense, verifyLicense, importSigningKey, importVerifyKey };\n');
+    try {
+        const mod = await import(tmp.href);
+        const bSign = await mod.importSigningKey(privB64);
+        const bVer = await mod.importVerifyKey(pubB64);
+        const fromBundle = await mod.signLicense(payload, bSign);
+        check('сборка выдаёт байт в байт тот же ключ', fromBundle === key);
+        const cross = await verifyLicense(fromBundle, verKey);
+        check('ключ из сборки проходит проверку исходным модулем', cross.ok, cross.reason || '');
+        const back = await mod.verifyLicense(key, bVer);
+        check('ключ из исходного модуля проходит проверку сборкой', back.ok, back.reason || '');
+    } finally {
+        await fs.rm(tmp, { force: true });
+    }
+}
 
 console.log('');
 if (failures) {
