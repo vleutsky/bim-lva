@@ -157,10 +157,11 @@
                                 <span class="pill">заявка от ${asDate(r.created_at)}</span>
                             </div>
                             <p class="muted">${esc(r.full_name || '—')} · ${esc(r.email)}${r.org ? ' · ' + esc(r.org) : ''}</p>
+                            <p class="muted">Компьютер: <code>${esc(r.machine_id || 'не указан — лицензия будет без привязки')}</code></p>
                             ${r.comment ? `<p class="muted">«${esc(r.comment)}»</p>` : ''}
                             <div class="row">
-                                <label class="muted">Срок, дней
-                                    <input class="days" type="number" min="1" max="3650" value="365">
+                                <label class="muted">Срок, дней <span title="0 — бессрочная">(0 = бессрочно)</span>
+                                    <input class="days" type="number" min="0" max="3650" value="365">
                                 </label>
                                 <input class="note" type="text" placeholder="Комментарий к решению (необязательно)">
                                 <button type="button" class="primary" data-act="issue">Выдать ключ</button>
@@ -210,7 +211,7 @@
                 const card = btn.closest('[data-req]');
                 const id = card.dataset.req;
                 const note = card.querySelector('.note').value;
-                const days = Number(card.querySelector('.days').value) || 365;
+                const days = Number(card.querySelector('.days').value);
                 const lic = window.BimLvaLicenses;
 
                 card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
@@ -218,10 +219,17 @@
                 try {
                     if (btn.dataset.act === 'issue') {
                         const res = await lic.issueLicense(id, days, note);
-                        say('Ключ выпущен. Он уже виден пользователю в кабинете.');
-                        // Показываем здесь же: удобно скопировать в письмо.
+                        say('Лицензия выпущена. Она уже видна пользователю в кабинете.');
+                        // Показываем здесь же: удобно приложить к письму.
                         card.insertAdjacentHTML('beforeend',
-                            `<textarea class="key" rows="3" readonly onclick="this.select()">${esc(res.licenseKey)}</textarea>`);
+                            `<textarea class="key" rows="6" readonly onclick="this.select()">${esc(res.licenseText)}</textarea>`
+                            + `<div class="row"><button type="button" class="primary" data-save>Скачать license.lic</button></div>`);
+                        card.querySelector('[data-save]')?.addEventListener('click', () => {
+                            const blob = new Blob([res.licenseText], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            Object.assign(document.createElement('a'), { href: url, download: 'license.lic' }).click();
+                            URL.revokeObjectURL(url);
+                        });
                         card.querySelectorAll('.row').forEach((r) => r.remove());
                     } else {
                         await lic.rejectRequest(id, note);

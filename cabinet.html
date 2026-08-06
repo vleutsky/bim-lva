@@ -186,6 +186,18 @@
             resize: vertical;
         }
 
+        .lic-hint {
+            margin: -.35rem 0 .6rem;
+            font-size: .78rem;
+            line-height: 1.45;
+            color: var(--ink-soft, #6b7684);
+        }
+        .lic-hint code {
+            background: var(--paper-2, #e8eef4);
+            padding: 0 .25rem;
+            border-radius: 3px;
+        }
+
         .lic-empty, .lic-note {
             font-size: .84rem;
             color: var(--ink-soft, #6b7684);
@@ -374,6 +386,17 @@
                         <input id="licName" type="text" placeholder="Иванов Иван" maxlength="120">
                     </label>
                     <label class="lic-field">
+                        <span>Код компьютера (Machine ID)</span>
+                        <input id="licMachine" type="text" spellcheck="false"
+                               placeholder="64 знака: 0–9 и A–F" maxlength="80">
+                    </label>
+                    <p class="lic-hint">
+                        Лицензия привязывается к конкретному компьютеру. Чтобы узнать код,
+                        запустите на нём <code>Get-LvaMachineId.ps1</code> — или наберите в
+                        Civil&nbsp;3D любую команду LVA: если лицензии ещё нет, код будет
+                        показан прямо в сообщении.
+                    </p>
+                    <label class="lic-field">
                         <span>Комментарий</span>
                         <textarea id="licComment" rows="2" placeholder="Для каких задач нужен плагин" maxlength="500"></textarea>
                     </label>
@@ -387,8 +410,8 @@
                     <h3>Мои заявки и ключи</h3>
                     <div id="licMine"><p class="lic-empty">Загрузка…</p></div>
                     <p class="lic-note">
-                        Ключ вставляется в плагин целиком, вместе с префиксом <code>BIMLVA1</code>.
-                        Проверка идёт без интернета.
+                        Готовый файл сохраните как <code>license.lic</code> и положите в
+                        <code>%ProgramData%\LVA.BIM\</code>. Плагин проверяет его без интернета.
                     </p>
                 </article>
             </div>
@@ -537,7 +560,8 @@
                             </div>
                             <textarea class="lic-key" rows="3" readonly onclick="this.select()">${esc(l.license_key)}</textarea>
                             <div class="row" style="margin-top:.4rem">
-                                <button type="button" class="btn btn-outline" data-copy="${esc(l.license_key)}">Скопировать ключ</button>
+                                <button type="button" class="btn btn-primary" data-download="${esc(l.id)}">Скачать license.lic</button>
+                                <button type="button" class="btn btn-outline" data-copy="${esc(l.license_key)}">Скопировать</button>
                             </div>
                         </div>`);
                 }
@@ -587,7 +611,8 @@
                         product: document.getElementById('licProduct').value,
                         org: document.getElementById('licOrg').value,
                         fullName: document.getElementById('licName').value,
-                        comment: document.getElementById('licComment').value
+                        comment: document.getElementById('licComment').value,
+                        machineId: document.getElementById('licMachine').value
                     });
                     licMessage('Заявка отправлена. Ключ появится в списке справа.');
                     document.getElementById('licComment').value = '';
@@ -599,8 +624,19 @@
                 }
             });
 
-            // Копирование делегированием: список перерисовывается целиком.
+            // Делегирование: список перерисовывается целиком.
             document.getElementById('licMine')?.addEventListener('click', async (ev) => {
+                const dl = ev.target.closest('[data-download]');
+                if (dl) {
+                    // Файл кладут на диск под строго определённым именем —
+                    // отдаём его готовым, чтобы не переименовывали вручную.
+                    const text = dl.closest('.lic-item')?.querySelector('.lic-key')?.value || '';
+                    const blob = new Blob([text], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    Object.assign(document.createElement('a'), { href: url, download: 'license.lic' }).click();
+                    URL.revokeObjectURL(url);
+                    return;
+                }
                 const btn = ev.target.closest('[data-copy]');
                 if (!btn) return;
                 try {

@@ -10,34 +10,23 @@
     'use strict';
 
     /**
-     * Продукты, на которые можно запросить лицензию.
+     * Продукты — ровно те, что проверяются в коде плагинов:
+     *   LVA.Civil.BIM/LVA_Ribbon.cs        → LicenseGate.Check("Civil")
+     *   LVA.Navis.Tools/…AuditPropSets.cs  → LicenseGate.Check("Navis")
+     *   LVA.Inventor.BIM/InventorPlugin.cs → LicenseGate.Check("Inventor")
      *
-     * Единственное место, где этот список задан: добавляете ленту или плагин —
-     * правите здесь, и он появляется и в кабинете, и в панели выпуска.
+     * Вкладки ленты («Генплан», «НВК», «Электрика» и прочие) продуктами не
+     * являются — это разделы внутри Civil, и лицензия у них общая.
      *
-     * `code` попадает в лицензионный ключ и по нему плагин решает, ему ли
-     * ключ выдан. Менять код у выпущенного продукта нельзя: выданные ключи
-     * перестанут подходить.
+     * Значение уходит в поле Products лицензии, по нему LicenseGate решает,
+     * открывать плагин или нет. Придумывать здесь свои коды нельзя: плагин их
+     * не знает и отвергнет лицензию как «не включает этот продукт».
      */
     const PRODUCTS = [
-        { code: 'lva-suite', title: 'Весь набор LVA (все ленты)', group: 'Комплект' },
-
-        { code: 'lva-genplan', title: 'LVA · Генплан', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-nvk', title: 'LVA · НВК', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-props', title: 'LVA · Свойства', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-bim-ifc', title: 'LVA · BIM/IFC', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-constructor', title: 'LVA · Конструктор', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-coordination', title: 'LVA · Координация', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-bim-bridge', title: 'LVA · BIM Bridge', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-electrica', title: 'LVA · Электрика', group: 'Ленты Civil 3D / AutoCAD' },
-        { code: 'lva-networks', title: 'LVA · Сети связи', group: 'Ленты Civil 3D / AutoCAD' },
-
-        { code: 'ksi-mapper', title: 'KSI Mapper Ultimate', group: 'Отдельные плагины' },
-        { code: 'bim-checker', title: 'BIM Чекер (Navisworks)', group: 'Отдельные плагины' },
-        { code: 'matrix-builder', title: 'LVA BIM Matrix Builder', group: 'Отдельные плагины' },
-        { code: 'clash-group', title: 'Clash Group Automator', group: 'Отдельные плагины' },
-        { code: 'surface-cutter', title: 'SurfaceCutter Pro', group: 'Отдельные плагины' },
-        { code: 'plant3d-link', title: 'Plant 3D Data Link', group: 'Отдельные плагины' }
+        { code: 'Civil', title: 'Civil 3D / AutoCAD — все ленты LVA', group: 'Продукты' },
+        { code: 'Navis', title: 'Navisworks — LVA.Navis.Tools', group: 'Продукты' },
+        { code: 'Inventor', title: 'Inventor — LVA.Inventor.BIM', group: 'Продукты' },
+        { code: '*', title: 'Все продукты сразу', group: 'Комплект' }
     ];
 
     const productTitle = (code) => PRODUCTS.find((p) => p.code === code)?.title || code;
@@ -53,6 +42,9 @@
         }
         return out;
     }
+
+    /** Machine ID из Get-LvaMachineId.ps1: SHA-256 hex, 64 знака. */
+    const isMachineId = (v) => /^[0-9a-fA-F]{64}$/.test(String(v || '').trim());
 
     function client() {
         const auth = global.BimLvaAuth;
@@ -75,7 +67,7 @@
         const user = await currentUser();
         const { data, error } = await client()
             .from('license_requests')
-            .select('id, product, org, status, comment, decision_note, created_at, decided_at')
+            .select('id, product, org, status, comment, decision_note, machine_id, created_at, decided_at')
             .eq('user_id', user.id)
             .order('created_at', { ascending: false });
         if (error) throw new Error(error.message);
@@ -87,15 +79,24 @@
         const user = await currentUser();
         const { data, error } = await client()
             .from('licenses')
-            .select('id, product, org, license_key, issued_at, expires_at, revoked_at, revoke_reason')
+            .select('id, product, org, license_key, machine_id, issued_at, expires_at, revoked_at, revoke_reason')
             .eq('user_id', user.id)
             .order('issued_at', { ascending: false });
         if (error) throw new Error(error.message);
         return data || [];
     }
 
-    async function createRequest({ product, org, fullName, comment }) {
+    async function createRequest({ product, org, fullName, comment, machineId }) {
         if (!product) throw new Error('Выберите продукт.');
+        const machine = (machineId || '').trim().toUpperCase();
+        // Лицензия привязывается к железу, и без кода компьютера выпустить её
+        // нельзя. Ловим здесь, чтобы человек не ждал ответа на пустую заявку.
+        if (!machine) {
+            throw new Error('Укажите код компьютера — без него лицензию не выпустить. Как его получить, написано под полем.');
+        }
+        if (!isMachineId(machine)) {
+            throw new Error('Код компьютера — это 64 знака из цифр и букв A–F. Похоже, скопировалось не полностью.');
+        }
         const user = await currentUser();
         const { error } = await client().from('license_requests').insert({
             user_id: user.id,
@@ -103,7 +104,8 @@
             product,
             org: (org || '').trim(),
             full_name: (fullName || '').trim(),
-            comment: (comment || '').trim()
+            comment: (comment || '').trim(),
+            machine_id: machine
         });
         if (error) {
             // Уникальный индекс на открытую заявку — не ошибка, а ответ по сути.
@@ -133,7 +135,7 @@
     async function listAllRequests(status) {
         let q = client()
             .from('license_requests')
-            .select('id, user_id, email, product, org, full_name, comment, status, decision_note, created_at, decided_at')
+            .select('id, user_id, email, product, org, full_name, comment, machine_id, status, decision_note, created_at, decided_at')
             .order('created_at', { ascending: false })
             .limit(200);
         if (status) q = q.eq('status', status);
@@ -145,7 +147,7 @@
     async function listAllLicenses() {
         const { data, error } = await client()
             .from('licenses')
-            .select('id, email, org, product, issued_at, expires_at, revoked_at')
+            .select('id, email, org, product, machine_id, issued_at, expires_at, revoked_at')
             .order('issued_at', { ascending: false })
             .limit(200);
         if (error) throw new Error(error.message);
@@ -176,6 +178,7 @@
         PRODUCTS,
         productTitle,
         productGroups,
+        isMachineId,
         listMyRequests,
         listMyLicenses,
         createRequest,

@@ -1,131 +1,195 @@
 /**
- * Проверка формата лицензионного ключа: подпись, срок, подделка.
+ * Проверка формата лицензии LVA BIM — того, что уже понимают плагины.
  *
- * Импортирует тот же license-format.js, что и Edge Function, поэтому проверяет
- * настоящий код выпуска, а не его пересказ. До живого Supabase дело не доходит —
- * здесь только криптография, и именно она должна быть безупречна: ошибку в ней
- * обнаружит клиент, которому ключ не подошёл.
+ * Импортирует тот же license-lic.js, что и Edge Function, поэтому проверяет
+ * настоящий код выпуска. Компилятора .NET здесь нет, поэтому совместимость
+ * доказывается иначе: воспроизводится логика LicensePayload.ToCanonicalString()
+ * и LicenseGate.VerifySignature, и результаты сверяются побайтно.
+ *
+ * Главная опасность этой связки — не криптография, а формат: C# читает JSON в
+ * DateTime и собирает каноническую строку заново. Если наша строка отличается
+ * от восстановленной хоть одним знаком, подпись не сойдётся — и узнает об этом
+ * клиент, а не мы. Поэтому половина проверок ниже про даты и порядок полей.
  *
  * Запуск: npm run test-license
  */
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, createVerify, createSign } from 'node:crypto';
 import fs from 'node:fs/promises';
 import {
-    importSigningKey,
-    importVerifyKey,
-    signLicense,
-    verifyLicense,
-    b64urlEncode
-} from '../supabase/functions/license-issue/license-format.js';
+    canonicalString,
+    toDotNetRoundTrip,
+    importRsaSigningKey,
+    importRsaVerifyKey,
+    signLicenseFile,
+    verifyLicenseFile,
+    isMachineId
+} from '../supabase/functions/license-issue/license-lic.js';
 
 let failures = 0;
-
 function check(name, ok, detail = '') {
     console.log(`${ok ? 'OK  ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
     if (!ok) failures++;
 }
 
-const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const privB64 = privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
 const pubB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 
-const signKey = await importSigningKey(privB64);
-const verKey = await importVerifyKey(pubB64);
+const signKey = await importRsaSigningKey(privB64);
+const verKey = await importRsaVerifyKey(pubB64);
 
-const now = Math.floor(Date.now() / 1000);
-const payload = {
-    v: 1,
-    id: 'a3f1c0de-0000-4000-8000-000000000001',
-    p: 'ksi-mapper',
-    e: 'engineer@example.org',
-    o: 'ПроектСтройИнжиниринг',
-    iss: 'BIM.LVA',
-    iat: now,
-    exp: now + 365 * 86400
-};
+// ---------------------------------------------------------------- даты ----
+// .NET ToString("o") для UTC даёт ровно семь знаков дробной части и «Z».
+const d = new Date(Date.UTC(2026, 7, 6, 12, 34, 56, 789));
+check('дата в формате .NET "o"', toDotNetRoundTrip(d) === '2026-08-06T12:34:56.7890000Z',
+    toDotNetRoundTrip(d));
+check('семь знаков дробной части, не три',
+    /\.\d{7}Z$/.test(toDotNetRoundTrip(d)));
+check('полночь тоже с дробной частью',
+    toDotNetRoundTrip(new Date(Date.UTC(2027, 0, 1))) === '2027-01-01T00:00:00.0000000Z');
 
-// --- обычная жизнь ключа ---
-const key = await signLicense(payload, signKey);
-const good = await verifyLicense(key, verKey);
-check('выданный ключ проходит проверку', good.ok, good.reason || '');
-check('данные читаются обратно',
-    good.payload?.e === payload.e && good.payload?.o === payload.o && good.payload?.p === payload.p);
-check('ключ помещается в одно поле ввода', key.length < 400, `${key.length} символов`);
-check('в ключе нет символов, ломающих копирование', /^[A-Za-z0-9._-]+$/.test(key));
-
-// --- подделка ---
-// Главное свойство схемы: имея ключ и публичный ключ, нельзя выписать себе
-// другой. Проверяем самую наивную попытку — правку содержимого.
-const forgedPayload = { ...payload, o: 'Другая организация', exp: now + 99 * 365 * 86400 };
-const forgedBody = b64urlEncode(new TextEncoder().encode(JSON.stringify(forgedPayload)));
-const forged = `BIMLVA1.${forgedBody}.${key.split('.')[2]}`;
-const forgedResult = await verifyLicense(forged, verKey);
-check('подменённое содержимое отвергается', !forgedResult.ok, forgedResult.reason);
-
-const bitFlipped = key.slice(0, -2) + (key.endsWith('A') ? 'B' : 'A') + key.slice(-1);
-const flippedResult = await verifyLicense(bitFlipped, verKey);
-check('испорченная подпись отвергается', !flippedResult.ok, flippedResult.reason);
-
-// Ключ, подписанный чужой парой, — попытка «сделаю свой генератор».
-const other = generateKeyPairSync('ed25519');
-const otherSignKey = await importSigningKey(
-    other.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64')
-);
-const alienKey = await signLicense(payload, otherSignKey);
-const alienResult = await verifyLicense(alienKey, verKey);
-check('ключ от чужой пары отвергается', !alienResult.ok, alienResult.reason);
-
-// --- сроки ---
-const expired = await signLicense({ ...payload, iat: now - 400 * 86400, exp: now - 86400 }, signKey);
-const expiredResult = await verifyLicense(expired, verKey);
-check('просроченный ключ отвергается', !expiredResult.ok, expiredResult.reason);
-check('просроченный ключ всё равно разобран', !!expiredResult.payload);
-
-const future = await signLicense({ ...payload, iat: now + 30 * 86400, exp: now + 400 * 86400 }, signKey);
-const futureResult = await verifyLicense(future, verKey);
-check('ключ «из будущего» отвергается с понятной причиной',
-    !futureResult.ok && /дат/i.test(futureResult.reason), futureResult.reason);
-
-// --- мусор на входе ---
-for (const [name, value] of [
-    ['пустая строка', ''],
-    ['произвольный текст', 'просто текст'],
-    ['две части вместо трёх', 'BIMLVA1.abc'],
-    ['чужой префикс', 'OTHER1.abc.def'],
-    ['нечитаемый base64', 'BIMLVA1.!!!.???']
-]) {
-    const r = await verifyLicense(value, verKey);
-    check(`отклоняет: ${name}`, !r.ok, r.reason);
+// ------------------------------------------------- каноническая строка ----
+// Копия LicensePayload.ToCanonicalString() — если разойдётся, подпись не сойдётся.
+function csharpCanonical(p) {
+    const products = p.Products == null ? '' : p.Products.join(',');
+    const expires = p.ExpiresUtc ? p.ExpiresUtc : '';
+    return [p.LicenseId, p.ClientName ?? '', products, p.IssuedUtc, expires, p.HostLock ?? ''].join('|');
 }
 
-// Пробелы по краям — обычное дело при копировании из письма.
-const padded = await verifyLicense(`  ${key}\n`, verKey);
-check('терпит пробелы вокруг скопированного ключа', padded.ok, padded.reason || '');
+const samplePayload = {
+    LicenseId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+    ClientName: 'ООО «Ромашка»',
+    Products: ['Civil', 'Navis'],
+    IssuedUtc: '2026-08-06T12:34:56.7890000Z',
+    ExpiresUtc: '2027-08-06T00:00:00.0000000Z',
+    HostLock: 'A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90'
+};
+check('каноническая строка совпадает с логикой C#',
+    canonicalString(samplePayload) === csharpCanonical(samplePayload));
+check('поля разделены «|», продукты — «,»',
+    canonicalString(samplePayload).split('|').length === 6 &&
+    canonicalString(samplePayload).split('|')[2] === 'Civil,Navis');
+check('у бессрочной лицензии в строке пусто, а не «null»',
+    canonicalString({ ...samplePayload, ExpiresUtc: null }).split('|')[4] === '');
 
-// --- однофайловая сборка для дашборда ---
-// Её вклеивает механический скрипт; если он что-то потеряет или исказит,
-// ключи начнут расходиться с проверкой — а заметит это клиент, а не мы.
+// ---------------------------------------------------------- подпись -------
+const lic = await signLicenseFile({
+    licenseId: samplePayload.LicenseId,
+    clientName: samplePayload.ClientName,
+    products: ['Civil', 'Navis'],
+    issuedUtc: d,
+    expiresUtc: new Date(Date.UTC(2027, 7, 6)),
+    hostLock: samplePayload.HostLock
+}, signKey);
+
+const good = await verifyLicenseFile(lic, verKey, { product: 'Civil', machineId: samplePayload.HostLock });
+check('выданная лицензия проходит проверку', good.ok, good.status);
+
+// Главное: подпись должна приниматься тем же вызовом, что делает .NET —
+// RSA.VerifyData(data, sig, SHA256, Pkcs1). В Node это RSA-SHA256 без опций.
+const nodeVerify = createVerify('RSA-SHA256');
+nodeVerify.update(Buffer.from(canonicalString(lic.Payload), 'utf8'));
+check('подпись проходит проверку алгоритмом RSA-SHA256/PKCS#1 (как в .NET)',
+    nodeVerify.verify(publicKey, Buffer.from(lic.Signature, 'base64')));
+
+// И наоборот: подпись, сделанная «как в PowerShell», принимается нашей проверкой.
+const psSign = createSign('RSA-SHA256');
+psSign.update(Buffer.from(canonicalString(lic.Payload), 'utf8'));
+const psSignature = psSign.sign(privateKey).toString('base64');
+check('подпись из PowerShell-совместимого вызова принимается',
+    (await verifyLicenseFile({ ...lic, Signature: psSignature }, verKey, { product: 'Civil' })).ok);
+
+// ------------------------------------------- имитация обратного разбора ----
+// C# читает JSON в DateTime и собирает строку заново. Прогоняем тот же круг:
+// JSON → разбор → повторная сборка строки → проверка подписи.
+const roundTripped = JSON.parse(JSON.stringify(lic));
+roundTripped.Payload.IssuedUtc = toDotNetRoundTrip(new Date(roundTripped.Payload.IssuedUtc));
+roundTripped.Payload.ExpiresUtc = roundTripped.Payload.ExpiresUtc
+    ? toDotNetRoundTrip(new Date(roundTripped.Payload.ExpiresUtc))
+    : null;
+check('после разбора и повторной сборки строка та же',
+    canonicalString(roundTripped.Payload) === canonicalString(lic.Payload));
+check('после круга через JSON подпись всё ещё верна',
+    (await verifyLicenseFile(roundTripped, verKey, { product: 'Civil' })).ok);
+
+// ------------------------------------------------------------ отказы ------
+const tampered = JSON.parse(JSON.stringify(lic));
+tampered.Payload.Products = ['*'];
+check('подмена продуктов на «*» отвергается',
+    !(await verifyLicenseFile(tampered, verKey, { product: 'Civil' })).ok);
+
+const stretched = JSON.parse(JSON.stringify(lic));
+stretched.Payload.ExpiresUtc = '2099-01-01T00:00:00.0000000Z';
+check('продление срока правкой файла отвергается',
+    !(await verifyLicenseFile(stretched, verKey, { product: 'Civil' })).ok);
+
+const alien = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const alienKey = await importRsaSigningKey(alien.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'));
+const alienLic = await signLicenseFile({
+    licenseId: samplePayload.LicenseId, clientName: 'Кто-то', products: ['*'],
+    issuedUtc: d, expiresUtc: null, hostLock: ''
+}, alienKey);
+check('лицензия от чужой пары ключей отвергается',
+    !(await verifyLicenseFile(alienLic, verKey, { product: 'Civil' })).ok);
+
+const expired = await signLicenseFile({
+    licenseId: samplePayload.LicenseId, clientName: 'Просрочка', products: ['Civil'],
+    issuedUtc: new Date(Date.UTC(2020, 0, 1)), expiresUtc: new Date(Date.UTC(2021, 0, 1)), hostLock: ''
+}, signKey);
+check('просроченная лицензия отвергается',
+    (await verifyLicenseFile(expired, verKey, { product: 'Civil' })).status === 'Expired');
+
+check('лицензия для другой машины отвергается',
+    (await verifyLicenseFile(lic, verKey, { product: 'Civil', machineId: 'B'.repeat(64) })).status === 'WrongMachine');
+check('лицензия на другой продукт отвергается',
+    (await verifyLicenseFile(lic, verKey, { product: 'Inventor' })).status === 'WrongProduct');
+
+const wildcard = await signLicenseFile({
+    licenseId: samplePayload.LicenseId, clientName: 'Всё', products: ['*'],
+    issuedUtc: d, expiresUtc: null, hostLock: ''
+}, signKey);
+check('«*» открывает любой продукт',
+    (await verifyLicenseFile(wildcard, verKey, { product: 'Inventor' })).ok);
+check('бессрочная лицензия не считается просроченной',
+    (await verifyLicenseFile(wildcard, verKey, { product: 'Civil' })).ok);
+
+// -------------------------------------------------------- Machine ID ------
+check('Machine ID распознаётся', isMachineId('A1B2C3D4E5F60718293A4B5C6D7E8F90'.repeat(2)));
+check('короткий Machine ID отклоняется', !isMachineId('ABC123'));
+check('Machine ID с посторонними знаками отклоняется', !isMachineId('Z'.repeat(64)));
+check('HostLock приводится к верхнему регистру',
+    (await signLicenseFile({
+        licenseId: samplePayload.LicenseId, clientName: 'x', products: ['Civil'],
+        issuedUtc: d, expiresUtc: null, hostLock: '  a1b2c3'.padEnd(64, 'f').trim()
+    }, signKey)).Payload.HostLock.match(/^[0-9A-F]+$/) !== null);
+
+// ------------------------------------------ однофайловая сборка ----------
+// Её собирает механический скрипт для развёртывания через дашборд. Разойдётся
+// с исходником — лицензии из неё перестанут проходить проверку в плагинах.
 const bundled = await fs.readFile(
     new URL('../supabase/functions/license-issue/bundled.ts', import.meta.url), 'utf8'
 );
-const START = '// ---- начало вклеенного license-format.js ----';
-const END = '// ---- конец вклеенного license-format.js ----';
+const START = '// ---- начало вклеенного license-lic.js ----';
+const END = '// ---- конец вклеенного license-lic.js ----';
 if (!bundled.includes(START) || !bundled.includes(END)) {
     check('в bundled.ts есть вклеенный модуль формата', false);
 } else {
     const inner = bundled.slice(bundled.indexOf(START) + START.length, bundled.indexOf(END));
-    const tmp = new URL('./_bundled-format.check.mjs', import.meta.url);
-    await fs.writeFile(tmp, inner + '\nexport { signLicense, verifyLicense, importSigningKey, importVerifyKey };\n');
+    const tmp = new URL('./_bundled-lic.check.mjs', import.meta.url);
+    await fs.writeFile(tmp,
+        inner + '\nexport { signLicenseFile, canonicalString, importRsaSigningKey, toDotNetRoundTrip };\n');
     try {
         const mod = await import(tmp.href);
-        const bSign = await mod.importSigningKey(privB64);
-        const bVer = await mod.importVerifyKey(pubB64);
-        const fromBundle = await mod.signLicense(payload, bSign);
-        check('сборка выдаёт байт в байт тот же ключ', fromBundle === key);
-        const cross = await verifyLicense(fromBundle, verKey);
-        check('ключ из сборки проходит проверку исходным модулем', cross.ok, cross.reason || '');
-        const back = await mod.verifyLicense(key, bVer);
-        check('ключ из исходного модуля проходит проверку сборкой', back.ok, back.reason || '');
+        const bKey = await mod.importRsaSigningKey(privB64);
+        const fromBundle = await mod.signLicenseFile({
+            licenseId: samplePayload.LicenseId, clientName: samplePayload.ClientName,
+            products: ['Civil', 'Navis'], issuedUtc: d,
+            expiresUtc: new Date(Date.UTC(2027, 7, 6)), hostLock: samplePayload.HostLock
+        }, bKey);
+        check('сборка выдаёт ту же лицензию байт в байт',
+            JSON.stringify(fromBundle) === JSON.stringify(lic));
+        check('лицензия из сборки проходит проверку исходным модулем',
+            (await verifyLicenseFile(fromBundle, verKey, { product: 'Civil' })).ok);
     } finally {
         await fs.rm(tmp, { force: true });
     }
@@ -136,4 +200,4 @@ if (failures) {
     console.error(`Провалено проверок: ${failures}`);
     process.exit(1);
 }
-console.log('Формат лицензии в порядке: подпись держит, подделки и просрочка отсекаются.');
+console.log('Формат совпадает с тем, что проверяет LicenseGate в плагинах.');

@@ -9,8 +9,12 @@
 //   Dashboard → Edge Functions → Create function "license-issue" → вставить →
 //   Deploy. В настройках функции verify_jwt = true (по умолчанию).
 //
+// Выпускает файл license.lic в том же формате, который проверяет
+// LVA.BIM.Common/Licensing/LicenseGate.cs в плагинах: JSON {Payload, Signature},
+// подпись RSA-SHA256 над канонической строкой. Контракт — в license-lic.js.
+//
 // Секреты (Dashboard → Edge Functions → Secrets):
-//   LICENSE_SIGNING_KEY — приватный ключ Ed25519, base64 от PKCS#8.
+//   LICENSE_SIGNING_KEY — приватный ключ RSA, base64 от PKCS#8.
 //                         Сгенерировать: node tools/make-license-keys.mjs
 //   LICENSE_ISSUER      — необязательно, кто выпустил (по умолчанию BIM.LVA)
 //
@@ -19,8 +23,8 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-// Формат ключа общий с проверкой — см. комментарий в license-format.js.
-import { importSigningKey, signLicense } from "./license-format.js";
+// Формат общий с тестами — см. комментарий в license-lic.js.
+import { importRsaSigningKey, signLicenseFile, isMachineId } from "./license-lic.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -42,8 +46,11 @@ function json(body: unknown, status = 200) {
 async function loadSigningKey(): Promise<CryptoKey> {
   const raw = Deno.env.get("LICENSE_SIGNING_KEY");
   if (!raw) throw new Error("LICENSE_SIGNING_KEY не задан в секретах функции");
-  return await importSigningKey(raw);
+  return await importRsaSigningKey(raw);
 }
+
+/** Продукты, которые проверяются в коде плагинов. Ничего другого не бывает. */
+const PRODUCTS = ["Civil", "Navis", "Inventor", "*"];
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -85,35 +92,52 @@ Deno.serve(async (req) => {
     const requestId = String(body.requestId ?? "");
     if (!requestId) return json({ error: "Не указана заявка" }, 400);
 
-    const days = Math.min(MAX_DAYS, Math.max(1, Number(body.days) || DEFAULT_DAYS));
+    // 0 дней = бессрочная лицензия: LicenseGate считает ExpiresUtc = null
+    // действующей всегда, и такие вы выдавали PowerShell-скриптом.
+    const days = Math.max(0, Math.min(MAX_DAYS, Number(body.days) ?? DEFAULT_DAYS));
 
     const { data: reqRow, error: reqErr } = await admin
       .from("license_requests")
-      .select("id, user_id, email, product, org, status")
+      .select("id, user_id, email, product, org, full_name, machine_id, status")
       .eq("id", requestId)
       .maybeSingle();
     if (reqErr || !reqRow) return json({ error: "Заявка не найдена" }, 404);
     if (reqRow.status === "approved") return json({ error: "Лицензия по этой заявке уже выдана" }, 409);
+    if (!PRODUCTS.includes(reqRow.product)) {
+      return json({ error: `Неизвестный продукт «${reqRow.product}»` }, 400);
+    }
+
+    const hostLock = String(body.machineId ?? reqRow.machine_id ?? "").trim();
+    // Пустой HostLock — лицензия без привязки к железу. Это осознанный выбор
+    // выдающего, но случайный мусор вместо Machine ID пропускать нельзя:
+    // плагин отвергнет такую лицензию как «выпущена для другого компьютера».
+    if (hostLock && !isMachineId(hostLock)) {
+      return json({ error: "Machine ID должен быть 64 шестнадцатеричными знаками" }, 400);
+    }
 
     const issuedAt = new Date();
-    const expiresAt = new Date(issuedAt.getTime() + days * 86400_000);
+    const expiresAt = days > 0 ? new Date(issuedAt.getTime() + days * 86400_000) : null;
     const licenseId = crypto.randomUUID();
 
-    let licenseKey: string;
+    // Имя клиента попадает в лицензию и видно в плагине — берём организацию,
+    // а если её не указали, то ФИО или почту: пустое имя выглядит поломкой.
+    const clientName = String(reqRow.org || reqRow.full_name || reqRow.email || "").trim();
+
+    let licenseFile: unknown;
     try {
-      licenseKey = await signLicense({
-        v: 1,
-        id: licenseId,
-        p: reqRow.product,
-        e: reqRow.email,
-        o: reqRow.org ?? "",
-        iss: Deno.env.get("LICENSE_ISSUER") ?? "BIM.LVA",
-        iat: Math.floor(issuedAt.getTime() / 1000),
-        exp: Math.floor(expiresAt.getTime() / 1000),
+      licenseFile = await signLicenseFile({
+        licenseId,
+        clientName,
+        products: [reqRow.product],
+        issuedUtc: issuedAt,
+        expiresUtc: expiresAt,
+        hostLock,
       }, await loadSigningKey());
     } catch (err) {
       return json({ error: `Подпись не удалась: ${err instanceof Error ? err.message : err}` }, 500);
     }
+
+    const licenseText = JSON.stringify(licenseFile, null, 2);
 
     const { error: insErr } = await admin.from("licenses").insert({
       id: licenseId,
@@ -122,9 +146,10 @@ Deno.serve(async (req) => {
       email: reqRow.email,
       org: reqRow.org ?? "",
       product: reqRow.product,
-      license_key: licenseKey,
+      machine_id: hostLock,
+      license_key: licenseText,
       issued_at: issuedAt.toISOString(),
-      expires_at: expiresAt.toISOString(),
+      expires_at: expiresAt ? expiresAt.toISOString() : null,
       issued_by: caller.id,
     });
     if (insErr) return json({ error: `Не удалось сохранить лицензию: ${insErr.message}` }, 500);
@@ -139,7 +164,12 @@ Deno.serve(async (req) => {
       })
       .eq("id", reqRow.id);
 
-    return json({ ok: true, licenseId, licenseKey, expiresAt: expiresAt.toISOString() });
+    return json({
+      ok: true,
+      licenseId,
+      licenseText,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    });
   }
 
   // ------------------------------------------------------------- отказ -----
