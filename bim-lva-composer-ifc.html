@@ -6385,6 +6385,20 @@ uniform vec3 uBatchSelColor;
         /** Схемы IFC, которые реально открывает web-ifc в Composer. */
         const SUPPORTED_IFC_SCHEMAS = Object.freeze(['IFC2X3', 'IFC4', 'IFC4X3']);
 
+        /**
+         * Инфраструктурные схемы (Civil 3D, OpenRoads): web-ifc официально их не
+         * заявляет, но DATA-секцию парсит без оглядки на заголовок, а геометрия
+         * IFC4X1/4X2 — те же сущности, что в IFC4. Открываем с предупреждением:
+         * элементы с размещением вдоль оси (IfcLinearPlacement) могут пропасть.
+         */
+        const COMPAT_IFC_SCHEMAS = Object.freeze(['IFC4X1', 'IFC4X2']);
+
+        function isCompatIfcSchema(schema) {
+            if (!schema) return false;
+            const s = String(schema).toUpperCase();
+            return COMPAT_IFC_SCHEMAS.some((base) => s === base || s.startsWith(base + '_'));
+        }
+
         function detectIfcSchemaFromText(text) {
             if (!text) return null;
             const match = String(text).match(/FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'/i);
@@ -6403,7 +6417,7 @@ uniform vec3 uBatchSelColor;
         function assertSupportedIfcSchema(fileName, headerText) {
             const schema = detectIfcSchemaFromText(headerText);
             if (!schema) return null;
-            if (!isSupportedIfcSchema(schema)) {
+            if (!isSupportedIfcSchema(schema) && !isCompatIfcSchema(schema)) {
                 throw new Error(
                     `${fileName}: схема ${schema} не поддерживается. ` +
                     `Откройте файл со схемой IFC2X3, IFC4 или IFC4X3 ` +
@@ -6667,6 +6681,14 @@ uniform vec3 uBatchSelColor;
                 );
                 validateIfcStepFile(file.name, data);
                 const detectedSchema = assertSupportedIfcSchema(file.name, headPreview);
+                if (isCompatIfcSchema(detectedSchema)) {
+                    notify(
+                        `${file.name}: схема ${detectedSchema} (инфраструктурный IFC — Civil 3D, OpenRoads). ` +
+                        `Открываю в режиме совместимости с IFC4. Если часть элементов не видна, ` +
+                        `экспортируйте IFC4 или IFC4X3.`,
+                        'info'
+                    );
+                }
                 const booleanOps = sampleIfcBooleanOps(data);
                 // Tekla CSG: быстрые bool часто дают 0 мешей — для таких файлов выключаем FAST_BOOLS
                 const preferExactBools = booleanOps >= 8;
@@ -18257,6 +18279,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.08: IFC4X1 / IFC4X2 (Civil 3D, OpenRoads) открываются в режиме совместимости с IFC4.',
                 '2026.08.08: пресеты загрузки IFC (каркас / инженерка / без арматуры и метизов) — лишние классы не тянутся в память.',
                 '2026.08.08: удаление выделенных элементов из сцены с освобождением памяти; точка вставки модели по координатам (E, N, Z).',
                 '2026.08.08: один прогресс-бар на пачку файлов — без моргания между файлами.',
