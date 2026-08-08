@@ -10,6 +10,7 @@
 import { chromium } from 'playwright';
 import { makeGridIfc } from './fixtures/make-grid-ifc.mjs';
 import { makeBlocksDxf } from './fixtures/make-blocks-dxf.mjs';
+import { makeGeoIfc } from './fixtures/make-geo-ifc.mjs';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -224,6 +225,58 @@ async function checkDxfBlocks(page) {
     }
 }
 
+/**
+ * Взаимное положение геопривязанных файлов в сводке.
+ *
+ * Регрессия, которую поймал не тест, а пользователь: COORDINATE_TO_ORIGIN
+ * включался для любой геодезической модели, web-ifc сдвигал КАЖДЫЙ файл к его
+ * собственному центру (и не сообщал, на сколько — GetCoordinationMatrix отдаёт
+ * нули), поэтому шесть файлов одной дороги схлопывались в кучу у нуля.
+ * Габариты при этом оставались правильными, и по ним поломка не видна —
+ * проверяем именно расстояние между центрами.
+ */
+async function checkGeoFederation(page) {
+    const a = path.join(ROOT, 'tools', 'fixtures', 'smoke-geo-a.ifc');
+    const b = path.join(ROOT, 'tools', 'fixtures', 'smoke-geo-b.ifc');
+    const GAP = 800; // м между площадками
+    const base = { worldX: 456_000, worldY: 6_188_000, worldZ: 60, count: 60, cols: 10 };
+    await fs.writeFile(a, makeGeoIfc({ ...base, seed: 0, name: 'smoke-geo-a.ifc' }));
+    await fs.writeFile(b, makeGeoIfc({ ...base, worldX: base.worldX + GAP, seed: 5000, name: 'smoke-geo-b.ifc' }));
+    try {
+        await page.setInputFiles('#localFileInput', [a, b]);
+        const bounds = await page
+            .waitForFunction(
+                () => {
+                    const list = (window.BimLvaDebug?.modelBounds || [])
+                        .filter((m) => /smoke-geo-[ab]\.ifc$/i.test(m.file));
+                    return list.length === 2 ? list : false;
+                },
+                { timeout: 90_000 }
+            )
+            .then((h) => h.jsonValue())
+            .catch(() => null);
+        if (!bounds) {
+            problems.push('геопривязанные IFC не загрузились — взаимное положение не проверить');
+            return null;
+        }
+        const [m1, m2] = bounds;
+        const dist = Math.hypot(m1.centerX - m2.centerX, m1.centerY - m2.centerY, m1.centerZ - m2.centerZ);
+        const ok = Math.abs(dist - GAP) < GAP * 0.05;
+        if (!ok) {
+            problems.push(
+                `геопривязанные файлы встали в ${dist.toFixed(0)} м друг от друга вместо ${GAP} — ` +
+                (dist < 50
+                    ? 'модели схлопнулись в кучу (COORDINATE_TO_ORIGIN сбросил координаты каждого файла)'
+                    : 'взаимное положение искажено')
+            );
+        }
+        return { ok, dist };
+    } finally {
+        await fs.rm(a, { force: true });
+        await fs.rm(b, { force: true });
+    }
+}
+
 async function main() {
     const { server, port } = await startStaticServer(ROOT);
     const browser = await chromium.launch({
@@ -269,6 +322,7 @@ async function main() {
     let toast = null;
     let clash = null;
     let dxfBlocks = null;
+    let geoFed = null;
     // Любая сборка Composer, включая тестовую копию, а не только основной файл.
     if (/^bim-lva-composer-ifc.*\.html$/.test(PAGE)) {
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
@@ -302,6 +356,7 @@ async function main() {
                     ).catch(() => problems.push('вторая модель не загрузилась'));
                     clash = await checkClash(page);
                     dxfBlocks = await checkDxfBlocks(page);
+                    geoFed = await checkGeoFederation(page);
                 } finally {
                     await fs.rm(second, { force: true });
                 }
@@ -342,6 +397,7 @@ async function main() {
     if (toast) console.log(`тосты:     API ${toast.shown ? 'ок' : 'НЕТ'}, из UI ${toast.fromUi ? 'ок' : 'НЕТ'}`);
     if (clash) console.log(`коллизии:  пар ${clash.pairs}, за ${clash.ms} мс`);
     if (dxfBlocks) console.log(`блоки DXF: ${dxfBlocks.ok ? `раскрыты верно, габарит ${dxfBlocks.size}` : 'ОШИБКА'}`);
+    if (geoFed) console.log(`геосводка: ${geoFed.ok ? `взаимное положение сохранено (${geoFed.dist.toFixed(0)} м)` : `СЛОМАНО (${geoFed.dist.toFixed(0)} м вместо 800)`}`);
 
     if (external.length) {
         // Не ошибка теста: сеть наружу (Supabase, Яндекс.Диск) тут недоступна.
