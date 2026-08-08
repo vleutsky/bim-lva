@@ -1900,6 +1900,38 @@
             display: flex;
         }
 
+        #btnNotifyLog { position: relative; }
+        .notify-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: #d9433b;
+            color: #fff;
+            border-radius: 10px;
+            font-size: 10px;
+            line-height: 1;
+            padding: 3px 5px;
+            pointer-events: none;
+        }
+        .notify-log-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 6px 4px;
+            border-bottom: 1px solid rgba(0,0,0,.07);
+        }
+        .notify-log-row .nl-meta {
+            flex: 0 0 auto;
+            white-space: nowrap;
+            opacity: .65;
+            font-size: 12px;
+            padding-top: 1px;
+        }
+        .notify-log-row .nl-text {
+            white-space: pre-wrap;
+            user-select: text;
+            word-break: break-word;
+        }
         .ctx-item {
             background: none;
             border: none;
@@ -2082,7 +2114,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 9434641</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · e0b6ddc</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2179,6 +2211,7 @@
         <div class="tb-aside">
             <div class="tb-rail tb-rail-end">
                 <div class="tb-seg">
+                    <button type="button" class="btn" id="btnNotifyLog" title="Журнал уведомлений: все сообщения этой сессии, включая уже закрывшиеся">🔔<span class="notify-badge" id="notifyLogBadge" hidden></span></button>
                     <button type="button" class="btn" id="btnAbout" title="О продукте, разработчик и версия сборки">ℹ</button>
                 </div>
                 <div class="tb-sep" aria-hidden="true"></div>
@@ -2689,6 +2722,19 @@
         </div>
     </div>
 
+    <div class="modal-backdrop" id="notifyLogModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(640px,100%)">
+            <h3>Журнал уведомлений</h3>
+            <div class="bulk-note">Все сообщения этой сессии — ошибки, предупреждения и подтверждения, включая уже закрывшиеся. Журнал живёт до перезагрузки страницы.</div>
+            <div id="notifyLogList" style="max-height:50vh;overflow:auto;margin:8px 0"></div>
+            <div class="modal-actions">
+                <button class="btn" id="notifyLogCopy" title="Скопировать весь журнал в буфер обмена">Скопировать всё</button>
+                <button class="btn" id="notifyLogClear">Очистить</button>
+                <button class="btn" id="notifyLogClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-backdrop" id="crsModal">
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
             <h3>CRS / смещение координат</h3>
@@ -3020,6 +3066,31 @@
             entry.el.remove();
         }
 
+        // Журнал уведомлений: тосты исчезают через секунды, журнал (кнопка 🔔) — нет
+        const notifyLog = [];
+        const NOTIFY_LOG_LIMIT = 300;
+        let notifyUnread = 0;
+
+        function updateNotifyLogButton() {
+            const badge = document.getElementById('notifyLogBadge');
+            if (!badge) return;
+            badge.textContent = notifyUnread > 99 ? '99+' : String(notifyUnread);
+            badge.hidden = notifyUnread === 0;
+        }
+
+        function pushNotifyLog(text, type, repeat) {
+            const last = notifyLog[0];
+            if (repeat && last && last.text === text && last.type === type) {
+                last.count++;
+                last.time = new Date();
+            } else {
+                notifyLog.unshift({ text, type, count: 1, time: new Date() });
+                if (notifyLog.length > NOTIFY_LOG_LIMIT) notifyLog.length = NOTIFY_LOG_LIMIT;
+            }
+            notifyUnread++;
+            updateNotifyLogButton();
+        }
+
         /**
          * Неблокирующее сообщение пользователю.
          * @param {string} message текст; переносы строк сохраняются
@@ -3035,8 +3106,10 @@
                 lastToast.countEl.hidden = false;
                 clearTimeout(lastToast.timer);
                 lastToast.timer = setTimeout(() => dismissToast(lastToast), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
+                pushNotifyLog(text, type, true);
                 return;
             }
+            pushNotifyLog(text, type, false);
 
             const el = document.createElement('div');
             el.className = `toast${type === 'ok' ? ' is-ok' : type === 'error' ? ' is-error' : ''}`;
@@ -3063,6 +3136,49 @@
             entry.timer = setTimeout(() => dismissToast(entry), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
             lastToast = entry;
         }
+
+        function renderNotifyLog() {
+            const host = $('notifyLogList');
+            if (!host) return;
+            if (!notifyLog.length) {
+                host.innerHTML = '<div class="bulk-note">Пока пусто — уведомления появятся по ходу работы.</div>';
+                return;
+            }
+            const ico = { error: '⛔', ok: '✅', info: 'ℹ️' };
+            host.innerHTML = notifyLog.map(e => `
+                <div class="notify-log-row">
+                    <div class="nl-meta">${e.time.toLocaleTimeString('ru-RU')} ${ico[e.type] || ''}${e.count > 1 ? ` ×${e.count}` : ''}</div>
+                    <div class="nl-text">${esc(e.text)}</div>
+                </div>`).join('');
+        }
+
+        $('btnNotifyLog').addEventListener('click', () => {
+            renderNotifyLog();
+            notifyUnread = 0;
+            updateNotifyLogButton();
+            $('notifyLogModal').classList.add('show');
+        });
+        $('notifyLogClose').addEventListener('click', () => $('notifyLogModal').classList.remove('show'));
+        $('notifyLogModal').addEventListener('click', e => {
+            if (e.target === $('notifyLogModal')) $('notifyLogModal').classList.remove('show');
+        });
+        $('notifyLogClear').addEventListener('click', () => {
+            notifyLog.length = 0;
+            notifyUnread = 0;
+            updateNotifyLogButton();
+            renderNotifyLog();
+        });
+        $('notifyLogCopy').addEventListener('click', async () => {
+            const textDump = [...notifyLog].reverse().map(e =>
+                `[${e.time.toLocaleTimeString('ru-RU')}] ${e.type.toUpperCase()}${e.count > 1 ? ` ×${e.count}` : ''}: ${e.text}`
+            ).join('\n');
+            try {
+                await navigator.clipboard.writeText(textDump);
+                notify('Журнал скопирован в буфер обмена.', 'ok');
+            } catch (_) {
+                notify('Не удалось скопировать: браузер не дал доступ к буферу обмена.', 'error');
+            }
+        });
 
         const notifyOk = (message) => notify(message, 'ok');
         const notifyError = (message) => notify(message, 'error');
@@ -6526,6 +6642,19 @@ uniform vec3 uBatchSelColor;
     return out;
   }
 
+  /**
+   * COORDINATE_TO_ORIGIN сдвигает КАЖДЫЙ файл к его собственному центру, и web-ifc
+   * не сообщает, на сколько именно (GetCoordinationMatrix возвращает нули).
+   * Поэтому для сводки CTO разрушителен: шесть файлов одной дороги схлопываются
+   * в кучу у нуля, и наш федеративный origin уже не видит крупных координат.
+   *
+   * Включаем его только там, где без него правда пусто: тесселяция CSG/boolean
+   * идёт в float32 в мировых координатах, и при геодезическом origin шаг float32
+   * (~0.5 м на 6e6) съедает геометрию. Без boolean вершины остаются локальными,
+   * а мировое положение живёт в flatTransformation (double) — точность цела.
+   *
+   * Если ошиблись и геометрия всё же пуста — loadSingleIFC повторит с CTO.
+   */
   function shouldForceCoordinateToOrigin({
     coordExtents,
     lengthToMeters,
@@ -6538,11 +6667,15 @@ uniform vec3 uBatchSelColor;
     const toM = Number(lengthToMeters);
     const scale = Number.isFinite(toM) && toM > 0 ? toM : (coordExtents.looksLikeMillimetres ? 0.001 : 1);
     const worldMeters = maxAbs * scale;
-    if (worldMeters >= LARGE_COORD_THRESHOLD) return true;
+    const booleans = Number(booleanOpsCount) || 0;
+    // Геодезический origin + плотный CSG: тот случай, ради которого CTO и заводили.
+    // Порог тот же, что у Tekla-правила ниже: единичные вырезы тесселяцию не рушат,
+    // а платить за них потерей абсолютных координат нельзя.
+    if (worldMeters >= LARGE_COORD_THRESHOLD && booleans >= 8) return true;
     // Tekla IFC2X3 CoordinationView often keeps a huge site origin and many CSG
     // DIFFERENCE ops. web-ifc float tessellation then yields empty fragments while
     // the spatial tree still lists products — zoom/focus silently no-ops.
-    if (isTekla && isIfc2x3 && (Number(booleanOpsCount) || 0) >= 8 && worldMeters >= 50) {
+    if (isTekla && isIfc2x3 && booleans >= 8 && worldMeters >= 50) {
       return true;
     }
     return false;
@@ -6890,6 +7023,17 @@ uniform vec3 uBatchSelColor;
                 modData._fragments = fragments;
                 if (rebased && ifcWorldOrigin) {
                     modData.coordOrigin = { ...ifcWorldOrigin };
+                }
+
+                // CTO пришлось включить (плотный CSG) — координаты этого файла уже не
+                // абсолютные, и в сводке он встанет не на своё место. Честно говорим.
+                if (modData.coordinateToOrigin && coordExtents.maxAbs * lengthToMetersEstimate >= LARGE_COORD_THRESHOLD) {
+                    notify(
+                        `${file.name}: файл геопривязан, но из-за плотной CSG-геометрии (${booleanOps}+ вырезов) ` +
+                        `открыт со сбросом координат в ноль — иначе геометрия теряется. ` +
+                        `В сводке поставьте его на место: «Выравнивание» → координаты точки вставки.`,
+                        'error'
+                    );
                 }
 
                 totalElements += modData.meshesByID.size;
@@ -18290,7 +18434,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.08',
-            buildId: '9434641-preview',
+            buildId: 'e0b6ddc-preview',
             released: '2026-08-08',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -18298,6 +18442,8 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
+                '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
                 '2026.08.08: IFC4X1 / IFC4X2 (Civil 3D, OpenRoads) открываются в режиме совместимости с IFC4.',
                 '2026.08.08: пресеты загрузки IFC (каркас / инженерка / без арматуры и метизов) — лишние классы не тянутся в память.',
                 '2026.08.08: удаление выделенных элементов из сцены с освобождением памяти; точка вставки модели по координатам (E, N, Z).',
