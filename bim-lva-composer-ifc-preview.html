@@ -2082,7 +2082,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · fd93a7a</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · bee770f</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2194,6 +2194,8 @@
                             <button class="btn" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ Яндекс.Диск</button>
                             <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 Растр (ECW / GeoTIFF)</button>
                             <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT / Tekla / Plant</button>
+                            <div class="tb-menu-label">Фильтр при загрузке IFC</div>
+                            <select class="editInput" id="loadPresetSelect" title="Какие IFC-классы тянуть в сцену при загрузке. Пресет экономит память на больших моделях: арматура, метизы и мебель не загружаются. Применяется к следующим загружаемым файлам."></select>
                             <div class="tb-menu-label">Сцена</div>
                             <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕ Очистить модели</button>
                             <div class="tb-menu-label" id="tbOverflowLabel" hidden>Инструменты</div>
@@ -2299,6 +2301,7 @@
         <button class="ctx-item" id="ctxRenameBranch" title="Изменить атрибут Name реального IFC-узла">✎ Переименовать ветку</button>
         <button class="ctx-item" id="ctxAddBranch" title="Создать дочернюю пользовательскую ветку под выбранным разделом">＋ Добавить дочернюю ветку</button>
         <button class="ctx-item" id="ctxHide" title="Скрыть геометрию выбранной ветки">👁 Скрыть ветку</button>
+        <button class="ctx-item danger" id="ctxDeleteSel" title="Удалить выделенные элементы из сцены и освободить память. Исходный IFC-файл не меняется">🗑 Удалить выделенное из сцены</button>
         <div class="ctx-divider"></div>
         <button class="ctx-item danger" id="ctxRemoveFile" title="Удалить весь файл, которому принадлежит выбранная ветка, из просмотрщика">✕ Удалить загруженный файл</button>
     </div>
@@ -2306,6 +2309,7 @@
     <div class="ctx-menu" id="stageCtx">
         <button class="ctx-item" id="ctxBg" title="Переключить светлый цвет фона 3D-сцены">🎨 Изменить цвет фона</button>
         <button class="ctx-item" id="ctxShowAll" title="Снова показать всю скрытую геометрию">👁‍🗨 Показать скрытое</button>
+        <button class="ctx-item danger" id="ctxDeleteStage" title="Удалить выделенные элементы из сцены и освободить память. Исходный IFC-файл не меняется">🗑 Удалить выделенное из сцены</button>
         <button class="ctx-item" id="ctxFit" title="Вписать все модели в окно просмотра">⤢ Вписать всё в кадр</button>
     </div>
 
@@ -2599,6 +2603,7 @@
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
             <h3>Фильтр по IFC-классам</h3>
             <div class="bulk-note">Снимите галочки, чтобы скрыть классы. Только IFC.</div>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px" id="classFilterPresets"></div>
             <div id="classFilterList" style="max-height:320px;overflow:auto;margin:8px 0"></div>
             <div class="modal-actions" style="justify-content:flex-start">
                 <button class="btn" id="classFilterAll">Все</button>
@@ -2709,8 +2714,8 @@
 
     <div class="modal-backdrop" id="alignModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="alignModalTitle" style="width:min(460px,100%)">
-            <h3 id="alignModalTitle">Выравнивание модели</h3>
-            <div class="bulk-note">Выберите модель и двигайте/вращайте её ручкой на сцене. Полезно для сведения разных файлов.</div>
+            <h3 id="alignModalTitle">Выравнивание / координаты модели</h3>
+            <div class="bulk-note">Выберите модель и двигайте/вращайте её ручкой на сцене — или введите координаты точки вставки вручную (например, когда IFC выгружен «в нуле», а посадить его надо по геодезии).</div>
             <div class="prop small">
                 <div class="k">Модель</div>
                 <select class="editInput" id="alignModelSelect"></select>
@@ -2722,7 +2727,12 @@
                     <option value="rotate">Поворот</option>
                 </select>
             </div>
+            <div class="bulk-note">Точка вставки — мировые координаты нуля модели, в метрах. Поля обновляются при перетаскивании ручкой.</div>
+            <div class="prop small"><div class="k">X (east)</div><input class="editInput" id="alignPosX" type="number" step="0.001"></div>
+            <div class="prop small"><div class="k">Y (north)</div><input class="editInput" id="alignPosY" type="number" step="0.001"></div>
+            <div class="prop small"><div class="k">Z (высота)</div><input class="editInput" id="alignPosZ" type="number" step="0.001"></div>
             <div class="modal-actions">
+                <button class="btn load-btn" id="alignApplyPos" title="Сдвинуть модель так, чтобы её ноль встал в указанные мировые координаты">Поставить по координатам</button>
                 <button class="btn" id="alignResetBtn">Сбросить трансформацию</button>
                 <button class="btn" id="alignDoneBtn">Готово</button>
             </div>
@@ -3300,14 +3310,26 @@
             }
         }
 
+        // Пачка файлов: один общий прогресс-бар, hideLoader() внутри пачки игнорируется,
+        // иначе лоадер моргает на каждом файле (каждый loadSingleXXX прячет его за собой).
+        let loaderBatch = null; // { current, total, filename }
+
         function showLoader(title, sub, progressOpts) {
             if (!loader) return;
             const titleEl = $('loadTitle');
             const subEl = $('loadSub');
             if (titleEl) titleEl.textContent = title;
-            if (subEl) subEl.textContent = sub || '';
+            if (subEl) {
+                subEl.textContent = loaderBatch
+                    ? `Файл ${loaderBatch.current}/${loaderBatch.total}: ${loaderBatch.filename}${sub ? ' — ' + sub : ''}`
+                    : (sub || '');
+            }
             if (progressOpts && (progressOpts.ratio != null || progressOpts.loaded != null)) {
                 setLoaderProgress(progressOpts.ratio, progressOpts);
+            } else if (loaderBatch) {
+                setLoaderProgress((loaderBatch.current - 1) / loaderBatch.total, {
+                    bytesText: `${loaderBatch.current}/${loaderBatch.total}`
+                });
             } else {
                 setLoaderProgress(null, { label: 'загрузка…' });
             }
@@ -3316,6 +3338,7 @@
 
         function hideLoader() {
             if (!loader) return;
+            if (loaderBatch) return;
             loader.classList.remove('show');
             setLoaderProgress(null, { label: 'загрузка…' });
         }
@@ -3425,7 +3448,10 @@
                         format: mod.format || '',
                         sizeX: box.max.x - box.min.x,
                         sizeY: box.max.y - box.min.y,
-                        sizeZ: box.max.z - box.min.z
+                        sizeZ: box.max.z - box.min.z,
+                        centerX: (box.min.x + box.max.x) / 2,
+                        centerY: (box.min.y + box.max.y) / 2,
+                        centerZ: (box.min.z + box.max.z) / 2
                     });
                 }
                 return out;
@@ -4951,6 +4977,8 @@
             // Сериализация загрузок — web-ifc не любит параллельный OpenModel
             ifcLoadLock = ifcLoadLock.then(() => loadFilesSequentially(files)).catch(err => {
                 console.error(err);
+                loaderBatch = null;
+                hideLoader();
             });
             await ifcLoadLock;
         }
@@ -4974,7 +5002,10 @@
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 const ext = file.name.split('.').pop().toLowerCase();
-                showLoader('ЗАГРУЗКА', `${i + 1}/${files.length}: ${file.name}`);
+                if (files.length > 1) {
+                    loaderBatch = { current: i + 1, total: files.length, filename: file.name };
+                }
+                showLoader('ЗАГРУЗКА', files.length > 1 ? '' : file.name);
                 try {
                     if (ext === 'ifc') await loadSingleIFC(file);
                     else if (ext === 'fbx') await loadSingleFBX(file);
@@ -5010,6 +5041,7 @@
                 // Пауза между файлами — дать браузеру освободить память
                 await new Promise(r => setTimeout(r, 80));
             }
+            loaderBatch = null;
 
             if (skipped.length) notifyError('Пропущено (формат не поддержан): ' + skipped.join(', '));
             if (failed.length) {
@@ -5545,9 +5577,10 @@ uniform vec3 uBatchSelColor;
         }
 
         /** Центр габарита в ноль (всегда, не только геодезия). */
+        /** @returns вычтенный центр (THREE.Vector3) или null — чтобы запомнить его как origin модели. */
         function forceCenterFragmentsNearOrigin(fragments) {
             const c = estimateFragmentsOrigin(fragments);
-            if (!c || c.lengthSq() < 1e-12) return;
+            if (!c || c.lengthSq() < 1e-12) return null;
             for (let i = 0; i < fragments.length; i++) {
                 const geom = fragments[i]?.geom;
                 if (!geom?.attributes?.position) continue;
@@ -5555,6 +5588,7 @@ uniform vec3 uBatchSelColor;
                 geom.computeBoundingBox();
                 geom.computeBoundingSphere();
             }
+            return c;
         }
 
         function shiftLoadedModelsByWorldVector(shiftWorld) {
@@ -6537,13 +6571,79 @@ uniform vec3 uBatchSelColor;
     } catch (_) {}
   }
 
+  // ---- Пресеты загрузки IFC: в сцену тянутся только нужные классы ----
+  // IFC из Tekla/Revit часто тащит тысячи метизов, арматуры и мебели.
+  // Пресет режет их на этапе извлечения мешей: web-ifc всё равно парсит файл
+  // целиком (WASM), но буферы three.js, батчи и BVH для отрезанных классов
+  // не создаются — а это основной расход памяти и времени.
+  const IFC_LOAD_PRESETS = {
+    all: { name: 'Вся модель (без фильтра)' },
+    structure: {
+      name: 'Каркас: стены, перекрытия, балки, колонны',
+      include: ['IFCWALL', 'IFCSLAB', 'IFCROOF', 'IFCBEAM', 'IFCCOLUMN', 'IFCFOOTING',
+        'IFCPILE', 'IFCMEMBER', 'IFCPLATE', 'IFCSTAIR', 'IFCRAMP', 'IFCCURTAINWALL',
+        'IFCELEMENTASSEMBLY', 'IFCBUILDINGELEMENTPROXY']
+    },
+    mep: {
+      name: 'Инженерные сети: трубы, воздуховоды, кабели',
+      include: ['IFCPIPE', 'IFCDUCT', 'IFCCABLE', 'IFCFLOW', 'IFCDISTRIBUTION',
+        'IFCVALVE', 'IFCPUMP', 'IFCFAN', 'IFCFILTER', 'IFCJUNCTIONBOX',
+        'IFCELECTRIC', 'IFCLIGHTFIXTURE', 'IFCSANITARYTERMINAL',
+        'IFCENERGYCONVERSIONDEVICE', 'IFCUNITARYEQUIPMENT']
+    },
+    light: {
+      name: 'Без арматуры, метизов и мебели',
+      exclude: ['IFCREINFORCING', 'IFCFASTENER', 'IFCMECHANICALFASTENER',
+        'IFCDISCRETEACCESSORY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE',
+        'IFCSYSTEMFURNITUREELEMENT', 'IFCANNOTATION']
+    }
+  };
+  const LOAD_PRESET_STORAGE_KEY = 'bimlva_ifc_load_preset_v1';
+  let ifcLoadPresetId = 'all';
+  try {
+    const savedPreset = localStorage.getItem(LOAD_PRESET_STORAGE_KEY);
+    if (savedPreset && IFC_LOAD_PRESETS[savedPreset]) ifcLoadPresetId = savedPreset;
+  } catch (_) {}
+
+  // Классы-наследники (IFCWALLSTANDARDCASE и т.п.) ловим по префиксу.
+  function ifcClassMatchesPreset(preset, className) {
+    if (preset.exclude && preset.exclude.some(p => className.startsWith(p))) return false;
+    if (preset.include) return preset.include.some(p => className.startsWith(p));
+    return true;
+  }
+
+  function activeLoadPreset() {
+    const preset = IFC_LOAD_PRESETS[ifcLoadPresetId];
+    return preset && (preset.include || preset.exclude) ? preset : null;
+  }
+
   async function streamIfcMeshes(modelID) {
             const fragments = [];
             let meshErrors = 0;
+            let presetSkipped = 0;
+            const preset = activeLoadPreset();
+            const presetVerdictByID = preset ? new Map() : null;
             try {
                 ifcAPI.StreamAllMeshes(modelID, (flatMesh) => {
                     try {
                         const expressID = flatMesh.expressID;
+                        if (preset) {
+                            let allowed = presetVerdictByID.get(expressID);
+                            if (allowed === undefined) {
+                                let className = '';
+                                try {
+                                    const tc = ifcAPI.GetLineType(modelID, expressID);
+                                    className = (tc != null && TYPE_NAMES[tc]) || '';
+                                } catch (_) {}
+                                // Неопознанный класс не режем — лучше лишняя геометрия, чем дыра.
+                                allowed = !className || ifcClassMatchesPreset(preset, className);
+                                presetVerdictByID.set(expressID, allowed);
+                            }
+                            if (!allowed) {
+                                presetSkipped++;
+                                return;
+                            }
+                        }
                         const placed = flatMesh.geometries;
                         for (let i = 0; i < placed.size(); i++) {
                             try {
@@ -6569,7 +6669,7 @@ uniform vec3 uBatchSelColor;
                 console.warn('Геометрия частично загружена:', streamError);
                 meshErrors++;
             }
-            return { fragments, meshErrors };
+            return { fragments, meshErrors, presetSkipped };
         }
 
         async function loadSingleIFC(file) {
@@ -6642,7 +6742,7 @@ uniform vec3 uBatchSelColor;
                 showLoader('ГЕОМЕТРИЯ', preferExactBools ? 'CSG/boolean (точнее, медленнее)…' : 'Извлечение мешей...');
                 await new Promise(r => setTimeout(r, 10));
 
-                let { fragments, meshErrors } = await streamIfcMeshes(modelID);
+                let { fragments, meshErrors, presetSkipped } = await streamIfcMeshes(modelID);
 
                 const countUsableFragments = (frags) =>
                     (frags || []).reduce((n, f) => n + (isFragmentMeshRenderable(f) ? 1 : 0), 0);
@@ -6670,9 +6770,17 @@ uniform vec3 uBatchSelColor;
                 }
 
                 let usableCount = countUsableFragments(fragments);
+                // Пресет срезал всё — повторы с другими настройками web-ifc не помогут
+                if (usableCount === 0 && presetSkipped > 0) {
+                    throw new Error(
+                        `${file.name}: пресет загрузки «${IFC_LOAD_PRESETS[ifcLoadPresetId].name}» ` +
+                        `отфильтровал все ${presetSkipped.toLocaleString('ru-RU')} элементов с геометрией.\n` +
+                        `Выберите другой пресет в меню ⋯ → «Фильтр при загрузке IFC» и загрузите файл снова.`
+                    );
+                }
                 // Пустая/дегенерированная геометрия при FAST_BOOLS — повтор без ускорения boolean
                 if (usableCount === 0 && openSettings.USE_FAST_BOOLS) {
-                    ({ fragments, meshErrors } = await reopenAndRestream(
+                    ({ fragments, meshErrors, presetSkipped } = await reopenAndRestream(
                         { USE_FAST_BOOLS: false },
                         'Повтор без ускорения boolean…'
                     ));
@@ -6681,7 +6789,7 @@ uniform vec3 uBatchSelColor;
                 // Крупный origin / float32-CSG: если ещё пусто и CTO не был включён — OpenModel с COORDINATE_TO_ORIGIN
                 if (usableCount === 0 && !openSettings.COORDINATE_TO_ORIGIN) {
                     forceCoordinateToOrigin = true;
-                    ({ fragments, meshErrors } = await reopenAndRestream(
+                    ({ fragments, meshErrors, presetSkipped } = await reopenAndRestream(
                         { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: false },
                         'Повтор с COORDINATE_TO_ORIGIN…'
                     ));
@@ -6746,7 +6854,9 @@ uniform vec3 uBatchSelColor;
                 }
                 bakeFragmentTransformsIntoGeometry(fragments);
                 if (!rebased) {
-                    forceCenterFragmentsNearOrigin(fragments);
+                    // Запоминаем вычтенный центр: это база для «поставить по координатам»
+                    const centered = forceCenterFragmentsNearOrigin(fragments);
+                    if (centered) modData.coordOrigin = { x: centered.x, y: centered.y, z: centered.z };
                 }
 
                 if (fragments.length >= IFC_BATCH_THRESHOLD) {
@@ -6784,6 +6894,14 @@ uniform vec3 uBatchSelColor;
                 markNeedsRender();
                 hideLoader();
 
+                if (presetSkipped > 0) {
+                    modData.loadPresetId = ifcLoadPresetId;
+                    notifyOk(
+                        `${file.name}: пресет «${IFC_LOAD_PRESETS[ifcLoadPresetId].name}» — ` +
+                        `геометрия ${presetSkipped.toLocaleString('ru-RU')} элементов не загружалась. ` +
+                        `Вернуть всё: меню ⋯ → «Фильтр при загрузке IFC» → «Вся модель» и перезагрузить файл.`
+                    );
+                }
                 if (meshErrors) {
                     console.warn(`${file.name}: пропущено проблемных фрагментов геометрии: ${meshErrors}`);
                 }
@@ -10390,6 +10508,96 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             markNeedsRender();
         }
 
+        // Удаление части модели: в отличие от «Скрыть», геометрия выгружается из
+        // памяти (фрагменты, батчи, BVH). Исходный IFC-текст не трогаем — при
+        // сохранении изменённого IFC удалённые элементы останутся в файле.
+        function deleteSelectedElementsFromScene() {
+            if (!selectedItems.length) {
+                notifyError('Сначала выделите элементы (клик, рамка или ветка дерева).');
+                return;
+            }
+            const byModel = new Map();
+            selectedItems.forEach(item => {
+                if (!byModel.has(item.modelID)) byModel.set(item.modelID, new Set());
+                byModel.get(item.modelID).add(item.expressID);
+            });
+            const requested = [...byModel.values()].reduce((n, s) => n + s.size, 0);
+            if (!confirm(
+                `Удалить ${requested.toLocaleString('ru-RU')} элементов из сцены?\n\n` +
+                'Геометрия будет выгружена из памяти. Исходный IFC-файл не меняется — ' +
+                'после перезагрузки файла элементы вернутся.'
+            )) return;
+
+            let removedTotal = 0;
+            const emptyModels = [];
+            for (const [modelID, ids] of byModel) {
+                const mod = loadedModels.get(modelID);
+                if (!mod) continue;
+                const before = mod.meshesByID.size;
+
+                // Индивидуальные меши (небольшие IFC, FBX/GLB/DXF): со сцены и в dispose
+                if (!mod.batched) {
+                    const doomed = new Set();
+                    ids.forEach(id => {
+                        (mod.meshesByID.get(id) || []).forEach(mesh => {
+                            if (mesh.parent) mesh.parent.remove(mesh);
+                            mesh.geometry?.disposeBoundsTree?.();
+                            disposeFragmentMesh(mesh);
+                            doomed.add(mesh);
+                        });
+                        mod.meshesByID.delete(id);
+                    });
+                    if (doomed.size) allMeshes = allMeshes.filter(m => !doomed.has(m));
+                }
+
+                // Фрагменты IFC — источник правды для пересборки батчей
+                if (mod._fragments) {
+                    const kept = [];
+                    for (const frag of mod._fragments) {
+                        if (ids.has(frag.expressID)) {
+                            try { frag.geom?.dispose?.(); } catch (_) {}
+                        } else kept.push(frag);
+                    }
+                    mod._fragments = kept;
+                }
+                ids.forEach(id => {
+                    mod.hiddenIds?.delete(id);
+                    mod.fragmentGeoms?.delete(id);
+                    mod.appearanceByID?.delete(id);
+                    mod.searchCache?.delete(id);
+                    const gid = mod.globalIdByExpress?.get(id);
+                    if (gid != null) {
+                        mod.globalIdByExpress.delete(id);
+                        mod.expressByGlobalId?.delete(gid);
+                    }
+                });
+                if (mod.batched) buildIfcBatches(mod, mod._fragments || []);
+
+                removedTotal += Math.max(0, before - mod.meshesByID.size);
+
+                // Дерево: листья удалённых элементов убираем, ветки с детьми оставляем
+                const strModel = String(modelID);
+                treeBox.querySelectorAll('.trow').forEach(row => {
+                    if (String(row.dataset.mid) !== strModel) return;
+                    const eid = row.dataset.eid != null ? parseInt(row.dataset.eid, 10) : NaN;
+                    if (!ids.has(eid)) return;
+                    const tnode = row.closest('.tnode');
+                    if (tnode && !tnode.querySelector(':scope > .children')) tnode.remove();
+                    else row._selectionItems = [];
+                });
+
+                if (!mod.meshesByID.size) emptyModels.push(modelID);
+            }
+
+            totalElements = Math.max(0, totalElements - removedTotal);
+            $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+            selectMultiple([]);
+            emptyModels.forEach(id => removeLoadedModel(id));
+            markNeedsRender();
+            notifyOk(`Удалено из сцены: ${removedTotal.toLocaleString('ru-RU')} элементов.`);
+            trackUsage('delete_selection', { count: removedTotal });
+        }
+
         $('btnHide').addEventListener('click', () => {
             const batchedToRebuild = new Set();
             selectedItems.forEach(i => {
@@ -12299,6 +12507,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
         }
 
+        // Селектор пресета загрузки в меню «⋯» — общий словарь с фильтром классов.
+        // Без esc/escAttr: это инициализация модуля, esc объявлен ниже (TDZ),
+        // а имена пресетов — свои константы, не пользовательский ввод.
+        (function initLoadPresetSelect() {
+            const sel = $('loadPresetSelect');
+            if (!sel) return;
+            sel.innerHTML = Object.entries(IFC_LOAD_PRESETS).map(([id, p]) =>
+                `<option value="${id}">${p.name}</option>`
+            ).join('');
+            sel.value = ifcLoadPresetId;
+            sel.addEventListener('change', () => {
+                ifcLoadPresetId = IFC_LOAD_PRESETS[sel.value] ? sel.value : 'all';
+                try { localStorage.setItem(LOAD_PRESET_STORAGE_KEY, ifcLoadPresetId); } catch (_) {}
+                if (activeLoadPreset()) {
+                    notifyOk(`Пресет «${IFC_LOAD_PRESETS[ifcLoadPresetId].name}» будет применён к следующим загружаемым IFC.`);
+                }
+                trackUsage('ifc_load_preset', { preset: ifcLoadPresetId });
+            });
+        })();
+
         $('btnClassFilter').addEventListener('click', () => {
             const classes = collectIfcClasses();
             $('classFilterList').innerHTML = classes.map(([cls, n]) => `
@@ -12307,6 +12535,24 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     <span>${esc(cls)} <span style="opacity:.6">(${n})</span></span>
                 </label>
             `).join('') || '<div class="bulk-note">Нет IFC-классов.</div>';
+            // Кнопки-пресеты: отмечают чекбоксы по тем же спискам, что и фильтр загрузки
+            const presetHost = $('classFilterPresets');
+            if (presetHost) {
+                presetHost.innerHTML = Object.entries(IFC_LOAD_PRESETS)
+                    .filter(([, p]) => p.include || p.exclude)
+                    .map(([id, p]) => `<button type="button" class="btn class-filter-preset" data-preset="${escAttr(id)}" title="Отметить классы пресета «${escAttr(p.name)}»">${esc(p.name)}</button>`)
+                    .join('');
+                presetHost.querySelectorAll('.class-filter-preset').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const preset = IFC_LOAD_PRESETS[btn.dataset.preset];
+                        if (!preset) return;
+                        document.querySelectorAll('.class-filter-cb').forEach(cb => {
+                            // В модалке классы без префикса IFC — возвращаем его для сверки
+                            cb.checked = ifcClassMatchesPreset(preset, 'IFC' + cb.dataset.cls.toUpperCase());
+                        });
+                    });
+                });
+            }
             $('classFilterModal').classList.add('show');
         });
         $('cancelClassFilter').addEventListener('click', () => $('classFilterModal').classList.remove('show'));
@@ -13118,6 +13364,31 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             markNeedsRender();
         }
 
+        // ID внешних моделей строковые (fbx_1), IFC — числа; select всегда отдаёт строку
+        function parseAlignModelId(raw) {
+            if (raw == null || raw === '') return null;
+            return isNaN(raw) ? raw : Number(raw);
+        }
+
+        function alignSelectedModel() {
+            const id = alignModelId ?? parseAlignModelId($('alignModelSelect').value);
+            return id == null ? null : loadedModels.get(id);
+        }
+
+        /** База мировых координат модели: origin, вычтенный из геометрии при загрузке. */
+        function alignModelWorldBase(mod) {
+            return mod?.coordOrigin || { x: 0, y: 0, z: 0 };
+        }
+
+        function refreshAlignPosInputs() {
+            const mod = alignSelectedModel();
+            if (!mod?.group) return;
+            const base = alignModelWorldBase(mod);
+            $('alignPosX').value = (base.x + mod.group.position.x).toFixed(3);
+            $('alignPosY').value = (base.y + mod.group.position.y).toFixed(3);
+            $('alignPosZ').value = (base.z + mod.group.position.z).toFixed(3);
+        }
+
         function startAlignOnModel(modelID) {
             const mod = loadedModels.get(modelID);
             if (!mod?.group) return;
@@ -13129,6 +13400,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             alignControl.visible = true;
             alignControl.enabled = true;
             $('btnAlign').classList.add('on');
+            refreshAlignPosInputs();
             markNeedsRender();
         }
 
@@ -13147,8 +13419,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             fillAlignModelSelect();
             $('alignModal').classList.add('show');
-            const first = Number($('alignModelSelect').value);
-            if (Number.isFinite(first)) startAlignOnModel(first);
+            const first = parseAlignModelId($('alignModelSelect').value);
+            if (first != null) startAlignOnModel(first);
             trackUsage('align_apply');
         });
         $('alignDoneBtn').addEventListener('click', stopAlignTool);
@@ -13156,19 +13428,42 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (e.target === $('alignModal')) stopAlignTool();
         });
         $('alignModelSelect').addEventListener('change', () => {
-            const id = Number($('alignModelSelect').value);
-            if (Number.isFinite(id)) startAlignOnModel(id);
+            const id = parseAlignModelId($('alignModelSelect').value);
+            alignModelId = null;
+            if (id != null) startAlignOnModel(id);
         });
         $('alignGizmoMode').addEventListener('change', () => {
             alignControl.setMode($('alignGizmoMode').value || 'translate');
             markNeedsRender();
         });
+        $('alignApplyPos').addEventListener('click', () => {
+            const mod = alignSelectedModel();
+            if (!mod?.group) return;
+            const x = parseFloat($('alignPosX').value);
+            const y = parseFloat($('alignPosY').value);
+            const z = parseFloat($('alignPosZ').value);
+            if (![x, y, z].every(Number.isFinite)) {
+                notifyError('Введите числовые координаты X, Y, Z (в метрах).');
+                return;
+            }
+            const base = alignModelWorldBase(mod);
+            mod.group.position.set(x - base.x, y - base.y, z - base.z);
+            mod.group.updateMatrixWorld(true);
+            markNeedsRender();
+            notifyOk(`Модель «${mod.filename}» поставлена в X=${x}, Y=${y}, Z=${z}.`);
+            trackUsage('align_set_coords');
+        });
+        // Перетаскивание ручкой — держим поля координат актуальными
+        alignControl.addEventListener('change', () => {
+            if (alignActive) refreshAlignPosInputs();
+        });
         $('alignResetBtn').addEventListener('click', () => {
-            const mod = loadedModels.get(alignModelId ?? Number($('alignModelSelect').value));
+            const mod = alignSelectedModel();
             if (!mod?.group) return;
             mod.group.position.set(0, 0, 0);
             mod.group.rotation.set(0, 0, 0);
             mod.group.scale.set(1, 1, 1);
+            refreshAlignPosInputs();
             markNeedsRender();
         });
 
@@ -16630,6 +16925,8 @@ ${componentXml || '    '}
         });
 
         $('ctxHide').addEventListener('click', () => $('btnHide').click());
+        $('ctxDeleteSel').addEventListener('click', deleteSelectedElementsFromScene);
+        $('ctxDeleteStage').addEventListener('click', deleteSelectedElementsFromScene);
 
         $('ctxAddBranch').addEventListener('click', () => {
             if (!treeContextRow) return;
@@ -17970,15 +18267,18 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.05',
-            buildId: 'fd93a7a-preview',
-            released: '2026-08-05',
+            version: '2026.08.08',
+            buildId: 'bee770f-preview',
+            released: '2026-08-08',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.08: пресеты загрузки IFC (каркас / инженерка / без арматуры и метизов) — лишние классы не тянутся в память.',
+                '2026.08.08: удаление выделенных элементов из сцены с освобождением памяти; точка вставки модели по координатам (E, N, Z).',
+                '2026.08.08: один прогресс-бар на пачку файлов — без моргания между файлами.',
                 '2026.08.05: чтение DWG (R13…2018) и раскрытие блоков DXF/DWG; единицы чертежа из $INSUNITS.',
                 '2026.08.05: коллизии через пространственный индекс, пикинг через BVH — на больших моделях кратно быстрее.',
                 '2026.08.05: библиотеки загружаются с самого сайта, офлайн-режим наконец работает.',
