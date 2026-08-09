@@ -95,6 +95,34 @@ try {
     });
     if (!customShown) problems.push('для своего шаблона не появилось поле URL');
 
+    // A2. Пара из карт вставляется одной строкой и раскладывается по полям
+    const pasted = await page.evaluate(([lat, lon]) => {
+        const el = document.getElementById('baseMapLatLonPaste');
+        el.value = `${lat}, ${lon}`;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return {
+            lat: parseFloat(document.getElementById('baseMapLat').value),
+            lon: parseFloat(document.getElementById('baseMapLon').value)
+        };
+    }, [SITE.lat, SITE.lon]);
+    if (Math.abs(pasted.lat - SITE.lat) > 1e-6 || Math.abs(pasted.lon - SITE.lon) > 1e-6) {
+        problems.push(`вставка пары координат не разложилась: ${JSON.stringify(pasted)}`);
+    }
+    // Русская локаль отдаёт дробь через запятую — самый частый способ всё сломать
+    const pastedComma = await page.evaluate(() => {
+        const el = document.getElementById('baseMapLatLonPaste');
+        el.value = '55,712345, 52,412345';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return {
+            lat: parseFloat(document.getElementById('baseMapLat').value),
+            lon: parseFloat(document.getElementById('baseMapLon').value)
+        };
+    });
+    if (Math.abs(pastedComma.lat - 55.712345) > 1e-6 || Math.abs(pastedComma.lon - 52.412345) > 1e-6) {
+        problems.push(`вставка с запятой в дробной части разобрана неверно: ${JSON.stringify(pastedComma)}`);
+    }
+    console.log(`A2. вставка «${SITE.lat}, ${SITE.lon}» → ${pasted.lat} / ${pasted.lon}; «55,712345, 52,412345» → ${pastedComma.lat} / ${pastedComma.lon}`);
+
     // B. Строим подложку
     await page.evaluate(([lat, lon, radius]) => {
         document.getElementById('baseMapLat').value = String(lat);
