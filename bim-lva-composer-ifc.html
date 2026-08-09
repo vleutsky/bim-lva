@@ -2207,6 +2207,7 @@
                             <div class="tb-menu-label">Открыть</div>
                             <button class="btn" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ Яндекс.Диск</button>
                             <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 Растр (ECW / GeoTIFF)</button>
+                            <button class="btn" id="btnBaseMap" title="Онлайн-карта или космоснимок подложкой под модель">🌍 Карта-подложка (онлайн)</button>
                             <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT / Tekla / Plant</button>
                             <div class="tb-menu-label">Фильтр при загрузке IFC</div>
                             <select class="editInput" id="loadPresetSelect" title="Какие IFC-классы тянуть в сцену при загрузке. Пресет экономит память на больших моделях: арматура, метизы и мебель не загружаются. Применяется к следующим загружаемым файлам."></select>
@@ -2699,6 +2700,51 @@
                 <button class="btn" id="tourCloseBtn">Закрыть</button>
                 <button class="btn" id="tourStopBtn">⏹ Стоп</button>
                 <button class="btn load-btn" id="tourPlayBtn">▶ Старт</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="baseMapModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="baseMapModalTitle" style="width:min(560px,100%)">
+            <h3 id="baseMapModalTitle">Карта-подложка под модель</h3>
+            <div class="bulk-note">
+                Карта приходит в мировых широте/долготе, а модель — в плоских съёмочных координатах.
+                Связать их вьювер сам не может, поэтому укажите <b>одну точку</b>: её координаты в модели
+                и её же широту/долготу. Проще всего — правый клик по своей площадке в любых онлайн-картах
+                и «скопировать координаты».
+            </div>
+            <div class="prop small">
+                <div class="k">Слой</div>
+                <select class="editInput" id="baseMapProvider"></select>
+            </div>
+            <div class="prop small" id="baseMapTemplateRow" style="display:none">
+                <div class="k">Шаблон тайлов</div>
+                <input class="editInput" id="baseMapTemplate" placeholder="https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=ВАШ_КЛЮЧ">
+            </div>
+            <div class="bulk-note" id="baseMapTemplateNote" style="display:none">
+                Ключ хранится только в этом браузере (localStorage) и на сервер BIM.LVA не уходит.
+            </div>
+            <div class="prop small"><div class="k">Широта точки</div><input class="editInput" id="baseMapLat" type="number" step="0.000001" placeholder="55.712345"></div>
+            <div class="prop small"><div class="k">Долгота точки</div><input class="editInput" id="baseMapLon" type="number" step="0.000001" placeholder="52.412345"></div>
+            <div class="bulk-note">Та же точка в координатах модели (east / north, метры). По умолчанию — центр загруженных моделей.</div>
+            <div class="prop small"><div class="k">X (east)</div><input class="editInput" id="baseMapAnchorX" type="number" step="0.01"></div>
+            <div class="prop small"><div class="k">Y (north)</div><input class="editInput" id="baseMapAnchorY" type="number" step="0.01"></div>
+            <div class="modal-actions" style="justify-content:flex-start;gap:6px">
+                <button type="button" class="btn" id="baseMapAnchorCenter" title="Подставить центр загруженных моделей">Центр моделей</button>
+                <button type="button" class="btn" id="baseMapAnchorSelection" title="Подставить координаты текущего выделения">Из выделения</button>
+            </div>
+            <div class="prop small"><div class="k">Поворот, ° <span style="opacity:.6">(север модели → истинный)</span></div><input class="editInput" id="baseMapRotation" type="number" step="0.1" value="0"></div>
+            <div class="prop small"><div class="k">Охват, м <span style="opacity:.6">(радиус)</span></div><input class="editInput" id="baseMapRadius" type="number" step="50" value="1000"></div>
+            <div class="prop small"><div class="k">Прозрачность</div><input type="range" id="baseMapOpacity" min="0.1" max="1" step="0.01" value="0.9"><span id="baseMapOpacityVal">0.90</span></div>
+            <div class="prop small">
+                <div class="k">Натянуть на рельеф</div>
+                <input type="checkbox" id="baseMapDrape" title="Положить карту на 3D-поверхность вместо плоскости">
+            </div>
+            <div class="bulk-note" id="baseMapAttribution"></div>
+            <div class="modal-actions">
+                <button class="btn" id="baseMapRemove">Убрать подложку</button>
+                <button class="btn" id="baseMapCancel">Закрыть</button>
+                <button class="btn load-btn" id="baseMapApply">Построить</button>
             </div>
         </div>
     </div>
@@ -3533,6 +3579,36 @@
                 scene.traverse(obj => { n += obj.geometry?.attributes?.position?.count || 0; });
                 return n;
             },
+            /**
+             * Карта-подложка: положение и размер в сцене плюс образцы UV.
+             * Тайл-серверы из песочницы недоступны, поэтому тест подменяет
+             * картинки и проверяет по этим числам нашу математику, а не сеть.
+             */
+            get basemapLayer() {
+                if (typeof geoRasterLayers === 'undefined') return null;
+                const layer = geoRasterLayers.find(l => l.id === basemapLayerId);
+                if (!layer?.mesh?.geometry) return null;
+                const mesh = layer.mesh;
+                mesh.geometry.computeBoundingBox();
+                mesh.updateWorldMatrix(true, false);
+                const box = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+                const uv = mesh.geometry.attributes.uv;
+                const at = (i) => [uv.getX(i), uv.getY(i)];
+                return {
+                    name: layer.name,
+                    tileInfo: layer.tileInfo || null,
+                    sizeX: box.max.x - box.min.x,
+                    sizeY: box.max.y - box.min.y,
+                    centerX: (box.min.x + box.max.x) / 2,
+                    centerY: (box.min.y + box.max.y) / 2,
+                    centerZ: (box.min.z + box.max.z) / 2,
+                    opacity: mesh.material?.opacity ?? 1,
+                    uvCount: uv.count,
+                    uvFirst: at(0),
+                    uvLast: at(uv.count - 1),
+                    uvMid: at(Math.floor(uv.count / 2))
+                };
+            },
             /** Габарит каждой загруженной модели по отдельности, в метрах сцены. */
             get modelBounds() {
                 const out = [];
@@ -3925,16 +4001,29 @@
             const indices = [];
             const baseZ = options.baseZ ?? getSceneGroundZ();
             const zOffset = options.zOffset ?? 0.05;
+            // Границы приходят в абсолютных координатах, а сцена сдвинута на ноль
+            // сводки: без поправки луч драпировки уходит за тысячи километров, а
+            // сама плоскость всплывает на высоту origin. Ноль по умолчанию —
+            // прежнее поведение для георастров.
+            const shift = options.worldShift || { e: 0, n: 0, h: 0 };
 
             for (let j = 0; j <= seg; j++) {
                 for (let i = 0; i <= seg; i++) {
                     const u = i / seg, v = j / seg;
                     const x = minX + u * w;
                     const y = minY + v * h;
-                    let z = baseZ + zOffset;
-                    if (options.drape) z = sampleTerrainZ(x, y, baseZ) + zOffset;
+                    let z = baseZ + zOffset + shift.h;
+                    if (options.drape) z = sampleTerrainZ(x - shift.e, y - shift.n, baseZ) + shift.h + zOffset;
                     positions.push(x, y, z);
-                    uvs.push(u, 1 - v);
+                    // GeoTIFF ложится линейно; тайловая подложка — нет: Меркатор
+                    // нелинеен по широте, и на паре километров линейный UV уводит
+                    // картинку на десятки сантиметров. Такой слой даёт свой uvFor.
+                    if (typeof options.uvFor === 'function') {
+                        const uv = options.uvFor(x, y);
+                        uvs.push(uv[0], uv[1]);
+                    } else {
+                        uvs.push(u, 1 - v);
+                    }
                 }
             }
             for (let j = 0; j < seg; j++) {
@@ -4053,6 +4142,316 @@
             }
             updateGeoRasterListUI();
             hideLoader();
+        }
+
+        // ================= Онлайн-карта как подложка =================
+        // Тайлы (OSM, спутник ESRI) — это Web Mercator: адресуются широтой и
+        // долготой, а модель лежит в плоских съёмочных координатах. Мост между
+        // ними вьювер угадать не может, поэтому его задаёт пользователь: точка
+        // модели ↔ её широта/долгота (правый клик в любых картах → копировать).
+        //
+        // Яндекс/Google/2ГИС сюда сознательно не добавлены: их условия разрешают
+        // показывать карту только внутри их собственного виджета, а нам нужна
+        // картинка текстурой под 3D. Это не техническое ограничение, а лицензия.
+        const BASEMAP_PROVIDERS = {
+            osm: {
+                name: 'OpenStreetMap — схема',
+                url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            },
+            esri: {
+                name: 'ESRI — космоснимок',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attribution: 'Источники: Esri, Maxar, Earthstar Geographics',
+                maxZoom: 19
+            },
+            custom: {
+                name: 'Свой шаблон (MapTiler / Mapbox — со своим ключом)',
+                url: '',
+                attribution: 'Источник указан в шаблоне',
+                maxZoom: 20
+            }
+        };
+
+        const BASEMAP_STORAGE_KEY = 'bimlva_basemap_v1';
+        const EARTH_METERS_PER_DEGREE = 111320; // по меридиану, достаточно на км-масштабах
+        /** Тайлов за один раз: щадим бесплатные сервисы и не вешаем вкладку. */
+        const BASEMAP_MAX_TILES = 160;
+        let basemapLayerId = null;
+
+        function lonToMercatorX(lon, z) {
+            return ((lon + 180) / 360) * Math.pow(2, z);
+        }
+
+        function latToMercatorY(lat, z) {
+            const rad = lat * Math.PI / 180;
+            return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, z);
+        }
+
+        /**
+         * Точка модели → широта/долгота через локальную ENU-развёртку вокруг
+         * привязки. На километровых площадках погрешность сантиметровая, а
+         * знать зону МСК не требуется — её в IFC обычно и нет.
+         */
+        function basemapModelToLatLon(binding, modelX, modelY) {
+            const dE0 = modelX - binding.anchorX;
+            const dN0 = modelY - binding.anchorY;
+            // Азимут: на сколько север модели повёрнут относительно истинного
+            const a = (binding.rotationDeg || 0) * Math.PI / 180;
+            const cos = Math.cos(a), sin = Math.sin(a);
+            const dE = dE0 * cos - dN0 * sin;
+            const dN = dE0 * sin + dN0 * cos;
+            const lat = binding.lat + dN / EARTH_METERS_PER_DEGREE;
+            const lonScale = EARTH_METERS_PER_DEGREE * Math.cos(binding.lat * Math.PI / 180);
+            const lon = binding.lon + dE / (Math.abs(lonScale) < 1 ? 1 : lonScale);
+            return { lat, lon };
+        }
+
+        function pickBasemapZoom(binding, radius, provider, targetPx = 2048) {
+            const metersAcross = radius * 2;
+            const latRad = binding.lat * Math.PI / 180;
+            // Разрешение Меркатора на широте: 156543.03 · cos(φ) / 2^z м/пиксель
+            const ideal = Math.log2(156543.03392 * Math.cos(latRad) * targetPx / Math.max(1, metersAcross));
+            return Math.max(1, Math.min(provider.maxZoom || 19, Math.round(ideal)));
+        }
+
+        function loadTileImage(url) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                // Без CORS холст «портится» и texture из него не читается
+                img.crossOrigin = 'anonymous';
+                img.onload = () => resolve(img);
+                img.onerror = () => resolve(null);
+                img.src = url;
+            });
+        }
+
+        function basemapTileUrl(provider, template, z, x, y) {
+            const tpl = (provider === BASEMAP_PROVIDERS.custom ? template : provider.url) || '';
+            return tpl
+                .replace('{z}', String(z))
+                .replace('{x}', String(x))
+                .replace('{y}', String(y))
+                .replace('{s}', 'a');
+        }
+
+        /**
+         * Скачивает и склеивает тайлы, покрывающие площадку.
+         * @returns {{texture, mercMinX, mercMinY, mercSpanX, mercSpanY, zoom, tiles, failed}}
+         */
+        async function fetchBasemapTexture(binding, radius, provider, template) {
+            // Углы площадки в широте/долготе — с запасом на поворот
+            const corners = [
+                [-radius, -radius], [radius, -radius], [-radius, radius], [radius, radius]
+            ].map(([dx, dy]) => basemapModelToLatLon(binding, binding.anchorX + dx, binding.anchorY + dy));
+            const lats = corners.map(c => c.lat);
+            const lons = corners.map(c => c.lon);
+            const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+            const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+
+            let zoom = pickBasemapZoom(binding, radius, provider);
+            let x0, x1, y0, y1;
+            // Ужимаем зум, пока не влезем в лимит тайлов
+            for (;;) {
+                x0 = Math.floor(lonToMercatorX(minLon, zoom));
+                x1 = Math.floor(lonToMercatorX(maxLon, zoom));
+                y0 = Math.floor(latToMercatorY(maxLat, zoom)); // север = меньший y
+                y1 = Math.floor(latToMercatorY(minLat, zoom));
+                const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+                if (count <= BASEMAP_MAX_TILES || zoom <= 1) break;
+                zoom--;
+            }
+
+            const cols = x1 - x0 + 1;
+            const rows = y1 - y0 + 1;
+            const TILE = 256;
+            const canvas = document.createElement('canvas');
+            canvas.width = cols * TILE;
+            canvas.height = rows * TILE;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#e9e6df';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const jobs = [];
+            for (let ty = y0; ty <= y1; ty++) {
+                for (let tx = x0; tx <= x1; tx++) {
+                    const max = Math.pow(2, zoom);
+                    const wrappedX = ((tx % max) + max) % max;
+                    if (ty < 0 || ty >= max) continue;
+                    jobs.push({ tx, ty, url: basemapTileUrl(provider, template, zoom, wrappedX, ty) });
+                }
+            }
+
+            let failed = 0;
+            let done = 0;
+            // Пачками по 8: параллельно, но без шторма запросов к чужому серверу
+            for (let i = 0; i < jobs.length; i += 8) {
+                const batch = jobs.slice(i, i + 8);
+                const images = await Promise.all(batch.map(j => loadTileImage(j.url)));
+                images.forEach((img, k) => {
+                    done++;
+                    if (!img) { failed++; return; }
+                    const j = batch[k];
+                    ctx.drawImage(img, (j.tx - x0) * TILE, (j.ty - y0) * TILE, TILE, TILE);
+                });
+                showLoader('КАРТА', `Тайлы ${done}/${jobs.length}…`);
+                await new Promise(r => setTimeout(r, 0));
+            }
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.needsUpdate = true;
+            return {
+                texture,
+                mercMinX: x0,
+                mercMinY: y0,
+                mercSpanX: cols,
+                mercSpanY: rows,
+                zoom,
+                tiles: jobs.length,
+                failed
+            };
+        }
+
+        function removeBasemapLayer() {
+            if (basemapLayerId == null) return false;
+            const idx = geoRasterLayers.findIndex(l => l.id === basemapLayerId);
+            if (idx >= 0) {
+                disposeGeoRasterLayer(geoRasterLayers[idx]);
+                geoRasterLayers.splice(idx, 1);
+            }
+            basemapLayerId = null;
+            updateGeoRasterListUI();
+            markNeedsRender();
+            return true;
+        }
+
+        async function applyBasemapLayer(settings) {
+            const provider = BASEMAP_PROVIDERS[settings.provider] || BASEMAP_PROVIDERS.osm;
+            if (provider === BASEMAP_PROVIDERS.custom && !/\{z\}/.test(settings.template || '')) {
+                throw new Error('Укажите шаблон тайлов со знаками {z}/{x}/{y} — например https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=ВАШ_КЛЮЧ');
+            }
+            const binding = {
+                lat: settings.lat,
+                lon: settings.lon,
+                anchorX: settings.anchorX,
+                anchorY: settings.anchorY,
+                rotationDeg: settings.rotationDeg || 0
+            };
+            if (!Number.isFinite(binding.lat) || Math.abs(binding.lat) > 85) {
+                throw new Error('Широта должна быть числом от −85 до 85.');
+            }
+            if (!Number.isFinite(binding.lon) || Math.abs(binding.lon) > 180) {
+                throw new Error('Долгота должна быть числом от −180 до 180.');
+            }
+            const radius = Math.max(50, Number(settings.radius) || 1000);
+
+            showLoader('КАРТА', 'Загрузка тайлов…');
+            const tiles = await fetchBasemapTexture(binding, radius, provider, settings.template);
+            if (tiles.failed >= tiles.tiles) {
+                tiles.texture.dispose();
+                hideLoader();
+                throw new Error(
+                    'Ни один тайл не загрузился. Проверьте подключение к интернету, ' +
+                    'а для своего шаблона — ключ и доступность сервиса из браузера.'
+                );
+            }
+
+            removeBasemapLayer();
+
+            const bounds = {
+                minX: binding.anchorX - radius,
+                maxX: binding.anchorX + radius,
+                minY: binding.anchorY - radius,
+                maxY: binding.anchorY + radius
+            };
+            // UV берём точно: точка модели → широта/долгота → пиксель Меркатора
+            const uvFor = (x, y) => {
+                const ll = basemapModelToLatLon(binding, x, y);
+                const mx = lonToMercatorX(ll.lon, tiles.zoom);
+                const my = latToMercatorY(ll.lat, tiles.zoom);
+                return [
+                    (mx - tiles.mercMinX) / tiles.mercSpanX,
+                    1 - (my - tiles.mercMinY) / tiles.mercSpanY
+                ];
+            };
+
+            const mesh = buildGeoRasterMesh(bounds, tiles.texture, {
+                segments: 96,
+                drape: !!settings.drape,
+                opacity: settings.opacity ?? 0.9,
+                zOffset: 0.05,
+                worldShift: currentWorldShiftEN(),
+                uvFor
+            });
+            geoRasterGroup.add(mesh);
+            const layer = {
+                id: nextGeoRasterId++,
+                name: `Карта: ${provider.name}`,
+                mesh,
+                bounds,
+                tileInfo: { zoom: tiles.zoom, spanX: tiles.mercSpanX, spanY: tiles.mercSpanY, count: tiles.tiles }
+            };
+            geoRasterLayers.push(layer);
+            basemapLayerId = layer.id;
+            updateGeoRasterListUI();
+            markNeedsRender();
+            hideLoader();
+
+            saveBasemapSettings(settings);
+            const note = tiles.failed
+                ? ` Не отдалось тайлов: ${tiles.failed} из ${tiles.tiles}.`
+                : '';
+            notifyOk(
+                `Подложка построена: ${provider.name}, зум ${tiles.zoom}, охват ${Math.round(radius * 2)} м. ` +
+                `${provider.attribution}.${note}`
+            );
+            trackUsage('basemap_apply', { provider: settings.provider, zoom: tiles.zoom });
+        }
+
+        function saveBasemapSettings(settings) {
+            try {
+                localStorage.setItem(BASEMAP_STORAGE_KEY, JSON.stringify(settings));
+            } catch (_) {}
+        }
+
+        function loadBasemapSettings() {
+            try {
+                const raw = localStorage.getItem(BASEMAP_STORAGE_KEY);
+                const parsed = raw ? JSON.parse(raw) : null;
+                return parsed && typeof parsed === 'object' ? parsed : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        /**
+         * Ноль сводки в привычных east/north/height. Внутри web-ifc работает в
+         * Y-up: ifcWorldOrigin = (E, h, −N), а сцена после поворота — Z-up.
+         */
+        function currentWorldShiftEN() {
+            const o = ifcWorldOrigin;
+            if (!o) return { e: 0, n: 0, h: 0 };
+            return { e: o.x, n: -o.z, h: o.y };
+        }
+
+        /** Центр загруженных моделей в абсолютных east/north — точка привязки по умолчанию. */
+        function currentModelCenterXY() {
+            const box = new THREE.Box3();
+            let any = false;
+            for (const mod of loadedModels.values()) {
+                if (!mod.group) continue;
+                try {
+                    const b = new THREE.Box3().setFromObject(mod.group);
+                    if (!b.isEmpty()) { box.union(b); any = true; }
+                } catch (_) {}
+            }
+            if (!any) return { x: 0, y: 0 };
+            // Box3 уже в координатах сцены (Z-up): X=east, Y=north
+            const c = box.getCenter(new THREE.Vector3());
+            const shift = currentWorldShiftEN();
+            return { x: c.x + shift.e, y: c.y + shift.n };
         }
 
         async function refreshGeoRasterEcwNote() {
@@ -16908,6 +17307,124 @@ ${componentXml || '    '}
         $('yaLoadSelected').addEventListener('click', yaLoadCheckedFiles);
 
         $('btnGeoRaster').addEventListener('click', openGeoRasterModal);
+
+        // ---- Карта-подложка ----
+        function baseMapProviderKey() {
+            return $('baseMapProvider').value in BASEMAP_PROVIDERS ? $('baseMapProvider').value : 'osm';
+        }
+
+        function refreshBaseMapProviderUi() {
+            const key = baseMapProviderKey();
+            const isCustom = key === 'custom';
+            $('baseMapTemplateRow').style.display = isCustom ? '' : 'none';
+            $('baseMapTemplateNote').style.display = isCustom ? '' : 'none';
+            $('baseMapAttribution').textContent = isCustom
+                ? 'Указывая свой шаблон, вы отвечаете за соблюдение условий выбранного сервиса.'
+                : `Источник: ${BASEMAP_PROVIDERS[key].attribution}. Указывать его при публикации материалов обязательно.`;
+        }
+
+        function readBaseMapForm() {
+            return {
+                provider: baseMapProviderKey(),
+                template: $('baseMapTemplate').value.trim(),
+                lat: parseFloat($('baseMapLat').value),
+                lon: parseFloat($('baseMapLon').value),
+                anchorX: parseFloat($('baseMapAnchorX').value) || 0,
+                anchorY: parseFloat($('baseMapAnchorY').value) || 0,
+                rotationDeg: parseFloat($('baseMapRotation').value) || 0,
+                radius: parseFloat($('baseMapRadius').value) || 1000,
+                opacity: parseFloat($('baseMapOpacity').value) || 0.9,
+                drape: $('baseMapDrape').checked
+            };
+        }
+
+        function openBaseMapModal() {
+            const saved = loadBasemapSettings() || {};
+            const sel = $('baseMapProvider');
+            if (!sel.options.length) {
+                // Без esc(): вызывается из обработчика, но список свой, не пользовательский
+                sel.innerHTML = Object.entries(BASEMAP_PROVIDERS)
+                    .map(([id, p]) => `<option value="${id}">${p.name}</option>`)
+                    .join('');
+            }
+            sel.value = BASEMAP_PROVIDERS[saved.provider] ? saved.provider : 'osm';
+            $('baseMapTemplate').value = saved.template || '';
+            if (Number.isFinite(saved.lat)) $('baseMapLat').value = saved.lat;
+            if (Number.isFinite(saved.lon)) $('baseMapLon').value = saved.lon;
+            $('baseMapRotation').value = saved.rotationDeg ?? 0;
+            $('baseMapRadius').value = saved.radius ?? 1000;
+            $('baseMapOpacity').value = saved.opacity ?? 0.9;
+            $('baseMapOpacityVal').textContent = Number($('baseMapOpacity').value).toFixed(2);
+            $('baseMapDrape').checked = !!saved.drape;
+
+            // Привязка запоминается, но модель могла смениться — центр берём заново,
+            // если сохранённая точка далеко за пределами того, что сейчас загружено.
+            const center = currentModelCenterXY();
+            const savedFits = Number.isFinite(saved.anchorX) && Number.isFinite(saved.anchorY) &&
+                Math.hypot(saved.anchorX - center.x, saved.anchorY - center.y) < 50_000;
+            $('baseMapAnchorX').value = (savedFits ? saved.anchorX : center.x).toFixed(2);
+            $('baseMapAnchorY').value = (savedFits ? saved.anchorY : center.y).toFixed(2);
+
+            refreshBaseMapProviderUi();
+            $('baseMapModal').classList.add('show');
+        }
+
+        $('btnBaseMap').addEventListener('click', openBaseMapModal);
+        $('baseMapProvider').addEventListener('change', refreshBaseMapProviderUi);
+        $('baseMapCancel').addEventListener('click', () => $('baseMapModal').classList.remove('show'));
+        $('baseMapModal').addEventListener('click', e => {
+            if (e.target === $('baseMapModal')) $('baseMapModal').classList.remove('show');
+        });
+        $('baseMapOpacity').addEventListener('input', () => {
+            const v = Number($('baseMapOpacity').value);
+            $('baseMapOpacityVal').textContent = v.toFixed(2);
+            // Живой отклик: подложка уже на сцене — крутим прозрачность без пересборки
+            const layer = geoRasterLayers.find(l => l.id === basemapLayerId);
+            if (layer?.mesh?.material) {
+                layer.mesh.material.opacity = v;
+                layer.mesh.material.transparent = v < 0.999;
+                layer.mesh.material.needsUpdate = true;
+                markNeedsRender();
+            }
+        });
+        $('baseMapAnchorCenter').addEventListener('click', () => {
+            const c = currentModelCenterXY();
+            $('baseMapAnchorX').value = c.x.toFixed(2);
+            $('baseMapAnchorY').value = c.y.toFixed(2);
+        });
+        $('baseMapAnchorSelection').addEventListener('click', () => {
+            if (!selectedItems.length) {
+                notifyError('Сначала выделите элемент, координаты которого известны.');
+                return;
+            }
+            const box = getSelectionBounds(selectedItems);
+            if (box.isEmpty()) {
+                notifyError('У выделения нет геометрии — координаты не определить.');
+                return;
+            }
+            const c = box.getCenter(new THREE.Vector3());
+            const shift = currentWorldShiftEN();
+            $('baseMapAnchorX').value = (c.x + shift.e).toFixed(2);
+            $('baseMapAnchorY').value = (c.y + shift.n).toFixed(2);
+        });
+        $('baseMapRemove').addEventListener('click', () => {
+            if (removeBasemapLayer()) notifyOk('Подложка убрана.');
+            else notifyError('Подложки на сцене нет.');
+        });
+        $('baseMapApply').addEventListener('click', async () => {
+            const settings = readBaseMapForm();
+            $('baseMapApply').disabled = true;
+            try {
+                await applyBasemapLayer(settings);
+                $('baseMapModal').classList.remove('show');
+            } catch (err) {
+                console.error(err);
+                hideLoader();
+                notifyError('Карта-подложка: ' + (err?.message || err));
+            } finally {
+                $('baseMapApply').disabled = false;
+            }
+        });
         $('cancelGeoRaster').addEventListener('click', closeGeoRasterModal);
         $('geoRasterModal').addEventListener('click', event => {
             if (event.target === $('geoRasterModal')) closeGeoRasterModal();
@@ -18423,6 +18940,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
                 '2026.08.08: IFC4X1 / IFC4X2 (Civil 3D, OpenRoads) открываются в режиме совместимости с IFC4.',
