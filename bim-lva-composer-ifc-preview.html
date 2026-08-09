@@ -2114,7 +2114,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1ca3978</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 43f9183</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2727,10 +2727,17 @@
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="baseMapModalTitle" style="width:min(560px,100%)">
             <h3 id="baseMapModalTitle">Карта-подложка под модель</h3>
             <div class="bulk-note">
-                Карта приходит в мировых широте/долготе, а модель — в плоских съёмочных координатах.
-                Связать их вьювер сам не может, поэтому укажите <b>одну точку</b>: её координаты в модели
-                и её же широту/долготу. Проще всего — правый клик по своей площадке в любых онлайн-картах
-                и «скопировать координаты».
+                <b>Привязка за три шага.</b>
+                <ol style="margin:6px 0 0;padding-left:18px">
+                    <li>Кликните в модели <b>узнаваемый</b> объект — мост, перекрёсток, трубу, угол здания — и нажмите «Из выделения».</li>
+                    <li>Найдите <b>этот же</b> объект в Яндекс.Картах или Google, щёлкните по нему правой кнопкой и скопируйте координаты.</li>
+                    <li>Вставьте их в «Широту» и «Долготу» и нажмите «Построить».</li>
+                </ol>
+                <div style="margin-top:6px">
+                    Широту из координат модели вычислить нельзя: они в местной системе (МСК),
+                    параметры которой в IFC не пишутся. Поэтому точку показываете вы — одну,
+                    остальное вьювер посчитает сам.
+                </div>
             </div>
             <div class="prop small">
                 <div class="k">Слой</div>
@@ -2743,14 +2750,21 @@
             <div class="bulk-note" id="baseMapTemplateNote" style="display:none">
                 Ключ хранится только в этом браузере (localStorage) и на сервер BIM.LVA не уходит.
             </div>
-            <div class="prop small"><div class="k">Широта точки</div><input class="editInput" id="baseMapLat" type="number" step="0.000001" placeholder="55.712345"></div>
-            <div class="prop small"><div class="k">Долгота точки</div><input class="editInput" id="baseMapLon" type="number" step="0.000001" placeholder="52.412345"></div>
-            <div class="bulk-note">Та же точка в координатах модели (east / north, метры). По умолчанию — центр загруженных моделей.</div>
-            <div class="prop small"><div class="k">X (east)</div><input class="editInput" id="baseMapAnchorX" type="number" step="0.01"></div>
-            <div class="prop small"><div class="k">Y (north)</div><input class="editInput" id="baseMapAnchorY" type="number" step="0.01"></div>
+
+            <div class="bulk-note" style="margin-top:10px"><b>Шаг 1.</b> Точка в координатах модели — те же числа, что в строке состояния внизу (восток · север). По умолчанию подставлен центр моделей.</div>
+            <div class="prop small"><div class="k">Восток (X)</div><input class="editInput" id="baseMapAnchorX" type="number" step="0.01"></div>
+            <div class="prop small"><div class="k">Север (Y)</div><input class="editInput" id="baseMapAnchorY" type="number" step="0.01"></div>
             <div class="modal-actions" style="justify-content:flex-start;gap:6px">
+                <button type="button" class="btn" id="baseMapAnchorSelection" title="Подставить координаты выделенного элемента">Из выделения</button>
                 <button type="button" class="btn" id="baseMapAnchorCenter" title="Подставить центр загруженных моделей">Центр моделей</button>
-                <button type="button" class="btn" id="baseMapAnchorSelection" title="Подставить координаты текущего выделения">Из выделения</button>
+            </div>
+
+            <div class="bulk-note" style="margin-top:10px"><b>Шаг 2.</b> Та же точка на обычной карте. В Яндекс.Картах: правый клик → координаты копируются в виде «55.712345, 52.412345» — первое число широта, второе долгота.</div>
+            <div class="prop small"><div class="k">Широта</div><input class="editInput" id="baseMapLat" type="number" step="0.000001" placeholder="55.712345"></div>
+            <div class="prop small"><div class="k">Долгота</div><input class="editInput" id="baseMapLon" type="number" step="0.000001" placeholder="52.412345"></div>
+            <div class="prop small">
+                <div class="k">Вставить пару</div>
+                <input class="editInput" id="baseMapLatLonPaste" placeholder="55.712345, 52.412345" title="Вставьте скопированную из карт пару — она разложится по полям выше">
             </div>
             <div class="prop small"><div class="k">Поворот, ° <span style="opacity:.6">(север модели → истинный)</span></div><input class="editInput" id="baseMapRotation" type="number" step="0.1" value="0"></div>
             <div class="prop small"><div class="k">Охват, м <span style="opacity:.6">(радиус)</span></div><input class="editInput" id="baseMapRadius" type="number" step="50" value="1000"></div>
@@ -17406,6 +17420,33 @@ ${componentXml || '    '}
                 markNeedsRender();
             }
         });
+        // Карты отдают координаты одной строкой «55.712345, 52.412345» — не заставляем
+        // разносить руками. Точка-разделитель и запятая-разделитель различаются по числу частей.
+        function parseLatLonPair(raw) {
+            const text = String(raw || '').trim();
+            if (!text) return null;
+            // Дробная часть и через точку, и через запятую: «55,712345, 52,412345»
+            // разбирается верно — шаблон забирает число целиком вместе с дробью.
+            const nums = text.match(/-?\d+(?:[.,]\d+)?/g);
+            if (!nums || nums.length < 2) return null;
+            const lat = parseFloat(nums[0].replace(',', '.'));
+            const lon = parseFloat(nums[1].replace(',', '.'));
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+            return { lat, lon };
+        }
+
+        $('baseMapLatLonPaste').addEventListener('input', () => {
+            const pair = parseLatLonPair($('baseMapLatLonPaste').value);
+            if (!pair) return;
+            // Яндекс копирует «широта, долгота», но пользователи приносят и обратный
+            // порядок: для России долгота заметно больше широты — подсказываем, не молчим.
+            $('baseMapLat').value = pair.lat;
+            $('baseMapLon').value = pair.lon;
+            if (Math.abs(pair.lat) > 85) {
+                notifyError('Первое число похоже на долготу. В Яндекс.Картах порядок «широта, долгота» — проверьте.');
+            }
+        });
+
         $('baseMapAnchorCenter').addEventListener('click', () => {
             const c = currentModelCenterXY();
             $('baseMapAnchorX').value = c.x.toFixed(2);
@@ -18951,7 +18992,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.08',
-            buildId: '1ca3978-preview',
+            buildId: '43f9183-preview',
             released: '2026-08-08',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
