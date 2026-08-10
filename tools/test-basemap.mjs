@@ -123,6 +123,47 @@ try {
     }
     console.log(`A2. вставка «${SITE.lat}, ${SITE.lon}» → ${pasted.lat} / ${pasted.lon}; «55,712345, 52,412345» → ${pastedComma.lat} / ${pastedComma.lon}`);
 
+    // A3. Ввод «как получится»: у type="number" браузер молча выбрасывает
+    // запятую («55,712345» → 55712345), и подложка отказывалась строиться.
+    // Поля переведены в text, поэтому проверяем именно набор с клавиатуры.
+    const typedCases = [
+        ['55,712345', 55.712345, 'запятая как разделитель дроби'],
+        ['55.712345', 55.712345, 'точка'],
+        ['55.712345, 52.412345', 55.712345, 'пара вставлена прямо в «Широту»'],
+        ['55 712,5', 55712.5, 'пробел-разряд не должен терять цифры']
+    ];
+    for (const [typed, expect, what] of typedCases) {
+        const got = await page.evaluate((text) => {
+            const el = document.getElementById('baseMapLat');
+            el.value = '';
+            el.value = text;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return {
+                lat: window.BimLvaDebug.parseDecimalProbe(document.getElementById('baseMapLat').value),
+                lon: document.getElementById('baseMapLon').value
+            };
+        }, typed);
+        if (Math.abs(got.lat - expect) > 1e-6) {
+            problems.push(`ввод «${typed}» (${what}) прочитан как ${got.lat}, ожидалось ${expect}`);
+        }
+    }
+    console.log(`A3. ввод с запятой/пробелом/парой — все ${typedCases.length} случая читаются верно`);
+
+    // A4. Координаты модели в поле широты → понятная ошибка, а не «от −85 до 85»
+    const wrongFieldMsg = await page.evaluate(async () => {
+        document.getElementById('baseMapLat').value = '2308446.98';
+        document.getElementById('baseMapLon').value = '454752.50';
+        document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
+        document.getElementById('baseMapApply').click();
+        await new Promise((r) => setTimeout(r, 800));
+        return [...document.querySelectorAll('.toast .toast-text')].map((t) => t.textContent).join(' | ');
+    });
+    if (!/2308446\.98/.test(wrongFieldMsg) || !/шага 1|карт/i.test(wrongFieldMsg)) {
+        problems.push(`при координатах модели в поле широты сообщение неинформативно: «${wrongFieldMsg.slice(0, 160)}»`);
+    }
+    console.log(`A4. координаты модели в поле широты → подсказка про шаг 1: ${/шага 1/.test(wrongFieldMsg) ? 'есть' : 'НЕТ'}`);
+    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
+
     // B. Строим подложку
     await page.evaluate(([lat, lon, radius]) => {
         document.getElementById('baseMapLat').value = String(lat);
