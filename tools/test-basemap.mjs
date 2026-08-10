@@ -119,33 +119,60 @@ try {
     });
     if (!customShown) problems.push('для своего шаблона не появилось поле URL');
 
-    // A2. Пара из карт вставляется одной строкой и раскладывается по полям
-    const pasted = await page.evaluate(([lat, lon]) => {
-        const el = document.getElementById('baseMapLatLonPaste');
-        el.value = `${lat}, ${lon}`;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        return {
+    // A2. Пара из карт вставляется целиком в любое из двух полей и разделяется.
+    // Проверяем настоящей вставкой (paste), а не подстановкой value: разделение
+    // сидит именно на paste, потому что на вводе оно портило набор с клавиатуры.
+    async function pasteInto(selector, text) {
+        await page.locator(selector).fill('');
+        await page.evaluate(([sel, value]) => {
+            const el = document.querySelector(sel);
+            el.focus();
+            const dt = new DataTransfer();
+            dt.setData('text', value);
+            el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+        }, [selector, text]);
+        return page.evaluate(() => ({
             lat: parseFloat(document.getElementById('baseMapLat').value),
             lon: parseFloat(document.getElementById('baseMapLon').value)
-        };
-    }, [SITE.lat, SITE.lon]);
-    if (Math.abs(pasted.lat - SITE.lat) > 1e-6 || Math.abs(pasted.lon - SITE.lon) > 1e-6) {
-        problems.push(`вставка пары координат не разложилась: ${JSON.stringify(pasted)}`);
+        }));
     }
-    // Русская локаль отдаёт дробь через запятую — самый частый способ всё сломать
-    const pastedComma = await page.evaluate(() => {
-        const el = document.getElementById('baseMapLatLonPaste');
-        el.value = '55,712345, 52,412345';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        return {
-            lat: parseFloat(document.getElementById('baseMapLat').value),
-            lon: parseFloat(document.getElementById('baseMapLon').value)
-        };
+    const pasteCases = [
+        ['#baseMapLat', `${SITE.lat}, ${SITE.lon}`, SITE.lat, SITE.lon, 'пара в «Широту»'],
+        ['#baseMapLon', `${SITE.lat}, ${SITE.lon}`, SITE.lat, SITE.lon, 'пара в «Долготу»'],
+        ['#baseMapLat', '55,712345, 52,412345', 55.712345, 52.412345, 'запятая в дробной части']
+    ];
+    for (const [sel, text, wantLat, wantLon, what] of pasteCases) {
+        const got = await pasteInto(sel, text);
+        if (Math.abs(got.lat - wantLat) > 1e-6 || Math.abs(got.lon - wantLon) > 1e-6) {
+            problems.push(`вставка «${text}» (${what}) дала ${got.lat} / ${got.lon}, ожидалось ${wantLat} / ${wantLon}`);
+        }
+    }
+    console.log(`A2. вставка пары — все ${pasteCases.length} случая (в «Широту», в «Долготу», с запятой) разделяются верно`);
+
+    // A2b. Набор пары руками не должен портить значение: разделение на каждом
+    // нажатии обрезало широту и дописывало к ней остаток строки.
+    await page.locator('#baseMapLat').fill('');
+    await page.locator('#baseMapLat').type('55.712345');
+    const typedLat = await page.evaluate(() => document.getElementById('baseMapLat').value);
+    if (typedLat !== '55.712345') {
+        problems.push(`набор широты с клавиатуры испорчен: получено «${typedLat}» вместо «55.712345»`);
+    }
+    console.log(`A2b. набор с клавиатуры: «${typedLat}»`);
+
+    // A2c. Пустое поле — отдельное понятное сообщение, а не «не градусы»
+    const emptyMsg = await page.evaluate(async () => {
+        document.getElementById('baseMapLat').value = '';
+        document.getElementById('baseMapLon').value = '';
+        document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
+        document.getElementById('baseMapApply').click();
+        await new Promise((r) => setTimeout(r, 600));
+        return [...document.querySelectorAll('.toast .toast-text')].map((t) => t.textContent).join(' | ');
     });
-    if (Math.abs(pastedComma.lat - 55.712345) > 1e-6 || Math.abs(pastedComma.lon - 52.412345) > 1e-6) {
-        problems.push(`вставка с запятой в дробной части разобрана неверно: ${JSON.stringify(pastedComma)}`);
+    if (!/Не заполнено поле «Широта»/.test(emptyMsg)) {
+        problems.push(`при пустом поле сообщение неверное: «${emptyMsg.slice(0, 140)}»`);
     }
-    console.log(`A2. вставка «${SITE.lat}, ${SITE.lon}» → ${pasted.lat} / ${pasted.lon}; «55,712345, 52,412345» → ${pastedComma.lat} / ${pastedComma.lon}`);
+    console.log(`A2c. пустое поле → «${(emptyMsg.split('\n')[0] || '').slice(0, 60)}»`);
+    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
 
     // A3. Ввод «как получится»: у type="number" браузер молча выбрасывает
     // запятую («55,712345» → 55712345), и подложка отказывалась строиться.

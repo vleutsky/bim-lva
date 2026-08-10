@@ -2768,13 +2768,9 @@
                 <button type="button" class="btn" id="baseMapAnchorCenter" title="Подставить центр загруженных моделей">Центр моделей</button>
             </div>
 
-            <div class="bulk-note" style="margin-top:10px"><b>Шаг 2.</b> Та же точка на обычной карте. В Яндекс.Картах: правый клик → координаты копируются в виде «55.712345, 52.412345» — первое число широта, второе долгота.</div>
+            <div class="bulk-note" style="margin-top:10px"><b>Шаг 2.</b> Та же точка на обычной карте. В Яндекс.Картах: правый клик → координаты копируются в виде «55.712345, 52.412345». Вставьте их <b>целиком в любое из двух полей</b> — они разделятся сами.</div>
             <div class="prop small"><div class="k">Широта</div><input class="editInput" id="baseMapLat" type="text" inputmode="decimal" placeholder="55.712345"></div>
             <div class="prop small"><div class="k">Долгота</div><input class="editInput" id="baseMapLon" type="text" inputmode="decimal" placeholder="52.412345"></div>
-            <div class="prop small">
-                <div class="k">Вставить пару</div>
-                <input class="editInput" id="baseMapLatLonPaste" placeholder="55.712345, 52.412345" title="Вставьте скопированную из карт пару — она разложится по полям выше">
-            </div>
             <div class="prop small"><div class="k">Поворот, ° <span style="opacity:.6">(север модели → истинный)</span></div><input class="editInput" id="baseMapRotation" type="text" inputmode="decimal" value="0"></div>
             <div class="prop small"><div class="k">Охват, м <span style="opacity:.6">(радиус)</span></div><input class="editInput" id="baseMapRadius" type="text" inputmode="decimal" value="1000"></div>
             <div class="prop small"><div class="k">Прозрачность</div><input type="range" id="baseMapOpacity" min="0.1" max="1" step="0.01" value="0.9"><span id="baseMapOpacityVal">0.90</span></div>
@@ -4408,18 +4404,25 @@
             // объясняет, что в поле попали координаты модели, а не градусы.
             const latRaw = String(settings.latRaw ?? '').trim();
             const lonRaw = String(settings.lonRaw ?? '').trim();
+            // «Пусто» и «не то число» — разные ошибки: раньше обе показывали
+            // одинаковый текст про диапазон, и пустое поле было не отличить.
+            if (!latRaw || !lonRaw) {
+                throw new Error(
+                    `Не заполнено поле «${!latRaw ? 'Широта' : 'Долгота'}» (шаг 2).\n` +
+                    `Откройте свою площадку в Яндекс.Картах, щёлкните по ней правой кнопкой, ` +
+                    `скопируйте координаты и вставьте их целиком в любое из двух полей — они разделятся сами.`
+                );
+            }
             if (!Number.isFinite(binding.lat) || Math.abs(binding.lat) > 85) {
                 throw new Error(
-                    `Широта${latRaw ? ` «${latRaw}»` : ''} — не градусы. Нужно число от −85 до 85, ` +
-                    `например 55.712345.\n` +
+                    `Широта «${latRaw}» — не градусы. Нужно число от −85 до 85, например 55.712345.\n` +
                     `Плоские координаты модели (восток/север) вводятся в поля шага 1, ` +
                     `а широту и долготу берут из обычной карты: правый клик по своей площадке → копировать координаты.`
                 );
             }
             if (!Number.isFinite(binding.lon) || Math.abs(binding.lon) > 180) {
                 throw new Error(
-                    `Долгота${lonRaw ? ` «${lonRaw}»` : ''} — не градусы. Нужно число от −180 до 180, ` +
-                    `например 52.412345.`
+                    `Долгота «${lonRaw}» — не градусы. Нужно число от −180 до 180, например 52.412345.`
                 );
             }
             const radius = Math.max(50, Number(settings.radius) || 1000);
@@ -17556,29 +17559,26 @@ ${componentXml || '    '}
             return { lat, lon };
         }
 
-        // Пару вставляют куда придётся — чаще всего прямо в «Широту».
-        // Если в поле оказалось два числа, разносим их сами, а не ругаемся.
-        $('baseMapLat').addEventListener('input', () => {
-            const el = $('baseMapLat');
-            // parseLatLonPair отдаёт пару только когда чисел действительно два:
-            // «55,712345» — это одно число с запятой, его не трогаем
-            const pair = parseLatLonPair(el.value);
-            if (!pair || Math.abs(pair.lat) > 85 || Math.abs(pair.lon) > 180) return;
-            el.value = pair.lat;
-            $('baseMapLon').value = pair.lon;
-        });
-
-        $('baseMapLatLonPaste').addEventListener('input', () => {
-            const pair = parseLatLonPair($('baseMapLatLonPaste').value);
-            if (!pair) return;
-            // Яндекс копирует «широта, долгота», но пользователи приносят и обратный
-            // порядок: для России долгота заметно больше широты — подсказываем, не молчим.
-            $('baseMapLat').value = pair.lat;
-            $('baseMapLon').value = pair.lon;
-            if (Math.abs(pair.lat) > 85) {
-                notifyError('Первое число похоже на долготу. В Яндекс.Картах порядок «широта, долгота» — проверьте.');
-            }
-        });
+        /**
+         * Пару координат из карт вставляют в любое из двух полей — разносим сами.
+         *
+         * Слушаем именно `paste`, а не `input`: на вводе с клавиатуры разделение
+         * срабатывало посреди набора («55.712345, 5» — уже два числа) и портило
+         * значение — остаток строки дописывался к обрезанной широте.
+         */
+        function attachLatLonPaste(id) {
+            $(id).addEventListener('paste', (event) => {
+                const text = (event.clipboardData || window.clipboardData)?.getData('text') || '';
+                const pair = parseLatLonPair(text);
+                if (!pair) return; // одиночное число — обычная вставка
+                if (Math.abs(pair.lat) > 85 || Math.abs(pair.lon) > 180) return;
+                event.preventDefault();
+                $('baseMapLat').value = pair.lat;
+                $('baseMapLon').value = pair.lon;
+            });
+        }
+        attachLatLonPaste('baseMapLat');
+        attachLatLonPaste('baseMapLon');
 
         $('baseMapAnchorCenter').addEventListener('click', () => {
             const c = currentModelCenterXY();
@@ -19124,9 +19124,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.08.08',
+            version: '2026.08.09',
             buildId: 'd3b76c6',
-            released: '2026-08-08',
+            released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
