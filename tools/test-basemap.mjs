@@ -138,8 +138,8 @@ try {
         templateHidden: document.getElementById('baseMapTemplateRow').style.display === 'none'
     }));
     if (!opened.shown) problems.push('модалка карты не открылась');
-    if (opened.providers.length < 3) problems.push(`провайдеров ${opened.providers.length}, ожидалось ≥3`);
-    if (!/OpenStreetMap/i.test(opened.attribution)) problems.push('не показан источник карты (атрибуция обязательна)');
+    if (opened.providers.length < 5) problems.push(`слоёв ${opened.providers.length}, ожидалось ≥5 (снимок, схема, топо, рельеф, свой)`);
+    if (!/Источник/i.test(opened.attribution)) problems.push('не показан источник карты (атрибуция обязательна)');
     if (!opened.templateHidden) problems.push('поле своего шаблона видно для OSM');
     const anchorOk = Math.abs(opened.anchorX - MODEL.worldX) < 300 && Math.abs(opened.anchorY - MODEL.worldY) < 300;
     if (!anchorOk) problems.push(`точка привязки (${opened.anchorX}, ${opened.anchorY}) не совпала с центром модели`);
@@ -337,11 +337,70 @@ try {
     console.log(`B2. копирование: «${copied.clip}» (площадка ${SITE.lat}, ${SITE.lon}) — ${looksLikeLatLon ? 'ок' : 'СБОЙ'}`);
     await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
 
+    // B3. Охват и детализация: «один квадрат» должен масштабироваться.
+    const beforeCount = tileUrls.length;
+    const coverage = await page.evaluate(async () => {
+        document.getElementById('btnBaseMap').click();
+        await new Promise((r) => setTimeout(r, 300));
+        const est = () => document.getElementById('baseMapEstimate').textContent;
+        const radiusBefore = document.getElementById('baseMapRadius').value;
+        document.getElementById('baseMapRadiusFit').click();
+        const radiusFitted = document.getElementById('baseMapRadius').value;
+        // Детализацию сравниваем на крупном охвате: на мелкой площадке зум
+        // упирается в потолок провайдера и оба уровня дают одно и то же.
+        const radiusEl = document.getElementById('baseMapRadius');
+        radiusEl.value = '5000';
+        radiusEl.dispatchEvent(new Event('input', { bubbles: true }));
+        const estNormal = est();
+        const sel = document.getElementById('baseMapDetail');
+        sel.value = 'high';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        const estHigh = est();
+        document.getElementById('baseMapCancel').click();
+        return { radiusBefore, radiusFitted, estNormal, estHigh };
+    });
+    const tilesOf = (text) => Number((text.match(/квадратов\s+(\d+)/) || [])[1] || 0);
+    if (!(tilesOf(coverage.estHigh) > tilesOf(coverage.estNormal))) {
+        problems.push(`высокая детализация не даёт больше квадратов: ${tilesOf(coverage.estNormal)} → ${tilesOf(coverage.estHigh)}`);
+    }
+    if (!Number.isFinite(parseFloat(coverage.radiusFitted)) || parseFloat(coverage.radiusFitted) < 50) {
+        problems.push(`«Под габарит моделей» дал охват ${coverage.radiusFitted}`);
+    }
+    console.log(`B3. охват под модели: радиус ${coverage.radiusBefore} → ${coverage.radiusFitted} м; на 10 км квадратов обычная ${tilesOf(coverage.estNormal)} → высокая ${tilesOf(coverage.estHigh)}`);
+
+    // B4. Драпировка: сетка должна густеть с охватом, иначе рельеф режется
+    // крупными гранями — на километровой площадке шаг был 20 м.
+    const drape = await page.evaluate(async () => {
+        document.getElementById('btnBaseMap').click();
+        await new Promise((r) => setTimeout(r, 300));
+        document.getElementById('baseMapDrape').checked = true;
+        document.getElementById('baseMapRadius').value = '800';
+        document.getElementById('baseMapApply').click();
+        for (let i = 0; i < 120 && document.getElementById('baseMapModal').classList.contains('show'); i++) {
+            await new Promise((r) => setTimeout(r, 250));
+        }
+        const bm = window.BimLvaDebug.basemapLayer;
+        return bm ? { uvCount: bm.uvCount, sizeX: bm.sizeX } : null;
+    });
+    if (!drape) {
+        problems.push('подложка с натягиванием на рельеф не построилась');
+    } else {
+        // 1600 м при шаге ~4 м → сторона сетки 400 → ограничена потолком 320
+        const side = Math.round(Math.sqrt(drape.uvCount)) - 1;
+        if (side < 200) {
+            problems.push(`сетка драпировки ${side}×${side} — шаг ${(drape.sizeX / side).toFixed(1)} м, рельеф будет резаться гранями`);
+        }
+        console.log(`B4. драпировка: сетка ${side}×${side}, шаг ${(drape.sizeX / side).toFixed(1)} м на охвате ${drape.sizeX.toFixed(0)} м`);
+    }
+
     // C. Тайлы: запрошены и лимит соблюдён
     const zooms = [...new Set(tileUrls.map((u) => (u.match(/\/(\d+)\/\d+\/\d+/) || [])[1]).filter(Boolean))];
     if (!tileUrls.length) problems.push('ни один тайл не запрошен');
-    if (tileUrls.length > 200) problems.push(`запрошено ${tileUrls.length} тайлов — лимит не работает`);
-    console.log(`C. тайлов ${tileUrls.length}, зум ${zooms.join(',')}`);
+    // Считаем последнюю сборку: за прогон их несколько, накопительная сумма
+    // ничего не говорит о бюджете
+    const lastBuildTiles = tileUrls.length - beforeCount;
+    if (lastBuildTiles > 520) problems.push(`за одну сборку запрошено ${lastBuildTiles} тайлов — бюджет детализации не соблюдается`);
+    console.log(`C. тайлов за прогон ${tileUrls.length} (последняя сборка ${lastBuildTiles}), зум ${zooms.join(',')}`);
 
     // D. Смена прозрачности без пересборки
     const opacityChanged = await page.evaluate(() => {

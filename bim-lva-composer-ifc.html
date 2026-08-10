@@ -2773,7 +2773,15 @@
             <div class="prop small"><div class="k">Широта</div><input class="editInput" id="baseMapLat" type="text" inputmode="decimal" placeholder="55.712345"></div>
             <div class="prop small"><div class="k">Долгота</div><input class="editInput" id="baseMapLon" type="text" inputmode="decimal" placeholder="52.412345"></div>
             <div class="prop small"><div class="k">Поворот, ° <span style="opacity:.6">(север модели → истинный)</span></div><input class="editInput" id="baseMapRotation" type="text" inputmode="decimal" value="0"></div>
-            <div class="prop small"><div class="k">Охват, м <span style="opacity:.6">(радиус)</span></div><input class="editInput" id="baseMapRadius" type="text" inputmode="decimal" value="1000"></div>
+            <div class="prop small"><div class="k">Охват, м <span style="opacity:.6">(радиус от точки)</span></div><input class="editInput" id="baseMapRadius" type="text" inputmode="decimal" value="1000"></div>
+            <div class="modal-actions" style="justify-content:flex-start;gap:6px;flex-wrap:wrap">
+                <button type="button" class="btn" id="baseMapRadiusFit" title="Подобрать охват так, чтобы карта покрыла все загруженные модели">Под габарит моделей</button>
+            </div>
+            <div class="prop small">
+                <div class="k">Детализация</div>
+                <select class="editInput" id="baseMapDetail"></select>
+            </div>
+            <div class="bulk-note" id="baseMapEstimate">—</div>
             <div class="prop small"><div class="k">Прозрачность</div><input type="range" id="baseMapOpacity" min="0.1" max="1" step="0.01" value="0.9"><span id="baseMapOpacityVal">0.90</span></div>
             <div class="prop small">
                 <div class="k">Натянуть на рельеф</div>
@@ -4032,6 +4040,66 @@
             return hits.length ? hits[0].point.z : fallbackZ;
         }
 
+        /**
+         * Высоты рельефа под сеткой драпировки.
+         *
+         * Промахи луча (за краем поверхности, в дырах модели) помечаем NaN и
+         * заполняем по соседям, а не роняем в общий низ сцены: иначе край
+         * подложки обрывается вертикальной стенкой, а внутри дыр появляются
+         * плоские заплаты — это и видно как «не все вершины обработались».
+         * Цели луча собираем один раз: collectRaycastTargets на каждую вершину
+         * пересобирал список из всех мешей сцены.
+         */
+        function sampleTerrainGrid(minX, minY, w, h, seg, baseZ) {
+            const n = seg + 1;
+            const z = new Float64Array(n * n).fill(NaN);
+            const targets = collectRaycastTargets(_terrainRayTargets, m => !m.userData?.isGeoRaster);
+            if (!targets.length) return z.fill(baseZ);
+
+            const raycaster = new THREE.Raycaster();
+            const from = new THREE.Vector3();
+            const down = new THREE.Vector3(0, 0, -1);
+            let hitCount = 0;
+            for (let j = 0; j < n; j++) {
+                for (let i = 0; i < n; i++) {
+                    from.set(minX + (i / seg) * w, minY + (j / seg) * h, 1e7);
+                    raycaster.set(from, down);
+                    const hits = raycaster.intersectObjects(targets, false);
+                    if (hits.length) {
+                        z[j * n + i] = hits[0].point.z;
+                        hitCount++;
+                    }
+                }
+            }
+            if (!hitCount) return z.fill(baseZ);
+
+            // Размываем известные высоты в пустоты, пока не заполнится всё
+            const avg = z.reduce((acc, v) => Number.isNaN(v) ? acc : acc + v, 0) / hitCount;
+            for (let pass = 0; pass < n; pass++) {
+                let filled = 0;
+                let missing = 0;
+                for (let j = 0; j < n; j++) {
+                    for (let i = 0; i < n; i++) {
+                        const k = j * n + i;
+                        if (!Number.isNaN(z[k])) continue;
+                        missing++;
+                        let sum = 0, cnt = 0;
+                        if (i > 0 && !Number.isNaN(z[k - 1])) { sum += z[k - 1]; cnt++; }
+                        if (i < seg && !Number.isNaN(z[k + 1])) { sum += z[k + 1]; cnt++; }
+                        if (j > 0 && !Number.isNaN(z[k - n])) { sum += z[k - n]; cnt++; }
+                        if (j < seg && !Number.isNaN(z[k + n])) { sum += z[k + n]; cnt++; }
+                        if (cnt) { z[k] = sum / cnt; filled++; }
+                    }
+                }
+                if (!missing) break;
+                if (!filled) { // изолированные пустоты — ровняем по средней
+                    for (let k = 0; k < z.length; k++) if (Number.isNaN(z[k])) z[k] = avg;
+                    break;
+                }
+            }
+            return z;
+        }
+
         function buildGeoRasterMesh(bounds, texture, options) {
             const minX = bounds.minX, maxX = bounds.maxX, minY = bounds.minY, maxY = bounds.maxY;
             const w = maxX - minX, h = maxY - minY;
@@ -4048,13 +4116,20 @@
             // прежнее поведение для георастров.
             const shift = options.worldShift || { e: 0, n: 0, h: 0 };
 
+            // Высоты считаем сеткой заранее: так промахи луча заполняются по
+            // соседям, а цели raycast собираются один раз, а не на каждую вершину.
+            const zGrid = options.drape
+                ? sampleTerrainGrid(minX - shift.e, minY - shift.n, w, h, seg, baseZ)
+                : null;
+
             for (let j = 0; j <= seg; j++) {
                 for (let i = 0; i <= seg; i++) {
                     const u = i / seg, v = j / seg;
                     const x = minX + u * w;
                     const y = minY + v * h;
-                    let z = baseZ + zOffset + shift.h;
-                    if (options.drape) z = sampleTerrainZ(x - shift.e, y - shift.n, baseZ) + shift.h + zOffset;
+                    const z = zGrid
+                        ? zGrid[j * (seg + 1) + i] + shift.h + zOffset
+                        : baseZ + zOffset + shift.h;
                     positions.push(x, y, z);
                     // GeoTIFF ложится линейно; тайловая подложка — нет: Меркатор
                     // нелинеен по широте, и на паре километров линейный UV уводит
@@ -4195,31 +4270,66 @@
         // показывать карту только внутри их собственного виджета, а нам нужна
         // картинка текстурой под 3D. Это не техническое ограничение, а лицензия.
         const BASEMAP_PROVIDERS = {
+            esri: {
+                name: 'Космоснимок (ESRI)',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attribution: 'Источники: Esri, Maxar, Earthstar Geographics',
+                maxZoom: 19
+            },
             osm: {
-                name: 'OpenStreetMap — схема',
+                name: 'Схема (OpenStreetMap)',
                 url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 attribution: '© OpenStreetMap contributors',
                 maxZoom: 19
             },
-            esri: {
-                name: 'ESRI — космоснимок',
-                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attribution: 'Источники: Esri, Maxar, Earthstar Geographics',
+            topo: {
+                name: 'Топографическая с горизонталями (OpenTopoMap)',
+                url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+                attribution: '© OpenTopoMap (CC-BY-SA), данные © OpenStreetMap contributors',
+                maxZoom: 17
+            },
+            esriTopo: {
+                name: 'Топографическая (ESRI)',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+                attribution: 'Источники: Esri, HERE, Garmin, USGS, NGA',
+                maxZoom: 19
+            },
+            esriRelief: {
+                name: 'Рельеф, отмывка (ESRI)',
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+                attribution: 'Источники: Esri, Airbus DS, USGS, NGA',
                 maxZoom: 19
             },
             custom: {
                 name: 'Свой шаблон (MapTiler / Mapbox — со своим ключом)',
                 url: '',
                 attribution: 'Источник указан в шаблоне',
-                maxZoom: 20
+                maxZoom: 22
             }
         };
+
+        /**
+         * Детализация: во сколько пикселей целимся по стороне площадки и сколько
+         * тайлов готовы запросить. Больше тайлов — резче картинка на том же
+         * охвате, но это чужие бесплатные сервисы, поэтому бюджет ограничен и
+         * запросы идут пачками, а не штормом.
+         */
+        const BASEMAP_DETAIL = {
+            normal: { name: 'Обычная (быстро)', targetPx: 2048, maxTiles: 200 },
+            high: { name: 'Высокая', targetPx: 4096, maxTiles: 520 },
+            max: { name: 'Максимальная (дольго грузится)', targetPx: 8192, maxTiles: 1100 }
+        };
+
+        /**
+         * Потолок стороны склейки в тайлах. 32 тайла — это холст 8192 px:
+         * 268 МБ в памяти и столько же в видеопамяти под текстуру. Больше уже
+         * упирается в предел текстуры WebGL и роняет слабые машины.
+         */
+        const BASEMAP_MAX_TILES_PER_SIDE = 32;
 
         const BASEMAP_STORAGE_KEY = 'bimlva_basemap_v1';
         let activeBasemapBinding = null;
         const EARTH_METERS_PER_DEGREE = 111320; // по меридиану, достаточно на км-масштабах
-        /** Тайлов за один раз: щадим бесплатные сервисы и не вешаем вкладку. */
-        const BASEMAP_MAX_TILES = 160;
         let basemapLayerId = null;
 
         function lonToMercatorX(lon, z) {
@@ -4258,6 +4368,32 @@
             return Math.max(1, Math.min(provider.maxZoom || 19, Math.round(ideal)));
         }
 
+        function basemapDetail(id) {
+            return BASEMAP_DETAIL[id] || BASEMAP_DETAIL.normal;
+        }
+
+        /** Сколько тайлов и какой зум выйдет при таких настройках — для подсказки в диалоге. */
+        function estimateBasemapTiles(binding, radius, provider, detailId) {
+            const detail = basemapDetail(detailId);
+            let zoom = pickBasemapZoom(binding, radius, provider, detail.targetPx);
+            const corners = [
+                [-radius, -radius], [radius, -radius], [-radius, radius], [radius, radius]
+            ].map(([dx, dy]) => basemapModelToLatLon(binding, binding.anchorX + dx, binding.anchorY + dy));
+            const lats = corners.map(c => c.lat);
+            const lons = corners.map(c => c.lon);
+            for (;;) {
+                const cols = Math.floor(lonToMercatorX(Math.max(...lons), zoom)) - Math.floor(lonToMercatorX(Math.min(...lons), zoom)) + 1;
+                const rows = Math.floor(latToMercatorY(Math.min(...lats), zoom)) - Math.floor(latToMercatorY(Math.max(...lats), zoom)) + 1;
+                const count = cols * rows;
+                const fitsSide = cols <= BASEMAP_MAX_TILES_PER_SIDE && rows <= BASEMAP_MAX_TILES_PER_SIDE;
+                if ((count <= detail.maxTiles && fitsSide) || zoom <= 1) {
+                    const mPerPx = 156543.03392 * Math.cos(binding.lat * Math.PI / 180) / Math.pow(2, zoom);
+                    return { zoom, tiles: count, metersPerPixel: mPerPx, capped: zoom < pickBasemapZoom(binding, radius, provider, detail.targetPx) };
+                }
+                zoom--;
+            }
+        }
+
         function loadTileImage(url) {
             return new Promise((resolve) => {
                 const img = new Image();
@@ -4282,7 +4418,8 @@
          * Скачивает и склеивает тайлы, покрывающие площадку.
          * @returns {{texture, mercMinX, mercMinY, mercSpanX, mercSpanY, zoom, tiles, failed}}
          */
-        async function fetchBasemapTexture(binding, radius, provider, template) {
+        async function fetchBasemapTexture(binding, radius, provider, template, detailId) {
+            const detail = basemapDetail(detailId);
             // Углы площадки в широте/долготе — с запасом на поворот
             const corners = [
                 [-radius, -radius], [radius, -radius], [-radius, radius], [radius, radius]
@@ -4292,16 +4429,18 @@
             const minLat = Math.min(...lats), maxLat = Math.max(...lats);
             const minLon = Math.min(...lons), maxLon = Math.max(...lons);
 
-            let zoom = pickBasemapZoom(binding, radius, provider);
+            let zoom = pickBasemapZoom(binding, radius, provider, detail.targetPx);
             let x0, x1, y0, y1;
-            // Ужимаем зум, пока не влезем в лимит тайлов
+            // Ужимаем зум, пока не влезем в бюджет тайлов выбранной детализации
             for (;;) {
                 x0 = Math.floor(lonToMercatorX(minLon, zoom));
                 x1 = Math.floor(lonToMercatorX(maxLon, zoom));
                 y0 = Math.floor(latToMercatorY(maxLat, zoom)); // север = меньший y
                 y1 = Math.floor(latToMercatorY(minLat, zoom));
                 const count = (x1 - x0 + 1) * (y1 - y0 + 1);
-                if (count <= BASEMAP_MAX_TILES || zoom <= 1) break;
+                const fitsSide = (x1 - x0 + 1) <= BASEMAP_MAX_TILES_PER_SIDE &&
+                    (y1 - y0 + 1) <= BASEMAP_MAX_TILES_PER_SIDE;
+                if ((count <= detail.maxTiles && fitsSide) || zoom <= 1) break;
                 zoom--;
             }
 
@@ -4338,7 +4477,8 @@
                     ctx.drawImage(img, (j.tx - x0) * TILE, (j.ty - y0) * TILE, TILE, TILE);
                 });
                 showLoader('КАРТА', `Тайлы ${done}/${jobs.length}…`);
-                await new Promise(r => setTimeout(r, 0));
+                // На больших охватах не долбим чужой сервер вплотную
+                await new Promise(r => setTimeout(r, jobs.length > 200 ? 40 : 0));
             }
 
             const texture = new THREE.CanvasTexture(canvas);
@@ -4429,7 +4569,7 @@
             const radius = Math.max(50, Number(settings.radius) || 1000);
 
             showLoader('КАРТА', 'Загрузка тайлов…');
-            const tiles = await fetchBasemapTexture(binding, radius, provider, settings.template);
+            const tiles = await fetchBasemapTexture(binding, radius, provider, settings.template, settings.detail);
             if (tiles.failed >= tiles.tiles) {
                 tiles.texture.dispose();
                 hideLoader();
@@ -4458,8 +4598,15 @@
                 ];
             };
 
+            // Шаг сетки под драпировку: ~4 м, иначе рельеф режется на крупные
+            // грани и по краям видны изломы. Без драпировки плотность не нужна.
+            const drapeSegments = Math.max(64, Math.min(320, Math.round((radius * 2) / 4)));
+            if (settings.drape) {
+                showLoader('КАРТА', `Натягивание на рельеф: сетка ${drapeSegments}×${drapeSegments}…`);
+                await new Promise(r => setTimeout(r, 10));
+            }
             const mesh = buildGeoRasterMesh(bounds, tiles.texture, {
-                segments: 96,
+                segments: settings.drape ? drapeSegments : 96,
                 drape: !!settings.drape,
                 opacity: settings.opacity ?? 0.9,
                 zOffset: 0.05,
@@ -17477,6 +17624,7 @@ ${componentXml || '    '}
                 anchorY: parseDecimal($('baseMapAnchorY').value, 0),
                 rotationDeg: parseDecimal($('baseMapRotation').value, 0),
                 radius: parseDecimal($('baseMapRadius').value, 1000),
+                detail: $('baseMapDetail').value in BASEMAP_DETAIL ? $('baseMapDetail').value : 'normal',
                 opacity: parseFloat($('baseMapOpacity').value) || 0.9,
                 drape: $('baseMapDrape').checked
             };
@@ -17491,7 +17639,14 @@ ${componentXml || '    '}
                     .map(([id, p]) => `<option value="${id}">${p.name}</option>`)
                     .join('');
             }
-            sel.value = BASEMAP_PROVIDERS[saved.provider] ? saved.provider : 'osm';
+            sel.value = BASEMAP_PROVIDERS[saved.provider] ? saved.provider : 'esri';
+            const detailSel = $('baseMapDetail');
+            if (!detailSel.options.length) {
+                detailSel.innerHTML = Object.entries(BASEMAP_DETAIL)
+                    .map(([id, d]) => `<option value="${id}">${d.name}</option>`)
+                    .join('');
+            }
+            detailSel.value = BASEMAP_DETAIL[saved.detail] ? saved.detail : 'normal';
             $('baseMapTemplate').value = saved.template || '';
             if (Number.isFinite(saved.lat)) $('baseMapLat').value = saved.lat;
             if (Number.isFinite(saved.lon)) $('baseMapLon').value = saved.lon;
@@ -17510,11 +17665,60 @@ ${componentXml || '    '}
             $('baseMapAnchorY').value = (savedFits ? saved.anchorY : center.y).toFixed(2);
 
             refreshBaseMapProviderUi();
+            refreshBaseMapEstimate();
             $('baseMapModal').classList.add('show');
         }
 
+        /** Живая подсказка: сколько тайлов и какая детальность выйдет. */
+        function refreshBaseMapEstimate() {
+            const el = $('baseMapEstimate');
+            if (!el) return;
+            const s = readBaseMapForm();
+            const provider = BASEMAP_PROVIDERS[s.provider] || BASEMAP_PROVIDERS.esri;
+            if (!Number.isFinite(s.lat) || Math.abs(s.lat) > 85) {
+                el.textContent = 'Заполните широту и долготу — после этого покажу охват и число квадратов.';
+                return;
+            }
+            const radius = Math.max(50, s.radius || 1000);
+            const est = estimateBasemapTiles(
+                { lat: s.lat, lon: s.lon, anchorX: s.anchorX, anchorY: s.anchorY, rotationDeg: s.rotationDeg },
+                radius, provider, s.detail
+            );
+            const side = (radius * 2).toLocaleString('ru-RU');
+            el.textContent =
+                `Охват ${side}×${side} м · квадратов ${est.tiles} · зум ${est.zoom} · ` +
+                `${est.metersPerPixel.toFixed(2)} м на пиксель` +
+                (est.capped ? ' · зум снижен, чтобы уложиться в бюджет детализации' : '');
+        }
+
         $('btnBaseMap').addEventListener('click', openBaseMapModal);
-        $('baseMapProvider').addEventListener('change', refreshBaseMapProviderUi);
+        $('baseMapProvider').addEventListener('change', () => { refreshBaseMapProviderUi(); refreshBaseMapEstimate(); });
+        ['baseMapDetail', 'baseMapRadius', 'baseMapLat', 'baseMapLon', 'baseMapRotation', 'baseMapAnchorX', 'baseMapAnchorY']
+            .forEach(id => $(id).addEventListener('input', refreshBaseMapEstimate));
+        $('baseMapDetail').addEventListener('change', refreshBaseMapEstimate);
+
+        /** Охват под габарит всех загруженных моделей — «одного квадрата» обычно мало. */
+        $('baseMapRadiusFit').addEventListener('click', () => {
+            const box = new THREE.Box3();
+            let any = false;
+            for (const mod of loadedModels.values()) {
+                if (!mod.group) continue;
+                try {
+                    const b = new THREE.Box3().setFromObject(mod.group);
+                    if (!b.isEmpty()) { box.union(b); any = true; }
+                } catch (_) {}
+            }
+            if (!any) {
+                notifyError('Нет загруженных моделей — не по чему подбирать охват.');
+                return;
+            }
+            const size = box.getSize(new THREE.Vector3());
+            // Радиус от точки привязки: половина большей стороны плюс запас 15 %
+            const radius = Math.max(100, Math.round(Math.max(size.x, size.y) / 2 * 1.15));
+            $('baseMapRadius').value = radius;
+            refreshBaseMapEstimate();
+            notifyOk(`Охват подобран под модели: радиус ${radius.toLocaleString('ru-RU')} м.`);
+        });
         $('baseMapCancel').addEventListener('click', () => $('baseMapModal').classList.remove('show'));
         $('baseMapModal').addEventListener('click', e => {
             if (e.target === $('baseMapModal')) $('baseMapModal').classList.remove('show');
