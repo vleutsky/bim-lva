@@ -2249,9 +2249,10 @@
 
                 <div class="tb-sep" data-tb-with="tbSegVis" aria-hidden="true"></div>
                 <div class="tb-seg" id="tbSegVis" data-tb-overflow="2">
-                    <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы"><span class="tb-ico">👁</span><span class="tb-txt">Скрыть</span></button>
-                    <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное"><span class="tb-ico">◎</span><span class="tb-txt">Isolate</span></button>
-                    <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию"><span class="tb-ico">◉</span><span class="tb-txt">Показать</span></button>
+                    <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы (Ctrl+H)"><span class="tb-ico">👁</span><span class="tb-txt">Скрыть</span></button>
+                    <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное (I)"><span class="tb-ico">◎</span><span class="tb-txt">Isolate</span></button>
+                    <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию (Shift+I)"><span class="tb-ico">◉</span><span class="tb-txt">Показать</span></button>
+                    <button class="btn" id="btnClearSelection" disabled title="Снять выделение (C)"><span class="tb-ico">∅</span><span class="tb-txt">Очистить</span></button>
                 </div>
 
                 <div class="tb-sep" aria-hidden="true"></div>
@@ -2348,7 +2349,6 @@
             <h3>Структура</h3>
             <div class="head-actions">
                 <button class="pop" id="treeSelectAll" title="Выделить все элементы всех загруженных моделей">ВСЕ</button>
-                <button class="pop" id="treeClearSelection" title="Снять выделение со всех элементов">∅</button>
                 <button class="pop panel-swap" id="treeSwap" title="Поменять панели местами (слева ↔ справа)">⇄</button>
                 <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
             </div>
@@ -6041,7 +6041,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -15381,7 +15381,7 @@ ${componentXml || '    '}
             selectMultiple(allItems);
         });
 
-        $('treeClearSelection').addEventListener('click', () => {
+        $('btnClearSelection').addEventListener('click', () => {
             treeSelectionAnchor = null;
             selectMultiple([]);
         });
@@ -16405,7 +16405,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -16909,6 +16909,38 @@ ${componentXml || '    '}
                 event.preventDefault();
                 focusOnList(selectedItems);
             }
+            // Горячие клавиши
+            if (event.key === 'c' || event.key === 'С') {
+                event.preventDefault();
+                $('btnClearSelection').click();
+            } else if (event.key === 'i' || event.key === 'и') {
+                if (event.shiftKey) {
+                    event.preventDefault();
+                    $('btnShowAll').click();
+                } else {
+                    event.preventDefault();
+                    $('btnIsolate').click();
+                }
+            } else if (event.key === 'Delete') {
+                event.preventDefault();
+                const btnDelete = document.querySelector('[data-act="deleteSelection"]');
+                if (btnDelete) btnDelete.click();
+            } else if (event.key === 'm' || event.key === 'М') {
+                event.preventDefault();
+                const btnMeasure = $('btnMeasure');
+                if (btnMeasure) btnMeasure.click();
+            } else if (event.key === 'b' || event.key === 'И') {
+                event.preventDefault();
+                const btnBcf = $('btnBcf');
+                if (btnBcf) btnBcf.click();
+            } else if (event.shiftKey && (event.key === 'C' || event.key === 'Ы')) {
+                event.preventDefault();
+                const btnClash = $('btnClash');
+                if (btnClash) btnClash.click();
+            } else if (event.ctrlKey && (event.key === 'h' || event.key === 'р')) {
+                event.preventDefault();
+                $('btnHide').click();
+            }
         });
 
         function fitView() {
@@ -17032,7 +17064,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
