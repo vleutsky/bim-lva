@@ -25,6 +25,7 @@ function isLocal(url, port) {
 }
 
 const problems = [];
+let train = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -235,6 +236,49 @@ async function checkDxfBlocks(page) {
  * Габариты при этом оставались правильными, и по ним поломка не видна —
  * проверяем именно расстояние между центрами.
  */
+/**
+ * Локомотив тура. Проверяем не «нарисовалось ли что-то», а размеры: модель
+ * заявлена в натуральную величину и по ней прикидывают проезд под путепроводом.
+ * Отдельно — что низ колёс лежит на нуле (УГР), иначе поезд утонет в рельефе,
+ * и что сложенный токоприёмник не выходит за габарит 1-Т (5300 мм, ГОСТ 9238).
+ */
+async function checkTourTrain(page) {
+    await page.evaluate(() => document.getElementById('btnTour')?.click());
+    const ok = await page.evaluate(() => {
+        const sel = document.getElementById('tourGroundVehicle');
+        if (!sel) return false;
+        sel.value = 'train';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    });
+    if (!ok) {
+        problems.push('в туре нет выбора транспорта (#tourGroundVehicle)');
+        return null;
+    }
+    const box = await page
+        .waitForFunction(() => {
+            const b = window.BimLvaDebug?.tourVehicleBox;
+            return b && b.kind === 'train' ? b : false;
+        }, { timeout: 30_000 })
+        .then((h) => h.jsonValue())
+        .catch(() => null);
+    await page.evaluate(() => document.getElementById('tourCloseBtn')?.click());
+    if (!box) {
+        problems.push('локомотив тура не построился');
+        return null;
+    }
+    const near = (got, want, tol) => Math.abs(got - want) <= tol;
+    const checks = [
+        [near(box.length, 22.0, 0.15), `длина ${box.length.toFixed(2)} м, ожидалось 22.0`],
+        [near(box.width, 3.10, 0.05), `ширина ${box.width.toFixed(2)} м, ожидалось 3.10`],
+        [near(box.bottom, 0, 0.02), `низ колёс на ${box.bottom.toFixed(2)} м вместо УГР 0`],
+        [box.height <= 5.3, `высота ${box.height.toFixed(2)} м вышла за габарит 1-Т (5.30)`],
+        [box.height >= 4.6, `высота ${box.height.toFixed(2)} м — крыша ниже 4.60, модель схлопнулась`]
+    ];
+    checks.filter(([good]) => !good).forEach(([, msg]) => problems.push('локомотив: ' + msg));
+    return box;
+}
+
 async function checkGeoFederation(page) {
     const a = path.join(ROOT, 'tools', 'fixtures', 'smoke-geo-a.ifc');
     const b = path.join(ROOT, 'tools', 'fixtures', 'smoke-geo-b.ifc');
@@ -357,6 +401,7 @@ async function main() {
                     clash = await checkClash(page);
                     dxfBlocks = await checkDxfBlocks(page);
                     geoFed = await checkGeoFederation(page);
+                    train = await checkTourTrain(page);
                 } finally {
                     await fs.rm(second, { force: true });
                 }
@@ -393,6 +438,12 @@ async function main() {
     console.log(`шрифт:     ${state.fontFamily}`);
     if (ifcLoaded !== null) console.log(`IFC:       ${ifcLoaded ? `загружен, узлов дерева ${state.treeItems}` : 'НЕ загрузился'}`);
     if (state.meshCount >= 0) console.log(`мешей:     ${state.meshCount}, с BVH: ${state.bvhCount}`);
+    if (train) {
+        console.log(
+            `локомотив: ${train.length.toFixed(2)} × ${train.width.toFixed(2)} × ${train.height.toFixed(2)} м ` +
+            `(${train.model})`
+        );
+    }
     if (pick) console.log(`пикинг:    ${pick.ok ? `элемент выбран (${pick.label})` : 'НЕ РАБОТАЕТ'}`);
     if (toast) console.log(`тосты:     API ${toast.shown ? 'ок' : 'НЕТ'}, из UI ${toast.fromUi ? 'ок' : 'НЕТ'}`);
     if (clash) console.log(`коллизии:  пар ${clash.pairs}, за ${clash.ms} мс`);
