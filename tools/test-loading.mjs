@@ -274,6 +274,33 @@ async function main() {
         await fs.rm(badPath, { force: true });
         await fs.rm(skipPath, { force: true });
 
+        // E3. Кнопка «Закрыть» не должна висеть во время загрузки, а полоса
+        // обязана двигаться внутри файла: правило display:flex перебивало
+        // атрибут hidden, а без весов стадий прогресс стоял на нуле.
+        await clearModels(page);
+        await resetInput(page);
+        let closeSeenDuringLoad = false;
+        const pcts = new Set();
+        const watch3 = setInterval(async () => {
+            try {
+                const st = await page.evaluate(() => ({
+                    rows: document.querySelectorAll('#loadFiles .load-file-row').length,
+                    doneShown: document.getElementById('loadTitle').textContent.includes('ЗАВЕРШЕНА'),
+                    closeVisible: document.getElementById('loadFilesActions').offsetParent !== null,
+                    pct: parseInt(document.getElementById('loadTrack').getAttribute('aria-valuenow') || '0', 10)
+                }));
+                if (st.rows > 0 && !st.doneShown && st.closeVisible) closeSeenDuringLoad = true;
+                if (st.rows > 0 && !st.doneShown) pcts.add(st.pct);
+            } catch (_) {}
+        }, 40);
+        await page.setInputFiles('#localFileInput', [gridPath, dxfPath]);
+        await waitModels(page, 2, 120_000);
+        clearInterval(watch3);
+        const midPcts = [...pcts].filter((p) => p > 0 && p < 50).length;
+        if (closeSeenDuringLoad) problems.push('кнопка «Закрыть» видна во время загрузки (hidden перебит правилом display)');
+        if (!midPcts) problems.push(`полоса не двигалась внутри первого файла: значения ${[...pcts].join(',')}`);
+        console.log(`E3. «Закрыть» во время загрузки=${closeSeenDuringLoad}; промежуточных значений полосы внутри 1-го файла: ${midPcts}`);
+
         // G. Журнал уведомлений: копит всё, что было, даже после закрытия тостов
         const logState = await page.evaluate(async () => {
             const badgeBefore = document.getElementById('notifyLogBadge').hidden;
