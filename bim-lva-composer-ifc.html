@@ -2914,6 +2914,15 @@
                 <div class="k">Авто-ноль (первая модель)</div>
                 <div class="v" id="crsAutoOriginValue">—</div>
             </div>
+            <div id="crsExtentsBlock" style="display:none">
+                <div class="bulk-note" style="margin-top:10px">
+                    Мировой габарит файлов — как он приехал в IFC, до вычитания нуля сцены.
+                    Это те же числа, что Civil 3D показывает в «Свойства поверхности →
+                    Статистика». Сходятся — файл привёз свои координаты, вьювер их не терял;
+                    расходятся — сдвиг случился при экспорте.
+                </div>
+                <div id="crsExtentsList" style="max-height:180px;overflow:auto"></div>
+            </div>
             <div class="prop small"><div class="k">ΔX (east)</div><input class="editInput" id="crsOffsetX" type="text" inputmode="decimal" value="0"></div>
             <div class="prop small"><div class="k">ΔY (north)</div><input class="editInput" id="crsOffsetY" type="text" inputmode="decimal" value="0"></div>
             <div class="prop small"><div class="k">ΔZ</div><input class="editInput" id="crsOffsetZ" type="text" inputmode="decimal" value="0"></div>
@@ -6956,6 +6965,42 @@ uniform vec3 uBatchSelColor;
             return box.getCenter(new THREE.Vector3());
         }
 
+        /**
+         * Абсолютный габарит фрагментов ДО вычитания нуля сцены, в double и в привычных
+         * east/north/height. Ровно те числа, что Civil 3D показывает в «Свойства
+         * поверхности → Статистика», — по ним видно, приехал файл со своими мировыми
+         * координатами или его сдвинули при экспорте.
+         */
+        function computeFragmentsAbsoluteBounds(fragments) {
+            if (!fragments?.length) return null;
+            const box = new THREE.Box3();
+            const identity = new THREE.Matrix4();
+            for (let fi = 0; fi < fragments.length; fi++) {
+                const frag = fragments[fi];
+                const pos = frag?.geom?.attributes?.position;
+                if (!pos?.count) continue;
+                const arr = pos.array;
+                const e = (frag.matrix || identity).elements;
+                for (let i = 0; i < pos.count; i++) {
+                    const i3 = i * 3;
+                    const x = arr[i3];
+                    const y = arr[i3 + 1];
+                    const z = arr[i3 + 2];
+                    _meshBoundsScratch.x = e[0] * x + e[4] * y + e[8] * z + e[12];
+                    _meshBoundsScratch.y = e[1] * x + e[5] * y + e[9] * z + e[13];
+                    _meshBoundsScratch.z = e[2] * x + e[6] * y + e[10] * z + e[14];
+                    box.expandByPoint(_meshBoundsScratch);
+                }
+            }
+            if (box.isEmpty()) return null;
+            // web-ifc отдаёт Y-up: (E, h, −N)
+            return {
+                e: { min: box.min.x, max: box.max.x },
+                n: { min: -box.max.z, max: -box.min.z },
+                h: { min: box.min.y, max: box.max.y }
+            };
+        }
+
         /** Вычесть origin из вершин в double (геодезия не ломает float32 bbox). */
         function subtractVectorFromFragmentVertices(fragments, origin) {
             if (!fragments?.length || !origin) return;
@@ -7310,6 +7355,40 @@ uniform vec3 uBatchSelColor;
                 : '';
             val.textContent =
                 `X ${o.x.toFixed(2)} · Y ${o.y.toFixed(2)} · Z ${o.z.toFixed(2)} м${src}`;
+        }
+
+        /** Таблица «файл → мировой габарит» для сверки с Civil 3D. */
+        function updateCrsExtentsUi() {
+            const block = $('crsExtentsBlock');
+            const list = $('crsExtentsList');
+            if (!block || !list) return;
+            const rows = [...loadedModels.values()].filter(m => m.absExtents);
+            if (!rows.length) {
+                block.style.display = 'none';
+                list.replaceChildren();
+                return;
+            }
+            block.style.display = '';
+            const range = (r) => `${r.min.toFixed(2)} … ${r.max.toFixed(2)}`;
+            const frag = document.createDocumentFragment();
+            rows.forEach(mod => {
+                const wrap = document.createElement('div');
+                wrap.className = 'prop small';
+                wrap.style.display = 'block';
+                const name = document.createElement('div');
+                name.className = 'k';
+                name.style.marginBottom = '2px';
+                name.textContent = mod.filename || 'модель';
+                const val = document.createElement('div');
+                val.className = 'v';
+                val.style.whiteSpace = 'pre-line';
+                const a = mod.absExtents;
+                val.textContent =
+                    `X ${range(a.e)} м\nY ${range(a.n)} м\nZ ${range(a.h)} м`;
+                wrap.append(name, val);
+                frag.appendChild(wrap);
+            });
+            list.replaceChildren(frag);
         }
 
         /**
@@ -7873,6 +7952,19 @@ uniform vec3 uBatchSelColor;
                             `[BIM.LVA] IFC: declared ×${declaredLengthToMeters}, но web-ifc уже в метрах — повторный scale пропущен.`
                         );
                     }
+                }
+
+                // Габарит в мировых координатах снимаем ДО вычитания нуля сцены —
+                // потом вершины уже относительные, и сверить с Civil будет нечем.
+                modData.absExtents = computeFragmentsAbsoluteBounds(fragments);
+                if (modData.absExtents) {
+                    const ax = modData.absExtents;
+                    console.info(
+                        `[BIM.LVA] ${file.name} мировой габарит (м): ` +
+                        `X ${ax.e.min.toFixed(2)}…${ax.e.max.toFixed(2)} · ` +
+                        `Y ${ax.n.min.toFixed(2)}…${ax.n.max.toFixed(2)} · ` +
+                        `Z ${ax.h.min.toFixed(2)}…${ax.h.max.toFixed(2)}`
+                    );
                 }
 
                 const rebased = rebaseLargeCoordinateFragments(fragments, {
@@ -13917,6 +14009,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('crsOffsetY').value = crsOffsets.y;
             $('crsOffsetZ').value = crsOffsets.z;
             updateCrsAutoUi();
+            updateCrsExtentsUi();
             $('crsModal').classList.add('show');
         });
         $('cancelCrs').addEventListener('click', () => $('crsModal').classList.remove('show'));
