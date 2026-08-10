@@ -2763,9 +2763,10 @@
             <div class="bulk-note" style="margin-top:10px"><b>Шаг 1.</b> Точка в координатах модели — те же числа, что в строке состояния внизу (восток · север). По умолчанию подставлен центр моделей.</div>
             <div class="prop small"><div class="k">Восток (X)</div><input class="editInput" id="baseMapAnchorX" type="text" inputmode="decimal"></div>
             <div class="prop small"><div class="k">Север (Y)</div><input class="editInput" id="baseMapAnchorY" type="text" inputmode="decimal"></div>
-            <div class="modal-actions" style="justify-content:flex-start;gap:6px">
+            <div class="modal-actions" style="justify-content:flex-start;gap:6px;flex-wrap:wrap">
                 <button type="button" class="btn" id="baseMapAnchorSelection" title="Подставить координаты выделенного элемента">Из выделения</button>
                 <button type="button" class="btn" id="baseMapAnchorCenter" title="Подставить центр загруженных моделей">Центр моделей</button>
+                <button type="button" class="btn" id="baseMapAnchorCopy" title="Скопировать восток и север в буфер обмена">⧉ Копировать</button>
             </div>
 
             <div class="bulk-note" style="margin-top:10px"><b>Шаг 2.</b> Та же точка на обычной карте. В Яндекс.Картах: правый клик → координаты копируются в виде «55.712345, 52.412345». Вставьте их <b>целиком в любое из двух полей</b> — они разделятся сами.</div>
@@ -4517,7 +4518,15 @@
             return { e: o.x, n: -o.z, h: o.y };
         }
 
-        /** Центр загруженных моделей в абсолютных east/north — точка привязки по умолчанию. */
+        /**
+         * Центр загруженных моделей в абсолютных east/north — точка привязки по умолчанию.
+         *
+         * Пересчёт идёт через `worldPointToAbsoluteXYZ` — тот же, что печатает строка
+         * состояния. Складывать габарит с `ifcWorldOrigin` напрямую нельзя: после
+         * загрузки сцена ещё до-центрируется (`ensureSceneContentNearOrigin`), и этот
+         * сдвиг в origin не входит — точка привязки уезжала на величину подгонки,
+         * а вместе с ней и вся подложка.
+         */
         function currentModelCenterXY() {
             const box = new THREE.Box3();
             let any = false;
@@ -4529,10 +4538,8 @@
                 } catch (_) {}
             }
             if (!any) return { x: 0, y: 0 };
-            // Box3 уже в координатах сцены (Z-up): X=east, Y=north
-            const c = box.getCenter(new THREE.Vector3());
-            const shift = currentWorldShiftEN();
-            return { x: c.x + shift.e, y: c.y + shift.n };
+            const abs = worldPointToAbsoluteXYZ(box.getCenter(new THREE.Vector3()));
+            return { x: abs.x, y: abs.y };
         }
 
         async function refreshGeoRasterEcwNote() {
@@ -17595,11 +17602,23 @@ ${componentXml || '    '}
                 notifyError('У выделения нет геометрии — координаты не определить.');
                 return;
             }
-            const c = box.getCenter(new THREE.Vector3());
-            const shift = currentWorldShiftEN();
-            $('baseMapAnchorX').value = (c.x + shift.e).toFixed(2);
-            $('baseMapAnchorY').value = (c.y + shift.n).toFixed(2);
+            // Тот же пересчёт, что в строке состояния — иначе привязка разъезжается
+            const abs = worldPointToAbsoluteXYZ(box.getCenter(new THREE.Vector3()));
+            $('baseMapAnchorX').value = abs.x.toFixed(2);
+            $('baseMapAnchorY').value = abs.y.toFixed(2);
         });
+        // Копирование кнопкой: выделять значение в поле мышью неудобно, а на
+        // узких экранах и вовсе почти невозможно.
+        $('baseMapAnchorCopy').addEventListener('click', async () => {
+            const text = `${$('baseMapAnchorX').value}, ${$('baseMapAnchorY').value}`;
+            try {
+                await navigator.clipboard.writeText(text);
+                notifyOk(`Скопировано: ${text} (восток, север).`);
+            } catch (_) {
+                notifyError(`Буфер обмена недоступен. Координаты: ${text}`);
+            }
+        });
+
         $('baseMapRemove').addEventListener('click', () => {
             if (removeBasemapLayer()) notifyOk('Подложка убрана.');
             else notifyError('Подложки на сцене нет.');

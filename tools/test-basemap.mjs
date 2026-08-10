@@ -64,6 +64,44 @@ try {
     await page.waitForFunction(() => !document.getElementById('loader').classList.contains('show'), { timeout: 30_000 });
     const modelBounds = await page.evaluate(() => window.BimLvaDebug.modelBounds[0]);
 
+    // A-1. Точка привязки должна совпадать со строкой состояния. Складывать
+    // габарит с ifcWorldOrigin напрямую нельзя: сцена после загрузки ещё
+    // до-центрируется, и на эту величину привязка (а с ней вся подложка) уезжала.
+    const anchorVsReadout = await page.evaluate(async () => {
+        document.getElementById('treeSelectAll').click();
+        await new Promise((r) => setTimeout(r, 500));
+        const readout = document.getElementById('coordSelection').textContent;
+        document.getElementById('btnBaseMap').click();
+        await new Promise((r) => setTimeout(r, 300));
+        document.getElementById('baseMapAnchorSelection').click();
+        const fromSelection = {
+            x: parseFloat(document.getElementById('baseMapAnchorX').value),
+            y: parseFloat(document.getElementById('baseMapAnchorY').value)
+        };
+        document.getElementById('baseMapAnchorCenter').click();
+        const fromCenter = {
+            x: parseFloat(document.getElementById('baseMapAnchorX').value),
+            y: parseFloat(document.getElementById('baseMapAnchorY').value)
+        };
+        document.getElementById('baseMapCancel').click();
+        return { readout, fromSelection, fromCenter };
+    });
+    // Строка состояния печатает «+E · +N · +Z» — сверяем с ней
+    const readoutNums = (anchorVsReadout.readout.match(/-?[\d.]+/g) || []).map(Number);
+    const okSel = readoutNums.length >= 2 &&
+        Math.abs(anchorVsReadout.fromSelection.x - readoutNums[0]) < 1 &&
+        Math.abs(anchorVsReadout.fromSelection.y - readoutNums[1]) < 1;
+    if (!okSel) {
+        problems.push(
+            `«Из выделения» дало (${anchorVsReadout.fromSelection.x}, ${anchorVsReadout.fromSelection.y}), ` +
+            `а строка состояния показывает «${anchorVsReadout.readout}» — привязка разъедется`
+        );
+    }
+    if (Math.abs(anchorVsReadout.fromCenter.x - MODEL.worldX) > 500) {
+        problems.push(`«Центр моделей» дал ${anchorVsReadout.fromCenter.x}, ожидалось около ${MODEL.worldX}`);
+    }
+    console.log(`A-1. привязка «из выделения» (${anchorVsReadout.fromSelection.x.toFixed(2)}, ${anchorVsReadout.fromSelection.y.toFixed(2)}) = строка состояния «${anchorVsReadout.readout.trim().slice(0, 40)}»`);
+
     // A0. До привязки карты кнопка копирует плоские координаты модели и
     // объясняет, как получать широту с долготой. Это первый сценарий у любого.
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
