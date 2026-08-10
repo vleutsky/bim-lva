@@ -1125,6 +1125,61 @@
             display: flex;
         }
 
+        /* Список файлов пачки: разметка постоянная, меняются только значки и
+           мелкая подпись стадии — поэтому экран не мигает. Ровно 10 строк
+           видно, дальше прокрутка вслед за текущим файлом. */
+        .load-files {
+            width: min(560px, 92vw);
+            max-height: calc(10 * 26px);
+            overflow-y: auto;
+            overflow-x: hidden;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 4px 0;
+            font-size: 12px;
+        }
+
+        .load-file-row {
+            display: grid;
+            grid-template-columns: 20px 1fr auto;
+            gap: 8px;
+            align-items: center;
+            height: 26px;
+            padding: 0 10px;
+            white-space: nowrap;
+        }
+
+        .load-file-row .lf-ico {
+            text-align: center;
+            opacity: .75;
+        }
+
+        .load-file-row .lf-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--txt-dim);
+        }
+
+        .load-file-row .lf-stage {
+            font-size: 11px;
+            opacity: .6;
+            max-width: 45%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .load-file-row.is-active .lf-name { color: var(--txt); font-weight: 500; }
+        .load-file-row.is-ok .lf-ico { color: #2e9e5b; opacity: 1; }
+        .load-file-row.is-fail .lf-ico { color: #d9433b; opacity: 1; }
+        .load-file-row.is-fail .lf-name { color: #d9433b; }
+        .load-file-row.is-skip .lf-ico { color: #b8860b; opacity: 1; }
+
+        .load-files-actions {
+            display: flex;
+            gap: 8px;
+        }
+
         .load-progress {
             width: min(320px, 78vw);
             display: flex;
@@ -3071,6 +3126,10 @@
                 <span id="loadBytes"></span>
             </div>
         </div>
+        <div class="load-files" id="loadFiles" hidden></div>
+        <div class="load-files-actions" id="loadFilesActions" hidden>
+            <button type="button" class="btn" id="loadFilesClose">Закрыть</button>
+        </div>
         <small id="loadSub">инициализация...</small>
     </div>
 
@@ -3531,26 +3590,115 @@
             }
         }
 
-        // Пачка файлов: один общий прогресс-бар, hideLoader() внутри пачки игнорируется,
-        // иначе лоадер моргает на каждом файле (каждый loadSingleXXX прячет его за собой).
-        let loaderBatch = null; // { current, total, filename }
+        // ---- Пачка файлов ----
+        // Экран мигал не из-за скрытия загрузчика, а из-за того, что на каждой
+        // стадии каждого файла переписывался крупный заголовок, а полоса
+        // прыгала назад на пофайловом прогрессе. Теперь при пачке заголовок и
+        // полоса общие и только растут, а стадия идёт мелкой подписью в строке
+        // своего файла — разметка не меняется, мигать нечему.
+        let loaderBatch = null; // { current, total, filename, rows: [] }
+        // Итог пачки держим на экране до явного закрытия: в конце загрузки есть
+        // общий hideLoader(), и без этого флага список результатов стирался
+        // ровно в тот момент, когда его надо показать.
+        let loaderHeld = false;
+
+        function beginLoadBatch(files) {
+            const host = $('loadFiles');
+            if (!host) return;
+            loaderBatch = { current: 0, total: files.length, filename: '', rows: [] };
+            host.innerHTML = '';
+            files.forEach((file) => {
+                const row = document.createElement('div');
+                row.className = 'load-file-row';
+                const ico = document.createElement('span');
+                ico.className = 'lf-ico';
+                ico.textContent = '·';
+                const name = document.createElement('span');
+                name.className = 'lf-name';
+                name.textContent = file.name;      // textContent: имя файла не разметка
+                name.title = file.name;
+                const stage = document.createElement('span');
+                stage.className = 'lf-stage';
+                host.append(row);
+                row.append(ico, name, stage);
+                loaderBatch.rows.push({ row, ico, stage });
+            });
+            host.hidden = false;
+            $('loadFilesActions').hidden = true;
+        }
+
+        function setLoadFileActive(index, file) {
+            if (!loaderBatch) return;
+            loaderBatch.current = index + 1;
+            loaderBatch.filename = file.name;
+            const entry = loaderBatch.rows[index];
+            if (!entry) return;
+            entry.row.classList.add('is-active');
+            entry.ico.textContent = '⏳';
+            // Прокрутка вслед за текущим файлом: видно и сделанное, и предстоящее
+            entry.row.scrollIntoView({ block: 'nearest' });
+        }
+
+        const LOAD_FILE_ICONS = { ok: '✔', fail: '✕', skip: '⚠' };
+
+        function setLoadFileDone(index, status, note) {
+            if (!loaderBatch) return;
+            const entry = loaderBatch.rows[index];
+            if (!entry) return;
+            entry.row.classList.remove('is-active');
+            entry.row.classList.add(`is-${status}`);
+            entry.ico.textContent = LOAD_FILE_ICONS[status] || '·';
+            entry.stage.textContent = note || '';
+        }
+
+        function endLoadBatch() {
+            loaderBatch = null;
+            loaderHeld = false;
+            const host = $('loadFiles');
+            if (host) { host.hidden = true; host.innerHTML = ''; }
+            const actions = $('loadFilesActions');
+            if (actions) actions.hidden = true;
+        }
+
+        /** Оставить итог на экране, пока не закроют: иначе непонятно, что не загрузилось. */
+        function holdLoadBatchResult(title, sub) {
+            const titleEl = $('loadTitle');
+            const subEl = $('loadSub');
+            if (titleEl) titleEl.textContent = title;
+            if (subEl) subEl.textContent = sub || '';
+            setLoaderProgress(1, { bytesText: '' });
+            const actions = $('loadFilesActions');
+            if (actions) actions.hidden = false;
+            loaderBatch = null;
+            loaderHeld = true;               // закрыть можно только кнопкой
+        }
 
         function showLoader(title, sub, progressOpts) {
             if (!loader) return;
             const titleEl = $('loadTitle');
             const subEl = $('loadSub');
-            if (titleEl) titleEl.textContent = title;
-            if (subEl) {
-                subEl.textContent = loaderBatch
-                    ? `Файл ${loaderBatch.current}/${loaderBatch.total}: ${loaderBatch.filename}${sub ? ' — ' + sub : ''}`
-                    : (sub || '');
+
+            if (loaderBatch) {
+                // Крупный заголовок постоянен, стадия — в строке своего файла
+                if (titleEl) titleEl.textContent = 'ЗАГРУЗКА МОДЕЛЕЙ';
+                if (subEl) subEl.textContent = `Файл ${loaderBatch.current} из ${loaderBatch.total}`;
+                const entry = loaderBatch.rows[loaderBatch.current - 1];
+                if (entry) entry.stage.textContent = sub ? `${title} · ${sub}` : title;
+                // Доля внутри файла добавляется к уже пройденным — полоса не откатывается
+                const inner = progressOpts && Number.isFinite(progressOpts.ratio)
+                    ? Math.max(0, Math.min(1, progressOpts.ratio))
+                    : 0;
+                setLoaderProgress((loaderBatch.current - 1 + inner) / loaderBatch.total, {
+                    bytesText: `${loaderBatch.current} / ${loaderBatch.total}`
+                });
+                loader.classList.add('show');
+                return;
             }
+
+            if (titleEl) titleEl.textContent = title;
+            if (subEl) subEl.textContent = sub || '';
             if (progressOpts && (progressOpts.ratio != null || progressOpts.loaded != null)) {
                 setLoaderProgress(progressOpts.ratio, progressOpts);
-            } else if (loaderBatch) {
-                setLoaderProgress((loaderBatch.current - 1) / loaderBatch.total, {
-                    bytesText: `${loaderBatch.current}/${loaderBatch.total}`
-                });
             } else {
                 setLoaderProgress(null, { label: 'загрузка…' });
             }
@@ -3559,9 +3707,13 @@
 
         function hideLoader() {
             if (!loader) return;
-            if (loaderBatch) return;
+            if (loaderBatch || loaderHeld) return;
             loader.classList.remove('show');
             setLoaderProgress(null, { label: 'загрузка…' });
+            const host = $('loadFiles');
+            if (host) host.hidden = true;
+            const actions = $('loadFilesActions');
+            if (actions) actions.hidden = true;
         }
 
         // --- Three.js Setup ---
@@ -5761,13 +5913,14 @@
 
             const skipped = [];
             const failed = [];
+            const multi = files.length > 1;
+            if (multi) beginLoadBatch(files);
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 const ext = file.name.split('.').pop().toLowerCase();
-                if (files.length > 1) {
-                    loaderBatch = { current: i + 1, total: files.length, filename: file.name };
-                }
-                showLoader('ЗАГРУЗКА', files.length > 1 ? '' : file.name);
+                if (multi) setLoadFileActive(i, file);
+                const before = loadedModels.size;
+                showLoader('ЗАГРУЗКА', multi ? '' : file.name);
                 try {
                     if (ext === 'ifc') await loadSingleIFC(file);
                     else if (ext === 'fbx') await loadSingleFBX(file);
@@ -5788,9 +5941,16 @@
                     } else if (ext === 'ply' || ext === 'dae' || ext === '3ds') {
                         skipped.push(`${file.name} (формат снят с поддержки — используйте IFC / DXF / GLB / OBJ / STL)`);
                     } else skipped.push(file.name);
+                    // Модель прибавилась — значит файл действительно загрузился,
+                    // а не просто отработал без исключения (skip тоже не бросает)
+                    if (multi) {
+                        if (loadedModels.size > before) setLoadFileDone(i, 'ok', 'загружен');
+                        else setLoadFileDone(i, 'skip', 'формат не поддержан');
+                    }
                 } catch (error) {
                     console.error(file.name, error);
                     failed.push(`${file.name}: ${error.message || error}`);
+                    if (multi) setLoadFileDone(i, 'fail', String(error.message || error).split('\n')[0].slice(0, 60));
                     if (isWasmFatalError(error)) {
                         try {
                             await recoverIfcApi(error.message || error);
@@ -5802,6 +5962,25 @@
                 }
                 // Пауза между файлами — дать браузеру освободить память
                 await new Promise(r => setTimeout(r, 80));
+            }
+            const okCount = files.length - skipped.length - failed.length;
+            if (multi) {
+                if (failed.length || skipped.length) {
+                    // Оставляем итог на экране: иначе непонятно, что не доехало
+                    holdLoadBatchResult(
+                        'ЗАГРУЗКА ЗАВЕРШЕНА',
+                        `Загружено ${okCount} из ${files.length}` +
+                        (failed.length ? ` · с ошибкой ${failed.length}` : '') +
+                        (skipped.length ? ` · пропущено ${skipped.length}` : '')
+                    );
+                } else {
+                    // Всё удачно — даём разглядеть галочки и закрываем сами
+                    holdLoadBatchResult('ЗАГРУЗКА ЗАВЕРШЕНА', `Загружено ${okCount} из ${files.length}`);
+                    $('loadFilesActions').hidden = true;
+                    await new Promise(r => setTimeout(r, 900));
+                    endLoadBatch();
+                    hideLoader();
+                }
             }
             loaderBatch = null;
 
@@ -17624,6 +17803,11 @@ ${componentXml || '    '}
             }
             trackUsage('copy_coords', { latlon: hasLatLon });
         }
+
+        $('loadFilesClose').addEventListener('click', () => {
+            endLoadBatch();
+            hideLoader();
+        });
 
         $('coordCursorCopy').addEventListener('click', () => copyCoordsToClipboard(lastCursorAbs, 'под курсором'));
         $('coordSelectionCopy').addEventListener('click', () => copyCoordsToClipboard(lastSelectionAbs, 'выделения'));
