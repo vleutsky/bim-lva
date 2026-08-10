@@ -1180,6 +1180,13 @@
             gap: 8px;
         }
 
+        /* display в правиле перебивает атрибут hidden из браузерных стилей —
+           без этих строк кнопка «Закрыть» висела на экране всю загрузку. */
+        .load-files[hidden],
+        .load-files-actions[hidden] {
+            display: none;
+        }
+
         .load-progress {
             width: min(320px, 78vw);
             display: flex;
@@ -2227,7 +2234,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · c7613a3</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 69630a0</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -3145,11 +3152,11 @@
                 <span id="loadBytes"></span>
             </div>
         </div>
+        <small id="loadSub">инициализация...</small>
         <div class="load-files" id="loadFiles" hidden></div>
         <div class="load-files-actions" id="loadFilesActions" hidden>
             <button type="button" class="btn" id="loadFilesClose">Закрыть</button>
         </div>
-        <small id="loadSub">инициализация...</small>
     </div>
 
     <footer class="status">
@@ -3650,6 +3657,7 @@
             if (!loaderBatch) return;
             loaderBatch.current = index + 1;
             loaderBatch.filename = file.name;
+            loaderBatch.innerDone = 0;   // новый файл — доля считается заново
             const entry = loaderBatch.rows[index];
             if (!entry) return;
             entry.row.classList.add('is-active');
@@ -3659,6 +3667,37 @@
         }
 
         const LOAD_FILE_ICONS = { ok: '✔', fail: '✕', skip: '⚠' };
+
+        /**
+         * Доля стадии внутри файла. Точного прогресса у web-ifc нет, но стадии
+         * идут в известном порядке, и без этих весов полоса стояла на нуле весь
+         * файл, а потом прыгала — выглядело как «зависло».
+         */
+        const LOAD_STAGE_WEIGHT = {
+            'ЧТЕНИЕ ФАЙЛА': 0.04,
+            'ОБЛАКО': 0.04,
+            'СКАЧИВАНИЕ': 0.10,
+            'ОТКРЫТИЕ IFC': 0.16,
+            'ИНДЕКСАЦИЯ СВОЙСТВ': 0.26,
+            'ГЕОМЕТРИЯ': 0.42,
+            'ОПТИМИЗАЦИЯ': 0.62,
+            'ЕДИНИЦЫ': 0.70,
+            'КООРДИНАТЫ': 0.74,
+            'ИНДЕКС IFC': 0.82,
+            'GUID': 0.88,
+            'СТРУКТУРА': 0.94,
+            'ГЕОРАСТР': 0.50,
+            'КАРТА': 0.50
+        };
+
+        function loadStageFraction(title, progressOpts) {
+            const byRatio = progressOpts && Number.isFinite(progressOpts.ratio)
+                ? Math.max(0, Math.min(1, progressOpts.ratio))
+                : 0;
+            const key = String(title || '').toUpperCase();
+            const byStage = LOAD_STAGE_WEIGHT[key] ?? 0;
+            return Math.max(byRatio, byStage);
+        }
 
         function setLoadFileDone(index, status, note) {
             if (!loaderBatch) return;
@@ -3703,10 +3742,10 @@
                 if (subEl) subEl.textContent = `Файл ${loaderBatch.current} из ${loaderBatch.total}`;
                 const entry = loaderBatch.rows[loaderBatch.current - 1];
                 if (entry) entry.stage.textContent = sub ? `${title} · ${sub}` : title;
-                // Доля внутри файла добавляется к уже пройденным — полоса не откатывается
-                const inner = progressOpts && Number.isFinite(progressOpts.ratio)
-                    ? Math.max(0, Math.min(1, progressOpts.ratio))
-                    : 0;
+                // Доля внутри файла добавляется к уже пройденным и только растёт:
+                // иначе полоса откатывалась назад на каждой новой стадии
+                const inner = Math.max(loaderBatch.innerDone || 0, loadStageFraction(title, progressOpts));
+                loaderBatch.innerDone = inner;
                 setLoaderProgress((loaderBatch.current - 1 + inner) / loaderBatch.total, {
                     bytesText: `${loaderBatch.current} / ${loaderBatch.total}`
                 });
@@ -5932,7 +5971,10 @@
 
             const skipped = [];
             const failed = [];
-            const multi = files.length > 1;
+            // Пачку мог открыть внешний цикл (например, загрузка из Яндекс.Диска,
+            // которая качает файлы по одному) — тогда не подменяем его список.
+            const joinedBatch = !!loaderBatch;
+            const multi = files.length > 1 && !joinedBatch;
             if (multi) beginLoadBatch(files);
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
@@ -5983,7 +6025,9 @@
                 await new Promise(r => setTimeout(r, 80));
             }
             const okCount = files.length - skipped.length - failed.length;
-            if (multi) {
+            if (joinedBatch) {
+                // Итог покажет тот, кто открыл пачку
+            } else if (multi) {
                 if (failed.length || skipped.length) {
                     // Оставляем итог на экране: иначе непонятно, что не доехало
                     holdLoadBatchResult(
@@ -6001,7 +6045,7 @@
                     hideLoader();
                 }
             }
-            loaderBatch = null;
+            if (!joinedBatch) loaderBatch = null;
 
             if (skipped.length) notifyError('Пропущено (формат не поддержан): ' + skipped.join(', '));
             if (failed.length) {
@@ -17642,7 +17686,7 @@ ${componentXml || '    '}
 
         async function yaDownloadAndOpen(fileInfo) {
             if (!yaPublicKey) throw new Error('Сначала откройте папку по публичной ссылке');
-            showLoader('ОБЛАКО', fileInfo.name);
+            showLoader('ОБЛАКО', loaderBatch ? '' : fileInfo.name);
 
             // World-файл сам по себе — ищем парный растр
             let rasterInfo = fileInfo;
@@ -17703,27 +17747,47 @@ ${componentXml || '    '}
                 if (!ok) return;
             }
             const errors = [];
-            const totalFiles = checks.length;
+            const picked = checks
+                .map(check => yaListedFiles[parseInt(check.dataset.yaIdx, 10)])
+                .filter(Boolean);
+            const totalFiles = picked.length;
             let doneFiles = 0;
-            for (const check of checks) {
-                const idx = parseInt(check.dataset.yaIdx, 10);
-                const info = yaListedFiles[idx];
-                if (!info) continue;
+            // Одна пачка на весь выбор: раньше каждый файл качался и загружался
+            // отдельным вызовом handleFiles, то есть своей пачкой — отсюда
+            // мигание и отсутствие списка при загрузке из облака.
+            const multi = totalFiles > 1;
+            if (multi) beginLoadBatch(picked);
+            for (let i = 0; i < picked.length; i++) {
+                const info = picked[i];
                 try {
-                    showLoader(
-                        `СКАЧИВАНИЕ ${doneFiles + 1}/${totalFiles}`,
-                        info.name,
-                        { label: `файл ${doneFiles + 1} из ${totalFiles}` }
-                    );
+                    if (multi) setLoadFileActive(i, info);
+                    else showLoader('СКАЧИВАНИЕ', info.name);
                     await yaDownloadAndOpen(info);
                     doneFiles += 1;
+                    if (multi) setLoadFileDone(i, 'ok', 'загружен');
                     await new Promise(r => setTimeout(r, 40));
                 } catch (error) {
                     console.error(info.name, error);
                     errors.push(`${info.name}: ${error.message || error}`);
+                    if (multi) setLoadFileDone(i, 'fail', String(error.message || error).split('\n')[0].slice(0, 60));
                 }
             }
-            hideLoader();
+            if (multi) {
+                if (errors.length) {
+                    holdLoadBatchResult(
+                        'ЗАГРУЗКА ЗАВЕРШЕНА',
+                        `Загружено ${doneFiles} из ${totalFiles} · с ошибкой ${errors.length}`
+                    );
+                } else {
+                    holdLoadBatchResult('ЗАГРУЗКА ЗАВЕРШЕНА', `Загружено ${doneFiles} из ${totalFiles}`);
+                    $('loadFilesActions').hidden = true;
+                    await new Promise(r => setTimeout(r, 900));
+                    endLoadBatch();
+                    hideLoader();
+                }
+            } else {
+                hideLoader();
+            }
             if (errors.length) {
                 notifyError(
                     'Часть файлов не загрузилась:\n\n' +
@@ -19582,7 +19646,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.09',
-            buildId: 'c7613a3-preview',
+            buildId: '69630a0-preview',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
