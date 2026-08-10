@@ -64,6 +64,30 @@ try {
     await page.waitForFunction(() => !document.getElementById('loader').classList.contains('show'), { timeout: 30_000 });
     const modelBounds = await page.evaluate(() => window.BimLvaDebug.modelBounds[0]);
 
+    // A0. До привязки карты кнопка копирует плоские координаты модели и
+    // объясняет, как получать широту с долготой. Это первый сценарий у любого.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const beforeBinding = await page.evaluate(async () => {
+        document.getElementById('treeSelectAll').click();
+        await new Promise((r) => setTimeout(r, 400));
+        document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
+        document.getElementById('coordSelectionCopy').click();
+        await new Promise((r) => setTimeout(r, 400));
+        return {
+            clip: await navigator.clipboard.readText(),
+            toast: [...document.querySelectorAll('.toast .toast-text')].map((t) => t.textContent).join(' | ')
+        };
+    });
+    const plainNums = (beforeBinding.clip || '').split(',').map((s) => parseFloat(s.trim()));
+    if (plainNums.length !== 3 || !(Math.abs(plainNums[0] - MODEL.worldX) < 500)) {
+        problems.push(`без привязки скопировано «${beforeBinding.clip}», ожидались плоские координаты модели`);
+    }
+    if (!/привяжите карту/i.test(beforeBinding.toast)) {
+        problems.push('без привязки нет подсказки, как получить широту и долготу');
+    }
+    console.log(`A0. до привязки копируются плоские координаты: «${beforeBinding.clip}»`);
+    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
+
     // A. Модалка: провайдеры, атрибуция, автоподстановка точки привязки
     await page.evaluate(() => document.getElementById('btnBaseMap').click());
     await page.waitForTimeout(300);
@@ -219,6 +243,34 @@ try {
         console.log(`   (без поправки Меркатора было бы ×${(1 / Math.cos(latRad)).toFixed(2)})`);
         console.log(`   прозрачность ${bm.opacity.toFixed(2)}, слой «${bm.name}»`);
     }
+
+    // B2. Копирование координат из строки состояния. Показания под курсором
+    // переписываются на каждое движение мыши, выделить их мышью нельзя —
+    // поэтому проверяем именно кнопку и то, что после привязки карты она
+    // отдаёт широту/долготу в формате поиска Яндекс.Карт.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const copied = await page.evaluate(async () => {
+        // Ставим выделение на любой элемент, чтобы было что копировать
+        document.getElementById('treeSelectAll').click();
+        await new Promise((r) => setTimeout(r, 400));
+        document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
+        document.getElementById('coordSelectionCopy').click();
+        await new Promise((r) => setTimeout(r, 400));
+        return {
+            clip: await navigator.clipboard.readText(),
+            toast: [...document.querySelectorAll('.toast .toast-text')].map((t) => t.textContent).join(' | ')
+        };
+    });
+    // Ожидаем «широта, долгота» рядом с площадкой, а не плоские метры
+    const pair = (copied.clip || '').split(',').map((s) => parseFloat(s.trim()));
+    const looksLikeLatLon = pair.length === 2 &&
+        Math.abs(pair[0] - SITE.lat) < 0.05 && Math.abs(pair[1] - SITE.lon) < 0.05;
+    if (!looksLikeLatLon) {
+        problems.push(`копирование координат отдало «${copied.clip}», ожидались широта/долгота около ${SITE.lat}, ${SITE.lon}`);
+    }
+    if (!/Яндекс/i.test(copied.toast)) problems.push('после копирования нет подсказки про вставку в Яндекс.Карты');
+    console.log(`B2. копирование: «${copied.clip}» (площадка ${SITE.lat}, ${SITE.lon}) — ${looksLikeLatLon ? 'ок' : 'СБОЙ'}`);
+    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
 
     // C. Тайлы: запрошены и лимит соблюдён
     const zooms = [...new Set(tileUrls.map((u) => (u.match(/\/(\d+)\/\d+\/\d+/) || [])[1]).filter(Boolean))];

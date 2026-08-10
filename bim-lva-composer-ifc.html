@@ -2015,6 +2015,34 @@
             margin: 0 2px;
         }
 
+        /* Показания под курсором переписываются на каждое движение мыши, поэтому
+           выделить их мышью невозможно — копирование даём кнопкой. */
+        .status .coord-copy {
+            background: none;
+            border: 0;
+            padding: 1px 4px;
+            margin: 0;
+            font: inherit;
+            color: inherit;
+            cursor: pointer;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        .status .coord-copy:hover {
+            background: var(--panel);
+            color: var(--txt);
+        }
+
+        .status .coord-copy .coord-copy-ico {
+            opacity: .45;
+            margin-left: 2px;
+        }
+
+        .status .coord-copy:hover .coord-copy-ico {
+            opacity: 1;
+        }
+
         /* ---- Уведомления ---- */
         /* Заменяют alert(): тот блокировал вкладку, не давал скопировать текст
            ошибки и вставал поперёк длинных операций вроде импорта. */
@@ -3013,9 +3041,9 @@
     <footer class="status">
         <span><span class="pip" id="pip"></span><span id="engineStatus">движок не готов</span></span>
         <span class="coord-readout" id="coordReadout" title="Координаты в метрах. Если задан авто-origin — абсолютные (мир), иначе относительно сцены.">
-            <span><b id="coordCursor">—</b> м курсор</span>
+            <button type="button" class="coord-copy" id="coordCursorCopy" title="Скопировать координаты последней точки под курсором. Если карта-подложка привязана — ещё и широту с долготой для Яндекс.Карт"><b id="coordCursor">—</b> м курсор <span class="coord-copy-ico">⧉</span></button>
             <span class="coord-sep">·</span>
-            <span><b id="coordSelection">—</b> м выделение</span>
+            <button type="button" class="coord-copy" id="coordSelectionCopy" title="Скопировать координаты выделения. Если карта-подложка привязана — ещё и широту с долготой для Яндекс.Карт"><b id="coordSelection">—</b> м выделение <span class="coord-copy-ico">⧉</span></button>
         </span>
         <span id="hintControls" title="ЛКМ+drag: вращение · Колесо: зум · F: кадр · 📌 пивот · ⚡ быстро. Камера без инерции — поворот и зум однотипны.">ЛКМ+drag: вращение · Колесо: зум · F: кадр · без инерции камеры</span>
         <span class="right" id="fps">—</span>
@@ -4191,6 +4219,7 @@
         };
 
         const BASEMAP_STORAGE_KEY = 'bimlva_basemap_v1';
+        let activeBasemapBinding = null;
         const EARTH_METERS_PER_DEGREE = 111320; // по меридиану, достаточно на км-масштабах
         /** Тайлов за один раз: щадим бесплатные сервисы и не вешаем вкладку. */
         const BASEMAP_MAX_TILES = 160;
@@ -4330,6 +4359,26 @@
             };
         }
 
+        /**
+         * Привязка карты, если она уже задана: сама подложка могла быть убрана
+         * со сцены, но пересчёт «координаты модели → широта/долгота» остаётся
+         * верным — им пользуется копирование координат в строке состояния.
+         */
+        function currentBasemapBinding() {
+            const s = activeBasemapBinding || loadBasemapSettings();
+            if (!s) return null;
+            const lat = Number(s.lat), lon = Number(s.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+            if (!Number.isFinite(Number(s.anchorX)) || !Number.isFinite(Number(s.anchorY))) return null;
+            return {
+                lat,
+                lon,
+                anchorX: Number(s.anchorX),
+                anchorY: Number(s.anchorY),
+                rotationDeg: Number(s.rotationDeg) || 0
+            };
+        }
+
         function removeBasemapLayer() {
             if (basemapLayerId == null) return false;
             const idx = geoRasterLayers.findIndex(l => l.id === basemapLayerId);
@@ -4427,6 +4476,7 @@
             markNeedsRender();
             hideLoader();
 
+            activeBasemapBinding = { ...settings };
             saveBasemapSettings(settings);
             const note = tiles.failed
                 ? ` Не отдалось тайлов: ${tiles.failed} из ${tiles.tiles}.`
@@ -6393,6 +6443,11 @@ uniform vec3 uBatchSelColor;
             return new THREE.Vector3(east, north, elev);
         }
 
+        // Последние показания держим отдельно от текста: при уходе мыши со сцены
+        // подпись гаснет, а копировать пользователь идёт уже потом — по кнопке.
+        let lastCursorAbs = null;
+        let lastSelectionAbs = null;
+
         function updateCoordCursorReadout(worldPoint, hitObject = null) {
             const el = $('coordCursor');
             if (!el) return;
@@ -6401,6 +6456,7 @@ uniform vec3 uBatchSelColor;
                 return;
             }
             const abs = worldPointToAbsoluteXYZ(worldPoint, hitObject);
+            lastCursorAbs = abs;
             el.textContent = formatCoordTriple(abs);
         }
 
@@ -6418,6 +6474,7 @@ uniform vec3 uBatchSelColor;
             }
             const center = box.getCenter(new THREE.Vector3());
             const abs = worldPointToAbsoluteXYZ(center);
+            lastSelectionAbs = abs;
             const suffix = selectedItems.length > 1 ? ` · ×${selectedItems.length}` : '';
             el.textContent = `${formatCoordTriple(abs)}${suffix}`;
         }
@@ -17335,6 +17392,53 @@ ${componentXml || '    '}
         $('yaLoadSelected').addEventListener('click', yaLoadCheckedFiles);
 
         $('btnGeoRaster').addEventListener('click', openGeoRasterModal);
+
+        // ---- Копирование координат из строки состояния ----
+        /**
+         * @param {THREE.Vector3} abs восток · север · отметка (как в подписи)
+         * @returns {{text: string, hasLatLon: boolean}}
+         */
+        function buildCoordClipboardText(abs) {
+            const plain = `${abs.x.toFixed(2)}, ${abs.y.toFixed(2)}, ${abs.z.toFixed(2)}`;
+            const binding = currentBasemapBinding();
+            if (!binding) return { text: plain, hasLatLon: false };
+            const ll = basemapModelToLatLon(binding, abs.x, abs.y);
+            if (!Number.isFinite(ll.lat) || !Number.isFinite(ll.lon)) {
+                return { text: plain, hasLatLon: false };
+            }
+            // Порядок и формат — ровно те, что понимает поиск Яндекс.Карт
+            return { text: `${ll.lat.toFixed(6)}, ${ll.lon.toFixed(6)}`, hasLatLon: true };
+        }
+
+        async function copyCoordsToClipboard(abs, what) {
+            if (!abs) {
+                notifyError(
+                    what === 'выделения'
+                        ? 'Нечего копировать: сначала выделите элемент.'
+                        : 'Нечего копировать: наведите курсор на модель, потом нажмите кнопку.'
+                );
+                return;
+            }
+            const { text, hasLatLon } = buildCoordClipboardText(abs);
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (_) {
+                notifyError(`Браузер не дал доступ к буферу обмена. Координаты ${what}: ${text}`);
+                return;
+            }
+            if (hasLatLon) {
+                notifyOk(`Скопировано для Яндекс.Карт: ${text} — вставьте в строку поиска.`);
+            } else {
+                notifyOk(
+                    `Скопированы координаты ${what}: ${text} (восток, север, отметка). ` +
+                    'Чтобы получать широту и долготу, привяжите карту-подложку — после этого кнопка копирует их.'
+                );
+            }
+            trackUsage('copy_coords', { latlon: hasLatLon });
+        }
+
+        $('coordCursorCopy').addEventListener('click', () => copyCoordsToClipboard(lastCursorAbs, 'под курсором'));
+        $('coordSelectionCopy').addEventListener('click', () => copyCoordsToClipboard(lastSelectionAbs, 'выделения'));
 
         // ---- Карта-подложка ----
         function baseMapProviderKey() {
