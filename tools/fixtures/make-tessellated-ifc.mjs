@@ -29,9 +29,12 @@ function guid(seed) {
  * @param {number} o.lengthToMetres — 1 (метры) или 0.001 (миллиметры)
  * @param {boolean} o.worldInContext — куда положить мировое преобразование:
  *        false — во вставку площадки (обычный путь),
- *        true  — в `WorldCoordinateSystem` контекста представления. Так делает
- *        экспортёр ODA: geometry остаётся локальной, а Navisworks показывает
- *        это как «преобразование сцены». web-ifc такой контекст игнорирует.
+ *        true  — в `WorldCoordinateSystem` контекста представления.
+ *        ПОДТВЕРЖДЕНО на реальном файле АР (ODA-экспорт): IfcSite и элементы
+ *        стоят на identity-цепочке IfcLocalPlacement, а мировой сдвиг
+ *        (55300.050/33820.602/1600.150, поворот 12.06°) лежит только здесь.
+ *        web-ifc такой контекст не читает — читает и применяет сам вьювер,
+ *        см. readWorldCoordinateSystemShift в bim-lva-composer-ifc.html.
  */
 export function makeTessellatedIfc({
     worldX = 0, worldY = 0, worldZ = 0, rotationDeg = 0,

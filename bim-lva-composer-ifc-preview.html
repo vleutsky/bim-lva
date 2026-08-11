@@ -2375,7 +2375,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · a9bee92</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 102ad47</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -8058,6 +8058,26 @@ uniform vec3 uBatchSelColor;
             geometry.computeBoundingSphere();
         }
 
+        /**
+         * Коррекция как отдельная матрица на фрагмент: если у фрагмента есть своя
+         * матрица — коррекция уходит в неё (сработает при следующей выпечке или
+         * вычитании origin), иначе — сразу в геометрию. Тот же приём, что и в
+         * `subtractVectorFromFragmentVertices`.
+         */
+        function applyMatrix4ToFragments(fragments, matrix) {
+            if (!fragments?.length) return;
+            const identity = new THREE.Matrix4();
+            for (let i = 0; i < fragments.length; i++) {
+                const frag = fragments[i];
+                if (!frag?.geom) continue;
+                if (frag.matrix && !frag.matrix.equals(identity)) {
+                    frag.matrix.premultiply(matrix);
+                } else {
+                    applyMatrix4ToGeometryInPlace(frag.geom, matrix);
+                }
+            }
+        }
+
         function bakeFragmentTransformsIntoGeometry(fragments) {
             if (!fragments?.length) return;
             const identity = new THREE.Matrix4();
@@ -9204,6 +9224,115 @@ uniform vec3 uBatchSelColor;
   }
 
   /**
+   * IfcGeometricRepresentationContext.WorldCoordinateSystem — мировой сдвиг,
+   * который некоторые ODA-экспортёры (Renga, nanoCAD) кладут ОТДЕЛЬНО от
+   * цепочки IfcLocalPlacement (Site→Building→Storey→Element), а не в
+   * IfcMapConversion (штатный способ геопривязки IFC4). web-ifc считает
+   * flatTransformation только по цепочке размещения и такой контекст не
+   * видит — геометрия остаётся в локальных координатах. Найдено и подтверждено
+   * на реальном файле кнопкой «🔗 Цепочка размещения» в «Диагностике IFC»
+   * (кабинет): у IfcSite и элемента вся цепочка — identity (0,0,0), а число
+   * из WorldCoordinateSystem совпало с тем, что Navisworks показывает как
+   * «преобразование сцены» день в день, метр в метр.
+   *
+   * Сканируем ограниченный префикс файла: контекст и то, на что он ссылается,
+   * почти всегда объявлены в первых мегабайтах, а полный проход по 70+ МБ на
+   * каждую загрузку был бы расточительным ради одной сущности.
+   */
+  function readWorldCoordinateSystemShift(text) {
+    if (!text) return null;
+    const entity = /#(\d+)\s*=\s*([A-Z0-9_]+)\s*\(/g;
+    const axis3d = new Map();
+    const points = new Map();
+    const dirs = new Map();
+    let contextFound = false;
+    let wcsRef = null;
+
+    const extractParen = (s, start) => {
+      let depth = 0;
+      for (let i = start; i < s.length; i++) {
+        if (s[i] === '(') depth++;
+        else if (s[i] === ')') { depth--; if (depth === 0) return s.slice(start + 1, i); }
+      }
+      return null;
+    };
+    const splitArgs = (s) => {
+      const out = []; let depth = 0; let inStr = false; let cur = '';
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (inStr) {
+          cur += c;
+          if (c === "'") { if (s[i + 1] === "'") cur += s[++i]; else inStr = false; }
+          continue;
+        }
+        if (c === "'") { inStr = true; cur += c; continue; }
+        if (c === '(') { depth++; cur += c; continue; }
+        if (c === ')') { depth--; cur += c; continue; }
+        if (c === ',' && depth === 0) { out.push(cur); cur = ''; continue; }
+        cur += c;
+      }
+      out.push(cur);
+      return out.map((x) => x.trim());
+    };
+    const refId = (tok) => { if (!tok) return null; const m = /^#(\d+)$/.exec(tok.trim()); return m ? Number(m[1]) : null; };
+    const parseVec = (tok) => {
+      if (!tok) return null;
+      const inner = tok.trim().replace(/^\(/, '').replace(/\)$/, '');
+      const parts = inner.split(',').map((s) => Number(s.trim()));
+      return parts.every(Number.isFinite) && parts.length ? parts : null;
+    };
+
+    let m;
+    while ((m = entity.exec(text)) !== null) {
+      const type = m[2];
+      const parenStart = entity.lastIndex - 1;
+      if (type === 'IFCAXIS2PLACEMENT3D') {
+        const inner = extractParen(text, parenStart);
+        if (inner == null) continue;
+        const a = splitArgs(inner);
+        axis3d.set(Number(m[1]), { loc: refId(a[0]), refDir: refId(a[2]) });
+      } else if (type === 'IFCCARTESIANPOINT') {
+        const inner = extractParen(text, parenStart);
+        if (inner != null) points.set(Number(m[1]), parseVec(inner));
+      } else if (type === 'IFCDIRECTION') {
+        const inner = extractParen(text, parenStart);
+        if (inner != null) dirs.set(Number(m[1]), parseVec(inner));
+      } else if (!contextFound && type === 'IFCGEOMETRICREPRESENTATIONCONTEXT') {
+        // Точный тип, не IFCGEOMETRICREPRESENTATIONSUBCONTEXT — у него другой
+        // порядок атрибутов и своего WorldCoordinateSystem нет, наследует.
+        contextFound = true;
+        const inner = extractParen(text, parenStart);
+        if (inner != null) wcsRef = refId(splitArgs(inner)[4]);
+      }
+    }
+    if (wcsRef == null) return null;
+    const ax = axis3d.get(wcsRef);
+    if (!ax || ax.loc == null) return null;
+    const loc = points.get(ax.loc);
+    if (!loc || loc.length < 3) return null;
+    const refDir = ax.refDir != null ? dirs.get(ax.refDir) : null;
+    const angleRad = refDir && refDir.length >= 2 ? Math.atan2(refDir[1], refDir[0]) : null;
+    return { location: loc, angleRad };
+  }
+
+  /**
+   * Матрица коррекции в осях ФРАГМЕНТОВ (Y-up), из сдвига+поворота в НАТИВНЫХ
+   * осях файла (Z-up: восток, север, высота). Переводим через ту же матрицу,
+   * что и globalGroup (MODEL_ROT_X), а не через ручные формулы со знаками —
+   * так гарантированно совпадает с тем, как сцена сама разворачивает IFC.
+   */
+  function buildWorldCoordinateSystemCorrectionMatrix(wcs) {
+    const translate = new THREE.Matrix4().makeTranslation(wcs.location[0], wcs.location[1], wcs.location[2]);
+    const rotate = wcs.angleRad ? new THREE.Matrix4().makeRotationZ(wcs.angleRad) : new THREE.Matrix4();
+    const native = new THREE.Matrix4().multiplyMatrices(translate, rotate); // сначала поворот, потом сдвиг
+
+    const toZup = new THREE.Matrix4().makeRotationX(MODEL_ROT_X); // фрагмент(Y-up) → сцена(Z-up), как globalGroup
+    const toYup = toZup.clone().invert();
+    // p_фрагмент_новый = toYup · native · toZup · p_фрагмент_старый
+    return new THREE.Matrix4().multiplyMatrices(toYup, new THREE.Matrix4().multiplyMatrices(native, toZup));
+  }
+
+  /**
    * COORDINATE_TO_ORIGIN сдвигает КАЖДЫЙ файл к его собственному центру, и web-ifc
    * не сообщает, на сколько именно (GetCoordinationMatrix возвращает нули).
    * Поэтому для сводки CTO разрушителен: шесть файлов одной дороги схлопываются
@@ -9563,6 +9692,50 @@ uniform vec3 uBatchSelColor;
                 // Габарит в мировых координатах снимаем ДО вычитания нуля сцены —
                 // потом вершины уже относительные, и сверить с Civil будет нечем.
                 modData.absExtents = computeFragmentsAbsoluteBounds(fragments);
+
+                // Мировой сдвиг мог остаться в WorldCoordinateSystem контекста, а не
+                // в цепочке размещения (см. комментарий у readWorldCoordinateSystemShift).
+                // Применяем только когда это ПОХОЖЕ на тот самый случай: MapConversion
+                // нет (иначе геопривязка штатная), геометрия сейчас у локального нуля,
+                // а WCS — на геодезическом расстоянии. Если геометрия и так уже большая,
+                // цепочка размещения её уже несёт — наложить сдвиг ещё раз значило бы
+                // применить его дважды.
+                if (modData.absExtents && !/IFCMAPCONVERSION/.test(rawPreview)) {
+                    const ax = modData.absExtents;
+                    const centerMag = Math.hypot(
+                        (ax.e.min + ax.e.max) / 2, (ax.n.min + ax.n.max) / 2, (ax.h.min + ax.h.max) / 2
+                    );
+                    if (centerMag < LARGE_COORD_THRESHOLD) {
+                        const wcsRaw = readWorldCoordinateSystemShift(rawPreview);
+                        if (wcsRaw) {
+                            const unitScale = declaredLengthToMeters || 0.001;
+                            const wcs = {
+                                location: wcsRaw.location.map((v) => v * unitScale),
+                                angleRad: wcsRaw.angleRad
+                            };
+                            const wcsMag = Math.hypot(...wcs.location);
+                            if (wcsMag >= LARGE_COORD_THRESHOLD) {
+                                const corr = buildWorldCoordinateSystemCorrectionMatrix(wcs);
+                                applyMatrix4ToFragments(fragments, corr);
+                                bakeFragmentTransformsIntoGeometry(fragments);
+                                modData.absExtents = computeFragmentsAbsoluteBounds(fragments);
+                                modData.worldContextShiftApplied = true;
+                                const deg = wcs.angleRad ? (wcs.angleRad * 180 / Math.PI).toFixed(2) + '°' : '—';
+                                console.info(
+                                    `[BIM.LVA] ${file.name}: применён сдвиг WorldCoordinateSystem ` +
+                                    `(${wcs.location.map((v) => v.toFixed(2)).join(', ')} м, поворот ${deg}) — ` +
+                                    `цепочка IfcLocalPlacement была в локальном нуле`
+                                );
+                                notify(
+                                    `${file.name}: мировые координаты нашлись не в цепочке размещения, а в ` +
+                                    `IfcGeometricRepresentationContext.WorldCoordinateSystem — типично для ` +
+                                    `экспорта через ODA (Renga, nanoCAD). Применены автоматически.`
+                                );
+                            }
+                        }
+                    }
+                }
+
                 if (modData.absExtents) {
                     const ax = modData.absExtents;
                     console.info(
@@ -21912,7 +22085,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: 'a9bee92-preview',
+            buildId: '102ad47-preview',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
