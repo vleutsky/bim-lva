@@ -269,6 +269,55 @@ try {
     const wantDeg = (Math.atan2(0.20913, 0.97789) * 180 / Math.PI).toFixed(3);
     check(wcsReport.includes(`поворот ≈ ${wantDeg}°`), 'поворот WorldCoordinateSystem посчитан верно');
 
+    // Пятый файл: RefDirection у WorldCoordinateSystem = $ (поворота там нет),
+    // а проектный разворот лежит в TrueNorth контекста — так тоже бывает у
+    // ODA-экспортёров, и раньше обе ветки молчали одинаково что при «$», что
+    // при пробеле разбора — нечестно, не разобрать, что перед нами.
+    await page.evaluate(() => document.getElementById('ifcdReset').click());
+    const trueNorthIfc = [
+        'ISO-10303-21;',
+        'HEADER;',
+        "FILE_SCHEMA(('IFC4'));",
+        'ENDSEC;',
+        'DATA;',
+        '#1=IFCCARTESIANPOINT((0.,0.,0.));',
+        '#2=IFCDIRECTION((0.,0.,1.));',
+        '#3=IFCDIRECTION((1.,0.,0.));',
+        '#4=IFCAXIS2PLACEMENT3D(#1,#2,#3);',
+        '#5=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
+        // WorldCoordinateSystem: сдвиг есть, а RefDirection — $ (не задан).
+        '#40=IFCCARTESIANPOINT((55300.05,33820.602,1600.15));',
+        '#42=IFCAXIS2PLACEMENT3D(#40,$,$);',
+        // TrueNorth — отдельная Direction, не привязанная к WorldCoordinateSystem.
+        '#43=IFCDIRECTION((0.20913,0.97789,0.));',
+        "#9=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#42,#43);",
+        "#10=IFCPROJECT('proj',$,'P',$,$,$,$,(#9),$);",
+        '#11=IFCLOCALPLACEMENT($,#4);',
+        "#12=IFCSITE('site',$,'Site',$,$,#11,$,$,.ELEMENT.,$,$,$,$,$);",
+        'ENDSEC;',
+        'END-ISO-10303-21;'
+    ].join('\n');
+    await page.setInputFiles('#ifcdFile', {
+        name: 'true-north-тест.ifc', mimeType: 'application/octet-stream', buffer: Buffer.from(trueNorthIfc, 'latin1')
+    });
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('Мировой габарит'),
+        null, { timeout: 30000 }
+    );
+    await page.evaluate(() => document.getElementById('cabMain')?.classList.remove('hidden'));
+    await page.evaluate(() => document.getElementById('ifcdChain').click());
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('WorldCoordinateSystem'),
+        null, { timeout: 30000 }
+    );
+    const tnReport = await page.textContent('#ifcdOut');
+    check(
+        tnReport.includes('RefDirection = $ — так в файле, поворот не задан (0°).'),
+        'RefDirection = $ у WorldCoordinateSystem — честно показан 0°, а не молчание'
+    );
+    const wantTnDeg = (Math.atan2(0.20913, 0.97789) * 180 / Math.PI).toFixed(3);
+    check(tnReport.includes(`истинный север повёрнут от оси Y на ≈ ${wantTnDeg}°`), 'TrueNorth прочитан и посчитан верно');
+
     const copied = await page.evaluate(async () => {
         document.getElementById('ifcdReset').click();
         const o = document.getElementById('ifcdOut');

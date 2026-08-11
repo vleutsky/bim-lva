@@ -619,7 +619,14 @@
                     } else {
                         const locM = loc.map((v) => (v * k).toFixed(3)).join(', ');
                         L.push(`  #${idx.context.id} → #${idx.context.wcs}: точка (${locM}) м`);
-                        if (refDir && refDir.length >= 2) {
+                        // Честно различаем «RefDirection и правда не задан» и «ссылка
+                        // была, но Direction не нашёлся» — молчание в обоих случаях уже
+                        // однажды маскировало реальный пробел разбора (см. цепочку выше).
+                        if (ax.refDir == null) {
+                            L.push('  Направление оси X: RefDirection = $ — так в файле, поворот не задан (0°).');
+                        } else if (!refDir) {
+                            L.push(`  Направление оси X: ссылка #${ax.refDir} на Direction НЕ НАШЛАСЬ в индексе — возможен пробел разбора.`);
+                        } else if (refDir.length >= 2) {
                             const deg = (Math.atan2(refDir[1], refDir[0]) * 180 / Math.PI);
                             L.push(`  Направление оси X: (${refDir.map((v) => v.toFixed(5)).join(', ')}) — поворот ≈ ${deg.toFixed(3)}° от востока`);
                         }
@@ -632,6 +639,21 @@
                                 '  вьювер (и web-ifc внутри него) его не видит и не применяет.'
                             );
                         }
+                    }
+                }
+                // TrueNorth — направление истинного севера относительно оси Y контекста.
+                // Некоторые ODA-экспортёры кладут проектный разворот именно сюда, а не
+                // в RefDirection самого WorldCoordinateSystem — если выше поворот 0° или
+                // «не задан», а Navisworks показывает ненулевой угол, сверьте с этим.
+                if (idx.context.trueNorth == null) {
+                    L.push('  TrueNorth = $ — контекст не задаёт истинный север.');
+                } else {
+                    const tn = idx.dirs.get(idx.context.trueNorth);
+                    if (!tn) {
+                        L.push(`  TrueNorth: ссылка #${idx.context.trueNorth} на Direction НЕ НАШЛАСЬ в индексе — возможен пробел разбора.`);
+                    } else if (tn.length >= 2) {
+                        const deg = (Math.atan2(tn[0], tn[1]) * 180 / Math.PI);
+                        L.push(`  TrueNorth: (${tn.map((v) => v.toFixed(5)).join(', ')}) — истинный север повёрнут от оси Y на ≈ ${deg.toFixed(3)}°`);
                     }
                 }
             }
