@@ -418,6 +418,54 @@ async function checkDrawDxf(page) {
     if (!dxf.includes(wantX)) {
         problems.push(`в DXF нет мировой координаты X ${wantX} — выгрузка ушла в локальных`);
     }
+
+    // Радиус сопряжения в средней вершине 3D-полилинии: точек должно стать
+    // больше (вершина заменена дугой), а длина — короче ломаной, но не меньше
+    // прямой между концами (дуга режет угол, но не спрямляет целиком).
+    const straight = Math.hypot(
+        three.abs[2].x - three.abs[0].x, three.abs[2].y - three.abs[0].y, three.abs[2].z - three.abs[0].z
+    );
+    const filletOk = await page.evaluate(
+        (id) => window.BimLvaDebug.setPolylineRadius(id, 1, 0.5),
+        three.id
+    );
+    const filleted = await page.evaluate(
+        (id) => window.BimLvaDebug.drawn.find((d) => d.id === id),
+        three.id
+    );
+    if (!filletOk || !filleted) {
+        problems.push('радиус сопряжения полилинии не применился');
+    } else {
+        if (filleted.abs.length <= three.abs.length) {
+            problems.push(`сопряжение не добавило точек: было ${three.abs.length}, стало ${filleted.abs.length}`);
+        }
+        if (!(filleted.length3d < three.length3d && filleted.length3d > straight - 1e-6)) {
+            problems.push(
+                `длина после сопряжения ${filleted.length3d.toFixed(3)} вне диапазона ` +
+                `(${straight.toFixed(3)} .. ${three.length3d.toFixed(3)})`
+            );
+        }
+    }
+
+    // Список полилиний: модалка открывается, переименование и общее удаление работают.
+    await page.evaluate(() => document.getElementById('btnPolylineList')?.click());
+    const listShown = await page.locator('#polylinesModal.show').count().catch(() => 0);
+    const countBadge = await page.evaluate(() => document.getElementById('polylinesCount')?.textContent);
+    if (!listShown) problems.push('список полилиний не открылся');
+    else if (countBadge !== '2') problems.push(`счётчик полилиний показывает ${countBadge} вместо 2`);
+    await page.evaluate(() => {
+        const input = document.querySelector('#polylinesList input.editInput');
+        if (!input) return;
+        input.value = 'Ось-тест';
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const renamed = await page.evaluate(() => window.BimLvaDebug.drawn.some((d) => d.name === 'Ось-тест'));
+    if (!renamed) problems.push('переименование полилинии в списке не сработало');
+    await page.evaluate(() => document.getElementById('polylinesClear')?.click());
+    const afterClear = await page.evaluate(() => window.BimLvaDebug.drawn.length);
+    if (afterClear !== 0) problems.push(`«Удалить все» оставило ${afterClear} полилиний`);
+    await page.evaluate(() => document.getElementById('polylinesClose')?.click());
+
     return { polylines: drawn.length, vertices: vertexCount, x: first.x, snaps: snaps.length };
 }
 

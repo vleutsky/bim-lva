@@ -1156,6 +1156,23 @@
             font-size: 11.5px;
         }
         .pin-row .btn { padding: 2px 8px; }
+        .polyline-row {
+            display: grid;
+            grid-template-columns: 130px 1fr auto auto auto;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 4px;
+            border-bottom: 1px solid var(--line, #d8dee6);
+        }
+        .polyline-row .btn { padding: 2px 8px; }
+        .polyline-point-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            padding: 4px;
+            border-bottom: 1px solid var(--line, #d8dee6);
+        }
 
         .coord-pin-label {
             position: absolute;
@@ -2381,7 +2398,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 4d832bd</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b7ecbe1</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2472,6 +2489,7 @@
                             <button class="btn" id="btnCoordPinList" disabled title="Список меток: перелёт к метке, копирование, удаление">📋 Метки: <span id="pinsCount" style="margin-left:2px">0</span></button>
                             <div class="tb-menu-label">Построения</div>
                             <button class="btn" id="btnDraw" disabled title="Черчение полилинии по модели. Клик — точка, Esc или повторное нажатие кнопки — завершить">✏ Полилиния</button>
+                            <button class="btn" id="btnPolylineList" disabled title="Список полилиний: переименование, точки, радиусы сопряжения в углах, приближение, удаление">📐 Полилинии: <span id="polylinesCount" style="margin-left:2px">0</span></button>
                             <div class="tb-menu-row" title="2D — все точки на отметке первой (как LWPOLYLINE), 3D — с настоящими отметками">
                                 <select id="drawModeSelect" class="tool-select" disabled>
                                     <option value="3d">3D</option>
@@ -3157,6 +3175,27 @@
                 <button class="btn" id="pinsCopyAll" title="Все метки в буфер: номер;X;Y;Z">Копировать все</button>
                 <button class="btn" id="pinsClear">Очистить</button>
                 <button class="btn load-btn" id="pinsClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="polylinesModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(640px,100%)">
+            <h3>Полилинии</h3>
+            <div class="bulk-note">
+                Имя правится прямо в строке. «✎» раскрывает точки: радиус
+                сопряжения вписывается в любую вершину, кроме первой и
+                последней (та же вписанная кривая, что скругляет угол
+                трассы в Civil 3D). «→» подводит камеру, «✕» удаляет.
+            </div>
+            <div id="polylinesList" style="max-height:220px;overflow:auto;margin-top:8px"></div>
+            <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
+                <div class="bulk-note" style="margin-bottom:6px"><b id="polylinePointsTitle"></b></div>
+                <div id="polylinePointsList" style="max-height:260px;overflow:auto"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="polylinesClear">Удалить все</button>
+                <button class="btn load-btn" id="polylinesClose">Закрыть</button>
             </div>
         </div>
     </div>
@@ -4226,7 +4265,18 @@
             /** Начерченные полилинии в абсолютных координатах. */
             get drawn() {
                 return (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
-                    .map((r) => ({ kind: r.kind, abs: r.abs, length3d: r.length3d, length2d: r.length2d }));
+                    .map((r) => ({
+                        id: r.id, name: r.name, kind: r.kind, abs: r.abs,
+                        length3d: r.length3d, length2d: r.length2d,
+                        points: r.pts.length, radii: r.radii.slice()
+                    }));
+            },
+            /** Задать радиус сопряжения в вершине полилинии (для проверки фаски). */
+            setPolylineRadius(id, idx, radius) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                setPolylineVertexRadius(rec, idx, radius);
+                return true;
             },
             /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
             dxfPreview() {
@@ -6072,6 +6122,102 @@
             refreshDrawDraft();
         }
 
+        let drawPolylineSeq = 0;
+        let polylineEditingId = null; // какая полилиния сейчас раскрыта на правку точек
+
+        /**
+         * Дуга сопряжения в вершине v между соседями prev/next, радиус r.
+         * Стандартная формула: касательная от v до начала/конца дуги —
+         * t = r / tan(α/2), где α — внутренний угол при вершине; центр дуги —
+         * на биссектрисе на расстоянии r / sin(α/2) от v. Направление обхода
+         * (по часовой или против) заранее неизвестно — пробуем один знак и
+         * проверяем, попали ли в касательную на выходе; если нет — знак меняем.
+         * Три точки всегда компланарны, поэтому работает и для 3D-полилинии.
+         */
+        function computeFilletArc(prev, v, next, r, segments = 20) {
+            const a = prev.clone().sub(v);
+            const b = next.clone().sub(v);
+            const distPrev = a.length();
+            const distNext = b.length();
+            if (distPrev < 1e-6 || distNext < 1e-6) return null;
+            a.divideScalar(distPrev);
+            b.divideScalar(distNext);
+            const cosA = THREE.MathUtils.clamp(a.dot(b), -1, 1);
+            const alpha = Math.acos(cosA);
+            if (alpha < 1e-3 || alpha > Math.PI - 1e-3) return null; // почти прямая или разворот на 180°
+
+            const tWant = r / Math.tan(alpha / 2);
+            // Ограничение с запасом: сосед мог получить фаску и с другой стороны
+            // того же отрезка, поэтому берём не больше 45% его длины.
+            const t = Math.min(tWant, distPrev * 0.45, distNext * 0.45);
+            const rEff = t * Math.tan(alpha / 2);
+            if (rEff < 1e-4) return null;
+
+            const tangentIn = v.clone().addScaledVector(a, t);
+            const tangentOut = v.clone().addScaledVector(b, t);
+            const bisector = a.clone().add(b);
+            if (bisector.lengthSq() < 1e-12) return null;
+            bisector.normalize();
+            const center = v.clone().addScaledVector(bisector, rEff / Math.sin(alpha / 2));
+            const normal = new THREE.Vector3().crossVectors(a, b).normalize();
+            const sweep = Math.PI - alpha;
+            const radial = tangentIn.clone().sub(center);
+
+            const build = (sign) => {
+                const pts = [];
+                for (let i = 0; i <= segments; i++) {
+                    const q = new THREE.Quaternion().setFromAxisAngle(normal, sign * sweep * (i / segments));
+                    pts.push(radial.clone().applyQuaternion(q).add(center));
+                }
+                return pts;
+            };
+            let pts = build(1);
+            if (pts[pts.length - 1].distanceTo(tangentOut) > Math.max(1e-3, rEff * 1e-3)) pts = build(-1);
+
+            return { points: pts, radius: rEff, clamped: t < tWant - 1e-9 };
+        }
+
+        /** Полилиния с фасками: прямые вершины как есть, вершины с радиусом — дугой. */
+        function buildFilletedPoints(pts, radii, segments = 20) {
+            const out = [pts[0].clone()];
+            let clamped = false;
+            for (let i = 1; i < pts.length - 1; i++) {
+                const r = radii[i] || 0;
+                const arc = r > 0 ? computeFilletArc(pts[i - 1], pts[i], pts[i + 1], r, segments) : null;
+                if (arc) {
+                    if (arc.clamped) clamped = true;
+                    out.push(...arc.points);
+                } else {
+                    out.push(pts[i].clone());
+                }
+            }
+            out.push(pts[pts.length - 1].clone());
+            return { points: out, clamped };
+        }
+
+        /** Перестроить геометрию/длины/абсолютные координаты после правки точек или радиусов. */
+        function rebuildPolylineGeometry(record, { notifyClamp = false } = {}) {
+            const { points, clamped } = buildFilletedPoints(record.pts, record.radii);
+            record.object.geometry.dispose();
+            record.object.geometry = new THREE.BufferGeometry().setFromPoints(points);
+            record.abs = points.map(p => {
+                const a = worldPointToAbsoluteXYZ(p) || p.clone();
+                return { x: a.x, y: a.y, z: a.z };
+            });
+            let length3d = 0;
+            let length2d = 0;
+            for (let i = 1; i < points.length; i++) {
+                length3d += points[i].distanceTo(points[i - 1]);
+                length2d += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+            }
+            record.length3d = length3d;
+            record.length2d = length2d;
+            if (notifyClamp && clamped) {
+                notify(`«${record.name}»: радиус сопряжения уменьшен — не хватает длины отрезка.`);
+            }
+            markNeedsRender();
+        }
+
         function finishDrawPolyline() {
             if (drawPoints.length < 2) {
                 drawPoints = [];
@@ -6087,24 +6233,25 @@
             line.renderOrder = 998;
             drawGroup.add(line);
 
-            const abs = pts.map(p => {
-                const a = worldPointToAbsoluteXYZ(p) || p.clone();
-                return { x: a.x, y: a.y, z: a.z };
-            });
-            let length3d = 0;
-            let length2d = 0;
-            for (let i = 1; i < pts.length; i++) {
-                length3d += pts[i].distanceTo(pts[i - 1]);
-                length2d += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-            }
-            const record = { kind, abs, object: line, length3d, length2d };
+            const record = {
+                id: ++drawPolylineSeq,
+                name: `Полилиния ${drawPolylineSeq}`,
+                kind,
+                pts,
+                radii: pts.map(() => 0),
+                abs: [],
+                object: line,
+                length3d: 0,
+                length2d: 0
+            };
             drawnPolylines.push(record);
+            rebuildPolylineGeometry(record);
             drawPoints = [];
             refreshDrawDraft();
             updateDrawUi();
             notify(
                 `Полилиния ${kind.toUpperCase()}: ${pts.length} точек, ` +
-                `L3D ${length3d.toFixed(2)} м · L2D ${length2d.toFixed(2)} м`
+                `L3D ${record.length3d.toFixed(2)} м · L2D ${record.length2d.toFixed(2)} м`
             );
             trackUsage('draw_polyline', { kind, points: pts.length });
             return record;
@@ -6118,13 +6265,165 @@
             });
             drawnPolylines = [];
             drawPoints = [];
+            polylineEditingId = null;
             refreshDrawDraft();
             updateDrawUi();
+        }
+
+        function deleteDrawnPolyline(record) {
+            const i = drawnPolylines.indexOf(record);
+            if (i < 0) return;
+            drawGroup.remove(record.object);
+            record.object.geometry.dispose();
+            record.object.material.dispose();
+            drawnPolylines.splice(i, 1);
+            if (polylineEditingId === record.id) polylineEditingId = null;
+            updateDrawUi();
+            markNeedsRender();
+        }
+
+        function renamePolyline(record, name) {
+            record.name = (name || '').trim() || record.name;
+            renderPolylinesList();
+        }
+
+        /** Убрать вершину: минимум 2 точки должны остаться. */
+        function removePolylineVertex(record, idx) {
+            if (record.pts.length <= 2 || idx < 0 || idx >= record.pts.length) return;
+            record.pts.splice(idx, 1);
+            record.radii.splice(idx, 1);
+            if (record.radii.length) { record.radii[0] = 0; record.radii[record.radii.length - 1] = 0; }
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+        }
+
+        function setPolylineVertexRadius(record, idx, value) {
+            if (idx <= 0 || idx >= record.pts.length - 1) return; // первая/последняя точка без сопряжения
+            const r = Math.max(0, Number(value) || 0);
+            record.radii[idx] = r;
+            rebuildPolylineGeometry(record, { notifyClamp: true });
+            renderPolylinesList();
+        }
+
+        /** Камера к полилинии по её мировому габариту (сцена, не абсолютные оси). */
+        function focusPolyline(record) {
+            const box = new THREE.Box3().setFromPoints(record.pts);
+            if (box.isEmpty()) return;
+            box.expandByScalar(Math.max(2, box.getSize(new THREE.Vector3()).length() * 0.15));
+            frameBox(box);
+            markNeedsRender();
+        }
+
+        function renderPolylinesList() {
+            const body = $('polylinesList');
+            const count = $('polylinesCount');
+            if (count) count.textContent = String(drawnPolylines.length);
+            if (!body) return;
+            if (!drawnPolylines.length) {
+                body.innerHTML = '<div class="empty">Полилиний пока нет. Включите «✏ Полилиния» и кликните по модели.</div>';
+                polylineEditingId = null;
+                $('polylinePointsBox')?.setAttribute('hidden', '');
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            drawnPolylines.forEach((r) => {
+                const row = document.createElement('div');
+                row.className = 'polyline-row';
+                const nameInput = document.createElement('input');
+                nameInput.className = 'editInput';
+                nameInput.style.cssText = 'width:100%;font-size:11px';
+                nameInput.value = r.name;
+                nameInput.addEventListener('change', () => renamePolyline(r, nameInput.value));
+                const info = document.createElement('span');
+                info.className = 'pin-xyz';
+                info.textContent = `${r.kind.toUpperCase()} · ${r.pts.length} т · L3D ${r.length3d.toFixed(2)} м`;
+                const edit = document.createElement('button');
+                edit.className = 'btn';
+                edit.textContent = '✎';
+                edit.title = 'Точки и радиусы сопряжения';
+                edit.addEventListener('click', () => {
+                    polylineEditingId = polylineEditingId === r.id ? null : r.id;
+                    renderPolylinePointsEditor(polylineEditingId ? r : null);
+                });
+                const go = document.createElement('button');
+                go.className = 'btn';
+                go.textContent = '→';
+                go.title = 'Приблизить камеру';
+                go.addEventListener('click', () => focusPolyline(r));
+                const del = document.createElement('button');
+                del.className = 'btn';
+                del.textContent = '✕';
+                del.title = 'Удалить полилинию';
+                del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
+                row.append(nameInput, info, edit, go, del);
+                frag.appendChild(row);
+            });
+            body.replaceChildren(frag);
+
+            if (polylineEditingId != null) {
+                const rec = drawnPolylines.find((r) => r.id === polylineEditingId);
+                renderPolylinePointsEditor(rec || null);
+            }
+        }
+
+        /** Раскрытая таблица точек: X/Y/Z в абсолютных координатах (только просмотр) + радиус (правится). */
+        function renderPolylinePointsEditor(record) {
+            const box = $('polylinePointsBox');
+            const title = $('polylinePointsTitle');
+            const list = $('polylinePointsList');
+            if (!box || !list) return;
+            if (!record) {
+                box.setAttribute('hidden', '');
+                return;
+            }
+            box.removeAttribute('hidden');
+            if (title) title.textContent = `«${record.name}» — точки`;
+            const frag = document.createDocumentFragment();
+            record.abs.forEach((a, i) => {
+                const isEnd = i === 0 || i === record.pts.length - 1;
+                const row = document.createElement('div');
+                row.className = 'polyline-point-row';
+                const num = document.createElement('b');
+                num.textContent = `#${i + 1}`;
+                const val = document.createElement('span');
+                val.className = 'pin-xyz';
+                val.textContent = `${a.x.toFixed(3)} ${a.y.toFixed(3)} ${a.z.toFixed(3)}`;
+                row.append(num, val);
+                if (isEnd) {
+                    const note = document.createElement('span');
+                    note.style.cssText = 'font-size:11px;color:var(--dim)';
+                    note.textContent = 'край — без сопряжения';
+                    row.append(note);
+                } else {
+                    const rLabel = document.createElement('span');
+                    rLabel.style.fontSize = '11px';
+                    rLabel.textContent = 'R, м';
+                    const rInput = document.createElement('input');
+                    rInput.type = 'number';
+                    rInput.min = '0';
+                    rInput.step = '0.1';
+                    rInput.className = 'editInput';
+                    rInput.style.cssText = 'width:70px';
+                    rInput.value = record.radii[i] ? record.radii[i].toFixed(3) : '';
+                    rInput.placeholder = '0';
+                    rInput.addEventListener('change', () => setPolylineVertexRadius(record, i, rInput.value));
+                    const delPt = document.createElement('button');
+                    delPt.className = 'btn';
+                    delPt.textContent = '✕';
+                    delPt.title = 'Убрать эту вершину';
+                    delPt.addEventListener('click', () => removePolylineVertex(record, i));
+                    row.append(rLabel, rInput, delPt);
+                }
+                frag.appendChild(row);
+            });
+            list.replaceChildren(frag);
         }
 
         function updateDrawUi() {
             const btn = $('btnDrawExport');
             if (btn) btn.disabled = !drawnPolylines.length && !coordPins.length && !sweptSolids.length;
+            renderPolylinesList();
         }
 
         /**
@@ -6468,6 +6767,19 @@
             } catch (_) {
                 notifyError('Буфер обмена недоступен.');
             }
+        });
+
+        $('btnPolylineList')?.addEventListener('click', () => {
+            renderPolylinesList();
+            $('polylinesModal').classList.add('show');
+        });
+        $('polylinesClose')?.addEventListener('click', () => $('polylinesModal').classList.remove('show'));
+        $('polylinesModal')?.addEventListener('click', (e) => {
+            if (e.target === $('polylinesModal')) $('polylinesModal').classList.remove('show');
+        });
+        $('polylinesClear')?.addEventListener('click', () => {
+            if (!drawnPolylines.length) return;
+            clearDrawnPolylines();
         });
 
         function addMeasureMarker(pt) {
@@ -7555,7 +7867,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -18670,7 +18982,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -19409,7 +19721,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -22218,7 +22530,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: '4d832bd-preview',
+            buildId: 'b7ecbe1-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
