@@ -27,6 +27,7 @@ function isLocal(url, port) {
 const problems = [];
 let train = null;
 let coordPin = null;
+let ruler = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -154,7 +155,121 @@ async function checkCoordPin(page) {
     const stillThere = await page.evaluate(() => !!document.querySelector('.coord-pin-label'));
     if (!stillThere) problems.push('метку стёрло переключением замеров');
 
-    return { shown, diff };
+    // Список меток: строка на метку, окно открывается и закрывается
+    await page.evaluate(() => document.getElementById('btnCoordPinList')?.click());
+    const rows = await page.locator('#pinsList .pin-row').count();
+    if (rows !== 1) problems.push(`в списке меток ${rows} строк вместо 1`);
+    const counter = await page.textContent('#pinsCount');
+    if (counter.trim() !== '1') problems.push(`счётчик меток показывает «${counter}» вместо 1`);
+    await page.evaluate(() => document.getElementById('pinsClose')?.click());
+
+    // Перетаскивание точки: координаты обязаны поехать вслед за ней
+    const dot = await page.locator('.coord-pin-dot').first().boundingBox();
+    const before = await page.evaluate(() => window.BimLvaDebug.coordPins[0]);
+    if (dot) {
+        await page.mouse.move(dot.x + dot.width / 2, dot.y + dot.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(dot.x + 40, dot.y + 25, { steps: 6 });
+        await page.mouse.up();
+    }
+    const after = await page.evaluate(() => window.BimLvaDebug.coordPins[0]);
+    const movedBy = Math.hypot(after.x - before.x, after.y - before.y, after.z - before.z);
+    if (movedBy < 0.01) {
+        problems.push('точку метки не удалось перетащить');
+    } else {
+        const shownAfter = await page.evaluate(
+            () => document.querySelector('.coord-pin-label').innerText.replace(/\s+/g, ' ')
+        );
+        const n = /X\s*(-?[\d.]+)\s*Y\s*(-?[\d.]+)\s*Z\s*(-?[\d.]+)/.exec(shownAfter);
+        const truthAfter = await page.evaluate(
+            () => window.BimLvaDebug.absoluteAt(...Object.values(window.BimLvaDebug.coordPins[0]))
+        );
+        const d2 = n ? Math.max(
+            Math.abs(Number(n[1]) - truthAfter.e),
+            Math.abs(Number(n[2]) - truthAfter.n),
+            Math.abs(Number(n[3]) - truthAfter.h)
+        ) : Infinity;
+        if (d2 > 0.01) problems.push('после переноса подпись метки не обновилась');
+    }
+
+    return { shown, diff, movedBy };
+}
+
+/**
+ * Линейка 2D/3D/уклон. Проверяем не наличие подписи, а согласованность чисел:
+ * горизонтальное проложение не может быть длиннее наклонного, а уклон обязан
+ * сойтись с ΔZ/L2D — иначе по нему нельзя считать сети.
+ */
+async function checkRuler(page) {
+    const box = await page.locator('#stage canvas').boundingBox();
+    if (!box) return null;
+    await page.evaluate(() => {
+        document.getElementById('btnMeasure').click();
+        const sel = document.getElementById('measureModeSelect');
+        sel.value = 'ruler';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    // Вторая точка — ниже и в стороне, чтобы попасть на другую высоту:
+    // на плоской крыше ΔZ вышел бы нулевым и проверка уклона стала бы холостой.
+    await page.mouse.click(cx - box.width * 0.10, cy - box.height * 0.12);
+    await page.mouse.click(cx + box.width * 0.12, cy + box.height * 0.18);
+    const text = await page
+        .waitForFunction(() => {
+            const l = [...document.querySelectorAll('.measure-label')]
+                .map((d) => d.innerText).find((t) => /L3D/.test(t));
+            return l || false;
+        }, { timeout: 3000 })
+        .then((h) => h.jsonValue())
+        .catch(() => null);
+    await page.evaluate(() => document.getElementById('btnMeasure').click());
+
+    if (!text) {
+        problems.push('линейка не выдала замер (нужны две точки по геометрии)');
+        return null;
+    }
+    const num = (re) => { const m = re.exec(text); return m ? Number(m[1]) : NaN; };
+    const l3d = num(/L3D\s+([\d.]+)/);
+    const l2d = num(/L2D\s+([\d.]+)/);
+    const dz = num(/ΔZ\s+([+-]?[\d.]+)/);
+    const perMille = num(/i\s+([+-]?[\d.]+)\s*‰/);
+
+    if (!(l2d <= l3d + 1e-6)) {
+        problems.push(`линейка: L2D ${l2d} больше L3D ${l3d}`);
+    }
+    if (Math.abs(Math.hypot(l2d, dz) - l3d) > 0.01) {
+        problems.push(`линейка: L3D не сходится с L2D и ΔZ (${l3d} vs ${Math.hypot(l2d, dz).toFixed(3)})`);
+    }
+    if (Number.isFinite(perMille) && l2d > 1e-6) {
+        const want = dz / l2d * 1000;
+        if (Math.abs(want - perMille) > 0.2) {
+            problems.push(`линейка: уклон ${perMille}‰ не равен ΔZ/L2D (${want.toFixed(1)}‰)`);
+        }
+    }
+    // Формулу уклона проверяем числами: на плоской фикстуре ΔZ выходит нулевым,
+    // и клики её не задевают.
+    const slopes = await page.evaluate(() => ({
+        down: window.BimLvaDebug.slopeText(-1, 100),
+        up: window.BimLvaDebug.slopeText(2.5, 50),
+        flat: window.BimLvaDebug.slopeText(0, 30),
+        vert: window.BimLvaDebug.slopeText(3, 0),
+        steep: window.BimLvaDebug.slopeText(1, 2)
+    }));
+    const wantSlopes = {
+        down: '-10.0 ‰ (-1.00 %) · 1:100',
+        up: '50.0 ‰ (5.00 %) · 1:20',
+        flat: '0.0 ‰ (0.00 %) · горизонтально',
+        vert: 'вертикально',
+        steep: '500.0 ‰ (50.00 %) · 1:2.00'
+    };
+    for (const [k, want] of Object.entries(wantSlopes)) {
+        if (slopes[k] !== want) {
+            problems.push(`уклон (${k}): «${slopes[k]}», ожидалось «${want}»`);
+        }
+    }
+
+    return { l3d, l2d, dz, perMille };
 }
 
 /**
@@ -473,6 +588,7 @@ async function main() {
                     clash = await checkClash(page);
                     dxfBlocks = await checkDxfBlocks(page);
                     coordPin = await checkCoordPin(page);
+                    ruler = await checkRuler(page);
                     geoFed = await checkGeoFederation(page);
                     train = await checkTourTrain(page);
                 } finally {
@@ -514,7 +630,14 @@ async function main() {
     if (coordPin) {
         console.log(
             `метка XYZ:  ${coordPin.shown.map((v) => v.toFixed(2)).join(' · ')} ` +
-            `(расхождение со статус-баром ${coordPin.diff.toFixed(3)} м)`
+            `(расхождение со статус-баром ${coordPin.diff.toFixed(3)} м, ` +
+            `перенос точки ${coordPin.movedBy.toFixed(2)} м)`
+        );
+    }
+    if (ruler) {
+        console.log(
+            `линейка:   L3D ${ruler.l3d.toFixed(2)} · L2D ${ruler.l2d.toFixed(2)} · ` +
+            `ΔZ ${ruler.dz.toFixed(2)} · i ${ruler.perMille.toFixed(1)} ‰`
         );
     }
     if (train) {
