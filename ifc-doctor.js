@@ -67,6 +67,26 @@
             acc.hist.set(type, (acc.hist.get(type) || 0) + 1);
             if (BOOLEAN_TYPES.has(type)) acc.booleans++;
 
+            // IFC4-тесселяция: вершины лежат списком и почти всегда в ЛОКАЛЬНЫХ
+            // координатах объекта — в мировой габарит их мешать нельзя, но и
+            // молчать о них нельзя, иначе у Renga/nanoCAD «точек 3D» почти нет.
+            if (type === 'IFCCARTESIANPOINTLIST3D') {
+                const end = text.indexOf(';', m.index);
+                const body = text.slice(m.index, end === -1 ? m.index + 400000 : end);
+                const tri = /\(\s*(-?[\d.]+(?:[eE][-+]?\d+)?)\s*,\s*(-?[\d.]+(?:[eE][-+]?\d+)?)\s*,\s*(-?[\d.]+(?:[eE][-+]?\d+)?)\s*\)/g;
+                let t;
+                while ((t = tri.exec(body)) !== null) {
+                    const v = [Number(t[1]), Number(t[2]), Number(t[3])];
+                    if (v.some((n) => !Number.isFinite(n))) continue;
+                    acc.meshPoints++;
+                    for (let i = 0; i < 3; i++) {
+                        if (v[i] < acc.meshMin[i]) acc.meshMin[i] = v[i];
+                        if (v[i] > acc.meshMax[i]) acc.meshMax[i] = v[i];
+                    }
+                }
+                continue;
+            }
+
             if (type === 'IFCCARTESIANPOINT') {
                 // ждём «((x,y,z))» сразу за именем сущности
                 const head = text.slice(entity.lastIndex, entity.lastIndex + 160);
@@ -129,6 +149,61 @@
         return { scale: 1, label: 'не найдена, считаю метрами' };
     }
 
+    /** (град, мин, сек, миллионные) из IfcSite → градусы. */
+    function dmsToDeg(parts) {
+        if (!parts || parts.length < 3) return null;
+        const [d, m, s] = parts;
+        const frac = parts.length > 3 ? parts[3] / 1e6 : 0;
+        const sign = d < 0 ? -1 : 1;
+        return sign * (Math.abs(d) + m / 60 + (s + frac) / 3600);
+    }
+
+    /** Человеческие пояснения к строкам геопривязки. */
+    function geoNotes(acc, unitScale) {
+        const notes = [];
+        for (const line of (acc.kept.get('IFCSITE') || [])) {
+            const tuples = [...line.matchAll(/\(\s*(-?\d+(?:\s*,\s*-?\d+){2,3})\s*\)/g)]
+                .map((m) => m[1].split(',').map((v) => Number(v.trim())));
+            const lat = dmsToDeg(tuples[0]);
+            const lon = dmsToDeg(tuples[1]);
+            if (lat === null || lon === null) continue;
+            if (!lat && !lon) {
+                notes.push('  IfcSite: широта и долгота нулевые — привязки к карте в файле нет.');
+                continue;
+            }
+            notes.push(`  IfcSite: широта ${lat.toFixed(6)}°, долгота ${lon.toFixed(6)}°`);
+            const elev = /,\s*(-?[\d.]+)\s*,\s*\$\s*,\s*\$\s*\)/.exec(line);
+            if (elev) {
+                const m = Number(elev[1]) * (unitScale || 1);
+                notes.push(`  Отметка площадки (RefElevation): ${m.toFixed(2)} м`);
+                // Москва на 1600 м не бывает: значит широта/долгота — заглушка экспортёра
+                if (Math.abs(lat - 55.75) < 0.02 && Math.abs(lon - 37.7) < 0.02 && Math.abs(m - 150) > 200) {
+                    notes.push('  ВНИМАНИЕ: 55.75/37.70 — это Москва по умолчанию, а отметка ей не соответствует.');
+                    notes.push('  Широту/долготу экспортёр проставил «как есть», для подложки они не годятся.');
+                }
+            }
+        }
+        for (const line of (acc.kept.get('IFCMAPCONVERSION') || [])) {
+            const nums = [...line.matchAll(/,\s*(-?[\d.]+(?:[eE][-+]?\d+)?)/g)].map((m) => Number(m[1]));
+            if (nums.length >= 6) {
+                const [e, n, h, ax, ay, scale] = nums.slice(-6);
+                notes.push(
+                    `  IfcMapConversion: E ${e}, N ${n}, H ${h}, ось X (${ax}, ${ay}), масштаб ${scale}`
+                );
+                if (!scale) {
+                    notes.push('  ВНИМАНИЕ: масштаб 0 — привязка нерабочая (всё, что её применит, схлопнется в точку).');
+                }
+                if (!ax && !ay) {
+                    notes.push('  ВНИМАНИЕ: направление оси X нулевое — поворот на север не задан.');
+                }
+                if (!e && !n && !h) {
+                    notes.push('  Сдвиг нулевой: координаты живут прямо в геометрии, а не в привязке.');
+                }
+            }
+        }
+        return notes;
+    }
+
     function buildReport(file, acc, ms) {
         const L = [];
         const unit = lengthUnitOf(acc);
@@ -144,6 +219,7 @@
         L.push(`Единица:   ${unit.label}${unit.scale && unit.scale !== 1 ? ` (×${unit.scale} к метру)` : ''}`);
         L.push(`Сущностей: ${num(acc.entities)}`);
         L.push(`Точек 3D:  ${num(acc.points)}${acc.points2d ? ` (+ ${num(acc.points2d)} двумерных — в габарит не идут)` : ''}`);
+        if (acc.meshPoints) L.push(`Вершин сеток: ${num(acc.meshPoints)} (IFC4-тесселяция)`);
         L.push(`Булевых:   ${num(acc.booleans)}${acc.booleans >= 8 ? '  ← плотная CSG, возможен сброс координат при открытии' : ''}`);
         L.push('');
 
@@ -165,11 +241,32 @@
             L.push('');
         }
 
+        if (acc.meshPoints) {
+            const k = unit.scale || 1;
+            const axis = ['X', 'Y', 'Z'];
+            L.push('--- Габарит вершин сеток ---');
+            L.push('Обычно это ЛОКАЛЬНЫЕ координаты объектов, а мировое положение');
+            L.push('задаётся точками вставки выше. Если здесь геодезические числа —');
+            L.push('значит экспортёр запек мировые координаты в саму геометрию.');
+            for (let i = 0; i < 3; i++) {
+                const lo = acc.meshMin[i];
+                const hi = acc.meshMax[i];
+                const inM = unit.scale ? `   → ${fixed(lo * k)} … ${fixed(hi * k)} м` : '';
+                L.push(`  ${axis[i]}: ${fixed(lo, 3)} … ${fixed(hi, 3)}${inM}`);
+            }
+            L.push('');
+        }
+
         const geo = [];
         for (const type of ['IFCMAPCONVERSION', 'IFCPROJECTEDCRS', 'IFCSITE']) {
             (acc.kept.get(type) || []).forEach(line => geo.push('  ' + line.slice(0, 300)));
         }
         L.push('--- Геопривязка ---');
+        const decoded = geoNotes(acc, unit.scale);
+        if (decoded.length) {
+            decoded.forEach((n) => L.push(n));
+            L.push('');
+        }
         L.push(geo.length ? geo.join('\n') : '  IfcMapConversion / IfcProjectedCrs не найдены — привязки в файле нет,');
         if (!geo.length) L.push('  координаты просто лежат в геометрии (для сводки этого достаточно).');
         L.push('');
@@ -193,6 +290,9 @@
             entities: 0,
             points: 0,
             points2d: 0,
+            meshPoints: 0,
+            meshMin: [Infinity, Infinity, Infinity],
+            meshMax: [-Infinity, -Infinity, -Infinity],
             booleans: 0,
             hist: new Map(),
             kept: new Map(),

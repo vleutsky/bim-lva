@@ -21,8 +21,15 @@ function guid(seed) {
  * @param {string} o.schema — FILE_SCHEMA
  * @param {number} o.count — сколько коробок
  * @param {number} o.seed — чтобы GlobalId файлов не совпадали
+ * @param {number} o.lengthToMetres — 1 (метры) или 0.001 (миллиметры, как у
+ *        выгрузок Renga/nanoCAD через ODA): величины в файле пишутся в его
+ *        единицах, а IFCSIUNIT получает приставку .MILLI.
  */
-export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, seed = 0, name = 'geo.ifc' } = {}) {
+export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, seed = 0, name = 'geo.ifc', lengthToMetres = 1 } = {}) {
+    // Коэффициент «метр → единица файла»
+    const k = 1 / lengthToMetres;
+    const isMm = Math.abs(lengthToMetres - 0.001) < 1e-12;
+    const u = (metres, digits = 3) => (metres * k).toFixed(digits);
     const head = [
         'ISO-10303-21;',
         'HEADER;',
@@ -35,14 +42,14 @@ export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4'
         '#2=IFCDIRECTION((0.,0.,1.));',
         '#3=IFCDIRECTION((1.,0.,0.));',
         '#4=IFCAXIS2PLACEMENT3D(#1,#2,#3);',
-        '#5=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
+        `#5=IFCSIUNIT(*,.LENGTHUNIT.,${isMm ? '.MILLI.' : '$'},.METRE.);`,
         '#6=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);',
         '#7=IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);',
         '#8=IFCUNITASSIGNMENT((#5,#6,#7));',
         "#9=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#4,$);",
         `#10=IFCPROJECT('${guid(seed + 1)}',$,'GeoTest',$,$,$,$,(#9),#8);`,
         // ВОТ ОНО: площадка стоит в мировых координатах
-        `#20=IFCCARTESIANPOINT((${worldX.toFixed(3)},${worldY.toFixed(3)},${worldZ.toFixed(3)}));`,
+        `#20=IFCCARTESIANPOINT((${u(worldX)},${u(worldY)},${u(worldZ)}));`,
         '#21=IFCAXIS2PLACEMENT3D(#20,#2,#3);',
         '#11=IFCLOCALPLACEMENT($,#21);',
         `#12=IFCSITE('${guid(seed + 2)}',$,'Site',$,$,#11,$,$,.ELEMENT.,$,$,$,$,$);`,
@@ -52,21 +59,21 @@ export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4'
         `#16=IFCBUILDINGSTOREY('${guid(seed + 4)}',$,'Level 0',$,$,#15,$,$,.ELEMENT.,0.);`,
         '#17=IFCCARTESIANPOINT((0.,0.));',
         '#18=IFCAXIS2PLACEMENT2D(#17,$);',
-        "#19=IFCRECTANGLEPROFILEDEF(.AREA.,'BoxProfile',#18,3.,3.);"
+        `#19=IFCRECTANGLEPROFILEDEF(.AREA.,'BoxProfile',#18,${u(3)},${u(3)});`
     ];
 
     const body = [];
     const walls = [];
     let id = 100;
     for (let i = 0; i < count; i++) {
-        const x = (i % cols) * step;
-        const y = Math.floor(i / cols) * step;
+        const x = (i % cols) * step * k;
+        const y = Math.floor(i / cols) * step * k;
         const pt = id++, axis = id++, placement = id++, solid = id++, shape = id++, product = id++, wall = id++;
         body.push(
             `#${pt}=IFCCARTESIANPOINT((${x.toFixed(1)},${y.toFixed(1)},0.));`,
             `#${axis}=IFCAXIS2PLACEMENT3D(#${pt},#2,#3);`,
             `#${placement}=IFCLOCALPLACEMENT(#15,#${axis});`,
-            `#${solid}=IFCEXTRUDEDAREASOLID(#19,#4,#2,3.);`,
+            `#${solid}=IFCEXTRUDEDAREASOLID(#19,#4,#2,${u(3)});`,
             `#${shape}=IFCSHAPEREPRESENTATION(#9,'Body','SweptSolid',(#${solid}));`,
             `#${product}=IFCPRODUCTDEFINITIONSHAPE($,$,(#${shape}));`,
             `#${wall}=IFCWALL('${guid(seed + 10 + i)}',$,'Wall ${i + 1}',$,$,#${placement},#${product},$,$);`

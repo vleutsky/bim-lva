@@ -118,6 +118,37 @@ try {
     await page.evaluate(() => document.getElementById('cabMain')?.classList.remove('hidden'));
     check(await page.isVisible('#ifcdCopy'), 'кнопка «Скопировать отчёт» появилась');
 
+    // Второй файл — как выгрузка Renga/nanoCAD через ODA: миллиметры, геометрия
+    // в IFCCARTESIANPOINTLIST3D, широта/долгота проставлены «Москвой по умолчанию».
+    await page.evaluate(() => document.getElementById('ifcdReset').click());
+    const ar = [
+        'ISO-10303-21;',
+        'HEADER;',
+        "FILE_SCHEMA(('IFC4'));",
+        'ENDSEC;',
+        'DATA;',
+        '#5= IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);',
+        "#310=IFCSITE('2pUZ',#20,'Default',$,$,#309,$,$,.ELEMENT.,(55,44,59,999999),(37,42,0,2746),1600150.,$,$);",
+        '#400= IFCCARTESIANPOINT((55300050.,33820602.,1600150.));',
+        '#401= IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(12000.,0.,0.),(12000.,7500.,3200.)));',
+        'ENDSEC;',
+        'END-ISO-10303-21;'
+    ].join('\n');
+    await page.setInputFiles('#ifcdFile', {
+        name: 'АР-тест.ifc', mimeType: 'application/octet-stream', buffer: Buffer.from(ar, 'latin1')
+    });
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('вершин сеток'),
+        null, { timeout: 30000 }
+    );
+    const arReport = await page.textContent('#ifcdOut');
+    check(/millimetre/.test(arReport), 'миллиметры распознаны');
+    check(/Вершин сеток:\s*3/.test(arReport), 'вершины IFCCARTESIANPOINTLIST3D посчитаны');
+    check(/12\.00/.test(arReport), 'локальный габарит сеток переведён в метры');
+    check(/широта 55\.750000°, долгота 37\.700001°/.test(arReport), 'широта и долгота расшифрованы');
+    check(/RefElevation\): 1600\.15 м/.test(arReport), 'отметка площадки переведена в метры');
+    check(/это Москва по умолчанию/.test(arReport), 'заглушка координат экспортёра замечена');
+
     const copied = await page.evaluate(async () => {
         document.getElementById('ifcdReset').click();
         const o = document.getElementById('ifcdOut');
