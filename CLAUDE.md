@@ -44,7 +44,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v97`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v98`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `FEATURES.md` — трекер фич вьювера (пункты 1–44 закрыты).
 - `LICENSE` — права на код: смотреть можно, копировать и использовать
