@@ -395,6 +395,16 @@
                 }
                 continue;
             }
+            // Точный тип, не IFCGEOMETRICREPRESENTATIONSUBCONTEXT — у него другой
+            // порядок атрибутов (свой WorldCoordinateSystem не задаёт, наследует).
+            if (!idx.context && type === 'IFCGEOMETRICREPRESENTATIONCONTEXT') {
+                const inner = extractParen(text, parenStart);
+                if (inner != null) {
+                    const args = splitTopLevelArgs(inner);
+                    idx.context = { id, wcs: refId(args[4]), trueNorth: refId(args[5]) };
+                }
+                continue;
+            }
             if (!idx.product && PRODUCT_TYPE_RE.test(type)) {
                 const inner = extractParen(text, parenStart);
                 if (inner != null) {
@@ -439,6 +449,17 @@
      * Проходит IfcLocalPlacement от заданного id до корня (PlacementRelTo = $)
      * и накапливает мировые координаты на каждом уровне.
      */
+    // «Локально (0,0,0)» бывает по двум причинам, которые нельзя путать: файл
+    // ТАК и написан (RelativePlacement = $), или мой же индекс не нашёл
+    // сущность (пробел разбора) — второе нельзя тихо подменять нулём, иначе
+    // отчёт лжёт увереннее, чем «не нашёл».
+    const LOC_STATUS_NOTE = {
+        'no-axis': ' [RelativePlacement = $ — так в файле]',
+        'axis-not-found': ' [ссылка на Axis2Placement3D НЕ НАШЛАСЬ в индексе — возможен пробел разбора]',
+        'no-location': ' [у Axis2Placement3D Location = $ — так в файле]',
+        'point-not-found': ' [ссылка на CartesianPoint НЕ НАШЛАСЬ в индексе — возможен пробел разбора]'
+    };
+
     function resolveChain(startPlacementId, idx) {
         const levels = [];
         let cur = startPlacementId;
@@ -447,10 +468,21 @@
             const lp = idx.localPlacements.get(cur);
             if (!lp) { levels.push({ id: cur, missing: true }); break; }
             const ax = lp.rel != null ? idx.axis3d.get(lp.rel) : null;
+            let location = V3_ZERO;
+            let locStatus = 'ok';
+            if (lp.rel == null) locStatus = 'no-axis';
+            else if (!ax) locStatus = 'axis-not-found';
+            else if (ax.loc == null) locStatus = 'no-location';
+            else {
+                const p = idx.points.get(ax.loc);
+                if (!p) locStatus = 'point-not-found';
+                else location = p;
+            }
             levels.push({
                 id: cur,
                 relTo: lp.relTo,
-                location: (ax && idx.points.get(ax.loc)) || V3_ZERO,
+                location,
+                locStatus,
                 axis: ax && ax.axis != null ? idx.dirs.get(ax.axis) : null,
                 refDirection: ax && ax.refDir != null ? idx.dirs.get(ax.refDir) : null,
                 hasAxis: !!ax
@@ -468,7 +500,10 @@
                 origin[1] + basis.x[1] * lvl.location[0] + basis.y[1] * lvl.location[1] + basis.z[1] * lvl.location[2],
                 origin[2] + basis.x[2] * lvl.location[0] + basis.y[2] * lvl.location[1] + basis.z[2] * lvl.location[2]
             ];
-            trace.push({ id: lvl.id, local: lvl.location, world: worldLoc, missing: lvl.missing, hasAxis: lvl.hasAxis });
+            trace.push({
+                id: lvl.id, local: lvl.location, world: worldLoc,
+                missing: lvl.missing, hasAxis: lvl.hasAxis, locStatus: lvl.locStatus
+            });
             if (lvl.missing) break;
             basis = composeBasis(basis, buildBasis(lvl.axis, lvl.refDirection));
             origin = worldLoc;
@@ -492,7 +527,8 @@
             }
             const loc = t.local.map((v) => (v * k).toFixed(3)).join(', ');
             const wld = t.world.map((v) => (v * k).toFixed(3)).join(', ');
-            L.push(`  #${t.id} (${tag}): локально (${loc}) м → накоплено (${wld}) м${t.hasAxis ? '' : ' [без Axis2Placement — ноль]'}`);
+            const note = LOC_STATUS_NOTE[t.locStatus] || '';
+            L.push(`  #${t.id} (${tag}): локально (${loc}) м → накоплено (${wld}) м${note}`);
         });
         L.push(`  Итог — мировая точка: ${worldOrigin.map((v) => (v * k).toFixed(3)).join(' / ')} м`);
         return L;
@@ -509,7 +545,7 @@
 
         const idx = {
             localPlacements: new Map(), axis3d: new Map(), points: new Map(), dirs: new Map(),
-            site: null, product: null
+            site: null, product: null, context: null
         };
         const decoder = new TextDecoder('latin1');
         let carry = '';
@@ -559,6 +595,46 @@
                 '«не найден» / PlacementRelTo = $ раньше — вот причина, по которой',
                 'элемент не наследует мировые координаты площадки.'
             );
+
+            // WorldCoordinateSystem контекста — мировой сдвиг ВНЕ цепочки вставки
+            // сайта. IfcMapConversion (стандартный способ геопривязки IFC4) в
+            // этом файле не встречается (см. основной отчёт выше) — если Site
+            // и элемент выше в локальном нуле, а число тут большое, вот и разгадка:
+            // веб-ifc отдаёт flatTransformation по цепочке размещения, а этот
+            // контекст в неё не входит.
+            L.push('', '--- IfcGeometricRepresentationContext.WorldCoordinateSystem ---');
+            if (!idx.context) {
+                L.push('  IfcGeometricRepresentationContext не найден.');
+            } else if (idx.context.wcs == null) {
+                L.push('  WorldCoordinateSystem = $ — контекст не задаёт отдельного мирового сдвига.');
+            } else {
+                const ax = idx.axis3d.get(idx.context.wcs);
+                if (!ax) {
+                    L.push(`  #${idx.context.id}: ссылка #${idx.context.wcs} на Axis2Placement3D не нашлась в индексе.`);
+                } else {
+                    const loc = ax.loc != null ? idx.points.get(ax.loc) : null;
+                    const refDir = ax.refDir != null ? idx.dirs.get(ax.refDir) : null;
+                    if (!loc) {
+                        L.push(`  #${idx.context.id}: Location у #${idx.context.wcs} пуст или не нашёлся.`);
+                    } else {
+                        const locM = loc.map((v) => (v * k).toFixed(3)).join(', ');
+                        L.push(`  #${idx.context.id} → #${idx.context.wcs}: точка (${locM}) м`);
+                        if (refDir && refDir.length >= 2) {
+                            const deg = (Math.atan2(refDir[1], refDir[0]) * 180 / Math.PI);
+                            L.push(`  Направление оси X: (${refDir.map((v) => v.toFixed(5)).join(', ')}) — поворот ≈ ${deg.toFixed(3)}° от востока`);
+                        }
+                        const mag = Math.hypot(loc[0], loc[1], loc[2]) * k;
+                        if (mag > 5) {
+                            L.push(
+                                '  ЭТО МИРОВОЙ СДВИГ ВНЕ ЦЕПОЧКИ РАЗМЕЩЕНИЯ: если у IfcSite и элемента',
+                                '  выше локальные (0,0,0), а тут — большие числа, значит именно этот',
+                                '  сдвиг несёт геометрию, и он не проходит через IfcLocalPlacement —',
+                                '  вьювер (и web-ifc внутри него) его не видит и не применяет.'
+                            );
+                        }
+                    }
+                }
+            }
             show(base + '\n' + L.join('\n'));
         } catch (error) {
             show(base + `\n\nЦепочку разобрать не удалось: ${error && error.message ? error.message : error}`);

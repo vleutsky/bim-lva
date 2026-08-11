@@ -212,6 +212,63 @@ try {
     check(!/55300/.test(productSection), 'оторванный элемент НЕ показывает мировые координаты площадки');
     check(/10\.000, 5\.000, 2\.000/.test(productSection), 'локальные координаты оторванного элемента верны');
 
+    // Четвёртый файл: находка с реального объекта. IfcSite и элемент стоят на
+    // ИДЕНТИЧНЫХ (нулевых) размещениях — цепочка IfcLocalPlacement целиком в
+    // нуле, — а мировой сдвиг лежит ОТДЕЛЬНО, в WorldCoordinateSystem контекста
+    // представления. IfcMapConversion при этом в файле нет (как и в реальном).
+    // Ровно так выглядел файл АР, когда его пропустили через эту диагностику.
+    await page.evaluate(() => document.getElementById('ifcdReset').click());
+    const wcsIfc = [
+        'ISO-10303-21;',
+        'HEADER;',
+        "FILE_SCHEMA(('IFC4'));",
+        'ENDSEC;',
+        'DATA;',
+        '#1=IFCCARTESIANPOINT((0.,0.,0.));',
+        '#2=IFCDIRECTION((0.,0.,1.));',
+        '#3=IFCDIRECTION((1.,0.,0.));',
+        '#4=IFCAXIS2PLACEMENT3D(#1,#2,#3);',
+        '#5=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
+        // Мировой сдвиг — только здесь, вне цепочки IfcLocalPlacement.
+        '#40=IFCCARTESIANPOINT((55300.05,33820.602,1600.15));',
+        '#41=IFCDIRECTION((0.97789,0.20913,0.));',
+        '#42=IFCAXIS2PLACEMENT3D(#40,#2,#41);',
+        "#9=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#42,$);",
+        "#10=IFCPROJECT('proj',$,'P',$,$,$,$,(#9),$);",
+        // Site/Building/Storey — все на identity-размещении (0,0,0), как в файле АР.
+        '#11=IFCLOCALPLACEMENT($,#4);',
+        "#12=IFCSITE('site',$,'Site',$,$,#11,$,$,.ELEMENT.,$,$,$,$,$);",
+        '#13=IFCLOCALPLACEMENT(#11,#4);',
+        "#14=IFCBUILDING('bld',$,'Building',$,$,#13,$,$,.ELEMENT.,$,$,$);",
+        '#15=IFCLOCALPLACEMENT(#13,#4);',
+        "#16=IFCBUILDINGSTOREY('storey',$,'Level0',$,$,#15,$,$,.ELEMENT.,0.);",
+        'ENDSEC;',
+        'END-ISO-10303-21;'
+    ].join('\n');
+    await page.setInputFiles('#ifcdFile', {
+        name: 'wcs-тест.ifc', mimeType: 'application/octet-stream', buffer: Buffer.from(wcsIfc, 'latin1')
+    });
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('Мировой габарит'),
+        null, { timeout: 30000 }
+    );
+    await page.evaluate(() => document.getElementById('cabMain')?.classList.remove('hidden'));
+    await page.evaluate(() => document.getElementById('ifcdChain').click());
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('WorldCoordinateSystem'),
+        null, { timeout: 30000 }
+    );
+    const wcsReport = await page.textContent('#ifcdOut');
+    const siteWcsSection = wcsReport.slice(wcsReport.indexOf('--- IfcSite'));
+    check(/Уровней в цепочке:\s*1/.test(siteWcsSection), 'у IfcSite цепочка размещения короткая (identity)');
+    check(/локально \(0\.000, 0\.000, 0\.000\)/.test(siteWcsSection), 'IfcSite действительно на нулевом размещении, а не «не нашли»');
+    check(/точка \(55300\.050, 33820\.602, 1600\.150\)/.test(wcsReport), 'WorldCoordinateSystem найден и посчитан верно');
+    check(/ЭТО МИРОВОЙ СДВИГ ВНЕ ЦЕПОЧКИ РАЗМЕЩЕНИЯ/.test(wcsReport), 'предупреждение о сдвиге вне цепочки выведено');
+    // Не 12.06 — это округлённое число С ОБЪЕКТА, а не то, что даёт мой
+    // приблизительный (0.97789, 0.20913) вектор. Считаю честно, как и код.
+    const wantDeg = (Math.atan2(0.20913, 0.97789) * 180 / Math.PI).toFixed(3);
+    check(wcsReport.includes(`поворот ≈ ${wantDeg}°`), 'поворот WorldCoordinateSystem посчитан верно');
+
     const copied = await page.evaluate(async () => {
         document.getElementById('ifcdReset').click();
         const o = document.getElementById('ifcdOut');
