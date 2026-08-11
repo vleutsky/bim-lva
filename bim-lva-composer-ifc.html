@@ -2663,7 +2663,7 @@
     <div class="ctx-menu" id="stageCtx">
         <div id="ctxPolylineGroup" hidden>
             <button class="ctx-item" id="ctxPolylineProps" title="Открыть полилинию в таблице: вершины, отметки, длины, уклоны">📐 Свойства полилинии</button>
-            <button class="ctx-item" id="ctxPolylineFillet" title="Вписать радиус во все внутренние углы этой полилинии">◜ Вписать кривую…</button>
+            <button class="ctx-item" id="ctxPolylineFillet" title="Вписать радиус в угол, ближайший к точке правого клика">◜ Вписать кривую в этот угол…</button>
             <button class="ctx-item" id="ctxPolylineSweep" title="Прогнать сечение вдоль этой полилинии и получить 3D-тело">⬒ Тело по этой оси</button>
             <button class="ctx-item danger" id="ctxPolylineDelete" title="Удалить эту полилинию">🗑 Удалить полилинию</button>
             <div class="ctx-divider"></div>
@@ -3208,18 +3208,14 @@
         </div>
     </div>
 
-    <div class="modal-backdrop" id="filletAllModal">
+    <div class="modal-backdrop" id="filletModal">
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
-            <h3>Вписать кривую</h3>
-            <div class="bulk-note" id="filletAllNote">
-                Радиус вписывается во все внутренние углы полилинии. Там, где
-                соседний отрезок короче нужного, радиус уменьшается сам —
-                об этом будет уведомление. 0 убирает сопряжения.
-            </div>
-            <div class="prop small"><div class="k">Радиус, м</div><input class="editInput" id="filletAllRadius" type="number" min="0" step="0.5" value="5"></div>
+            <h3>Вписать кривую в угол</h3>
+            <div class="bulk-note" id="filletNote"></div>
+            <div class="prop small"><div class="k">Радиус, м</div><input class="editInput" id="filletRadius" type="number" min="0" step="0.5" value="5"></div>
             <div class="modal-actions">
-                <button class="btn" id="filletAllCancel">Отмена</button>
-                <button class="btn load-btn" id="filletAllApply">Вписать</button>
+                <button class="btn" id="filletCancel">Отмена</button>
+                <button class="btn load-btn" id="filletApply">Вписать</button>
             </div>
         </div>
     </div>
@@ -4296,7 +4292,15 @@
             get drawn() {
                 return (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
                     .map((r) => ({
-                        id: r.id, name: r.name, kind: r.kind, abs: r.abs,
+                        id: r.id, name: r.name, kind: r.kind,
+                        // abs — точки ПОСЛЕ сопряжения (с дугами), vertsAbs —
+                        // реальные вершины. Путать их нельзя: индексы разъезжаются,
+                        // как только у вершины появился радиус.
+                        abs: r.abs,
+                        vertsAbs: r.pts.map((p) => {
+                            const a = worldPointToAbsoluteXYZ(p) || p;
+                            return { x: a.x, y: a.y, z: a.z };
+                        }),
                         length3d: r.length3d, length2d: r.length2d,
                         points: r.pts.length, radii: r.radii.slice()
                     }));
@@ -4307,6 +4311,34 @@
                 if (!rec) return false;
                 setPolylineVertexRadius(rec, idx, radius);
                 return true;
+            },
+            /** Вершины полилинии в пикселях холста — то же, чем меряет пикинг. */
+            polylineScreenPts(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return null;
+                const rect = stage.getBoundingClientRect();
+                return rec.pts.map((p) => {
+                    const s = projectToPixels(p);
+                    return { x: s.x, y: s.y, clientX: s.x + rect.left, clientY: s.y + rect.top, behind: s.behind };
+                });
+            },
+            /** Какая полилиния под экранной точкой (тот же путь, что у клика и ПКМ). */
+            pickPolylineAt(clientX, clientY) {
+                const hit = pickDrawnPolyline(clientX, clientY);
+                return hit ? { id: hit.record.id, name: hit.record.name } : null;
+            },
+            /** Абсолютные координаты → оси сцены (обратное к absoluteAt). */
+            absoluteToScene(x, y, z) {
+                const p = absoluteXYZToWorldPoint(x, y, z);
+                return { x: p.x, y: p.y, z: p.z };
+            },
+            /**
+             * Ближайший внутренний угол к точке сцены — та самая логика, по
+             * которой «Вписать кривую» выбирает угол под правым кликом.
+             */
+            nearestPolylineCorner(id, x, y, z) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? nearestInteriorVertex(rec, new THREE.Vector3(x, y, z)) : -1;
             },
             /** Правка геометрии числами: 'elev' | 'length' | 'slope'. */
             editPolyline(id, what, idx, value) {
@@ -6447,16 +6479,18 @@
          * АБСОЛЮТНЫХ координатах (как в статус-баре и в таблице), поэтому
          * переводим её в оси сцены тем же сдвигом, что worldPointToAbsoluteXYZ. */
 
-        /** Абсолютная отметка Z → Z в осях сцены. */
-        function absoluteZToSceneZ(absZ) {
-            const shift = ifcWorldOrigin ? worldOriginSceneVec() : null;
-            return shift ? absZ - shift.z : absZ;
+        /** Обратное к worldPointToAbsoluteXYZ: абсолютные координаты → оси сцены. */
+        function absoluteXYZToWorldPoint(x, y, z) {
+            const p = new THREE.Vector3(x, y, z);
+            if (!ifcWorldOrigin) return p;
+            const shift = worldOriginSceneVec();
+            return p.sub(shift);
         }
 
         function setPolylineVertexElevation(record, idx, absZ) {
             const z = Number(absZ);
             if (!Number.isFinite(z) || idx < 0 || idx >= record.pts.length) return;
-            record.pts[idx].z = absoluteZToSceneZ(z);
+            record.pts[idx].z = absoluteXYZToWorldPoint(0, 0, z).z;
             rebuildPolylineGeometry(record);
             renderPolylinePointsEditor(record);
             renderPolylinesList();
@@ -7071,35 +7105,47 @@
             else if (park) polylinesPanel.park();
         }
 
-        let filletAllTargetId = null;
+        let filletTargetId = null;
+        let filletTargetVertex = -1;
 
-        function openFilletAllModal(record) {
-            filletAllTargetId = record.id;
-            const note = $('filletAllNote');
-            if (note) {
-                note.textContent =
-                    `«${record.name}»: внутренних углов ${Math.max(0, record.pts.length - 2)}. ` +
-                    'Там, где соседний отрезок короче нужного, радиус уменьшается сам. 0 убирает сопряжения.';
+        /** Вписать радиус в ОДИН угол — тот, что ближе к точке правого клика. */
+        function openFilletModal(record, vertexIdx) {
+            if (vertexIdx < 0) {
+                notifyError(`«${record.name}»: у полилинии из двух точек углов нет.`);
+                return;
             }
-            $('filletAllModal').classList.add('show');
+            filletTargetId = record.id;
+            filletTargetVertex = vertexIdx;
+            const note = $('filletNote');
+            if (note) {
+                const a = worldPointToAbsoluteXYZ(record.pts[vertexIdx]) || record.pts[vertexIdx];
+                note.textContent =
+                    `«${record.name}», вершина #${vertexIdx + 1} ` +
+                    `(${a.x.toFixed(2)}, ${a.y.toFixed(2)}, ${a.z.toFixed(2)}). ` +
+                    'Если соседний отрезок короче нужного, радиус уменьшится сам. 0 убирает сопряжение.';
+            }
+            const input = $('filletRadius');
+            if (input) input.value = record.radii[vertexIdx] ? String(record.radii[vertexIdx]) : '5';
+            $('filletModal').classList.add('show');
         }
 
-        $('filletAllCancel')?.addEventListener('click', () => $('filletAllModal').classList.remove('show'));
-        $('filletAllModal')?.addEventListener('click', (e) => {
-            if (e.target === $('filletAllModal')) $('filletAllModal').classList.remove('show');
+        $('filletCancel')?.addEventListener('click', () => $('filletModal').classList.remove('show'));
+        $('filletModal')?.addEventListener('click', (e) => {
+            if (e.target === $('filletModal')) $('filletModal').classList.remove('show');
         });
-        $('filletAllApply')?.addEventListener('click', () => {
-            const rec = drawnPolylines.find((r) => r.id === filletAllTargetId);
-            $('filletAllModal').classList.remove('show');
+        $('filletApply')?.addEventListener('click', () => {
+            const rec = drawnPolylines.find((r) => r.id === filletTargetId);
+            $('filletModal').classList.remove('show');
             if (!rec) return notifyError('Полилиния не найдена.');
-            const r = Math.max(0, Number($('filletAllRadius').value) || 0);
-            for (let i = 1; i < rec.pts.length - 1; i++) rec.radii[i] = r;
-            rebuildPolylineGeometry(rec, { notifyClamp: true });
-            renderPolylinesList();
+            if (filletTargetVertex <= 0 || filletTargetVertex >= rec.pts.length - 1) {
+                return notifyError('Вершина больше не существует — выберите угол заново.');
+            }
+            const r = Math.max(0, Number($('filletRadius').value) || 0);
+            setPolylineVertexRadius(rec, filletTargetVertex, r);
             notify(r > 0
-                ? `«${rec.name}»: радиус ${r} м вписан в ${Math.max(0, rec.pts.length - 2)} углов.`
-                : `«${rec.name}»: сопряжения убраны.`);
-            trackUsage('polyline_fillet_all', { radius: r });
+                ? `«${rec.name}»: в вершину #${filletTargetVertex + 1} вписан радиус ${r} м.`
+                : `«${rec.name}»: сопряжение в вершине #${filletTargetVertex + 1} убрано.`);
+            trackUsage('polyline_fillet', { radius: r });
         });
 
         $('btnPolylineList')?.addEventListener('click', () => openPolylinesPanel());
@@ -14143,20 +14189,54 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
          * подмешивать нельзя — они не элементы. Line2 умеет raycast сам, порог
          * задаётся в экранных пикселях (как и у объектной привязки).
          */
+        const POLYLINE_PICK_PX = 8;
+
         function pickDrawnPolyline(clientX, clientY) {
             if (!drawnPolylines.length) return null;
-            const rect = renderer.domElement.getBoundingClientRect();
-            const pointer = new THREE.Vector2(
-                ((clientX - rect.left) / rect.width) * 2 - 1,
-                -((clientY - rect.top) / rect.height) * 2 + 1
-            );
-            const raycaster = new THREE.Raycaster();
-            raycaster.setFromCamera(pointer, camera);
-            raycaster.params.Line2 = { threshold: 8 };
-            const targets = drawnPolylines.map((r) => r.object).filter((o) => o.visible);
-            const hits = raycaster.intersectObjects(targets, false);
-            const id = hits[0]?.object?.userData?.drawnPolylineId;
-            return id == null ? null : drawnPolylines.find((r) => r.id === id) || null;
+            const rect = stage.getBoundingClientRect();
+            const px = clientX - rect.left;
+            const py = clientY - rect.top;
+
+            let best = null;
+            for (const rec of drawnPolylines) {
+                if (!rec.object.visible) continue;
+                const pts = rec.renderPts;
+                for (let i = 0; i < pts.length - 1; i++) {
+                    const a = projectToPixels(pts[i]);
+                    const b = projectToPixels(pts[i + 1]);
+                    if (a.behind || b.behind) continue;
+                    const vx = b.x - a.x;
+                    const vy = b.y - a.y;
+                    const len2 = vx * vx + vy * vy;
+                    const t = len2 < 1e-9
+                        ? 0
+                        : Math.max(0, Math.min(1, ((px - a.x) * vx + (py - a.y) * vy) / len2));
+                    const d = Math.hypot(a.x + vx * t - px, a.y + vy * t - py);
+                    if (d > POLYLINE_PICK_PX) continue;
+                    if (!best || d < best.d) {
+                        best = {
+                            record: rec,
+                            d,
+                            point: pts[i].clone().lerp(pts[i + 1], t)
+                        };
+                    }
+                }
+            }
+            return best ? { record: best.record, point: best.point } : null;
+        }
+
+        /**
+         * Ближайшая к точке ВНУТРЕННЯЯ вершина: сопряжение возможно только там,
+         * у первой и последней угла нет. Возвращает -1, если углов нет вовсе.
+         */
+        function nearestInteriorVertex(record, point) {
+            let best = -1;
+            let bestD = Infinity;
+            for (let i = 1; i < record.pts.length - 1; i++) {
+                const d = record.pts[i].distanceToSquared(point);
+                if (d < bestD) { bestD = d; best = i; }
+            }
+            return best;
         }
 
         /** {modelID, expressID} из попадания луча — батч-IFC и DXF/DWG разрешаются отдельно. */
@@ -14205,7 +14285,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!drawMode && !isMeasuring && !coordPinMode && !bcfPickMode) {
                 const poly = pickDrawnPolyline(ev.clientX, ev.clientY);
                 if (poly) {
-                    selectDrawnPolyline(poly);
+                    selectDrawnPolyline(poly.record);
                     return;
                 }
             }
@@ -21300,6 +21380,7 @@ ${componentXml || '    '}
         let treeContextRow = null;
         let stageContextElementRef = null;
         let stageContextPolyline = null;
+        let stageContextVertex = -1;
         
         window.addEventListener('click', () => { 
             treeCtx.classList.remove('show'); 
@@ -21363,9 +21444,13 @@ ${componentXml || '    '}
             }
             stageContextElementRef = resolveHitElementRef(pickStageHit(e.clientX, e.clientY));
             $('ctxSelectSimilar').classList.toggle('disabled', !stageContextElementRef);
-            // Блок команд полилинии показываем, только если ПКМ пришёлся по ней
-            stageContextPolyline = pickDrawnPolyline(e.clientX, e.clientY);
+            // Блок команд полилинии показываем, только если ПКМ пришёлся по ней.
+            // Запоминаем и ближайший угол — «Вписать кривую» работает по нему.
+            const polyHit = pickDrawnPolyline(e.clientX, e.clientY);
+            stageContextPolyline = polyHit?.record || null;
+            stageContextVertex = polyHit ? nearestInteriorVertex(polyHit.record, polyHit.point) : -1;
             $('ctxPolylineGroup').hidden = !stageContextPolyline;
+            $('ctxPolylineFillet').classList.toggle('disabled', stageContextVertex < 0);
             $('ctxPolylineTable').classList.toggle('disabled', !drawnPolylines.length);
             stageCtx.style.left = e.clientX + 'px';
             stageCtx.style.top = e.clientY + 'px';
@@ -21381,7 +21466,7 @@ ${componentXml || '    '}
             if (stageContextPolyline) selectDrawnPolyline(stageContextPolyline);
         });
         $('ctxPolylineFillet').addEventListener('click', () => {
-            if (stageContextPolyline) openFilletAllModal(stageContextPolyline);
+            if (stageContextPolyline) openFilletModal(stageContextPolyline, stageContextVertex);
         });
         $('ctxPolylineSweep').addEventListener('click', () => {
             if (!stageContextPolyline) return;
@@ -22948,7 +23033,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: 'c718fe7',
+            buildId: 'ed01f12',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

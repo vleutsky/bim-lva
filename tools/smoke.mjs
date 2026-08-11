@@ -388,7 +388,9 @@ async function checkDrawDxf(page) {
         if (btn.classList.contains('on')) btn.click();
     });
 
-    await drawOne('3d', [[-0.12, -0.06], [0.0, 0.02], [0.11, -0.04]]);
+    // Четыре точки — два внутренних угла: только так проверяется, что радиус
+    // ложится в УКАЗАННЫЙ угол, а не сразу во все.
+    await drawOne('3d', [[-0.12, -0.06], [0.0, 0.02], [0.11, -0.04], [0.20, 0.03]]);
     await drawOne('2d', [[-0.10, 0.10], [0.06, 0.12]]);
     await page.evaluate(() => {
         const btn = document.getElementById('btnDraw');
@@ -430,7 +432,7 @@ async function checkDrawDxf(page) {
     }
     const three = drawn.find((d) => d.kind === '3d');
     const flat = drawn.find((d) => d.kind === '2d');
-    if (three.abs.length !== 3) problems.push(`в 3D-полилинии ${three.abs.length} точек вместо 3`);
+    if (three.abs.length !== 4) problems.push(`в 3D-полилинии ${three.abs.length} точек вместо 4`);
     if (flat && flat.abs.length === 2) {
         const dz = Math.abs(flat.abs[0].z - flat.abs[1].z);
         if (dz > 1e-6) problems.push(`2D-полилиния получилась с перепадом ${dz.toFixed(3)} м`);
@@ -460,8 +462,9 @@ async function checkDrawDxf(page) {
     // Радиус сопряжения в средней вершине 3D-полилинии: точек должно стать
     // больше (вершина заменена дугой), а длина — короче ломаной, но не меньше
     // прямой между концами (дуга режет угол, но не спрямляет целиком).
+    const last = three.abs[three.abs.length - 1];
     const straight = Math.hypot(
-        three.abs[2].x - three.abs[0].x, three.abs[2].y - three.abs[0].y, three.abs[2].z - three.abs[0].z
+        last.x - three.abs[0].x, last.y - three.abs[0].y, last.z - three.abs[0].z
     );
     const filletOk = await page.evaluate(
         (id) => window.BimLvaDebug.setPolylineRadius(id, 1, 0.5),
@@ -483,6 +486,41 @@ async function checkDrawDxf(page) {
                 `(${straight.toFixed(3)} .. ${three.length3d.toFixed(3)})`
             );
         }
+        // Ровно один угол, а не все: у второго внутреннего угла радиус остался 0
+        const touched = filleted.radii.filter((r) => r > 0).length;
+        if (touched !== 1) {
+            problems.push(`радиус лёг в ${touched} углов вместо одного: [${filleted.radii.join(', ')}]`);
+        }
+    }
+
+    // Клик/ПКМ по линии в сцене. Целимся по СПРОЕЦИРОВАННЫМ вершинам, а не по
+    // точкам клика: объектная привязка уводит поставленную точку на ближайшую
+    // вершину геометрии, и линия проходит не там, где был курсор.
+    const linePick = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        const sp = D.polylineScreenPts(id);
+        return sp.map((s) => (D.pickPolylineAt(s.clientX, s.clientY)?.id === id ? 1 : 0));
+    }, three.id);
+    if (linePick.some((ok) => !ok)) {
+        problems.push(`клик по линии в сцене не попадает в ${linePick.filter((v) => !v).length} вершинах из ${linePick.length}`);
+    }
+
+    // Выбор угла «под курсором»: просим угол рядом с вершиной #3 (индекс 2) и
+    // ждём именно его, а не первый попавшийся внутренний.
+    const cornerPick = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        const rec = D.drawn.find((d) => d.id === id);
+        // Именно vertsAbs, а не abs: в abs уже лежат точки дуги от сопряжения
+        // выше, и abs[2] — не вершина #3, а точка на дуге у вершины #2.
+        const target = rec.vertsAbs[2];
+        const near = D.absoluteToScene(target.x + 0.3, target.y + 0.3, target.z);
+        return {
+            picked: D.nearestPolylineCorner(id, near.x, near.y, near.z),
+            interior: rec.points - 2
+        };
+    }, three.id);
+    if (cornerPick.picked !== 2) {
+        problems.push(`«вписать в этот угол» выбрал вершину #${cornerPick.picked + 1} вместо #3`);
     }
 
     // Цвет и толщина: у Line2 их держит LineMaterial, а не геометрия. Сверяем
