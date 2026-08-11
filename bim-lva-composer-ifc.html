@@ -1042,6 +1042,7 @@
         #viewCube .vc-iso { grid-column: 2; grid-row: 2; }
         #viewCube .vc-btn[data-view="right"] { grid-column: 3; grid-row: 2; }
         #viewCube .vc-btn[data-view="front"] { grid-column: 2; grid-row: 3; }
+        #viewCube .vc-proj { grid-column: 3; grid-row: 3; font-size: 10px; }
         @media (max-width: 720px) { #viewCube { display: none; } }
 
         #labels-container,
@@ -2501,6 +2502,7 @@
             <button class="vc-btn" data-view="front" title="Вид спереди, с юга">Ю</button>
             <button class="vc-btn vc-bottom" data-view="bottom" title="Вид снизу">Низ</button>
             <button class="vc-btn" data-view="back" title="Вид сзади, с севера">С</button>
+            <button class="vc-btn vc-proj" id="vcProjection" title="Проекция: перспектива или ортогональная (параллельная). Для 2D-чертежей и планов нужна ортогональная">Персп</button>
         </div>
         <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
@@ -4075,6 +4077,8 @@
                 }
                 return out;
             },
+            /** Текущая проекция: 'persp' или 'ortho'. */
+            get projection() { return projectionMode; },
             /** Куда нацелена орбита и где центр выделения — для проверки видов. */
             get cameraTarget() {
                 return { x: controls.target.x, y: controls.target.y, z: controls.target.z };
@@ -4157,8 +4161,73 @@
         const scene = new THREE.Scene();
         THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
         
-        const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
-        camera.up.set(0, 0, 1);
+        const perspCamera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
+        perspCamera.up.set(0, 0, 1);
+        const orthoCamera = new THREE.OrthographicCamera(-10, 10, 10, -10, -10000, 100000);
+        orthoCamera.up.set(0, 0, 1);
+        // Активная камера подменяется целиком: OrbitControls, лучи, проекция
+        // подписей — все берут её из этой переменной, поэтому переключение
+        // проекции не требует трогать остальной код.
+        let camera = perspCamera;
+        let projectionMode = 'persp';
+
+        /** Видимая высота кадра в метрах на дистанции до цели орбиты. */
+        function currentFrameHeight() {
+            if (projectionMode === 'ortho') return orthoCamera.top - orthoCamera.bottom;
+            const dist = camera.position.distanceTo(controls?.target || new THREE.Vector3());
+            return 2 * Math.max(dist, 0.01) * Math.tan(THREE.MathUtils.degToRad(perspCamera.fov) / 2);
+        }
+
+        function syncOrthoFrustum(height) {
+            const w = Math.max(stage.clientWidth, 1);
+            const h = Math.max(stage.clientHeight, 1);
+            const aspect = w / h;
+            const half = Math.max(height, 0.01) / 2;
+            orthoCamera.top = half;
+            orthoCamera.bottom = -half;
+            orthoCamera.left = -half * aspect;
+            orthoCamera.right = half * aspect;
+            // Ортокамере нужен диапазон и «за спиной», иначе половина модели
+            // отсекается при виде сверху на большой площадке
+            const span = Math.max(lastSceneMaxDim || 10, height) * 50;
+            orthoCamera.near = -span;
+            orthoCamera.far = span;
+            orthoCamera.updateProjectionMatrix();
+        }
+
+        function setProjectionMode(mode) {
+            const next = mode === 'ortho' ? 'ortho' : 'persp';
+            if (next === projectionMode) return;
+            const height = currentFrameHeight();
+            const from = camera;
+            const to = next === 'ortho' ? orthoCamera : perspCamera;
+            to.position.copy(from.position);
+            to.quaternion.copy(from.quaternion);
+            to.up.copy(from.up);
+            projectionMode = next;
+            camera = to;
+            if (next === 'ortho') syncOrthoFrustum(height);
+            else {
+                // Держим тот же охват кадра: отодвигаем на нужную дистанцию
+                const dist = (height / 2) / Math.tan(THREE.MathUtils.degToRad(perspCamera.fov) / 2);
+                const dir = new THREE.Vector3().subVectors(from.position, controls.target);
+                if (dir.lengthSq() < 1e-9) dir.set(0, -1, 0.5);
+                camera.position.copy(controls.target).add(dir.normalize().multiplyScalar(dist));
+                camera.updateProjectionMatrix();
+            }
+            if (controls) {
+                controls.object = camera;
+                controls.update();
+            }
+            const btn = $('vcProjection');
+            if (btn) {
+                btn.textContent = next === 'ortho' ? 'Орто' : 'Персп';
+                btn.classList.toggle('on', next === 'ortho');
+            }
+            applyCameraNear();
+            trackUsage('projection_mode', { mode: next });
+            markNeedsRender();
+        }
 
         const CAMERA_NEAR_STORAGE = 'bimlva_camera_near_v1';
         let lastSceneMaxDim = 10;
@@ -4199,6 +4268,10 @@
 
         function applyCameraNear(maxDim) {
             if (Number.isFinite(maxDim) && maxDim > 0) lastSceneMaxDim = maxDim;
+            if (projectionMode === 'ortho') {
+                syncOrthoFrustum(orthoCamera.top - orthoCamera.bottom);
+                return;
+            }
             const dist = camera.position.distanceTo(controls?.target || camera.position) || lastSceneMaxDim || 10;
             if (cameraNearAuto) {
                 // Раньше near = maxDim/200 на больших моделях давал метры и «съедал» геометрию при зуме.
@@ -5983,8 +6056,9 @@
             if (w === 0 || h === 0) return;
             
             renderer.setSize(w, h, true);
-            camera.aspect = w / h; 
-            camera.updateProjectionMatrix();
+            perspCamera.aspect = w / h;
+            perspCamera.updateProjectionMatrix();
+            if (projectionMode === 'ortho') syncOrthoFrustum(orthoCamera.top - orthoCamera.bottom);
             markNeedsRender();
         }
         window.addEventListener('resize', resize);
@@ -17619,7 +17693,11 @@ ${componentXml || '    '}
             camera.up.set(0, 0, 1);
             if (Math.abs(dir.z) > 0.999) camera.up.set(0, 1, 0);
             applyCameraNear(maxDim);
-            camera.far = Math.max(maxDim * 40, camera.far, 1000);
+            if (projectionMode === 'ortho') {
+                syncOrthoFrustum(maxDim * 1.15);
+            } else {
+                camera.far = Math.max(maxDim * 40, camera.far, 1000);
+            }
             camera.updateProjectionMatrix();
             syncOrbitControlsFromCamera();
         }
@@ -18014,7 +18092,12 @@ ${componentXml || '    '}
 
         $('viewCube')?.addEventListener('click', (e) => {
             const btn = e.target.closest('.vc-btn');
-            if (btn) setStandardView(btn.dataset.view);
+            if (!btn) return;
+            if (btn.id === 'vcProjection') {
+                setProjectionMode(projectionMode === 'ortho' ? 'persp' : 'ortho');
+                return;
+            }
+            setStandardView(btn.dataset.view);
         });
 
         $('fit').addEventListener('click', () => {
@@ -20919,7 +21002,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: 'bd97f2e',
+            buildId: '0fa1040',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

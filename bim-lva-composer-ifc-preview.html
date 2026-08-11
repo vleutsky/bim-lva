@@ -1003,6 +1003,48 @@
             padding: 30px;
         }
 
+        /* Видовой куб: сетка 3×3, по сторонам света — как на плане */
+        #viewCube {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 18;
+            display: grid;
+            grid-template-columns: repeat(3, 34px);
+            grid-template-rows: 26px 26px 26px;
+            gap: 3px;
+            padding: 5px;
+            border-radius: 9px;
+            background: rgba(255, 255, 255, .88);
+            border: 1px solid var(--line, #c9d4e0);
+            box-shadow: 0 6px 18px rgba(15, 26, 40, .14);
+            backdrop-filter: blur(3px);
+        }
+        #viewCube .vc-btn {
+            border: 1px solid var(--line, #c9d4e0);
+            background: #fff;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--txt, #2b3a4a);
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+        #viewCube .vc-btn:hover { border-color: var(--accent, #1f6f8b); color: var(--accent, #1f6f8b); }
+        #viewCube .vc-btn.on { background: var(--accent, #1f6f8b); border-color: var(--accent, #1f6f8b); color: #fff; }
+        /* Стороны света читаются как на плане: С сверху, Ю снизу, З слева, В
+           справа. Верх и низ занимают свободные углы, чтобы не спорить с ними. */
+        #viewCube .vc-top { grid-column: 1; grid-row: 1; }
+        #viewCube .vc-btn[data-view="back"] { grid-column: 2; grid-row: 1; }
+        #viewCube .vc-bottom { grid-column: 3; grid-row: 1; }
+        #viewCube .vc-btn[data-view="left"] { grid-column: 1; grid-row: 2; }
+        #viewCube .vc-iso { grid-column: 2; grid-row: 2; }
+        #viewCube .vc-btn[data-view="right"] { grid-column: 3; grid-row: 2; }
+        #viewCube .vc-btn[data-view="front"] { grid-column: 2; grid-row: 3; }
+        #viewCube .vc-proj { grid-column: 3; grid-row: 3; font-size: 10px; }
+        @media (max-width: 720px) { #viewCube { display: none; } }
+
         #labels-container,
         #coord-pins-container {
             position: absolute;
@@ -2312,7 +2354,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · bd97f2e</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 0fa1040</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2328,6 +2370,12 @@
                     <button class="btn" id="btnMeasure" disabled title="Инструмент замеров"><span class="tb-ico">📏</span><span class="tb-txt">Замер</span></button>
                     <button class="btn" id="btnCoordPin" disabled title="Метка координат: клик по модели ставит подпись с X, Y, Z (абсолютные, в метрах). Точку можно перетащить"><span class="tb-ico">📍</span><span class="tb-txt">Метка XYZ</span></button>
                     <button class="btn" id="btnCoordPinList" disabled title="Список меток: перелёт к метке, копирование, удаление"><span class="tb-ico">📋</span><span class="tb-txt">Метки <span id="pinsCount">0</span></span></button>
+                    <button class="btn" id="btnDraw" disabled title="Черчение полилинии по модели. Клик — точка, Esc или повторное нажатие кнопки — завершить"><span class="tb-ico">✏</span><span class="tb-txt">Полилиния</span></button>
+                    <select id="drawModeSelect" class="tool-select" disabled title="2D — все точки на отметке первой (как LWPOLYLINE), 3D — с настоящими отметками">
+                        <option value="3d">3D</option>
+                        <option value="2d">2D</option>
+                    </select>
+                    <button class="btn" id="btnDrawExport" disabled title="Выгрузить начерченное и метки в DXF в мировых координатах"><span class="tb-ico">⤓</span><span class="tb-txt">DXF</span></button>
                     <select id="measureModeSelect" class="tool-select" disabled title="Режим замера. «2D/3D/i» — линейка: наклонное и горизонтальное расстояние, превышение и уклон">
                         <option value="distance">м</option>
                         <option value="ruler">2D/3D/i</option>
@@ -2465,6 +2513,16 @@
     <div class="resizer" id="dragLeft"></div>
 
     <main class="stage" id="stage">
+        <div id="viewCube" aria-label="Стандартные виды">
+            <button class="vc-btn vc-top" data-view="top" title="Вид сверху (план)">Верх</button>
+            <button class="vc-btn" data-view="left" title="Вид слева, с запада">З</button>
+            <button class="vc-btn vc-iso" data-view="iso" title="Изометрия">Изо</button>
+            <button class="vc-btn" data-view="right" title="Вид справа, с востока">В</button>
+            <button class="vc-btn" data-view="front" title="Вид спереди, с юга">Ю</button>
+            <button class="vc-btn vc-bottom" data-view="bottom" title="Вид снизу">Низ</button>
+            <button class="vc-btn" data-view="back" title="Вид сзади, с севера">С</button>
+            <button class="vc-btn vc-proj" id="vcProjection" title="Проекция: перспектива или ортогональная (параллельная). Для 2D-чертежей и планов нужна ортогональная">Персп</button>
+        </div>
         <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
             <h2>BIM.LVA Composer IFC</h2>
@@ -2540,6 +2598,9 @@
         <button class="ctx-item" id="ctxAddBranch" title="Создать дочернюю пользовательскую ветку под выбранным разделом">＋ Добавить дочернюю ветку</button>
         <button class="ctx-item" id="ctxHide" title="Скрыть геометрию выбранной ветки">👁 Скрыть ветку</button>
         <button class="ctx-item danger" id="ctxDeleteSel" title="Удалить выделенные элементы из сцены и освободить память. Исходный IFC-файл не меняется">🗑 Удалить выделенное из сцены</button>
+        <div class="ctx-divider"></div>
+        <button class="ctx-item" id="ctxReloadFile" title="Перечитать файл с диска, не убирая модель из сцены. Камера и остальные модели остаются на месте">⟳ Обновить модель</button>
+        <button class="ctx-item" id="ctxReloadAll" title="Перечитать все загруженные файлы">⟳ Обновить все модели</button>
         <div class="ctx-divider"></div>
         <button class="ctx-item danger" id="ctxRemoveFile" title="Удалить весь файл, которому принадлежит выбранная ветка, из просмотрщика">✕ Удалить загруженный файл</button>
     </div>
@@ -4035,6 +4096,33 @@
                 }
                 return out;
             },
+            /** Текущая проекция: 'persp' или 'ortho'. */
+            get projection() { return projectionMode; },
+            /** Куда нацелена орбита и где центр выделения — для проверки видов. */
+            get cameraTarget() {
+                return { x: controls.target.x, y: controls.target.y, z: controls.target.z };
+            },
+            get selectionCentre() {
+                if (!selectedItems.length) return null;
+                const box = getSelectionBounds(selectedItems);
+                if (!box || box.isEmpty()) return null;
+                const c = box.getCenter(new THREE.Vector3());
+                return { x: c.x, y: c.y, z: c.z };
+            },
+            /** Начерченные полилинии в абсолютных координатах. */
+            get drawn() {
+                return (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                    .map((r) => ({ kind: r.kind, abs: r.abs, length3d: r.length3d, length2d: r.length2d }));
+            },
+            /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
+            dxfPreview() {
+                return buildDxf(drawnPolylines, coordPins);
+            },
+            /** Единичный вектор «куда смотрит камера» — для проверки видов. */
+            get cameraDir() {
+                const d = controls.target.clone().sub(camera.position).normalize();
+                return { x: d.x, y: d.y, z: d.z };
+            },
             /** До-центрирование сцены: сколько раз и на какой суммарный вектор. */
             get sceneSnap() {
                 return {
@@ -4092,8 +4180,73 @@
         const scene = new THREE.Scene();
         THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
         
-        const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
-        camera.up.set(0, 0, 1);
+        const perspCamera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
+        perspCamera.up.set(0, 0, 1);
+        const orthoCamera = new THREE.OrthographicCamera(-10, 10, 10, -10, -10000, 100000);
+        orthoCamera.up.set(0, 0, 1);
+        // Активная камера подменяется целиком: OrbitControls, лучи, проекция
+        // подписей — все берут её из этой переменной, поэтому переключение
+        // проекции не требует трогать остальной код.
+        let camera = perspCamera;
+        let projectionMode = 'persp';
+
+        /** Видимая высота кадра в метрах на дистанции до цели орбиты. */
+        function currentFrameHeight() {
+            if (projectionMode === 'ortho') return orthoCamera.top - orthoCamera.bottom;
+            const dist = camera.position.distanceTo(controls?.target || new THREE.Vector3());
+            return 2 * Math.max(dist, 0.01) * Math.tan(THREE.MathUtils.degToRad(perspCamera.fov) / 2);
+        }
+
+        function syncOrthoFrustum(height) {
+            const w = Math.max(stage.clientWidth, 1);
+            const h = Math.max(stage.clientHeight, 1);
+            const aspect = w / h;
+            const half = Math.max(height, 0.01) / 2;
+            orthoCamera.top = half;
+            orthoCamera.bottom = -half;
+            orthoCamera.left = -half * aspect;
+            orthoCamera.right = half * aspect;
+            // Ортокамере нужен диапазон и «за спиной», иначе половина модели
+            // отсекается при виде сверху на большой площадке
+            const span = Math.max(lastSceneMaxDim || 10, height) * 50;
+            orthoCamera.near = -span;
+            orthoCamera.far = span;
+            orthoCamera.updateProjectionMatrix();
+        }
+
+        function setProjectionMode(mode) {
+            const next = mode === 'ortho' ? 'ortho' : 'persp';
+            if (next === projectionMode) return;
+            const height = currentFrameHeight();
+            const from = camera;
+            const to = next === 'ortho' ? orthoCamera : perspCamera;
+            to.position.copy(from.position);
+            to.quaternion.copy(from.quaternion);
+            to.up.copy(from.up);
+            projectionMode = next;
+            camera = to;
+            if (next === 'ortho') syncOrthoFrustum(height);
+            else {
+                // Держим тот же охват кадра: отодвигаем на нужную дистанцию
+                const dist = (height / 2) / Math.tan(THREE.MathUtils.degToRad(perspCamera.fov) / 2);
+                const dir = new THREE.Vector3().subVectors(from.position, controls.target);
+                if (dir.lengthSq() < 1e-9) dir.set(0, -1, 0.5);
+                camera.position.copy(controls.target).add(dir.normalize().multiplyScalar(dist));
+                camera.updateProjectionMatrix();
+            }
+            if (controls) {
+                controls.object = camera;
+                controls.update();
+            }
+            const btn = $('vcProjection');
+            if (btn) {
+                btn.textContent = next === 'ortho' ? 'Орто' : 'Персп';
+                btn.classList.toggle('on', next === 'ortho');
+            }
+            applyCameraNear();
+            trackUsage('projection_mode', { mode: next });
+            markNeedsRender();
+        }
 
         const CAMERA_NEAR_STORAGE = 'bimlva_camera_near_v1';
         let lastSceneMaxDim = 10;
@@ -4134,6 +4287,10 @@
 
         function applyCameraNear(maxDim) {
             if (Number.isFinite(maxDim) && maxDim > 0) lastSceneMaxDim = maxDim;
+            if (projectionMode === 'ortho') {
+                syncOrthoFrustum(orthoCamera.top - orthoCamera.bottom);
+                return;
+            }
             const dist = camera.position.distanceTo(controls?.target || camera.position) || lastSceneMaxDim || 10;
             if (cameraNearAuto) {
                 // Раньше near = maxDim/200 на больших моделях давал метры и «съедал» геометрию при зуме.
@@ -5063,9 +5220,9 @@
          * Y-up: ifcWorldOrigin = (E, h, −N), а сцена после поворота — Z-up.
          */
         function currentWorldShiftEN() {
-            const o = ifcWorldOrigin;
-            if (!o) return { e: 0, n: 0, h: 0 };
-            return { e: o.x, n: -o.z, h: o.y };
+            if (!ifcWorldOrigin) return { e: 0, n: 0, h: 0 };
+            const v = worldOriginSceneVec();
+            return { e: v.x, n: v.y, h: v.z };
         }
 
         /**
@@ -5331,6 +5488,183 @@
             labelsList = [];
         }
 
+        /* --- Черчение полилиний ----------------------------------------------
+         * Точки берём тем же лучом, что и пикинг, поэтому линия ложится на
+         * геометрию. Экспорт идёт в АБСОЛЮТНЫХ координатах — файл должен
+         * открыться в Civil 3D там же, где стоит модель, а не у нуля сцены.
+         */
+        let drawMode = false;
+        let drawPoints = [];
+        let drawnPolylines = [];
+        const drawGroup = new THREE.Group();
+        drawGroup.name = 'DrawnPolylines';
+        scene.add(drawGroup);
+        const DRAW_COLOR = 0x1f8f5f;
+        let drawDraft = null;
+
+        function drawKind() {
+            return $('drawModeSelect')?.value === '2d' ? '2d' : '3d';
+        }
+
+        function refreshDrawDraft() {
+            if (drawDraft) {
+                drawGroup.remove(drawDraft);
+                drawDraft.geometry.dispose();
+                drawDraft = null;
+            }
+            if (drawPoints.length < 2) { markNeedsRender(); return; }
+            drawDraft = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(drawPoints),
+                new THREE.LineDashedMaterial({ color: DRAW_COLOR, dashSize: 1.2, gapSize: 0.6, depthTest: false })
+            );
+            drawDraft.computeLineDistances();
+            drawDraft.renderOrder = 998;
+            drawGroup.add(drawDraft);
+            markNeedsRender();
+        }
+
+        function addDrawPoint(worldPoint) {
+            const p = worldPoint.clone();
+            // 2D-полилиния лежит на отметке первой точки: так её и ждут в плане
+            if (drawKind() === '2d' && drawPoints.length) p.z = drawPoints[0].z;
+            drawPoints.push(p);
+            refreshDrawDraft();
+        }
+
+        function finishDrawPolyline() {
+            if (drawPoints.length < 2) {
+                drawPoints = [];
+                refreshDrawDraft();
+                return null;
+            }
+            const kind = drawKind();
+            const pts = drawPoints.slice();
+            const line = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(pts),
+                new THREE.LineBasicMaterial({ color: DRAW_COLOR, depthTest: false })
+            );
+            line.renderOrder = 998;
+            drawGroup.add(line);
+
+            const abs = pts.map(p => {
+                const a = worldPointToAbsoluteXYZ(p) || p.clone();
+                return { x: a.x, y: a.y, z: a.z };
+            });
+            let length3d = 0;
+            let length2d = 0;
+            for (let i = 1; i < pts.length; i++) {
+                length3d += pts[i].distanceTo(pts[i - 1]);
+                length2d += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+            }
+            const record = { kind, abs, object: line, length3d, length2d };
+            drawnPolylines.push(record);
+            drawPoints = [];
+            refreshDrawDraft();
+            updateDrawUi();
+            notify(
+                `Полилиния ${kind.toUpperCase()}: ${pts.length} точек, ` +
+                `L3D ${length3d.toFixed(2)} м · L2D ${length2d.toFixed(2)} м`
+            );
+            trackUsage('draw_polyline', { kind, points: pts.length });
+            return record;
+        }
+
+        function clearDrawnPolylines() {
+            drawnPolylines.forEach(r => {
+                drawGroup.remove(r.object);
+                r.object.geometry.dispose();
+                r.object.material.dispose();
+            });
+            drawnPolylines = [];
+            drawPoints = [];
+            refreshDrawDraft();
+            updateDrawUi();
+        }
+
+        function updateDrawUi() {
+            const btn = $('btnDrawExport');
+            if (btn) btn.disabled = !drawnPolylines.length && !coordPins.length;
+        }
+
+        /**
+         * ASCII DXF R12: HEADER с единицами (метры), TABLES со слоями и ENTITIES.
+         * R12 намеренно: его читают все, включая старые версии Civil и nanoCAD,
+         * а LWPOLYLINE из R13+ там уже не откроется.
+         * Координаты — абсолютные, иначе файл ляжет у нуля, а не на площадке.
+         */
+        function buildDxf(polylines, pins) {
+            const out = [];
+            const g = (code, value) => { out.push(String(code)); out.push(String(value)); };
+            const n = (v) => (Math.round(v * 1e6) / 1e6).toFixed(6);
+
+            g(0, 'SECTION'); g(2, 'HEADER');
+            g(9, '$ACADVER'); g(1, 'AC1009');
+            g(9, '$INSUNITS'); g(70, 6);            // 6 = метры
+            g(9, '$MEASUREMENT'); g(70, 1);          // метрическая
+            g(0, 'ENDSEC');
+
+            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS'];
+            g(0, 'SECTION'); g(2, 'TABLES');
+            g(0, 'TABLE'); g(2, 'LAYER'); g(70, layers.length);
+            layers.forEach((name, i) => {
+                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1][i]); g(6, 'CONTINUOUS');
+            });
+            g(0, 'ENDTAB'); g(0, 'ENDSEC');
+
+            g(0, 'SECTION'); g(2, 'ENTITIES');
+            polylines.forEach((poly) => {
+                const is3d = poly.kind === '3d';
+                const layer = is3d ? 'LVA_3D' : 'LVA_2D';
+                g(0, 'POLYLINE'); g(8, layer); g(66, 1);
+                g(70, is3d ? 8 : 0);                 // 8 = 3D-полилиния
+                g(10, 0); g(20, 0); g(30, is3d ? 0 : n(poly.abs[0].z));
+                poly.abs.forEach((p) => {
+                    g(0, 'VERTEX'); g(8, layer);
+                    g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
+                    if (is3d) g(70, 32);             // вершина 3D-полилинии
+                });
+                g(0, 'SEQEND'); g(8, layer);
+            });
+            pins.forEach((pin) => {
+                g(0, 'POINT'); g(8, 'LVA_POINTS');
+                g(10, n(pin.abs.x)); g(20, n(pin.abs.y)); g(30, n(pin.abs.z));
+            });
+            g(0, 'ENDSEC');
+            g(0, 'EOF');
+            return out.join('\r\n') + '\r\n';
+        }
+
+        function exportDrawingDxf() {
+            if (!drawnPolylines.length && !coordPins.length) {
+                notifyError('Чертить нечего: нет ни полилиний, ни меток.');
+                return;
+            }
+            const text = buildDxf(drawnPolylines, coordPins);
+            const blob = new Blob([text], { type: 'application/dxf' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}.dxf`;
+            a.click();
+            URL.revokeObjectURL(url);
+            notify(
+                `DXF: полилиний ${drawnPolylines.length}, точек ${coordPins.length}. ` +
+                `Координаты мировые, единицы — метры.`
+            );
+            trackUsage('draw_export_dxf', { polylines: drawnPolylines.length, pins: coordPins.length });
+        }
+
+        function setDrawMode(on) {
+            if (!on && drawMode) finishDrawPolyline();
+            drawMode = !!on;
+            $('btnDraw')?.classList.toggle('on', drawMode);
+            if (drawMode) {
+                if (isMeasuring) $('btnMeasure').click();
+                if (coordPinMode) setCoordPinMode(false);
+            }
+            $('stage').style.cursor = drawMode ? 'crosshair' : '';
+        }
+
         /* --- Метки координат -------------------------------------------------
          * Свой слой, не общий с замерами: «Очистить замеры» их не трогает.
          * Числа берём через worldPointToAbsoluteXYZ — тот же путь, что печатает
@@ -5360,6 +5694,7 @@
             pin.dot?.remove();
             pin.leader?.remove();
             renderCoordPinList();
+            updateDrawUi();
             markNeedsRender();
         }
 
@@ -5415,6 +5750,7 @@
 
             trackUsage('coord_pin');
             renderCoordPinList();
+            updateDrawUi();
             markNeedsRender();
             return pin;
         }
@@ -5527,6 +5863,11 @@
         }
 
         $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
+        $('btnDraw')?.addEventListener('click', () => setDrawMode(!drawMode));
+        $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
+        $('drawModeSelect')?.addEventListener('change', () => {
+            if (drawPoints.length) finishDrawPolyline();
+        });
         $('btnCoordPinList')?.addEventListener('click', () => {
             renderCoordPinList();
             $('pinsModal').classList.add('show');
@@ -5734,8 +6075,9 @@
             if (w === 0 || h === 0) return;
             
             renderer.setSize(w, h, true);
-            camera.aspect = w / h; 
-            camera.updateProjectionMatrix();
+            perspCamera.aspect = w / h;
+            perspCamera.updateProjectionMatrix();
+            if (projectionMode === 'ortho') syncOrthoFrustum(orthoCamera.top - orthoCamera.bottom);
             markNeedsRender();
         }
         window.addEventListener('resize', resize);
@@ -6390,6 +6732,119 @@
 
         // --- Загрузка ---
         let loadSourceHint = 'local';
+        /* --- Обновление загруженной модели ----------------------------------
+         * Перечитать файл «по пути» браузер не даёт. Там, где есть
+         * FileSystemFileHandle (перетаскивание в Chrome или выбор через
+         * showOpenFilePicker), обновляем молча; иначе просим выбрать файл —
+         * это всё равно один диалог вместо «удалить и добавить заново».
+         */
+        const pendingFileHandles = new WeakMap();
+
+        async function captureDropHandles(dataTransfer) {
+            if (!dataTransfer?.items) return;
+            const jobs = [...dataTransfer.items].map(async (item) => {
+                if (item.kind !== 'file' || typeof item.getAsFileSystemHandle !== 'function') return;
+                try {
+                    const handle = await item.getAsFileSystemHandle();
+                    if (!handle || handle.kind !== 'file') return;
+                    const file = await handle.getFile();
+                    pendingFileHandles.set(file, handle);
+                    return file;
+                } catch (_) { /* Firefox/Safari — просто не будет тихого обновления */ }
+            });
+            const files = (await Promise.all(jobs)).filter(Boolean);
+            return files.length ? files : null;
+        }
+
+        /** Файл для обновления: сначала handle, потом диалог. */
+        async function resolveReloadFile(mod) {
+            if (mod.sourceHandle?.getFile) {
+                try {
+                    const perm = mod.sourceHandle.queryPermission
+                        ? await mod.sourceHandle.queryPermission({ mode: 'read' })
+                        : 'granted';
+                    if (perm !== 'granted' && mod.sourceHandle.requestPermission) {
+                        const asked = await mod.sourceHandle.requestPermission({ mode: 'read' });
+                        if (asked !== 'granted') throw new Error('нет доступа к файлу');
+                    }
+                    return await mod.sourceHandle.getFile();
+                } catch (error) {
+                    console.warn('[BIM.LVA] handle обновления не сработал:', error);
+                }
+            }
+            const ext = '.' + String(mod.filename || '').split('.').pop().toLowerCase();
+            if (typeof window.showOpenFilePicker === 'function') {
+                try {
+                    const [handle] = await window.showOpenFilePicker({
+                        multiple: false,
+                        types: [{ description: `Файл ${mod.filename}`, accept: { 'application/octet-stream': [ext] } }]
+                    });
+                    if (!handle) return null;
+                    const file = await handle.getFile();
+                    pendingFileHandles.set(file, handle);
+                    return file;
+                } catch (_) { return null; }
+            }
+            return await pickFileViaInput(ext);
+        }
+
+        /** Запасной путь для браузеров без File System Access API. */
+        function pickFileViaInput(accept) {
+            return new Promise(resolve => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = accept;
+                input.style.display = 'none';
+                document.body.appendChild(input);
+                input.addEventListener('change', () => {
+                    const file = input.files?.[0] || null;
+                    input.remove();
+                    resolve(file);
+                }, { once: true });
+                input.click();
+            });
+        }
+
+        async function reloadLoadedModel(modelID, opts = {}) {
+            const mod = loadedModels.get(modelID);
+            if (!mod) return false;
+            if (mod.edited && !opts.silentEdited &&
+                !confirm(`В «${mod.filename}» есть несохранённые правки. Обновить файл и потерять их?`)) {
+                return false;
+            }
+            const file = await resolveReloadFile(mod);
+            if (!file) return false;
+
+            // Камера не должна прыгать — ради этого обновление и делается
+            const camPos = camera.position.clone();
+            const camTarget = controls.target.clone();
+
+            removeLoadedModel(modelID);
+            await handleFiles([file]);
+
+            camera.position.copy(camPos);
+            controls.target.copy(camTarget);
+            controls.update();
+            markNeedsRender();
+            trackUsage('model_reload');
+            return true;
+        }
+
+        async function reloadAllModels() {
+            const list = [...loadedModels.entries()];
+            if (!list.length) return notifyError('Загруженных моделей нет.');
+            let done = 0;
+            let skipped = 0;
+            for (const [modelID, mod] of list) {
+                // Модель могла исчезнуть, пока обновляли предыдущую
+                if (!loadedModels.has(modelID)) continue;
+                const ok = await reloadLoadedModel(modelID, { silentEdited: true });
+                if (ok) done++; else skipped++;
+            }
+            if (done) notify(`Обновлено моделей: ${done}${skipped ? `, пропущено ${skipped}` : ''}`);
+            else notifyError('Ни одна модель не обновлена.');
+        }
+
         async function handleFiles(fileList) {
             const files = fileList ? [...fileList] : [];
             if (!files.length) return;
@@ -6434,6 +6889,7 @@
                 const ext = file.name.split('.').pop().toLowerCase();
                 if (multi) setLoadFileActive(i, file);
                 const before = loadedModels.size;
+                const knownIDs = new Set(loadedModels.keys());
                 showLoader('ЗАГРУЗКА', multi ? '' : file.name);
                 try {
                     if (ext === 'ifc') await loadSingleIFC(file);
@@ -6455,6 +6911,13 @@
                     } else if (ext === 'ply' || ext === 'dae' || ext === '3ds') {
                         skipped.push(`${file.name} (формат снят с поддержки — используйте IFC / DXF / GLB / OBJ / STL)`);
                     } else skipped.push(file.name);
+                    // Запоминаем, откуда файл приехал: с handle его удастся
+                    // перечитать молча, без диалога (кнопка «Обновить модель»).
+                    for (const [id, mod] of loadedModels) {
+                        if (knownIDs.has(id)) continue;
+                        mod.sourceFile = file;
+                        mod.sourceHandle = pendingFileHandles.get(file) || null;
+                    }
                     // Модель прибавилась — значит файл действительно загрузился,
                     // а не просто отработал без исключения (skip тоже не бросает)
                     if (multi) {
@@ -6513,7 +6976,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -6992,6 +7455,39 @@ uniform vec3 uBatchSelColor;
         // Важно: IFC часто в мм, LandXML в метрах — перед origin приводим IFC к метрам.
         const LARGE_COORD_THRESHOLD = 5000; // м от (0,0,0)
         let ifcWorldOrigin = null; // {x,y,z} в метрах (до поворота globalGroup)
+        /**
+         * В каких осях записан ноль сцены. IFC приходит Y-up (E, h, −N) и живёт
+         * под повёрнутым globalGroup; DXF/DWG/FBX/LandXML — сразу Z-up (E, N, h)
+         * в externalGroup. Ноль задаёт ПЕРВАЯ крупная модель, какой бы она ни
+         * была, поэтому систему осей надо помнить, а не предполагать: иначе у
+         * координат меняются местами север и отметка.
+         */
+        let worldOriginFrame = 'ifc';
+
+        /** Ноль сцены в осях сцены (Z-up: восток, север, отметка). */
+        function worldOriginSceneVec() {
+            const o = ifcWorldOrigin;
+            if (!o) return new THREE.Vector3();
+            return worldOriginFrame === 'ifc'
+                ? new THREE.Vector3(o.x, -o.z, o.y)   // R(Y-up) → Z-up
+                : new THREE.Vector3(o.x, o.y, o.z);
+        }
+
+        /** Ноль сцены в осях IFC (Y-up), как его ждут фрагменты web-ifc. */
+        function worldOriginIfcVec() {
+            const o = ifcWorldOrigin;
+            if (!o) return new THREE.Vector3();
+            return worldOriginFrame === 'ifc'
+                ? new THREE.Vector3(o.x, o.y, o.z)
+                : new THREE.Vector3(o.x, o.z, -o.y);  // R⁻¹(Z-up) → Y-up
+        }
+
+        /** Вектор сцены → в осях, в которых записан ноль (для его правки). */
+        function sceneVecToOriginFrame(v) {
+            return worldOriginFrame === 'ifc'
+                ? new THREE.Vector3(v.x, v.z, -v.y)
+                : v.clone();
+        }
         let ifcOriginAutoApplied = false;
         let worldOriginSource = null; // { filename, format }
         let worldOriginLengthUnit = 'm';
@@ -7311,27 +7807,16 @@ uniform vec3 uBatchSelColor;
             const o = ifcWorldOrigin;
             if (!o) return worldPoint.clone();
 
-            let isExternal = false;
-            if (hitObject?.userData?.modelID != null) {
-                const mod = loadedModels.get(hitObject.userData.modelID);
-                isExternal = !!(mod?.isExternal || mod?.isFBX);
-            }
-
-            if (isExternal) {
-                return new THREE.Vector3(
-                    worldPoint.x + o.x,
-                    worldPoint.y + o.y,
-                    worldPoint.z + o.z
-                );
-            }
-
-            const p = worldPoint.clone();
-            globalGroup.worldToLocal(p);
-            // IFC Z-up в сцене: Rx(π/2) → показ как восток · север · отметка (север без «вечного» минуса)
-            const east = p.x + o.x;
-            const north = -(p.z + o.z);
-            const elev = p.y + o.y;
-            return new THREE.Vector3(east, north, elev);
+            // Вся геометрия — и IFC после поворота globalGroup, и внешние
+            // форматы — лежит в одних осях сцены. Значит и пересчёт один, а не
+            // выбирается по тому, во что попал курсор: раньше при промахе мимо
+            // элемента север и отметка менялись местами.
+            const shift = worldOriginSceneVec();
+            return new THREE.Vector3(
+                worldPoint.x + shift.x,
+                worldPoint.y + shift.y,
+                worldPoint.z + shift.z
+            );
         }
 
         // Последние показания держим отдельно от текста: при уходе мыши со сцены
@@ -7677,7 +8162,8 @@ uniform vec3 uBatchSelColor;
             const negCw = centerWorld.clone().negate();
             _snapStats.count++;
             _snapStats.total.add(negCw);
-            const ifcShift = shiftLoadedModelsByWorldVector(negCw);
+            shiftLoadedModelsByWorldVector(negCw);
+            const ifcShift = sceneVecToOriginFrame(negCw);
             // Геометрия уехала на +ifcShift — ноль сцены обязан уехать на −ifcShift.
             // Без этого до-центрирование (оно срабатывает на «Вписать» и после
             // загрузки второго файла) молча смещает ВСЕ абсолютные координаты на
@@ -7699,6 +8185,15 @@ uniform vec3 uBatchSelColor;
             }
             // Метки координат живут в сцене, а не в модели: без этого сдвига
             // они остались бы на старом месте и стали бы врать.
+            // Начерченное живёт в координатах сцены — двигаем вместе с моделями.
+            // Абсолютные координаты в записях пересчитывать не надо: они сняты
+            // при создании и от сдвига сцены не зависят.
+            drawnPolylines.forEach(r => {
+                r.object.geometry.translate(negCw.x, negCw.y, negCw.z);
+                r.object.geometry.computeBoundingSphere();
+            });
+            drawPoints.forEach(p => p.add(negCw));
+            refreshDrawDraft();
             coordPins.forEach(pin => {
                 pin.pos.add(negCw);
                 pin.abs = worldPointToAbsoluteXYZ(pin.pos) || pin.abs;
@@ -7740,7 +8235,7 @@ uniform vec3 uBatchSelColor;
             }
         }
 
-        function setWorldOriginFromFirstModel(center, sourceMeta = {}) {
+        function setWorldOriginFromFirstModel(center, sourceMeta = {}, frame = 'ifc') {
             if (ifcWorldOrigin || !center) return false;
             const mag = typeof center.length === 'function'
                 ? center.length()
@@ -7751,6 +8246,7 @@ uniform vec3 uBatchSelColor;
                 y: center.y,
                 z: center.z
             };
+            worldOriginFrame = frame;
             ifcOriginAutoApplied = true;
             worldOriginSource = {
                 filename: sourceMeta.filename || sourceMeta.name || '',
@@ -7828,13 +8324,10 @@ uniform vec3 uBatchSelColor;
                 geoRasterGroup.position.set(0, 0, 0);
                 return;
             }
-            // IFC (x,y,z) под globalGroup.rotation.x = π/2 → сцена (x, -z, y)
-            // Вершины сдвинуты на -origin в IFC → растр (уже в сцене) сдвигаем на -R(origin)
-            geoRasterGroup.position.set(
-                -ifcWorldOrigin.x,
-                ifcWorldOrigin.z,
-                -ifcWorldOrigin.y
-            );
+            // Растр живёт прямо в сцене, поэтому сдвигаем его на минус ноль
+            // сцены — в осях сцены, какой бы файл этот ноль ни задал.
+            const v = worldOriginSceneVec();
+            geoRasterGroup.position.set(-v.x, -v.y, -v.z);
         }
 
         function updateCrsAutoUi() {
@@ -7899,17 +8392,12 @@ uniform vec3 uBatchSelColor;
             if (!center) return false;
 
             if (!ifcWorldOrigin) {
-                if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
+                if (!setWorldOriginFromFirstModel(center, sourceMeta, 'ifc')) return false;
             } else if (center.length() < LARGE_COORD_THRESHOLD) {
                 return false;
             }
 
-            const origin = new THREE.Vector3(
-                ifcWorldOrigin.x,
-                ifcWorldOrigin.y,
-                ifcWorldOrigin.z
-            );
-            subtractVectorFromFragmentVertices(fragments, origin);
+            subtractVectorFromFragmentVertices(fragments, worldOriginIfcVec());
             return true;
         }
 
@@ -7940,12 +8428,13 @@ uniform vec3 uBatchSelColor;
             }
 
             if (!ifcWorldOrigin) {
-                if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
+                // Внешние форматы уже в осях сцены — так ноль и запоминаем
+                if (!setWorldOriginFromFirstModel(center, sourceMeta, 'scene')) return false;
             } else if (center.length() < LARGE_COORD_THRESHOLD) {
                 return false;
             }
 
-            const o = ifcWorldOrigin;
+            const o = worldOriginSceneVec();
             root.traverse(obj => {
                 if (!obj.geometry?.attributes?.position) return;
                 obj.geometry.translate(-o.x, -o.y, -o.z);
@@ -7963,6 +8452,7 @@ uniform vec3 uBatchSelColor;
 
         function resetIfcWorldOrigin() {
             ifcWorldOrigin = null;
+            worldOriginFrame = 'ifc';
             ifcOriginAutoApplied = false;
             worldOriginSource = null;
             worldOriginLengthUnit = 'm';
@@ -11889,6 +12379,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (validHits.length === 0) { 
                 if (!isMeasuring && !coordPinMode) selectMultiple([]); 
                 return; 
+            }
+
+            // ЧЕРЧЕНИЕ
+            if (drawMode) {
+                addDrawPoint(validHits[0].point);
+                return;
             }
 
             // МЕТКА КООРДИНАТ
@@ -17002,7 +17498,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -17200,7 +17696,7 @@ ${componentXml || '    '}
             }
         }
 
-        function frameBox(box) {
+        function frameBox(box, viewDir = null) {
             if (!box || box.isEmpty()) return;
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
@@ -17209,12 +17705,18 @@ ${componentXml || '    '}
             const dist = (maxDim / (2 * Math.tan(fov / 2))) * 1.45;
             const aspect = Math.max(camera.aspect || 1, 0.05);
             const distFit = Math.max(dist, (maxDim / (2 * Math.tan(fov / 2) * aspect)) * 1.45);
-            const dir = new THREE.Vector3(1, -1, 0.85).normalize();
+            const dir = (viewDir ? viewDir.clone() : new THREE.Vector3(1, -1, 0.85)).normalize();
             controls.target.copy(center);
             camera.position.copy(center).add(dir.multiplyScalar(distFit));
+            // Строго сверху/снизу «верх» по оси Z вырождается — берём север
             camera.up.set(0, 0, 1);
+            if (Math.abs(dir.z) > 0.999) camera.up.set(0, 1, 0);
             applyCameraNear(maxDim);
-            camera.far = Math.max(maxDim * 40, camera.far, 1000);
+            if (projectionMode === 'ortho') {
+                syncOrthoFrustum(maxDim * 1.15);
+            } else {
+                camera.far = Math.max(maxDim * 40, camera.far, 1000);
+            }
             camera.updateProjectionMatrix();
             syncOrbitControlsFromCamera();
         }
@@ -17501,6 +18003,12 @@ ${componentXml || '    '}
 
         window.addEventListener('keydown', event => {
             if (event.target.closest('input, textarea, select, .editInput')) return;
+            if (event.key === 'Escape' && drawMode) {
+                event.preventDefault();
+                if (drawPoints.length) finishDrawPolyline();
+                else setDrawMode(false);
+                return;
+            }
             if (event.key === 'f' || event.key === 'F' || event.key === 'а' || event.key === 'А') {
                 if (!selectedItems.length) return;
                 event.preventDefault();
@@ -17540,6 +18048,41 @@ ${componentXml || '    '}
             }
         });
 
+        /**
+         * Стандартные виды. Сцена Z-up (X — восток, Y — север, Z — отметка),
+         * поэтому «сверху» — это взгляд вдоль −Z, «спереди» — с юга на север.
+         */
+        const STANDARD_VIEWS = Object.freeze({
+            top: { dir: [0, 0, 1], label: 'Сверху' },
+            bottom: { dir: [0, 0, -1], label: 'Снизу' },
+            front: { dir: [0, -1, 0], label: 'Спереди (с юга)' },
+            back: { dir: [0, 1, 0], label: 'Сзади (с севера)' },
+            left: { dir: [-1, 0, 0], label: 'Слева (с запада)' },
+            right: { dir: [1, 0, 0], label: 'Справа (с востока)' },
+            iso: { dir: [1, -1, 0.85], label: 'Изометрия' }
+        });
+
+        function setStandardView(name) {
+            const view = STANDARD_VIEWS[name];
+            if (!view) return;
+            ensureSceneContentNearOrigin();
+            globalGroup.updateWorldMatrix(true, true);
+            externalGroup.updateWorldMatrix(true, true);
+            const box = selectedItems.length
+                ? (getSelectionBounds(selectedItems) || getSceneContentBox())
+                : getSceneContentBox();
+            if (!box || box.isEmpty()) {
+                notifyError('Сначала загрузите модель.');
+                return;
+            }
+            frameBox(box, new THREE.Vector3(...view.dir));
+            document.querySelectorAll('#viewCube .vc-btn').forEach(b => {
+                b.classList.toggle('on', b.dataset.view === name);
+            });
+            trackUsage('standard_view', { view: name });
+            markNeedsRender();
+        }
+
         function fitView() {
             ensureSceneContentNearOrigin();
             globalGroup.updateWorldMatrix(true, true);
@@ -17565,6 +18108,16 @@ ${componentXml || '    '}
             scene.add(grid);
             markNeedsRender();
         }
+
+        $('viewCube')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('.vc-btn');
+            if (!btn) return;
+            if (btn.id === 'vcProjection') {
+                setProjectionMode(projectionMode === 'ortho' ? 'persp' : 'ortho');
+                return;
+            }
+            setStandardView(btn.dataset.view);
+        });
 
         $('fit').addEventListener('click', () => {
             clearViewHashFromUrl();
@@ -17646,6 +18199,8 @@ ${componentXml || '    '}
             measureVisuals.clear(); 
             clearCoordPins();
             setCoordPinMode(false);
+            setDrawMode(false);
+            clearDrawnPolylines();
             labelsContainer.innerHTML = ''; 
             labelsList = [];
             appearanceDraftTexture = null;
@@ -17663,7 +18218,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -18798,10 +19353,13 @@ ${componentXml || '    '}
             e.preventDefault(); 
             stage.classList.remove('dragover'); 
         }));
-        stage.addEventListener('drop', e => {
+        stage.addEventListener('drop', async e => {
             // rvt/rfa/rte пропускаем дальше намеренно: пусть диспетчер объяснит,
             // почему Revit не открыть, вместо молчаливого отсева.
-            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|rvt|rfa|rte)$/i.test(f.name));
+            const SUPPORTED = /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|rvt|rfa|rte)$/i;
+            // Через handle тот же файл потом можно перечитать без диалога
+            const viaHandles = await captureDropHandles(e.dataTransfer);
+            const files = (viaHandles || Array.from(e.dataTransfer.files)).filter(f => SUPPORTED.test(f.name));
             if (files.length) {
                 loadSourceHint = 'drag_drop';
                 handleFiles(files).finally(() => { loadSourceHint = 'local'; });
@@ -18921,6 +19479,32 @@ ${componentXml || '    '}
         $('ctxAddBranch').addEventListener('click', () => {
             if (!treeContextRow) return;
             openBranchModalForRow(treeContextRow);
+        });
+
+        /** modelID по строке дерева, на которой открыли контекстное меню. */
+        function modelIDFromContextRow() {
+            const fileRoot = treeContextRow && treeContextRow.closest('.file-root');
+            const fileRow = fileRoot && fileRoot.firstElementChild;
+            if (!fileRow || fileRow.dataset.mid === undefined) return null;
+            const raw = fileRow.dataset.mid;
+            return isNaN(raw) ? raw : parseInt(raw, 10);
+        }
+
+        $('ctxReloadFile').addEventListener('click', async () => {
+            const modelID = modelIDFromContextRow();
+            treeContextRow = null;
+            if (modelID === null || !loadedModels.has(modelID)) {
+                notifyError('Не удалось определить загруженный файл для этой ветки.');
+                return;
+            }
+            const name = loadedModels.get(modelID).filename;
+            const ok = await reloadLoadedModel(modelID);
+            if (ok) notify(`Модель обновлена: ${name}`);
+        });
+
+        $('ctxReloadAll').addEventListener('click', async () => {
+            treeContextRow = null;
+            await reloadAllModels();
         });
 
         $('ctxRemoveFile').addEventListener('click', () => {
@@ -20437,7 +21021,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: 'bd97f2e-preview',
+            buildId: '0fa1040-preview',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

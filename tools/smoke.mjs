@@ -325,6 +325,30 @@ async function checkViewCube(page) {
     }
     await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
 
+    // Ортогональная проекция: камера подменяется целиком, поэтому проверяем не
+    // флаг, а что после переключения по сцене всё ещё можно попасть кликом —
+    // луч в орто строится иначе, и здесь это ломается в первую очередь.
+    await page.evaluate(() => document.getElementById('vcProjection').click());
+    const mode = await page.evaluate(() => window.BimLvaDebug.projection);
+    if (mode !== 'ortho') problems.push(`проекция не переключилась: ${mode}`);
+
+    const box = await page.locator('#stage canvas').boundingBox();
+    let pickedInOrtho = false;
+    for (const [dx, dy] of [[0, 0], [0.08, 0.05], [-0.08, -0.05], [0.15, -0.1]]) {
+        await page.mouse.click(box.x + box.width * (0.5 + dx), box.y + box.height * (0.5 + dy));
+        pickedInOrtho = await page
+            .waitForFunction(() => /ExpressID/i.test(document.querySelector('#props')?.textContent || ''),
+                { timeout: 1200 })
+            .then(() => true).catch(() => false);
+        if (pickedInOrtho) break;
+    }
+    if (!pickedInOrtho) problems.push('в ортогональной проекции клик перестал выделять элементы');
+
+    await page.evaluate(() => document.getElementById('vcProjection').click());
+    const back = await page.evaluate(() => window.BimLvaDebug.projection);
+    if (back !== 'persp') problems.push(`проекция не вернулась в перспективу: ${back}`);
+    await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
+
     return views;
 }
 
@@ -724,7 +748,11 @@ async function main() {
     });
     page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`));
     page.on('requestfailed', (req) => {
-        const line = `${req.url()} — ${req.failure()?.errorText}`;
+        const reason = req.failure()?.errorText || '';
+        // ERR_ABORTED — запрос отменили (закрыли панель, ушли со страницы), это
+        // не битый ресурс. Проверка ловит отсутствующие файлы, а не отмены.
+        if (/ERR_ABORTED/i.test(reason)) return;
+        const line = `${req.url()} — ${reason}`;
         (isLocal(req.url(), port) ? problems : external).push(`запрос не удался: ${line}`);
     });
     page.on('response', (res) => {
@@ -848,7 +876,7 @@ async function main() {
             `мировая X ${draw.x.toFixed(2)}`
         );
     }
-    if (viewCube) console.log('видовой куб: 6 стандартных видов встали по осям');
+    if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');
     if (reload) {
         console.log(
             `обновление: «${reload.was}» → «${reload.now}», ` +
