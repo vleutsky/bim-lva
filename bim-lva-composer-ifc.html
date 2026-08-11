@@ -4214,6 +4214,25 @@
                 return (typeof coordPins !== 'undefined' ? coordPins : [])
                     .map((p) => ({ x: p.pos.x, y: p.pos.y, z: p.pos.z }));
             },
+            /** Сдвинуть модель (для проверки возврата по мировым координатам). */
+            nudgeModel(fileRe, dx, dy, dz) {
+                const re = new RegExp(fileRe, 'i');
+                for (const mod of loadedModels.values()) {
+                    if (!re.test(mod.filename || '') || !mod.group) continue;
+                    mod.group.position.add(new THREE.Vector3(dx, dy, dz));
+                    mod.group.updateWorldMatrix(true, true);
+                    return true;
+                }
+                return false;
+            },
+            /** Вернуть модель на её мировой габарит. */
+            snapToWorld(fileRe) {
+                const re = new RegExp(fileRe, 'i');
+                for (const [id, mod] of loadedModels) {
+                    if (re.test(mod.filename || '')) return !!snapModelToWorldExtents(id);
+                }
+                return false;
+            },
             /** Точка сцены → абсолютные east/north/высота, как их печатает статус-бар. */
             absoluteAt(x, y, z) {
                 const abs = worldPointToAbsoluteXYZ(new THREE.Vector3(x, y, z));
@@ -4239,7 +4258,7 @@
                 const out = [];
                 for (const mod of (typeof loadedModels !== 'undefined' ? loadedModels.values() : [])) {
                     if (!mod.absExtents) continue;
-                    out.push({ file: mod.filename || '', ...mod.absExtents });
+                    out.push({ file: mod.filename || '', rebase: mod.coordRebase || '', ...mod.absExtents });
                 }
                 return out;
             }
@@ -8865,6 +8884,44 @@ uniform vec3 uBatchSelColor;
                 `X ${o.x.toFixed(2)} · Y ${o.y.toFixed(2)} · Z ${o.z.toFixed(2)} м${src}`;
         }
 
+        /**
+         * Поставить файл на его мировые координаты.
+         *
+         * Габарит снят при загрузке, ДО вычитания нуля сцены, поэтому он знает,
+         * где файл должен быть. Разницу между «где лежит сейчас» и «где должен»
+         * прикладываем к группе модели. Оси сцены и абсолютные совпадают
+         * (восток, север, отметка), поэтому вектор переносится как есть.
+         */
+        function snapModelToWorldExtents(modelID) {
+            const mod = loadedModels.get(modelID);
+            if (!mod?.absExtents || !mod.group) return null;
+            const a = mod.absExtents;
+            const want = new THREE.Vector3(
+                (a.e.min + a.e.max) / 2,
+                (a.n.min + a.n.max) / 2,
+                (a.h.min + a.h.max) / 2
+            );
+            mod.group.updateWorldMatrix(true, true);
+            const box = new THREE.Box3().setFromObject(mod.group);
+            if (box.isEmpty()) return null;
+            const nowAbs = worldPointToAbsoluteXYZ(box.getCenter(new THREE.Vector3()));
+            const delta = want.clone().sub(nowAbs);
+            // delta посчитана в осях сцены, а position живёт в осях РОДИТЕЛЯ:
+            // у IFC это повёрнутый globalGroup, и без пересчёта сдвиг уходит
+            // не туда. У внешних моделей поворота нет и пересчёт ничего не меняет.
+            const local = delta.clone();
+            if (mod.group.parent) {
+                const q = new THREE.Quaternion();
+                mod.group.parent.getWorldQuaternion(q).invert();
+                local.applyQuaternion(q);
+            }
+            mod.group.position.add(local);
+            mod.coordRebase = 'shared';
+            mod.group.updateWorldMatrix(true, true);
+            markNeedsRender();
+            return delta;
+        }
+
         /** Таблица «файл → мировой габарит» для сверки с Civil 3D. */
         function updateCrsExtentsUi() {
             const block = $('crsExtentsBlock');
@@ -8878,6 +8935,11 @@ uniform vec3 uBatchSelColor;
             }
             block.style.display = '';
             const range = (r) => `${r.min.toFixed(2)} … ${r.max.toFixed(2)}`;
+            const REBASE_LABEL = {
+                shared: 'вычтен общий ноль сцены — координаты сохранены',
+                self: 'ПОСАЖЕН В СВОЙ ЦЕНТР — мировые координаты потеряны',
+                none: 'без сдвига'
+            };
             const frag = document.createDocumentFragment();
             rows.forEach(mod => {
                 const wrap = document.createElement('div');
@@ -8893,7 +8955,27 @@ uniform vec3 uBatchSelColor;
                 const a = mod.absExtents;
                 val.textContent =
                     `X ${range(a.e)} м\nY ${range(a.n)} м\nZ ${range(a.h)} м`;
-                wrap.append(name, val);
+                const how = document.createElement('div');
+                how.className = 'v';
+                how.style.marginTop = '2px';
+                how.style.color = mod.coordRebase === 'self' ? '#b3261e' : '';
+                how.textContent = REBASE_LABEL[mod.coordRebase] || '—';
+
+                const fix = document.createElement('button');
+                fix.className = 'btn';
+                fix.style.marginTop = '4px';
+                fix.textContent = '⇲ Поставить по мировым координатам';
+                fix.title = 'Сдвинуть файл так, чтобы он встал на габарит, снятый при загрузке';
+                fix.addEventListener('click', () => {
+                    const d = snapModelToWorldExtents(mod.modelID);
+                    if (!d) return notifyError('Нет мирового габарита у этого файла.');
+                    notify(
+                        `${mod.filename}: сдвинут на ${d.length().toFixed(2)} м ` +
+                        `(${d.x.toFixed(2)} / ${d.y.toFixed(2)} / ${d.z.toFixed(2)})`
+                    );
+                    updateCrsExtentsUi();
+                });
+                wrap.append(name, val, how, fix);
                 frag.appendChild(wrap);
             });
             list.replaceChildren(frag);
@@ -9481,10 +9563,30 @@ uniform vec3 uBatchSelColor;
                     await new Promise(r => setTimeout(r, 10));
                 }
                 bakeFragmentTransformsIntoGeometry(fragments);
+                modData.coordRebase = rebased ? 'shared' : 'self';
                 if (!rebased) {
-                    // Запоминаем вычтенный центр: это база для «поставить по координатам»
+                    // Файл не привязался к общему нулю и садится в СВОЙ центр —
+                    // мировые координаты у него после этого теряются. Раньше это
+                    // происходило молча, и модель просто оказывалась «не там».
                     const centered = forceCenterFragmentsNearOrigin(fragments);
                     if (centered) modData.coordOrigin = { x: centered.x, y: centered.y, z: centered.z };
+                    else modData.coordRebase = 'none';
+                    if (modData.coordRebase === 'self' && modData.absExtents) {
+                        const ax = modData.absExtents;
+                        const mag = Math.hypot(
+                            (ax.e.min + ax.e.max) / 2,
+                            (ax.n.min + ax.n.max) / 2,
+                            (ax.h.min + ax.h.max) / 2
+                        );
+                        if (mag >= LARGE_COORD_THRESHOLD) {
+                            notify(
+                                `${file.name}: файл геопривязан (центр ≈ ${Math.round(mag)} м от нуля), ` +
+                                `но к общему нулю сводки не привязался и поставлен в свой центр. ` +
+                                `В сводке он окажется не на месте — «Анализ → CRS» покажет его габарит.`,
+                                'error'
+                            );
+                        }
+                    }
                 }
 
                 if (fragments.length >= IFC_BATCH_THRESHOLD) {
@@ -21791,7 +21893,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: '7e2bd9c',
+            buildId: 'a9bee92',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

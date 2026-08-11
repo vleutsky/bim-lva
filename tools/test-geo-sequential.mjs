@@ -109,6 +109,16 @@ try {
             `проверка вхолостую, поправьте фикстуры`
         );
     }
+    // Каждый файл обязан вычесть ОБЩИЙ ноль. Если какой-то посажен в свой
+    // центр, он встанет «в кучу» у нуля сцены — именно так модель и уезжает.
+    const rebases = await page.evaluate(() =>
+        window.BimLvaDebug.modelAbsExtents.map((m) => ({ file: m.file, rebase: m.rebase })));
+    rebases.forEach((r) => {
+        console.log(`${r.file}: ${r.rebase}`);
+        if (r.rebase !== 'shared') {
+            problems.push(`${r.file}: посажен в свой центр (${r.rebase}) вместо общего нуля`);
+        }
+    });
     bounds = await page.evaluate(() => window.BimLvaDebug.modelBounds);
 
     if (!bounds) {
@@ -137,6 +147,34 @@ try {
             }
         }
     }
+    // «Поставить по мировым координатам»: нарочно сдвигаем модель и проверяем,
+    // что кнопка возвращает её на место — это ручной выход, если файл всё-таки
+    // сел не туда.
+    const fixed = await page.evaluate(() => {
+        const dbg = window.BimLvaDebug;
+        const before = dbg.modelBounds.find((m) => /seq-bld\.ifc$/i.test(m.file));
+        const absBefore = dbg.absoluteAt(before.centerX, before.centerY, before.centerZ);
+        dbg.nudgeModel(/seq-bld\.ifc$/i.source, 37, -14, 9);
+        const moved = dbg.modelBounds.find((m) => /seq-bld\.ifc$/i.test(m.file));
+        const absMoved = dbg.absoluteAt(moved.centerX, moved.centerY, moved.centerZ);
+        dbg.snapToWorld(/seq-bld\.ifc$/i.source);
+        const after = dbg.modelBounds.find((m) => /seq-bld\.ifc$/i.test(m.file));
+        const absAfter = dbg.absoluteAt(after.centerX, after.centerY, after.centerZ);
+        return { absBefore, absMoved, absAfter };
+    });
+    const drift = Math.hypot(
+        fixed.absMoved.e - fixed.absBefore.e,
+        fixed.absMoved.n - fixed.absBefore.n,
+        fixed.absMoved.h - fixed.absBefore.h
+    );
+    const back = Math.hypot(
+        fixed.absAfter.e - fixed.absBefore.e,
+        fixed.absAfter.n - fixed.absBefore.n,
+        fixed.absAfter.h - fixed.absBefore.h
+    );
+    console.log(`сдвинули на ${drift.toFixed(2)} м, после «по мировым координатам» осталось ${back.toFixed(3)} м`);
+    if (drift < 1) problems.push('модель не удалось сдвинуть — проверка вхолостую');
+    if (back > 0.05) problems.push(`возврат по мировым координатам промахнулся на ${back.toFixed(2)} м`);
 } catch (error) {
     problems.push('исключение: ' + (error?.message || error));
 } finally {
