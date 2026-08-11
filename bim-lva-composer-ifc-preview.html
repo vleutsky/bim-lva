@@ -2375,7 +2375,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 15b3534</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d9d7332</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -4202,6 +4202,8 @@
             get snap() { return lastSnap ? { ...lastSnap } : null; },
             /** Текущая проекция: 'persp' или 'ortho'. */
             get projection() { return projectionMode; },
+            /** Видимая высота кадра ортокамеры (м) — для проверки зума колесом. */
+            get orthoFrustumHeight() { return orthoCamera.top - orthoCamera.bottom; },
             /** Куда нацелена орбита и где центр выделения — для проверки видов. */
             get cameraTarget() {
                 return { x: controls.target.x, y: controls.target.y, z: controls.target.z };
@@ -19020,6 +19022,14 @@ ${componentXml || '    '}
             camera.position.copy(point).add(camOffset.multiplyScalar(factor));
             controls.target.copy(point).add(targetOffset.multiplyScalar(factor));
 
+            // У ортокамеры масштаб задаёт только фрустум (top/bottom/left/right) —
+            // расстояние камеры до цели на параллельной проекции ни на что не влияет.
+            // Без этого колесо двигало камеру вбок (к точке под курсором), а видимый
+            // масштаб не менялся вовсе — выглядело как смещение по XY вместо зума.
+            if (projectionMode === 'ortho') {
+                syncOrthoFrustum((orthoCamera.top - orthoCamera.bottom) * factor);
+            }
+
             const dist = camera.position.distanceTo(controls.target);
             if (dist < 0.05) {
                 const dir = camOffset.lengthSq() > 0 ? camOffset.normalize() : new THREE.Vector3(0, -1, 0);
@@ -22096,7 +22106,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: '15b3534-preview',
+            buildId: 'd9d7332-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

@@ -473,9 +473,27 @@ async function checkViewCube(page) {
     }
     if (!pickedInOrtho) problems.push('в ортогональной проекции клик перестал выделять элементы');
 
-    await page.evaluate(() => document.getElementById('vcProjection').click());
+    // Колесо в орто должно зумить (менять фрустум), а не таскать камеру вбок —
+    // раньше дальность камеры до цели двигалась, а параллельная проекция от
+    // неё не зависит, и выглядело как смещение по XY вместо приближения.
+    // Мы уже в орто-режиме (переключились выше перед проверкой пикинга).
+    const orthoBefore = await page.evaluate(() => window.BimLvaDebug.orthoFrustumHeight);
+    const stageBox = await page.locator('#stage canvas').boundingBox();
+    await page.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + stageBox.height / 2);
+    await page.mouse.wheel(0, -400);
+    await page.waitForTimeout(150);
+    const orthoAfter = await page.evaluate(() => window.BimLvaDebug.orthoFrustumHeight);
+    if (!(orthoAfter < orthoBefore * 0.98)) {
+        problems.push(
+            `колесо в орто не зумит: высота кадра ${orthoBefore.toFixed(2)} → ${orthoAfter.toFixed(2)} м`
+        );
+    }
+
     const back = await page.evaluate(() => window.BimLvaDebug.projection);
-    if (back !== 'persp') problems.push(`проекция не вернулась в перспективу: ${back}`);
+    if (back !== 'ortho') problems.push(`проекция неожиданно переключилась: ${back}`);
+    await page.evaluate(() => document.getElementById('vcProjection').click());
+    const backPersp = await page.evaluate(() => window.BimLvaDebug.projection);
+    if (backPersp !== 'persp') problems.push(`проекция не вернулась в перспективу: ${backPersp}`);
     await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
 
     return views;

@@ -446,6 +446,18 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
 - Оси: web-ifc отдаёт геометрию в **Y-up** (E, h, −N), `globalGroup.rotation.x
   = π/2` разворачивает её в сцену **Z-up** (E, N, h). `ifcWorldOrigin` хранится
   в Y-up-системе — отсюда `currentWorldShiftEN()`.
+- **Зум колесом в орто-проекции двигал камеру вбок вместо приближения.**
+  `zoomCameraTowardPoint()` — это дольли: камера физически едет к точке под
+  курсором, и для перспективы это и есть зум. У ортокамеры масштаб задаёт
+  только фрустум (`orthoCamera.top/bottom/left/right` в `syncOrthoFrustum()`),
+  расстояние до цели на параллельную проекцию не влияет вообще. Дольли-код
+  всё равно исполнялся и двигал `camera.position`/`controls.target` к точке —
+  визуально это чистый снос по XY без единого пикселя зума. Починка: в
+  `zoomCameraTowardPoint()` при `projectionMode === 'ortho'` дополнительно
+  зовём `syncOrthoFrustum(текущая_высота × factor)` — тем же `factor`, что и
+  для дольли, поэтому направление (колесо вверх = приближение) не разъезжается
+  между проекциями. Закреплено в `npm run smoke` (`checkViewCube`):
+  `BimLvaDebug.orthoFrustumHeight` до/после `page.mouse.wheel()`.
 
 ---
 
