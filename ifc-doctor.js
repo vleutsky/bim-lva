@@ -26,6 +26,7 @@
     const barFill = bar ? bar.querySelector('i') : null;
     const out = $('ifcdOut');
     const actions = $('ifcdActions');
+    const btnChain = $('ifcdChain');
 
     const CHUNK = 8 * 1024 * 1024;
     // Заголовок и привязка — сущностей мало, храним целиком; координаты — только счёт.
@@ -44,6 +45,8 @@
     ]);
 
     let busy = false;
+    let lastFile = null;
+    let lastUnitScale = 1;
 
     function setProgress(frac) {
         if (!bar || !barFill) return;
@@ -278,6 +281,295 @@
         return L.join('\n');
     }
 
+    /* --- Цепочка размещения (IfcLocalPlacement) ------------------------------
+     * «Мировой габарит» и «Диагностика» показывают, ЧТО лежит в файле, но не
+     * ГДЕ именно теряется мировая привязка, если вьювер сажает файл в свой
+     * центр. Здесь — второй, отдельный проход по файлу: строится индекс всех
+     * IfcLocalPlacement / IfcAxis2Placement3D / IfcCartesianPoint / IfcDirection,
+     * а затем для IfcSite и для одного типового элемента цепочка
+     * PlacementRelTo проходится до корня с накоплением мировых координат на
+     * каждом шаге. Если у элемента цепочка обрывается раньше site (пустой
+     * PlacementRelTo) или просто не доходит до тех же больших чисел — вот он,
+     * разрыв, и видно, на каком уровне.
+     *
+     * Отдельный проход, а не совмещённый с основным: индекс из всех точек и
+     * направлений файла — это может быть сотни тысяч записей, и держать его
+     * при каждом обычном разборе незачем.
+     */
+    const PLACEMENT_TYPES = new Set([
+        'IFCLOCALPLACEMENT', 'IFCAXIS2PLACEMENT3D', 'IFCCARTESIANPOINT', 'IFCDIRECTION'
+    ]);
+    // Любой IfcProduct: GlobalId, OwnerHistory, Name, Description, ObjectType,
+    // ObjectPlacement, Representation — ObjectPlacement всегда 6-й параметр
+    // (индекс 5), это фиксировано схемой IFC4 и не зависит от подтипа.
+    const PRODUCT_TYPE_RE = new RegExp(
+        '^IFC(WALL|WALLSTANDARDCASE|SLAB|COLUMN|BEAM|COVERING|FOOTING|MEMBER|PLATE|' +
+        'RAILING|ROOF|STAIR|STAIRFLIGHT|RAMP|RAMPFLIGHT|DOOR|WINDOW|' +
+        'BUILDINGELEMENTPROXY|BUILDINGELEMENTPART|FURNISHINGELEMENT|' +
+        'FLOWSEGMENT|FLOWFITTING|FLOWTERMINAL|FLOWCONTROLLER|DISTRIBUTIONELEMENT|' +
+        'PIPESEGMENT|PIPEFITTING|DUCTSEGMENT|DUCTFITTING|' +
+        'CABLECARRIERSEGMENT|CABLESEGMENT|SPACE|CURTAINWALL|CHIMNEY|PILE)$'
+    );
+
+    /** Текст между парной парой скобок начиная с позиции '(' — глубина считается посимвольно. */
+    function extractParen(text, parenStart) {
+        let depth = 0;
+        for (let i = parenStart; i < text.length; i++) {
+            const c = text[i];
+            if (c === '(') depth++;
+            else if (c === ')') {
+                depth--;
+                if (depth === 0) return text.slice(parenStart + 1, i);
+            }
+        }
+        return null;
+    }
+
+    /** Разбор списка параметров STEP-сущности по запятым верхнего уровня. */
+    function splitTopLevelArgs(s) {
+        const out = [];
+        let depth = 0;
+        let inStr = false;
+        let cur = '';
+        for (let i = 0; i < s.length; i++) {
+            const c = s[i];
+            if (inStr) {
+                cur += c;
+                if (c === "'") {
+                    if (s[i + 1] === "'") cur += s[++i];   // '' — экранированная кавычка внутри строки
+                    else inStr = false;
+                }
+                continue;
+            }
+            if (c === "'") { inStr = true; cur += c; continue; }
+            if (c === '(') { depth++; cur += c; continue; }
+            if (c === ')') { depth--; cur += c; continue; }
+            if (c === ',' && depth === 0) { out.push(cur); cur = ''; continue; }
+            cur += c;
+        }
+        out.push(cur);
+        return out.map((x) => x.trim());
+    }
+
+    function refId(tok) {
+        if (!tok) return null;
+        const m = /^#(\d+)$/.exec(tok.trim());
+        return m ? Number(m[1]) : null;
+    }
+
+    function parseVec(tok) {
+        if (!tok) return null;
+        const inner = tok.trim().replace(/^\(/, '').replace(/\)$/, '');
+        const parts = inner.split(',').map((s) => Number(s.trim()));
+        return parts.every(Number.isFinite) && parts.length ? parts : null;
+    }
+
+    function scanPlacementChunk(text, idx) {
+        const entity = /#(\d+)\s*=\s*([A-Z0-9_]+)\s*\(/g;
+        let m;
+        while ((m = entity.exec(text)) !== null) {
+            const id = Number(m[1]);
+            const type = m[2];
+            const parenStart = entity.lastIndex - 1;
+
+            if (PLACEMENT_TYPES.has(type)) {
+                const inner = extractParen(text, parenStart);
+                if (inner == null) continue;
+                const args = splitTopLevelArgs(inner);
+                if (type === 'IFCLOCALPLACEMENT') {
+                    idx.localPlacements.set(id, { relTo: refId(args[0]), rel: refId(args[1]) });
+                } else if (type === 'IFCAXIS2PLACEMENT3D') {
+                    idx.axis3d.set(id, { loc: refId(args[0]), axis: refId(args[1]), refDir: refId(args[2]) });
+                } else if (type === 'IFCCARTESIANPOINT') {
+                    idx.points.set(id, parseVec(args[0]));
+                } else if (type === 'IFCDIRECTION') {
+                    idx.dirs.set(id, parseVec(args[0]));
+                }
+                continue;
+            }
+            if (!idx.site && type === 'IFCSITE') {
+                const inner = extractParen(text, parenStart);
+                if (inner != null) {
+                    const args = splitTopLevelArgs(inner);
+                    idx.site = { id, placementRef: refId(args[5]) };
+                }
+                continue;
+            }
+            if (!idx.product && PRODUCT_TYPE_RE.test(type)) {
+                const inner = extractParen(text, parenStart);
+                if (inner != null) {
+                    const args = splitTopLevelArgs(inner);
+                    const ref = refId(args[5]);
+                    if (ref != null) idx.product = { id, type, placementRef: ref };
+                }
+            }
+        }
+    }
+
+    const V3_ZERO = [0, 0, 0];
+    const len3 = (v) => Math.hypot(v[0], v[1], v[2]);
+    const norm3 = (v) => { const l = len3(v) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+    const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const cross3 = (a, b) => [
+        a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]
+    ];
+
+    /** Ортонормированный базис из Axis (Z) и RefDirection (X), как в IfcAxis2Placement3D. */
+    function buildBasis(axis, refDir) {
+        const z = norm3(axis && axis.length === 3 ? axis : [0, 0, 1]);
+        let x = refDir && refDir.length === 3 ? refDir.slice() : [1, 0, 0];
+        const d = dot3(x, z);
+        x = [x[0] - d * z[0], x[1] - d * z[1], x[2] - d * z[2]];
+        if (len3(x) < 1e-9) x = Math.abs(z[2]) < 0.9 ? cross3([0, 0, 1], z) : cross3([1, 0, 0], z);
+        x = norm3(x);
+        const y = cross3(z, x);
+        return { x, y, z };
+    }
+
+    const applyBasis = (b, v) => [
+        b.x[0] * v[0] + b.y[0] * v[1] + b.z[0] * v[2],
+        b.x[1] * v[0] + b.y[1] * v[1] + b.z[1] * v[2],
+        b.x[2] * v[0] + b.y[2] * v[1] + b.z[2] * v[2]
+    ];
+    const composeBasis = (parent, local) => ({
+        x: applyBasis(parent, local.x), y: applyBasis(parent, local.y), z: applyBasis(parent, local.z)
+    });
+
+    /**
+     * Проходит IfcLocalPlacement от заданного id до корня (PlacementRelTo = $)
+     * и накапливает мировые координаты на каждом уровне.
+     */
+    function resolveChain(startPlacementId, idx) {
+        const levels = [];
+        let cur = startPlacementId;
+        let guard = 0;
+        while (cur != null && guard++ < 64) {
+            const lp = idx.localPlacements.get(cur);
+            if (!lp) { levels.push({ id: cur, missing: true }); break; }
+            const ax = lp.rel != null ? idx.axis3d.get(lp.rel) : null;
+            levels.push({
+                id: cur,
+                relTo: lp.relTo,
+                location: (ax && idx.points.get(ax.loc)) || V3_ZERO,
+                axis: ax && ax.axis != null ? idx.dirs.get(ax.axis) : null,
+                refDirection: ax && ax.refDir != null ? idx.dirs.get(ax.refDir) : null,
+                hasAxis: !!ax
+            });
+            cur = lp.relTo;
+        }
+        levels.reverse(); // от корня к листу
+
+        let origin = V3_ZERO;
+        let basis = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+        const trace = [];
+        for (const lvl of levels) {
+            const worldLoc = [
+                origin[0] + basis.x[0] * lvl.location[0] + basis.y[0] * lvl.location[1] + basis.z[0] * lvl.location[2],
+                origin[1] + basis.x[1] * lvl.location[0] + basis.y[1] * lvl.location[1] + basis.z[1] * lvl.location[2],
+                origin[2] + basis.x[2] * lvl.location[0] + basis.y[2] * lvl.location[1] + basis.z[2] * lvl.location[2]
+            ];
+            trace.push({ id: lvl.id, local: lvl.location, world: worldLoc, missing: lvl.missing, hasAxis: lvl.hasAxis });
+            if (lvl.missing) break;
+            basis = composeBasis(basis, buildBasis(lvl.axis, lvl.refDirection));
+            origin = worldLoc;
+        }
+        return { trace, worldOrigin: origin, levels: levels.length };
+    }
+
+    function formatChainTrace(label, startId, idx, k) {
+        const L = [`--- ${label} ---`];
+        if (startId == null) {
+            L.push('  ObjectPlacement = $ (нет размещения — сущность в абсолютном нуле).');
+            return L;
+        }
+        const { trace, worldOrigin, levels } = resolveChain(startId, idx);
+        L.push(`  Уровней в цепочке: ${levels}`);
+        trace.forEach((t, i) => {
+            const tag = i === 0 ? 'корень' : `шаг ${i}`;
+            if (t.missing) {
+                L.push(`  #${t.id} (${tag}): IfcLocalPlacement не найден в индексе — цепочка обрывается здесь.`);
+                return;
+            }
+            const loc = t.local.map((v) => (v * k).toFixed(3)).join(', ');
+            const wld = t.world.map((v) => (v * k).toFixed(3)).join(', ');
+            L.push(`  #${t.id} (${tag}): локально (${loc}) м → накоплено (${wld}) м${t.hasAxis ? '' : ' [без Axis2Placement — ноль]'}`);
+        });
+        L.push(`  Итог — мировая точка: ${worldOrigin.map((v) => (v * k).toFixed(3)).join(' / ')} м`);
+        return L;
+    }
+
+    async function traceChain(file, unitScale) {
+        if (busy) return;
+        busy = true;
+        const btn = $('ifcdChain');
+        if (btn) { btn.disabled = true; btn.dataset.label = btn.innerHTML; }
+        const base = out.textContent || '';
+        show(base + '\n\nЧитаю файл повторно — строю индекс размещений…');
+        setProgress(0);
+
+        const idx = {
+            localPlacements: new Map(), axis3d: new Map(), points: new Map(), dirs: new Map(),
+            site: null, product: null
+        };
+        const decoder = new TextDecoder('latin1');
+        let carry = '';
+        let offset = 0;
+        try {
+            while (offset < file.size) {
+                const slice = file.slice(offset, Math.min(offset + CHUNK, file.size));
+                const buf = await slice.arrayBuffer();
+                offset += buf.byteLength;
+                const text = carry + decoder.decode(buf, { stream: offset < file.size });
+                const cut = text.lastIndexOf(';');
+                if (cut === -1) { carry = text; }
+                else {
+                    scanPlacementChunk(text.slice(0, cut + 1), idx);
+                    carry = text.slice(cut + 1);
+                }
+                setProgress(offset / file.size);
+                show(base + `\n\nЧитаю файл повторно — ${(offset / file.size * 100).toFixed(0)} %`);
+                await new Promise((r) => setTimeout(r, 0));
+            }
+            if (carry.trim()) scanPlacementChunk(carry, idx);
+
+            const k = unitScale || 1;
+            const L = [
+                '',
+                '=== Цепочка размещения (IfcLocalPlacement) ===',
+                `Индекс: LocalPlacement ${idx.localPlacements.size.toLocaleString('ru-RU')} · ` +
+                `Axis2Placement3D ${idx.axis3d.size.toLocaleString('ru-RU')} · ` +
+                `CartesianPoint ${idx.points.size.toLocaleString('ru-RU')} · ` +
+                `Direction ${idx.dirs.size.toLocaleString('ru-RU')}`,
+                ''
+            ];
+            if (idx.site) {
+                L.push(...formatChainTrace(`IfcSite #${idx.site.id}`, idx.site.placementRef, idx, k));
+            } else {
+                L.push('--- IfcSite ---', '  Не найден.');
+            }
+            L.push('');
+            if (idx.product) {
+                L.push(...formatChainTrace(`${idx.product.type} #${idx.product.id} (типовой элемент)`, idx.product.placementRef, idx, k));
+            } else {
+                L.push('--- Типовой элемент ---', '  Ни одного распознанного IfcProduct не найдено.');
+            }
+            L.push(
+                '',
+                'Если у элемента цепочка короче, чем у IfcSite, или обрывается на',
+                '«не найден» / PlacementRelTo = $ раньше — вот причина, по которой',
+                'элемент не наследует мировые координаты площадки.'
+            );
+            show(base + '\n' + L.join('\n'));
+        } catch (error) {
+            show(base + `\n\nЦепочку разобрать не удалось: ${error && error.message ? error.message : error}`);
+        } finally {
+            busy = false;
+            setProgress(1);
+            if (bar) bar.hidden = true;
+            if (btn) { btn.disabled = false; if (btn.dataset.label) btn.innerHTML = btn.dataset.label; }
+        }
+    }
+
     async function analyze(file) {
         if (busy) return;
         busy = true;
@@ -332,6 +624,9 @@
             setProgress(1);
             show(buildReport(file, acc, performance.now() - started));
             if (actions) actions.hidden = false;
+            lastFile = file;
+            lastUnitScale = lengthUnitOf(acc).scale || 1;
+            if (btnChain) btnChain.disabled = false;
         } catch (error) {
             show(`Не удалось разобрать файл: ${error && error.message ? error.message : error}`);
         } finally {
@@ -382,10 +677,21 @@
         }
     });
 
+    if (btnChain) {
+        btnChain.disabled = true;
+        btnChain.addEventListener('click', () => {
+            if (!lastFile || busy) return;
+            traceChain(lastFile, lastUnitScale);
+        });
+    }
+
     const resetBtn = $('ifcdReset');
     if (resetBtn) resetBtn.addEventListener('click', () => {
         input.value = '';
         if (out) { out.hidden = true; out.textContent = ''; }
         if (actions) actions.hidden = true;
+        lastFile = null;
+        lastUnitScale = 1;
+        if (btnChain) btnChain.disabled = true;
     });
 })();

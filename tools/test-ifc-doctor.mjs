@@ -149,6 +149,69 @@ try {
     check(/RefElevation\): 1600\.15 м/.test(arReport), 'отметка площадки переведена в метры');
     check(/это Москва по умолчанию/.test(arReport), 'заглушка координат экспортёра замечена');
 
+    // Третий файл: цепочка размещения. IfcSite стоит в мировых координатах
+    // (число снято с площадки — 55300.050/33820.602/1600.150), а единственный
+    // элемент размещён с PlacementRelTo=$ — то есть НЕ унаследовал площадку.
+    // Это ровно та поломка, которую разбор пришёл искать: элемент существует,
+    // но его цепочка обрывается на первом же шаге, до site.
+    await page.evaluate(() => document.getElementById('ifcdReset').click());
+    const chainIfc = [
+        'ISO-10303-21;',
+        'HEADER;',
+        "FILE_SCHEMA(('IFC4'));",
+        'ENDSEC;',
+        'DATA;',
+        '#1=IFCCARTESIANPOINT((0.,0.,0.));',
+        '#2=IFCDIRECTION((0.,0.,1.));',
+        '#3=IFCDIRECTION((1.,0.,0.));',
+        '#4=IFCAXIS2PLACEMENT3D(#1,#2,#3);',
+        '#5=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
+        "#10=IFCPROJECT('proj',$,'P',$,$,$,$,$,$);",
+        '#20=IFCCARTESIANPOINT((55300.05,33820.602,1600.15));',
+        '#21=IFCDIRECTION((0.97789,0.20913,0.));',
+        '#22=IFCAXIS2PLACEMENT3D(#20,#2,#21);',
+        '#11=IFCLOCALPLACEMENT($,#22);',
+        "#12=IFCSITE('site',$,'Site',$,$,#11,$,$,.ELEMENT.,$,$,$,$,$);",
+        '#13=IFCLOCALPLACEMENT(#11,#4);',
+        "#14=IFCBUILDING('bld',$,'Building',$,$,#13,$,$,.ELEMENT.,$,$,$);",
+        '#15=IFCLOCALPLACEMENT(#13,#4);',
+        "#16=IFCBUILDINGSTOREY('storey',$,'Level0',$,$,#15,$,$,.ELEMENT.,0.);",
+        // Продукт НЕ ссылается на #15 (storey) — PlacementRelTo=$, поэтому его
+        // локальные координаты (10,5,2) остаются мировыми как есть.
+        '#30=IFCCARTESIANPOINT((10.,5.,2.));',
+        '#31=IFCAXIS2PLACEMENT3D(#30,$,$);',
+        '#32=IFCLOCALPLACEMENT($,#31);',
+        "#33=IFCBUILDINGELEMENTPROXY('broken',$,'BrokenBox',$,$,#32,$,$,$);",
+        'ENDSEC;',
+        'END-ISO-10303-21;'
+    ].join('\n');
+    await page.setInputFiles('#ifcdFile', {
+        name: 'chain-тест.ifc', mimeType: 'application/octet-stream', buffer: Buffer.from(chainIfc, 'latin1')
+    });
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('Мировой габарит') ||
+            document.getElementById('ifcdOut')?.textContent?.includes('IFCCARTESIANPOINT не найдено'),
+        null, { timeout: 30000 }
+    );
+    await page.evaluate(() => document.getElementById('cabMain')?.classList.remove('hidden'));
+    const chainBtnEnabled = await page.evaluate(() => !document.getElementById('ifcdChain').disabled);
+    check(chainBtnEnabled, 'кнопка «Цепочка размещения» включилась после разбора');
+    await page.evaluate(() => document.getElementById('ifcdChain').click());
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('Итог — мировая точка'),
+        null, { timeout: 30000 }
+    );
+    const chainReport = await page.textContent('#ifcdOut');
+    check(/=== Цепочка размещения/.test(chainReport), 'раздел цепочки появился в отчёте');
+    check(/IfcSite #12/.test(chainReport), 'IfcSite найден по id');
+    check(/55300\.050.*33820\.602.*1600\.150/s.test(chainReport), 'мировая точка IfcSite посчитана верно');
+    // От заголовка «(типовой элемент)», а не от первого упоминания типа —
+    // тот встречается раньше, в сводке «Чаще всего встречается».
+    const productSection = chainReport.slice(chainReport.indexOf('типовой элемент'));
+    check(/Уровней в цепочке:\s*1/.test(productSection), 'у оторванного элемента цепочка длиной 1 (не унаследовал site)');
+    check(!/55300/.test(productSection), 'оторванный элемент НЕ показывает мировые координаты площадки');
+    check(/10\.000, 5\.000, 2\.000/.test(productSection), 'локальные координаты оторванного элемента верны');
+
     const copied = await page.evaluate(async () => {
         document.getElementById('ifcdReset').click();
         const o = document.getElementById('ifcdOut');

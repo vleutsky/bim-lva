@@ -37,6 +37,9 @@ const BLD = { worldX: 55300.05, worldY: 33820.602, worldZ: 1600.15, rotationDeg:
 // Тот же случай, но в МИЛЛИМЕТРАХ: у файла АР единицы миллиметровые, и это
 // последняя комбинация, которой не касалась ни одна проверка
 const BLD_MM = { ...BLD, seed: 77, lengthToMetres: 0.001 };
+// Случай файла АР: мировое преобразование лежит не во вставке, а в
+// WorldCoordinateSystem контекста представления — так пишет экспортёр ODA
+const BLD_CTX = { ...BLD, seed: 123, lengthToMetres: 0.001, worldInContext: true };
 
 const siteFile = path.join(ROOT, 'tools', 'fixtures', 'rot-site.ifc');
 const bldFile = path.join(ROOT, 'tools', 'fixtures', 'rot-bld.ifc');
@@ -44,6 +47,8 @@ await fs.writeFile(siteFile, makeGeoIfc({ ...SITE, name: 'rot-site.ifc' }));
 await fs.writeFile(bldFile, makeTessellatedIfc({ ...BLD, name: 'rot-bld.ifc' }));
 const bldMmFile = path.join(ROOT, 'tools', 'fixtures', 'rot-bld-mm.ifc');
 await fs.writeFile(bldMmFile, makeTessellatedIfc({ ...BLD_MM, name: 'rot-bld-mm.ifc' }));
+const bldCtxFile = path.join(ROOT, 'tools', 'fixtures', 'rot-bld-ctx.ifc');
+await fs.writeFile(bldCtxFile, makeTessellatedIfc({ ...BLD_CTX, name: 'rot-bld-ctx.ifc' }));
 
 const { server, port } = await startStaticServer(ROOT);
 const browser = await chromium.launch({ executablePath: await resolveChromium() });
@@ -54,7 +59,7 @@ try {
     await page.goto(`http://127.0.0.1:${port}/bim-lva-composer-ifc.html`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !!window.BimLvaDebug, null, { timeout: 60_000 });
 
-    for (const f of [siteFile, bldFile, bldMmFile]) {
+    for (const f of [siteFile, bldFile, bldMmFile, bldCtxFile]) {
         await page.setInputFiles('#localFileInput', f);
         const base = path.basename(f);
         await page.waitForFunction(
@@ -70,7 +75,8 @@ try {
     const bounds = await page.evaluate(() => window.BimLvaDebug.modelBounds);
     for (const [label, re, cfg] of [
         ['метры', /rot-bld\.ifc$/i, BLD],
-        ['миллиметры', /rot-bld-mm\.ifc$/i, BLD_MM]
+        ['миллиметры', /rot-bld-mm\.ifc$/i, BLD_MM],
+        ['преобразование в контексте', /rot-bld-ctx\.ifc$/i, BLD_CTX]
     ]) {
     const bld = bounds.find((m) => re.test(m.file));
     if (!bld) {
@@ -111,6 +117,7 @@ try {
     await fs.rm(siteFile, { force: true });
     await fs.rm(bldFile, { force: true });
     await fs.rm(bldMmFile, { force: true });
+    await fs.rm(bldCtxFile, { force: true });
 }
 
 console.log('');

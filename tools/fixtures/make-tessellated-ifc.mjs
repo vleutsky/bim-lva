@@ -27,10 +27,16 @@ function guid(seed) {
  * @param {number} o.step — шаг коробок в ЛОКАЛЬНЫХ координатах
  * @param {number} o.size — сторона коробки
  * @param {number} o.lengthToMetres — 1 (метры) или 0.001 (миллиметры)
+ * @param {boolean} o.worldInContext — куда положить мировое преобразование:
+ *        false — во вставку площадки (обычный путь),
+ *        true  — в `WorldCoordinateSystem` контекста представления. Так делает
+ *        экспортёр ODA: geometry остаётся локальной, а Navisworks показывает
+ *        это как «преобразование сцены». web-ifc такой контекст игнорирует.
  */
 export function makeTessellatedIfc({
     worldX = 0, worldY = 0, worldZ = 0, rotationDeg = 0,
-    boxes = 4, step = 10, size = 4, seed = 1, name = 'tess.ifc', lengthToMetres = 1
+    boxes = 4, step = 10, size = 4, seed = 1, name = 'tess.ifc', lengthToMetres = 1,
+    worldInContext = false
 } = {}) {
     const a = rotationDeg * Math.PI / 180;
     const refDir = [Math.cos(a), Math.sin(a), 0];
@@ -55,13 +61,13 @@ export function makeTessellatedIfc({
         '#6=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);',
         '#7=IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);',
         '#8=IFCUNITASSIGNMENT((#5,#6,#7));',
-        "#9=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#4,$);",
+        `#9=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,${worldInContext ? '#22' : '#4'},$);`,
         `#10=IFCPROJECT('${guid(seed + 1)}',$,'TessTest',$,$,$,$,(#9),#8);`,
         // Вставка площадки: сдвиг + поворот вокруг Z
         `#20=IFCCARTESIANPOINT((${u(worldX)},${u(worldY)},${u(worldZ)}));`,
         `#21=IFCDIRECTION((${f(refDir[0])},${f(refDir[1])},0.));`,
         '#22=IFCAXIS2PLACEMENT3D(#20,#2,#21);',
-        '#11=IFCLOCALPLACEMENT($,#22);',
+        `#11=IFCLOCALPLACEMENT($,${worldInContext ? '#4' : '#22'});`,
         `#12=IFCSITE('${guid(seed + 2)}',$,'Site',$,$,#11,$,$,.ELEMENT.,$,$,$,$,$);`,
         '#13=IFCLOCALPLACEMENT(#11,#4);',
         `#14=IFCBUILDING('${guid(seed + 3)}',$,'Building',$,$,#13,$,$,.ELEMENT.,$,$,$);`,
