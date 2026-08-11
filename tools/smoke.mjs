@@ -32,6 +32,7 @@ let reload = null;
 let bvhPeak = -1;
 let viewCube = null;
 let draw = null;
+let dxfEntities = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -89,6 +90,62 @@ async function checkPicking(page) {
     }
     problems.push('клик по геометрии не выделил ни одного элемента');
     return { ok: false };
+}
+
+/**
+ * Сущности DXF. Слой склеивается в один объект ради скорости отрисовки, но
+ * каждая линия должна опознаваться по диапазону вершин: иначе в дереве видно
+ * только слой, а отдельную ось не выбрать. Проверяем и дерево, и клик в сцене.
+ */
+async function checkDxfEntities(page) {
+    const rows = await page.evaluate(() => {
+        const root = [...document.querySelectorAll('#tree .file-root')]
+            .find((r) => /smoke-blocks\.dxf/i.test(r.textContent || ''));
+        if (!root) return null;
+        const labels = [...root.querySelectorAll('.tlabel')].map((n) => n.textContent.trim());
+        return labels.filter((t) => /^(Отрезок|Полилиния|Дуга|Точка|3D-грань|Сетка) #\d+$/.test(t));
+    });
+    if (!rows) {
+        problems.push('в дереве нет ветки DXF-файла');
+        return null;
+    }
+    if (!rows.length) {
+        problems.push('сущности DXF не попали в дерево — виден только слой');
+        return null;
+    }
+
+    // Клик по строке сущности обязан выделить именно её, а не весь слой
+    const picked = await page.evaluate(() => {
+        const row = [...document.querySelectorAll('#tree .trow')]
+            .find((r) => /^(Отрезок|Полилиния|Дуга|3D-грань) #\d+$/.test(
+                r.querySelector('.tlabel')?.textContent.trim() || ''));
+        if (!row) return null;
+        row.click();
+        return document.getElementById('sSelected')?.textContent || null;
+    });
+    await page.waitForTimeout(200);
+    const props = await page.textContent('#props');
+    if (picked !== '1') problems.push(`клик по сущности DXF выделил ${picked} элементов вместо 1`);
+    if (!/Слой/.test(props)) problems.push('в свойствах сущности DXF нет слоя');
+    if (!/Сущность/.test(props)) problems.push('в свойствах сущности DXF нет её типа');
+
+    // Опознание по вершине — то же, что при клике в сцене. Проверяем обе
+    // границы каждого диапазона: бинарный поиск ломается именно на них.
+    const probe = await page.evaluate(() => window.BimLvaDebug.dxfProbe);
+    if (!probe) {
+        problems.push('не нашлось объекта DXF с диапазонами сущностей');
+    } else {
+        const bad = probe.at.filter((p, i) => p.id !== probe.spans[Math.floor(i / 2)].id);
+        if (bad.length) {
+            problems.push(`опознание сущности по вершине врёт в ${bad.length} случаях из ${probe.at.length}`);
+        }
+        if (probe.outside !== null) {
+            problems.push('вершина за пределами диапазонов опозналась как сущность');
+        }
+    }
+
+    await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
+    return { entities: rows.length, spans: probe ? probe.spans.length : 0 };
 }
 
 /**
@@ -839,6 +896,7 @@ async function main() {
                     ).catch(() => problems.push('вторая модель не загрузилась'));
                     clash = await checkClash(page);
                     dxfBlocks = await checkDxfBlocks(page);
+                    dxfEntities = await checkDxfEntities(page);
                     coordPin = await checkCoordPin(page);
                     ruler = await checkRuler(page);
                     // BVH снимаем до обновления: новая модель маленькая и своего
@@ -896,6 +954,12 @@ async function main() {
         console.log(
             `линейка:   L3D ${ruler.l3d.toFixed(2)} · L2D ${ruler.l2d.toFixed(2)} · ` +
             `ΔZ ${ruler.dz.toFixed(2)} · i ${ruler.perMille.toFixed(1)} ‰`
+        );
+    }
+    if (dxfEntities) {
+        console.log(
+            `сущности DXF: в дереве ${dxfEntities.entities}, диапазонов ${dxfEntities.spans}, ` +
+            `опознание по вершине верное`
         );
     }
     if (draw) {

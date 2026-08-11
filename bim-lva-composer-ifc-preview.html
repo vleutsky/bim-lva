@@ -2375,7 +2375,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1cc3f2c</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d7d9b32</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -4118,6 +4118,30 @@
                     });
                 }
                 return out;
+            },
+            /**
+             * Опознание сущности DXF по номеру вершины — то же, что при клике.
+             * Отдаём вместе с диапазонами, чтобы проверять границы поиска.
+             */
+            get dxfProbe() {
+                for (const mod of (typeof loadedModels !== 'undefined' ? loadedModels.values() : [])) {
+                    if (!mod.dxfEntities?.size) continue;
+                    let target = null;
+                    mod.group?.traverse((o) => {
+                        if (!target && o.userData?.dxfRangeIndex?.length) target = o;
+                    });
+                    if (!target) continue;
+                    const spans = target.userData.dxfRangeIndex.map((r) => ({ ...r }));
+                    return {
+                        spans,
+                        at: spans.flatMap((r) => [
+                            { vertex: r.start, id: dxfEntityAtVertex(target, r.start) },
+                            { vertex: r.start + r.count - 1, id: dxfEntityAtVertex(target, r.start + r.count - 1) }
+                        ]),
+                        outside: dxfEntityAtVertex(target, spans[spans.length - 1].start + spans[spans.length - 1].count + 5)
+                    };
+                }
+                return null;
             },
             /** Последняя сработавшая привязка (тип и точка) — для проверок. */
             get snap() { return lastSnap ? { ...lastSnap } : null; },
@@ -7457,6 +7481,7 @@ uniform vec3 uBatchSelColor;
             clearBatchSelectionHighlights();
             const list = items || [];
             applyBatchSelectionHighlights(list);
+            applyDxfEntityHighlight(list);
             buildSelectionContours(list);
             markNeedsRender();
         }
@@ -9257,6 +9282,9 @@ uniform vec3 uBatchSelColor;
                 allMeshes.push(obj);
             });
             totalElements += modData.meshesByID.size;
+            // Сущности DXF должны быть известны до дерева — иначе под слоем
+            // просто нечего перечислять
+            registerDxfEntities(modData, root);
             buildTreeForFBXModel(modData, root);
         }
 
@@ -9903,18 +9931,56 @@ uniform vec3 uBatchSelColor;
             }
         }
 
+        /**
+         * Сборка сцены из сущностей DXF.
+         *
+         * Геометрия по-прежнему сливается в один объект на слой — иначе на
+         * плане с десятками тысяч линий будет столько же вызовов отрисовки.
+         * Но для каждой сущности запоминается её диапазон вершин в общем
+         * буфере: по нему сущность потом находится под курсором, подсвечивается
+         * и попадает в дерево. Без этих диапазонов после склейки разделить
+         * объекты уже нельзя.
+         */
         function buildDXFRoot(entities, filename) {
             const root = new THREE.Group();
             root.name = filename;
             const segmentsByLayer = new Map();
             const pointsByLayer = new Map();
             const meshByLayer = new Map();
+            const rangesByLayer = { line: new Map(), point: new Map(), mesh: new Map() };
+            const entityInfo = new Map();
+            let entitySeq = 0;
+            let currentId = 0;
+
+            const rangeStore = (kind, layer) => {
+                if (!rangesByLayer[kind].has(layer)) rangesByLayer[kind].set(layer, []);
+                return rangesByLayer[kind].get(layer);
+            };
+            /** Отметить, что вершины с этого места принадлежат текущей сущности. */
+            const markRange = (kind, layer, start, count) => {
+                if (!count) return;
+                const list = rangeStore(kind, layer);
+                const last = list[list.length - 1];
+                if (last && last.id === currentId) last.count += count;
+                else list.push({ id: currentId, start, count });
+            };
+
             const addSegment = (layer, a, b) => {
                 if (!segmentsByLayer.has(layer)) segmentsByLayer.set(layer, []);
-                segmentsByLayer.get(layer).push(...a, ...b);
+                const arr = segmentsByLayer.get(layer);
+                const start = arr.length / 3;
+                arr.push(...a, ...b);
+                markRange('line', layer, start, 2);
             };
 
             entities.forEach(entity => {
+                currentId = ++entitySeq;
+                entityInfo.set(currentId, {
+                    id: currentId,
+                    layer: entity.layer || '0',
+                    kind: entity.type,
+                    handle: entity.handle || ''
+                });
                 if (entity.type === 'line') {
                     addSegment(entity.layer, entity.values.slice(0, 3), entity.values.slice(3, 6));
                 } else if (entity.type === 'polyline') {
@@ -9933,16 +9999,24 @@ uniform vec3 uBatchSelColor;
                     }
                 } else if (entity.type === 'point') {
                     if (!pointsByLayer.has(entity.layer)) pointsByLayer.set(entity.layer, []);
-                    pointsByLayer.get(entity.layer).push(...entity.point);
+                    const arr = pointsByLayer.get(entity.layer);
+                    const start = arr.length / 3;
+                    arr.push(...entity.point);
+                    markRange('point', entity.layer, start, 1);
                 } else if (entity.type === 'face') {
-                    dxfPushFace(dxfEnsureMeshBucket(meshByLayer, entity.layer), entity.points);
+                    const bucket = dxfEnsureMeshBucket(meshByLayer, entity.layer);
+                    const before = bucket.positions.length / 3;
+                    dxfPushFace(bucket, entity.points);
+                    markRange('mesh', entity.layer, before, bucket.positions.length / 3 - before);
                 } else if (entity.type === 'mesh') {
                     const bucket = dxfEnsureMeshBucket(meshByLayer, entity.layer);
+                    const before = bucket.positions.length / 3;
                     const verts = entity.vertices;
                     entity.faces.forEach(face => {
                         const pts = face.map(idx => verts[idx]).filter(Boolean);
                         dxfPushFace(bucket, pts);
                     });
+                    markRange('mesh', entity.layer, before, bucket.positions.length / 3 - before);
                 }
             });
 
@@ -9961,6 +10035,8 @@ uniform vec3 uBatchSelColor;
                     })
                 );
                 mesh.name = `${layer} · TIN/mesh`;
+                mesh.userData.dxfRanges = rangesByLayer.mesh.get(layer) || [];
+                mesh.userData.dxfLayer = layer;
                 root.add(mesh);
             });
 
@@ -9969,6 +10045,8 @@ uniform vec3 uBatchSelColor;
                 geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
                 const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: dxfLayerColor(layer) }));
                 lines.name = layer;
+                lines.userData.dxfRanges = rangesByLayer.line.get(layer) || [];
+                lines.userData.dxfLayer = layer;
                 root.add(lines);
             });
             pointsByLayer.forEach((positions, layer) => {
@@ -9976,9 +10054,111 @@ uniform vec3 uBatchSelColor;
                 geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
                 const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: dxfLayerColor(layer), size: 0.12 }));
                 points.name = `${layer} · точки`;
+                points.userData.dxfRanges = rangesByLayer.point.get(layer) || [];
+                points.userData.dxfLayer = layer;
                 root.add(points);
             });
+            root.userData.dxfEntityInfo = entityInfo;
             return root;
+        }
+
+        /** Подпись сущности DXF в дереве и свойствах. */
+        const DXF_KIND_LABEL = {
+            line: 'Отрезок', polyline: 'Полилиния', arc: 'Дуга',
+            point: 'Точка', face: '3D-грань', mesh: 'Сетка'
+        };
+
+        /**
+         * Регистрирует сущности DXF как выбираемые объекты. Геометрия остаётся
+         * склеенной по слоям, а сущность опознаётся по диапазону вершин —
+         * поэтому число вызовов отрисовки не растёт.
+         */
+        function registerDxfEntities(modData, root) {
+            const info = root.userData?.dxfEntityInfo;
+            if (!info || !modData) return;
+            const entities = new Map();
+            root.traverse(obj => {
+                const ranges = obj.userData?.dxfRanges;
+                if (!ranges?.length) return;
+                ranges.forEach(r => {
+                    const meta = info.get(r.id);
+                    if (!meta) return;
+                    const prev = entities.get(r.id);
+                    if (prev) {
+                        prev.count += r.count;
+                        return;
+                    }
+                    entities.set(r.id, {
+                        id: r.id,
+                        layer: meta.layer,
+                        kind: meta.kind,
+                        object: obj,
+                        start: r.start,
+                        count: r.count
+                    });
+                });
+                // Быстрый поиск сущности по вершине: диапазоны идут по возрастанию
+                obj.userData.dxfRangeIndex = ranges;
+            });
+            if (!entities.size) return;
+            modData.dxfEntities = entities;
+            console.info(`[BIM.LVA] ${modData.filename}: сущностей DXF — ${entities.size}`);
+        }
+
+        /** Сущность DXF по номеру вершины в склеенном буфере. */
+        function dxfEntityAtVertex(obj, vertexIndex) {
+            const ranges = obj?.userData?.dxfRangeIndex;
+            if (!ranges || !Number.isInteger(vertexIndex)) return null;
+            let lo = 0;
+            let hi = ranges.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const r = ranges[mid];
+                if (vertexIndex < r.start) hi = mid - 1;
+                else if (vertexIndex >= r.start + r.count) lo = mid + 1;
+                else return r.id;
+            }
+            return null;
+        }
+
+        /** Геометрия одной сущности — для подсветки и габарита. */
+        function dxfEntityGeometry(entry) {
+            const src = entry.object.geometry?.attributes?.position;
+            if (!src) return null;
+            const arr = new Float32Array(entry.count * 3);
+            for (let i = 0; i < entry.count * 3; i++) arr[i] = src.array[entry.start * 3 + i];
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+            geom.computeBoundingBox();
+            geom.computeBoundingSphere();
+            return geom;
+        }
+
+        /** Подсветка выбранных сущностей DXF поверх склеенного слоя. */
+        function applyDxfEntityHighlight(items) {
+            (items || []).forEach(item => {
+                const mod = loadedModels.get(item.modelID);
+                const entry = mod?.dxfEntities?.get(item.expressID);
+                if (!entry) return;
+                const geom = dxfEntityGeometry(entry);
+                if (!geom) return;
+                const isMeshEntity = entry.object.isMesh;
+                const obj = isMeshEntity
+                    ? new THREE.Mesh(geom, new THREE.MeshBasicMaterial({
+                        color: HIGHLIGHT_COLOR, depthTest: false, side: THREE.DoubleSide,
+                        transparent: true, opacity: 0.85
+                    }))
+                    : (entry.object.isPoints
+                        ? new THREE.Points(geom, new THREE.PointsMaterial({
+                            color: HIGHLIGHT_COLOR, size: 0.35, depthTest: false
+                        }))
+                        : new THREE.LineSegments(geom, new THREE.LineBasicMaterial({
+                            color: HIGHLIGHT_COLOR, depthTest: false, linewidth: 2
+                        })));
+                obj.userData.ownsGeometry = true;
+                obj.renderOrder = 997;
+                addSelectionOutlineObject(obj, entry.object);
+            });
         }
 
         // 3DSOLID/BODY/REGION хранят геометрию в ACIS (SAT/SAB). Извлекаем плоские грани через ezdxf в Pyodide.
@@ -11269,6 +11449,46 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     if (items.length > 0) handleTreeSelection(row, items, e);
                     else if (kids.length) node.classList.toggle('collapsed');
                 });
+
+                // Сущности DXF: слой склеен в один объект, но каждая линия и
+                // грань опознаётся по диапазону вершин — показываем их списком.
+                // Список ограничен: на плане их бывают десятки тысяч, и столько
+                // строк DOM не переживёт, а выбор мышью в сцене работает для всех.
+                const dxfRanges = obj.userData?.dxfRanges;
+                if (dxfRanges?.length && modData.dxfEntities) {
+                    const LIMIT = 500;
+                    dxfRanges.slice(0, LIMIT).forEach(r => {
+                        const entry = modData.dxfEntities.get(r.id);
+                        if (!entry) return;
+                        const child = document.createElement('div');
+                        child.className = 'tnode';
+                        const crow = document.createElement('div');
+                        crow.className = 'trow';
+                        crow.dataset.mid = modData.modelID;
+                        crow.dataset.eid = entry.id;
+                        crow._selectionItems = [{ modelID: modData.modelID, expressID: entry.id }];
+                        const kind = DXF_KIND_LABEL[entry.kind] || entry.kind || '';
+                        crow.innerHTML =
+                            `<span class="caret empty">▾</span>` +
+                            `<span class="tlabel">${esc(kind)} #${entry.id}</span>` +
+                            `<span class="ttype">${entry.count} верш.</span>`;
+                        crow.addEventListener('click', (e) => {
+                            handleTreeSelection(crow, crow._selectionItems, e);
+                        });
+                        crow.addEventListener('dblclick', () => focusOnList(crow._selectionItems));
+                        child.appendChild(crow);
+                        node.appendChild(child);
+                    });
+                    if (dxfRanges.length > LIMIT) {
+                        const more = document.createElement('div');
+                        more.className = 'trow';
+                        more.innerHTML =
+                            `<span class="caret empty"></span>` +
+                            `<span class="tlabel" style="opacity:.7">…и ещё ${dxfRanges.length - LIMIT}: ` +
+                            `выбираются кликом в сцене</span>`;
+                        node.appendChild(more);
+                    }
+                }
 
                 row.addEventListener('dblclick', () => {
                     const items = getAllChildGeomFBX(modData.modelID, obj);
@@ -12600,6 +12820,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const face = validHits[0].face;
                 if (attr && face) expressID = Math.round(attr.getX(face.a));
             }
+            // DXF/DWG: слой склеен в один объект, сущность опознаём по номеру
+            // вершины, в которую попал луч
+            const dxfVertex = validHits[0].face ? validHits[0].face.a : validHits[0].index;
+            const dxfId = dxfEntityAtVertex(hitObj, dxfVertex);
+            if (dxfId != null) expressID = dxfId;
             if (expressID == null || ud.modelID == null) return;
             treeSelectionAnchor = null;
             selectMultiple([{ modelID: ud.modelID, expressID }]);
@@ -17574,12 +17799,52 @@ ${componentXml || '    '}
 
         function showFBXProps(modelID, expressID, countTotal) {
             const modData = loadedModels.get(modelID);
+            const dxfEntry = modData?.dxfEntities?.get(expressID);
             const meshes = modData ? modData.meshesByID.get(expressID) : null;
-            const obj = meshes && meshes[0];
+            const obj = dxfEntry ? dxfEntry.object : (meshes && meshes[0]);
 
             const tag = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
             const materialHtml = renderAppearancePanel(countTotal, modelID, expressID);
             let infoHtml = propRow('Формат', modData ? modData.format : '');
+            if (dxfEntry) {
+                infoHtml += propRow('Слой', dxfEntry.layer || '0');
+                infoHtml += propRow('Сущность', DXF_KIND_LABEL[dxfEntry.kind] || dxfEntry.kind || '');
+                infoHtml += propRow('Вершин', dxfEntry.count.toLocaleString('ru-RU'));
+                const geom = dxfEntityGeometry(dxfEntry);
+                if (geom) {
+                    const pos = geom.attributes.position;
+                    let len = 0;
+                    if (!dxfEntry.object.isMesh) {
+                        for (let i = 1; i < pos.count; i++) {
+                            len += Math.hypot(
+                                pos.getX(i) - pos.getX(i - 1),
+                                pos.getY(i) - pos.getY(i - 1),
+                                pos.getZ(i) - pos.getZ(i - 1)
+                            );
+                        }
+                        if (len > 0) infoHtml += propRow('Длина', `${len.toFixed(3)} м`);
+                    }
+                    const b = geom.boundingBox;
+                    if (b && !b.isEmpty()) {
+                        const c = b.getCenter(new THREE.Vector3());
+                        dxfEntry.object.updateWorldMatrix(true, false);
+                        c.applyMatrix4(dxfEntry.object.matrixWorld);
+                        const abs = worldPointToAbsoluteXYZ(c) || c;
+                        infoHtml += propRow(
+                            'Центр (мир)',
+                            `${abs.x.toFixed(3)}, ${abs.y.toFixed(3)}, ${abs.z.toFixed(3)}`
+                        );
+                    }
+                    geom.dispose();
+                }
+                infoHtml += `<div class="empty" style="padding-top:10px">Сущность чертежа: слой, тип и геометрия. BIM-семантики в DXF нет.</div>`;
+                propsBox.innerHTML = tag + renderPropsTabs({
+                    info: infoHtml,
+                    material: materialHtml,
+                    edit: null
+                });
+                return;
+            }
             if (obj) {
                 infoHtml += propRow('Имя', obj.name || '');
                 infoHtml += propRow('Тип', typeLabelFBX(obj));
@@ -17835,6 +18100,16 @@ ${componentXml || '    '}
                         const b = frag.geom.boundingBox.clone().applyMatrix4(frag.matrix).applyMatrix4(mod.group.matrixWorld);
                         box.union(b);
                     });
+                    return;
+                }
+                const dxfEntry = mod.dxfEntities?.get(i.expressID);
+                if (dxfEntry) {
+                    const geom = dxfEntityGeometry(dxfEntry);
+                    if (geom?.boundingBox && !geom.boundingBox.isEmpty()) {
+                        dxfEntry.object.updateWorldMatrix(true, false);
+                        box.union(geom.boundingBox.clone().applyMatrix4(dxfEntry.object.matrixWorld));
+                    }
+                    geom?.dispose();
                     return;
                 }
                 if (mod.meshesByID.has(i.expressID)) {
@@ -21188,7 +21463,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: '1cc3f2c-preview',
+            buildId: 'd7d9b32-preview',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
