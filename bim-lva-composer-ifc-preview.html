@@ -2375,7 +2375,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d9d7332</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 70b30d1</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -9251,6 +9251,13 @@ uniform vec3 uBatchSelColor;
    * Сканируем ограниченный префикс файла: контекст и то, на что он ссылается,
    * почти всегда объявлены в первых мегабайтах, а полный проход по 70+ МБ на
    * каждую загрузку был бы расточительным ради одной сущности.
+   *
+   * Поворот у самого WorldCoordinateSystem (RefDirection) на реальном файле
+   * оказался пуст ($) — цепочка размещения тоже вся в нуле, а 12.06°,
+   * которые Navisworks показывает как поворот сцены, лежат в TrueNorth
+   * контекста (направление истинного севера относительно оси Y модели).
+   * Используем его как запасной источник поворота, когда у самого
+   * WorldCoordinateSystem направление не задано — см. `readWorldCoordinateSystemShift`.
    */
   function readWorldCoordinateSystemShift(text) {
     if (!text) return null;
@@ -9260,6 +9267,7 @@ uniform vec3 uBatchSelColor;
     const dirs = new Map();
     let contextFound = false;
     let wcsRef = null;
+    let trueNorthRef = null;
 
     const extractParen = (s, start) => {
       let depth = 0;
@@ -9315,7 +9323,11 @@ uniform vec3 uBatchSelColor;
         // порядок атрибутов и своего WorldCoordinateSystem нет, наследует.
         contextFound = true;
         const inner = extractParen(text, parenStart);
-        if (inner != null) wcsRef = refId(splitArgs(inner)[4]);
+        if (inner != null) {
+          const a = splitArgs(inner);
+          wcsRef = refId(a[4]);
+          trueNorthRef = refId(a[5]);
+        }
       }
     }
     if (wcsRef == null) return null;
@@ -9324,7 +9336,17 @@ uniform vec3 uBatchSelColor;
     const loc = points.get(ax.loc);
     if (!loc || loc.length < 3) return null;
     const refDir = ax.refDir != null ? dirs.get(ax.refDir) : null;
-    const angleRad = refDir && refDir.length >= 2 ? Math.atan2(refDir[1], refDir[0]) : null;
+    let angleRad = refDir && refDir.length >= 2 ? Math.atan2(refDir[1], refDir[0]) : null;
+    // У некоторых ODA-экспортёров (этот случай) у самого WorldCoordinateSystem
+    // RefDirection пуст, а проектный разворот лежит в TrueNorth контекста —
+    // направление истинного севера относительно оси Y модели. Поворот,
+    // выравнивающий TrueNorth с мировой осью Y (в тех же осях и в том же
+    // соглашении знака, что и makeRotationZ ниже) — atan2(Tx, Ty), НЕ atan2(Ty, Tx)
+    // (в отличие от RefDirection, TrueNorth — направление оси Y, не оси X).
+    if (angleRad == null && trueNorthRef != null) {
+      const tn = dirs.get(trueNorthRef);
+      if (tn && tn.length >= 2) angleRad = Math.atan2(tn[0], tn[1]);
+    }
     return { location: loc, angleRad };
   }
 
@@ -22106,7 +22128,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: 'd9d7332-preview',
+            buildId: '70b30d1-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

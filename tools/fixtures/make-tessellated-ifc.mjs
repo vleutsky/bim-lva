@@ -35,14 +35,24 @@ function guid(seed) {
  *        (55300.050/33820.602/1600.150, поворот 12.06°) лежит только здесь.
  *        web-ifc такой контекст не читает — читает и применяет сам вьювер,
  *        см. readWorldCoordinateSystemShift в bim-lva-composer-ifc.html.
+ * @param {boolean} o.worldInTrueNorth — второй подслучай `worldInContext`:
+ *        у самого WorldCoordinateSystem RefDirection = $ (поворота нет), а
+ *        разворот лежит в TrueNorth контекста (направление истинного севера
+ *        относительно оси Y модели). ПОДТВЕРЖДЕНО на файле АР: именно так,
+ *        а не через RefDirection — «Диагностика IFC» показала RefDirection = $
+ *        и TrueNorth = (-0.20894, 0.97793) → -12.060°.
  */
 export function makeTessellatedIfc({
     worldX = 0, worldY = 0, worldZ = 0, rotationDeg = 0,
     boxes = 4, step = 10, size = 4, seed = 1, name = 'tess.ifc', lengthToMetres = 1,
-    worldInContext = false
+    worldInContext = false, worldInTrueNorth = false
 } = {}) {
     const a = rotationDeg * Math.PI / 180;
     const refDir = [Math.cos(a), Math.sin(a), 0];
+    // atan2(Tx, Ty) = a — направление истинного севера, которое даёт при
+    // выравнивании ровно тот же поворот, что и refDir выше (см. вывод в
+    // readWorldCoordinateSystemShift).
+    const trueNorthDir = [Math.sin(a), Math.cos(a), 0];
     const k = 1 / lengthToMetres;                 // метр → единица файла
     const isMm = Math.abs(lengthToMetres - 0.001) < 1e-12;
     const f = (v) => v.toFixed(6);
@@ -64,12 +74,14 @@ export function makeTessellatedIfc({
         '#6=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);',
         '#7=IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);',
         '#8=IFCUNITASSIGNMENT((#5,#6,#7));',
-        `#9=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,${worldInContext ? '#22' : '#4'},$);`,
+        `#9=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,${worldInContext ? '#22' : '#4'},${worldInTrueNorth ? '#23' : '$'});`,
         `#10=IFCPROJECT('${guid(seed + 1)}',$,'TessTest',$,$,$,$,(#9),#8);`,
-        // Вставка площадки: сдвиг + поворот вокруг Z
+        // Вставка площадки: сдвиг + поворот вокруг Z (или сдвиг без поворота,
+        // если поворот вынесен в TrueNorth контекста — worldInTrueNorth).
         `#20=IFCCARTESIANPOINT((${u(worldX)},${u(worldY)},${u(worldZ)}));`,
         `#21=IFCDIRECTION((${f(refDir[0])},${f(refDir[1])},0.));`,
-        '#22=IFCAXIS2PLACEMENT3D(#20,#2,#21);',
+        `#22=IFCAXIS2PLACEMENT3D(#20,#2,${worldInTrueNorth ? '$' : '#21'});`,
+        ...(worldInTrueNorth ? [`#23=IFCDIRECTION((${f(trueNorthDir[0])},${f(trueNorthDir[1])}));`] : []),
         `#11=IFCLOCALPLACEMENT($,${worldInContext ? '#4' : '#22'});`,
         `#12=IFCSITE('${guid(seed + 2)}',$,'Site',$,$,#11,$,$,.ELEMENT.,$,$,$,$,$);`,
         '#13=IFCLOCALPLACEMENT(#11,#4);',

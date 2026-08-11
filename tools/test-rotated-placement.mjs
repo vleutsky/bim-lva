@@ -14,6 +14,12 @@
  * readWorldCoordinateSystemShift/buildWorldCoordinateSystemCorrectionMatrix
  * (bim-lva-composer-ifc.html): без него давал 267 м ошибки, с ним — 0.00.
  *
+ * Повторный запрос диагностики на реальном файле уточнил источник поворота:
+ * у самого WorldCoordinateSystem RefDirection = $ (поворота там нет), а
+ * 12.06° лежат в TrueNorth контекста (-0.20894, 0.97793). Случай
+ * `worldInTrueNorth: true` воспроизводит именно это — регрессия для
+ * запасного чтения угла из TrueNorth в readWorldCoordinateSystemShift.
+ *
  * Сверяем абсолютное положение центра геометрии с посчитанным вручную.
  */
 import { chromium } from 'playwright';
@@ -47,6 +53,11 @@ const BLD_MM = { ...BLD, seed: 77, lengthToMetres: 0.001 };
 // Случай файла АР: мировое преобразование лежит не во вставке, а в
 // WorldCoordinateSystem контекста представления — так пишет экспортёр ODA
 const BLD_CTX = { ...BLD, seed: 123, lengthToMetres: 0.001, worldInContext: true };
+// Тот же файл АР, но точнее: у самого WorldCoordinateSystem RefDirection = $
+// (поворота там нет), а поворот лежит в TrueNorth контекста — «Диагностика
+// IFC» на реальном файле показала именно это (RefDirection = $, TrueNorth
+// -12.060°), а не поворот во вставке.
+const BLD_TN = { ...BLD, seed: 124, lengthToMetres: 0.001, worldInContext: true, worldInTrueNorth: true };
 
 const siteFile = path.join(ROOT, 'tools', 'fixtures', 'rot-site.ifc');
 const bldFile = path.join(ROOT, 'tools', 'fixtures', 'rot-bld.ifc');
@@ -56,6 +67,8 @@ const bldMmFile = path.join(ROOT, 'tools', 'fixtures', 'rot-bld-mm.ifc');
 await fs.writeFile(bldMmFile, makeTessellatedIfc({ ...BLD_MM, name: 'rot-bld-mm.ifc' }));
 const bldCtxFile = path.join(ROOT, 'tools', 'fixtures', 'rot-bld-ctx.ifc');
 await fs.writeFile(bldCtxFile, makeTessellatedIfc({ ...BLD_CTX, name: 'rot-bld-ctx.ifc' }));
+const bldTnFile = path.join(ROOT, 'tools', 'fixtures', 'rot-bld-tn.ifc');
+await fs.writeFile(bldTnFile, makeTessellatedIfc({ ...BLD_TN, name: 'rot-bld-tn.ifc' }));
 
 const { server, port } = await startStaticServer(ROOT);
 const browser = await chromium.launch({ executablePath: await resolveChromium() });
@@ -66,7 +79,7 @@ try {
     await page.goto(`http://127.0.0.1:${port}/bim-lva-composer-ifc.html`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !!window.BimLvaDebug, null, { timeout: 60_000 });
 
-    for (const f of [siteFile, bldFile, bldMmFile, bldCtxFile]) {
+    for (const f of [siteFile, bldFile, bldMmFile, bldCtxFile, bldTnFile]) {
         await page.setInputFiles('#localFileInput', f);
         const base = path.basename(f);
         await page.waitForFunction(
@@ -83,7 +96,8 @@ try {
     for (const [label, re, cfg] of [
         ['метры', /rot-bld\.ifc$/i, BLD],
         ['миллиметры', /rot-bld-mm\.ifc$/i, BLD_MM],
-        ['преобразование в контексте', /rot-bld-ctx\.ifc$/i, BLD_CTX]
+        ['преобразование в контексте', /rot-bld-ctx\.ifc$/i, BLD_CTX],
+        ['поворот в TrueNorth', /rot-bld-tn\.ifc$/i, BLD_TN]
     ]) {
     const bld = bounds.find((m) => re.test(m.file));
     if (!bld) {
@@ -125,6 +139,7 @@ try {
     await fs.rm(bldFile, { force: true });
     await fs.rm(bldMmFile, { force: true });
     await fs.rm(bldCtxFile, { force: true });
+    await fs.rm(bldTnFile, { force: true });
 }
 
 console.log('');
