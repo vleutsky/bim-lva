@@ -94,6 +94,58 @@ async function checkPicking(page) {
 }
 
 /**
+ * ПКМ по элементу → «Выбрать подобные»: должна выделить остальные элементы
+ * того же IFC-класса. Фикстура smoke-grid.ifc — все IFCWALL одного класса,
+ * поэтому ожидаем ровно столько элементов, сколько их в модели.
+ */
+async function checkSelectSimilar(page) {
+    const box = await page.locator('#stage canvas').boundingBox();
+    if (!box) {
+        problems.push('не найден холст для проверки «Выбрать подобные»');
+        return null;
+    }
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const offsets = [0, 0.08, -0.08, 0.16, -0.16];
+
+    for (const dx of offsets) {
+        for (const dy of offsets) {
+            const x = cx + dx * box.width;
+            const y = cy + dy * box.height;
+            await page.mouse.click(x, y);
+            const before = await page.evaluate(() => document.getElementById('sSelected')?.textContent || '0');
+            if (before === '0' || before === '') continue;
+
+            await page.mouse.click(x, y, { button: 'right' });
+            const menuShown = await page.locator('#stageCtx.show').count().catch(() => 0);
+            if (!menuShown) continue;
+            const disabled = await page.evaluate(
+                () => document.getElementById('ctxSelectSimilar')?.classList.contains('disabled')
+            );
+            if (disabled) {
+                await page.mouse.click(10, 10); // закрыть меню, не задев сцену
+                continue;
+            }
+            await page.click('#ctxSelectSimilar');
+            const after = await page
+                .waitForFunction(
+                    (prev) => {
+                        const t = document.getElementById('sSelected')?.textContent || '0';
+                        return t !== prev ? t : false;
+                    },
+                    before,
+                    { timeout: 2000 }
+                )
+                .then((h) => h.jsonValue())
+                .catch(() => null);
+            if (after) return { ok: true, before: Number(before), after: Number(after) };
+        }
+    }
+    problems.push('«Выбрать подобные» не сработала ни в одной точке клика');
+    return { ok: false };
+}
+
+/**
  * Сущности DXF. Слой склеивается в один объект ради скорости отрисовки, но
  * каждая линия должна опознаваться по диапазону вершин: иначе в дереве видно
  * только слой, а отдельную ось не выбрать. Проверяем и дерево, и клик в сцене.
@@ -146,7 +198,21 @@ async function checkDxfEntities(page) {
     }
 
     await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
-    return { entities: rows.length, spans: probe ? probe.spans.length : 0 };
+
+    // «Выбрать подобные» для DXF: те же слой+тип сущности. Все 4 сущности
+    // фикстуры — раскрытые вставки одного и того же полилинии-блока на одном
+    // слое, поэтому ожидаем, что найдутся все.
+    const similarOk = await page.evaluate(() => window.BimLvaDebug.selectSimilarByFile('smoke-blocks', 'polyline'));
+    await page.waitForTimeout(150);
+    const similarCount = await page.evaluate(() => document.getElementById('sSelected')?.textContent || '0');
+    if (!similarOk) {
+        problems.push('«Выбрать подобные» (DXF) не нашла сущность для старта');
+    } else if (Number(similarCount) !== rows.length) {
+        problems.push(`«Выбрать подобные» (DXF): выделила ${similarCount} вместо ${rows.length}`);
+    }
+    await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
+
+    return { entities: rows.length, spans: probe ? probe.spans.length : 0, similar: Number(similarCount) };
 }
 
 /**
@@ -921,6 +987,7 @@ async function main() {
     // строится по порогу, и путь пикинга через дерево остался бы непроверенным.
     let ifcLoaded = null;
     let pick = null;
+    let selectSimilar = null;
     let toast = null;
     let clash = null;
     let dxfBlocks = null;
@@ -946,6 +1013,13 @@ async function main() {
                 // поэтому уведомления идут первыми, коллизии последними.
                 toast = await checkNotifications(page);
                 pick = await checkPicking(page);
+                selectSimilar = await checkSelectSimilar(page);
+                if (selectSimilar?.ok && selectSimilar.after !== 2100) {
+                    problems.push(
+                        `«Выбрать подобные»: выделила ${selectSimilar.after} вместо 2100 (все IFCWALL в smoke-grid.ifc)`
+                    );
+                }
+                await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
 
                 // Вторая модель в тех же координатах — заведомые пересечения.
                 const second = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid-b.ifc');
@@ -1051,6 +1125,9 @@ async function main() {
         );
     }
     if (pick) console.log(`пикинг:    ${pick.ok ? `элемент выбран (${pick.label})` : 'НЕ РАБОТАЕТ'}`);
+    if (selectSimilar) {
+        console.log(`подобные:  ${selectSimilar.ok ? `${selectSimilar.before} → ${selectSimilar.after}` : 'НЕ РАБОТАЕТ'}`);
+    }
     if (toast) console.log(`тосты:     API ${toast.shown ? 'ок' : 'НЕТ'}, из UI ${toast.fromUi ? 'ок' : 'НЕТ'}`);
     if (clash) console.log(`коллизии:  пар ${clash.pairs}, за ${clash.ms} мс`);
     if (dxfBlocks) console.log(`блоки DXF: ${dxfBlocks.ok ? `раскрыты верно, габарит ${dxfBlocks.size}` : 'ОШИБКА'}`);

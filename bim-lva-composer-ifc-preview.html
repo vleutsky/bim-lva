@@ -2192,6 +2192,12 @@
             color: #ffffff;
         }
 
+        .ctx-item.disabled {
+            opacity: 0.4;
+            cursor: default;
+            pointer-events: none;
+        }
+
         .ctx-divider {
             height: 1px;
             background: var(--line);
@@ -2375,7 +2381,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 70b30d1</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 4d832bd</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2641,6 +2647,8 @@
     </div>
 
     <div class="ctx-menu" id="stageCtx">
+        <button class="ctx-item" id="ctxSelectSimilar" title="IFC: тот же класс во всех загруженных моделях. DXF/DWG: та же сущность на том же слое">🧲 Выбрать подобные</button>
+        <div class="ctx-divider"></div>
         <button class="ctx-item" id="ctxBg" title="Переключить светлый цвет фона 3D-сцены">🎨 Изменить цвет фона</button>
         <button class="ctx-item" id="ctxShowAll" title="Снова показать всю скрытую геометрию">👁‍🗨 Показать скрытое</button>
         <button class="ctx-item danger" id="ctxDeleteStage" title="Удалить выделенные элементы из сцены и освободить память. Исходный IFC-файл не меняется">🗑 Удалить выделенное из сцены</button>
@@ -4241,6 +4249,24 @@
             },
             /** Уклон словами — проверяется числами в npm run smoke. */
             slopeText(dz, l2d) { return describeSlope(dz, l2d); },
+            /**
+             * «Выбрать подобные» без клика по 3D-сцене — путь по ПКМ уже
+             * закрывает IFC-ветку (проверено кликом), а DXF-ветку (тот же
+             * слой+тип сущности) иначе не собрать: сущности не позиционируются
+             * предсказуемо в экранных координатах для правого клика.
+             */
+            selectSimilarByFile(fileRe, kindFilter) {
+                const re = new RegExp(fileRe, 'i');
+                for (const [modelID, mod] of loadedModels) {
+                    if (!re.test(mod.filename || '') || !mod.dxfEntities) continue;
+                    for (const [expressID, entry] of mod.dxfEntities) {
+                        if (kindFilter && entry.kind !== kindFilter) continue;
+                        selectSimilarElements({ modelID, expressID });
+                        return true;
+                    }
+                }
+                return false;
+            },
             /** Метки координат: позиции в сцене (для проверки, что подпись не врёт). */
             get coordPins() {
                 return (typeof coordPins !== 'undefined' ? coordPins : [])
@@ -13378,6 +13404,56 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             markNeedsRender();
         }
 
+        /**
+         * Выбрать все элементы того же типа, что и указанный. Для IFC — тот же
+         * класс во ВСЕХ загруженных IFC-моделях (федерация); для DXF/DWG — та же
+         * сущность (линия/полилиния/…) на том же слое в пределах одного файла.
+         */
+        function selectSimilarElements(ref) {
+            const mod = loadedModels.get(ref.modelID);
+            if (!mod) return;
+
+            if (mod.isFBX) {
+                const entry = mod.dxfEntities?.get(ref.expressID);
+                if (!entry) {
+                    notifyError('Выбор подобных для этого формата не поддерживается.');
+                    return;
+                }
+                const matches = [];
+                for (const [id, e] of mod.dxfEntities) {
+                    if (e.layer === entry.layer && e.kind === entry.kind) {
+                        matches.push({ modelID: ref.modelID, expressID: id });
+                    }
+                }
+                selectMultiple(matches);
+                notify(`Выбрано подобных: ${matches.length} (слой «${entry.layer}», ${DXF_KIND_LABEL[entry.kind] || entry.kind})`);
+                trackUsage('select_similar', { kind: 'dxf', count: matches.length });
+                return;
+            }
+
+            if (!mod.ifcIndex) {
+                notifyError('Выбор подобных недоступен: нет индекса файла.');
+                return;
+            }
+            const targetClass = getEntityParts(mod, ref.expressID)?.className;
+            if (!targetClass) {
+                notifyError('Не удалось определить IFC-класс элемента.');
+                return;
+            }
+            const matches = [];
+            for (const [modelID, m] of loadedModels) {
+                if (m.isFBX || !m.ifcIndex) continue;
+                for (const eid of m.meshesByID.keys()) {
+                    if (getEntityParts(m, eid)?.className === targetClass) {
+                        matches.push({ modelID, expressID: eid });
+                    }
+                }
+            }
+            selectMultiple(matches);
+            notify(`Выбрано подобных: ${matches.length} (класс ${targetClass.replace(/^IFC/i, '')})`);
+            trackUsage('select_similar', { kind: 'ifc', count: matches.length });
+        }
+
         // Raycaster (Клик по геометрии)
         function pickStageHit(clientX, clientY) {
             if (allMeshes.length === 0) return null;
@@ -13393,6 +13469,26 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const hits = raycaster.intersectObjects(collectRaycastTargets(_pickRayTargets), false);
             const validHits = isClipping ? hits.filter(h => pointPassesClipping(h.point)) : hits;
             return validHits[0] || null;
+        }
+
+        /** {modelID, expressID} из попадания луча — батч-IFC и DXF/DWG разрешаются отдельно. */
+        function resolveHitElementRef(hit) {
+            if (!hit) return null;
+            const hitObj = hit.object;
+            const ud = hitObj.userData;
+            let expressID = ud.expressID;
+            if (ud.isBatch) {
+                const attr = hitObj.geometry?.getAttribute('expressId');
+                const face = hit.face;
+                if (attr && face) expressID = Math.round(attr.getX(face.a));
+            }
+            // DXF/DWG: слой склеен в один объект, сущность опознаём по номеру
+            // вершины, в которую попал луч
+            const dxfVertex = hit.face ? hit.face.a : hit.index;
+            const dxfId = dxfEntityAtVertex(hitObj, dxfVertex);
+            if (dxfId != null) expressID = dxfId;
+            if (expressID == null || ud.modelID == null) return null;
+            return { modelID: ud.modelID, expressID };
         }
 
         renderer.domElement.addEventListener('click', (ev) => {
@@ -13468,22 +13564,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             
             // ОБЫЧНОЕ ВЫДЕЛЕНИЕ
-            const hitObj = validHits[0].object;
-            const ud = hitObj.userData;
-            let expressID = ud.expressID;
-            if (ud.isBatch) {
-                const attr = hitObj.geometry?.getAttribute('expressId');
-                const face = validHits[0].face;
-                if (attr && face) expressID = Math.round(attr.getX(face.a));
-            }
-            // DXF/DWG: слой склеен в один объект, сущность опознаём по номеру
-            // вершины, в которую попал луч
-            const dxfVertex = validHits[0].face ? validHits[0].face.a : validHits[0].index;
-            const dxfId = dxfEntityAtVertex(hitObj, dxfVertex);
-            if (dxfId != null) expressID = dxfId;
-            if (expressID == null || ud.modelID == null) return;
+            const ref = resolveHitElementRef(validHits[0]);
+            if (!ref) return;
             treeSelectionAnchor = null;
-            selectMultiple([{ modelID: ud.modelID, expressID }]);
+            selectMultiple([ref]);
         });
 
         // Координаты под курсором (низ экрана)
@@ -20512,6 +20596,7 @@ ${componentXml || '    '}
         // --- Context Menus & Background ---
         const treeCtx = $('treeCtx'), stageCtx = $('stageCtx');
         let treeContextRow = null;
+        let stageContextElementRef = null;
         
         window.addEventListener('click', () => { 
             treeCtx.classList.remove('show'); 
@@ -20573,15 +20658,20 @@ ${componentXml || '    '}
                 stageCtx.classList.remove('show');
                 return;
             }
-            stageCtx.style.left = e.clientX + 'px'; 
-            stageCtx.style.top = e.clientY + 'px'; 
-            stageCtx.classList.add('show'); 
+            stageContextElementRef = resolveHitElementRef(pickStageHit(e.clientX, e.clientY));
+            $('ctxSelectSimilar').classList.toggle('disabled', !stageContextElementRef);
+            stageCtx.style.left = e.clientX + 'px';
+            stageCtx.style.top = e.clientY + 'px';
+            stageCtx.classList.add('show');
             treeCtx.classList.remove('show');
         });
 
         $('ctxHide').addEventListener('click', () => $('btnHide').click());
         $('ctxDeleteSel').addEventListener('click', deleteSelectedElementsFromScene);
         $('ctxDeleteStage').addEventListener('click', deleteSelectedElementsFromScene);
+        $('ctxSelectSimilar').addEventListener('click', () => {
+            if (stageContextElementRef) selectSimilarElements(stageContextElementRef);
+        });
 
         $('ctxAddBranch').addEventListener('click', () => {
             if (!treeContextRow) return;
@@ -22128,7 +22218,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: '70b30d1-preview',
+            buildId: '4d832bd-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
