@@ -177,6 +177,7 @@
       props: sanitizeProps(item.p),
       client_id: clientId,
       email: user?.email || null,
+      name: user?.name || null,
       user_id: user?.id || null,
       page
     }));
@@ -197,7 +198,7 @@
     const lim = Math.min(2000, Math.max(50, Number(limit) || 500));
     const { data, error } = await sb
       .from('viewer_usage_events')
-      .select('created_at,email,client_id,event,props,page,user_id')
+      .select('created_at,email,name,client_id,event,props,page,user_id')
       .order('created_at', { ascending: false })
       .limit(lim);
     if (error) throw error;
@@ -214,6 +215,7 @@
         row = {
           key,
           email: email || null,
+          name: '',
           clientId: r.client_id || '',
           events: 0,
           composerOpens: 0,
@@ -227,6 +229,9 @@
       }
       const t = r.created_at ? new Date(r.created_at).getTime() : 0;
       if (t > row.lastAt) row.lastAt = t;
+      // Строки идут от новых к старым — первое непустое имя на ключ уже самое
+      // свежее, дальше не перезаписываем.
+      if (!row.name && r.name) row.name = String(r.name);
       const ev = String(r.event || '');
       row.events += 1;
       row.top[ev] = (row.top[ev] || 0) + 1;
