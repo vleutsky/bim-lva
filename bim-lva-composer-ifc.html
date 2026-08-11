@@ -4075,6 +4075,17 @@
                 }
                 return out;
             },
+            /** Куда нацелена орбита и где центр выделения — для проверки видов. */
+            get cameraTarget() {
+                return { x: controls.target.x, y: controls.target.y, z: controls.target.z };
+            },
+            get selectionCentre() {
+                if (!selectedItems.length) return null;
+                const box = getSelectionBounds(selectedItems);
+                if (!box || box.isEmpty()) return null;
+                const c = box.getCenter(new THREE.Vector3());
+                return { x: c.x, y: c.y, z: c.z };
+            },
             /** Начерченные полилинии в абсолютных координатах. */
             get drawn() {
                 return (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
@@ -5117,9 +5128,9 @@
          * Y-up: ifcWorldOrigin = (E, h, −N), а сцена после поворота — Z-up.
          */
         function currentWorldShiftEN() {
-            const o = ifcWorldOrigin;
-            if (!o) return { e: 0, n: 0, h: 0 };
-            return { e: o.x, n: -o.z, h: o.y };
+            if (!ifcWorldOrigin) return { e: 0, n: 0, h: 0 };
+            const v = worldOriginSceneVec();
+            return { e: v.x, n: v.y, h: v.z };
         }
 
         /**
@@ -7351,6 +7362,39 @@ uniform vec3 uBatchSelColor;
         // Важно: IFC часто в мм, LandXML в метрах — перед origin приводим IFC к метрам.
         const LARGE_COORD_THRESHOLD = 5000; // м от (0,0,0)
         let ifcWorldOrigin = null; // {x,y,z} в метрах (до поворота globalGroup)
+        /**
+         * В каких осях записан ноль сцены. IFC приходит Y-up (E, h, −N) и живёт
+         * под повёрнутым globalGroup; DXF/DWG/FBX/LandXML — сразу Z-up (E, N, h)
+         * в externalGroup. Ноль задаёт ПЕРВАЯ крупная модель, какой бы она ни
+         * была, поэтому систему осей надо помнить, а не предполагать: иначе у
+         * координат меняются местами север и отметка.
+         */
+        let worldOriginFrame = 'ifc';
+
+        /** Ноль сцены в осях сцены (Z-up: восток, север, отметка). */
+        function worldOriginSceneVec() {
+            const o = ifcWorldOrigin;
+            if (!o) return new THREE.Vector3();
+            return worldOriginFrame === 'ifc'
+                ? new THREE.Vector3(o.x, -o.z, o.y)   // R(Y-up) → Z-up
+                : new THREE.Vector3(o.x, o.y, o.z);
+        }
+
+        /** Ноль сцены в осях IFC (Y-up), как его ждут фрагменты web-ifc. */
+        function worldOriginIfcVec() {
+            const o = ifcWorldOrigin;
+            if (!o) return new THREE.Vector3();
+            return worldOriginFrame === 'ifc'
+                ? new THREE.Vector3(o.x, o.y, o.z)
+                : new THREE.Vector3(o.x, o.z, -o.y);  // R⁻¹(Z-up) → Y-up
+        }
+
+        /** Вектор сцены → в осях, в которых записан ноль (для его правки). */
+        function sceneVecToOriginFrame(v) {
+            return worldOriginFrame === 'ifc'
+                ? new THREE.Vector3(v.x, v.z, -v.y)
+                : v.clone();
+        }
         let ifcOriginAutoApplied = false;
         let worldOriginSource = null; // { filename, format }
         let worldOriginLengthUnit = 'm';
@@ -7670,27 +7714,16 @@ uniform vec3 uBatchSelColor;
             const o = ifcWorldOrigin;
             if (!o) return worldPoint.clone();
 
-            let isExternal = false;
-            if (hitObject?.userData?.modelID != null) {
-                const mod = loadedModels.get(hitObject.userData.modelID);
-                isExternal = !!(mod?.isExternal || mod?.isFBX);
-            }
-
-            if (isExternal) {
-                return new THREE.Vector3(
-                    worldPoint.x + o.x,
-                    worldPoint.y + o.y,
-                    worldPoint.z + o.z
-                );
-            }
-
-            const p = worldPoint.clone();
-            globalGroup.worldToLocal(p);
-            // IFC Z-up в сцене: Rx(π/2) → показ как восток · север · отметка (север без «вечного» минуса)
-            const east = p.x + o.x;
-            const north = -(p.z + o.z);
-            const elev = p.y + o.y;
-            return new THREE.Vector3(east, north, elev);
+            // Вся геометрия — и IFC после поворота globalGroup, и внешние
+            // форматы — лежит в одних осях сцены. Значит и пересчёт один, а не
+            // выбирается по тому, во что попал курсор: раньше при промахе мимо
+            // элемента север и отметка менялись местами.
+            const shift = worldOriginSceneVec();
+            return new THREE.Vector3(
+                worldPoint.x + shift.x,
+                worldPoint.y + shift.y,
+                worldPoint.z + shift.z
+            );
         }
 
         // Последние показания держим отдельно от текста: при уходе мыши со сцены
@@ -8036,7 +8069,8 @@ uniform vec3 uBatchSelColor;
             const negCw = centerWorld.clone().negate();
             _snapStats.count++;
             _snapStats.total.add(negCw);
-            const ifcShift = shiftLoadedModelsByWorldVector(negCw);
+            shiftLoadedModelsByWorldVector(negCw);
+            const ifcShift = sceneVecToOriginFrame(negCw);
             // Геометрия уехала на +ifcShift — ноль сцены обязан уехать на −ifcShift.
             // Без этого до-центрирование (оно срабатывает на «Вписать» и после
             // загрузки второго файла) молча смещает ВСЕ абсолютные координаты на
@@ -8108,7 +8142,7 @@ uniform vec3 uBatchSelColor;
             }
         }
 
-        function setWorldOriginFromFirstModel(center, sourceMeta = {}) {
+        function setWorldOriginFromFirstModel(center, sourceMeta = {}, frame = 'ifc') {
             if (ifcWorldOrigin || !center) return false;
             const mag = typeof center.length === 'function'
                 ? center.length()
@@ -8119,6 +8153,7 @@ uniform vec3 uBatchSelColor;
                 y: center.y,
                 z: center.z
             };
+            worldOriginFrame = frame;
             ifcOriginAutoApplied = true;
             worldOriginSource = {
                 filename: sourceMeta.filename || sourceMeta.name || '',
@@ -8196,13 +8231,10 @@ uniform vec3 uBatchSelColor;
                 geoRasterGroup.position.set(0, 0, 0);
                 return;
             }
-            // IFC (x,y,z) под globalGroup.rotation.x = π/2 → сцена (x, -z, y)
-            // Вершины сдвинуты на -origin в IFC → растр (уже в сцене) сдвигаем на -R(origin)
-            geoRasterGroup.position.set(
-                -ifcWorldOrigin.x,
-                ifcWorldOrigin.z,
-                -ifcWorldOrigin.y
-            );
+            // Растр живёт прямо в сцене, поэтому сдвигаем его на минус ноль
+            // сцены — в осях сцены, какой бы файл этот ноль ни задал.
+            const v = worldOriginSceneVec();
+            geoRasterGroup.position.set(-v.x, -v.y, -v.z);
         }
 
         function updateCrsAutoUi() {
@@ -8267,17 +8299,12 @@ uniform vec3 uBatchSelColor;
             if (!center) return false;
 
             if (!ifcWorldOrigin) {
-                if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
+                if (!setWorldOriginFromFirstModel(center, sourceMeta, 'ifc')) return false;
             } else if (center.length() < LARGE_COORD_THRESHOLD) {
                 return false;
             }
 
-            const origin = new THREE.Vector3(
-                ifcWorldOrigin.x,
-                ifcWorldOrigin.y,
-                ifcWorldOrigin.z
-            );
-            subtractVectorFromFragmentVertices(fragments, origin);
+            subtractVectorFromFragmentVertices(fragments, worldOriginIfcVec());
             return true;
         }
 
@@ -8308,12 +8335,13 @@ uniform vec3 uBatchSelColor;
             }
 
             if (!ifcWorldOrigin) {
-                if (!setWorldOriginFromFirstModel(center, sourceMeta)) return false;
+                // Внешние форматы уже в осях сцены — так ноль и запоминаем
+                if (!setWorldOriginFromFirstModel(center, sourceMeta, 'scene')) return false;
             } else if (center.length() < LARGE_COORD_THRESHOLD) {
                 return false;
             }
 
-            const o = ifcWorldOrigin;
+            const o = worldOriginSceneVec();
             root.traverse(obj => {
                 if (!obj.geometry?.attributes?.position) return;
                 obj.geometry.translate(-o.x, -o.y, -o.z);
@@ -8331,6 +8359,7 @@ uniform vec3 uBatchSelColor;
 
         function resetIfcWorldOrigin() {
             ifcWorldOrigin = null;
+            worldOriginFrame = 'ifc';
             ifcOriginAutoApplied = false;
             worldOriginSource = null;
             worldOriginLengthUnit = 'm';

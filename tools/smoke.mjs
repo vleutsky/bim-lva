@@ -303,6 +303,28 @@ async function checkViewCube(page) {
             );
         }
     }
+    // С выделением куб обязан кадрировать элемент, а не всю сцену
+    const zoom = await page.evaluate(async () => {
+        const row = document.querySelector('#tree .trow[data-eid]');
+        if (!row) return null;
+        row.click();
+        await new Promise((r) => setTimeout(r, 150));
+        document.querySelector('#viewCube .vc-btn[data-view="top"]').click();
+        await new Promise((r) => setTimeout(r, 150));
+        const t = window.BimLvaDebug.cameraTarget;
+        const sel = window.BimLvaDebug.selectionCentre;
+        return sel ? { t, sel } : null;
+    });
+    if (!zoom) {
+        problems.push('не удалось выделить элемент для проверки зума видовым кубом');
+    } else {
+        const off = Math.hypot(zoom.t.x - zoom.sel.x, zoom.t.y - zoom.sel.y, zoom.t.z - zoom.sel.z);
+        if (off > 0.5) {
+            problems.push(`видовой куб с выделением смотрит мимо элемента на ${off.toFixed(1)} м`);
+        }
+    }
+    await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
+
     return views;
 }
 
