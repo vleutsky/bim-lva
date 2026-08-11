@@ -2522,6 +2522,9 @@
         <button class="ctx-item" id="ctxHide" title="Скрыть геометрию выбранной ветки">👁 Скрыть ветку</button>
         <button class="ctx-item danger" id="ctxDeleteSel" title="Удалить выделенные элементы из сцены и освободить память. Исходный IFC-файл не меняется">🗑 Удалить выделенное из сцены</button>
         <div class="ctx-divider"></div>
+        <button class="ctx-item" id="ctxReloadFile" title="Перечитать файл с диска, не убирая модель из сцены. Камера и остальные модели остаются на месте">⟳ Обновить модель</button>
+        <button class="ctx-item" id="ctxReloadAll" title="Перечитать все загруженные файлы">⟳ Обновить все модели</button>
+        <div class="ctx-divider"></div>
         <button class="ctx-item danger" id="ctxRemoveFile" title="Удалить весь файл, которому принадлежит выбранная ветка, из просмотрщика">✕ Удалить загруженный файл</button>
     </div>
 
@@ -6371,6 +6374,119 @@
 
         // --- Загрузка ---
         let loadSourceHint = 'local';
+        /* --- Обновление загруженной модели ----------------------------------
+         * Перечитать файл «по пути» браузер не даёт. Там, где есть
+         * FileSystemFileHandle (перетаскивание в Chrome или выбор через
+         * showOpenFilePicker), обновляем молча; иначе просим выбрать файл —
+         * это всё равно один диалог вместо «удалить и добавить заново».
+         */
+        const pendingFileHandles = new WeakMap();
+
+        async function captureDropHandles(dataTransfer) {
+            if (!dataTransfer?.items) return;
+            const jobs = [...dataTransfer.items].map(async (item) => {
+                if (item.kind !== 'file' || typeof item.getAsFileSystemHandle !== 'function') return;
+                try {
+                    const handle = await item.getAsFileSystemHandle();
+                    if (!handle || handle.kind !== 'file') return;
+                    const file = await handle.getFile();
+                    pendingFileHandles.set(file, handle);
+                    return file;
+                } catch (_) { /* Firefox/Safari — просто не будет тихого обновления */ }
+            });
+            const files = (await Promise.all(jobs)).filter(Boolean);
+            return files.length ? files : null;
+        }
+
+        /** Файл для обновления: сначала handle, потом диалог. */
+        async function resolveReloadFile(mod) {
+            if (mod.sourceHandle?.getFile) {
+                try {
+                    const perm = mod.sourceHandle.queryPermission
+                        ? await mod.sourceHandle.queryPermission({ mode: 'read' })
+                        : 'granted';
+                    if (perm !== 'granted' && mod.sourceHandle.requestPermission) {
+                        const asked = await mod.sourceHandle.requestPermission({ mode: 'read' });
+                        if (asked !== 'granted') throw new Error('нет доступа к файлу');
+                    }
+                    return await mod.sourceHandle.getFile();
+                } catch (error) {
+                    console.warn('[BIM.LVA] handle обновления не сработал:', error);
+                }
+            }
+            const ext = '.' + String(mod.filename || '').split('.').pop().toLowerCase();
+            if (typeof window.showOpenFilePicker === 'function') {
+                try {
+                    const [handle] = await window.showOpenFilePicker({
+                        multiple: false,
+                        types: [{ description: `Файл ${mod.filename}`, accept: { 'application/octet-stream': [ext] } }]
+                    });
+                    if (!handle) return null;
+                    const file = await handle.getFile();
+                    pendingFileHandles.set(file, handle);
+                    return file;
+                } catch (_) { return null; }
+            }
+            return await pickFileViaInput(ext);
+        }
+
+        /** Запасной путь для браузеров без File System Access API. */
+        function pickFileViaInput(accept) {
+            return new Promise(resolve => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = accept;
+                input.style.display = 'none';
+                document.body.appendChild(input);
+                input.addEventListener('change', () => {
+                    const file = input.files?.[0] || null;
+                    input.remove();
+                    resolve(file);
+                }, { once: true });
+                input.click();
+            });
+        }
+
+        async function reloadLoadedModel(modelID, opts = {}) {
+            const mod = loadedModels.get(modelID);
+            if (!mod) return false;
+            if (mod.edited && !opts.silentEdited &&
+                !confirm(`В «${mod.filename}» есть несохранённые правки. Обновить файл и потерять их?`)) {
+                return false;
+            }
+            const file = await resolveReloadFile(mod);
+            if (!file) return false;
+
+            // Камера не должна прыгать — ради этого обновление и делается
+            const camPos = camera.position.clone();
+            const camTarget = controls.target.clone();
+
+            removeLoadedModel(modelID);
+            await handleFiles([file]);
+
+            camera.position.copy(camPos);
+            controls.target.copy(camTarget);
+            controls.update();
+            markNeedsRender();
+            trackUsage('model_reload');
+            return true;
+        }
+
+        async function reloadAllModels() {
+            const list = [...loadedModels.entries()];
+            if (!list.length) return notifyError('Загруженных моделей нет.');
+            let done = 0;
+            let skipped = 0;
+            for (const [modelID, mod] of list) {
+                // Модель могла исчезнуть, пока обновляли предыдущую
+                if (!loadedModels.has(modelID)) continue;
+                const ok = await reloadLoadedModel(modelID, { silentEdited: true });
+                if (ok) done++; else skipped++;
+            }
+            if (done) notify(`Обновлено моделей: ${done}${skipped ? `, пропущено ${skipped}` : ''}`);
+            else notifyError('Ни одна модель не обновлена.');
+        }
+
         async function handleFiles(fileList) {
             const files = fileList ? [...fileList] : [];
             if (!files.length) return;
@@ -6415,6 +6531,7 @@
                 const ext = file.name.split('.').pop().toLowerCase();
                 if (multi) setLoadFileActive(i, file);
                 const before = loadedModels.size;
+                const knownIDs = new Set(loadedModels.keys());
                 showLoader('ЗАГРУЗКА', multi ? '' : file.name);
                 try {
                     if (ext === 'ifc') await loadSingleIFC(file);
@@ -6436,6 +6553,13 @@
                     } else if (ext === 'ply' || ext === 'dae' || ext === '3ds') {
                         skipped.push(`${file.name} (формат снят с поддержки — используйте IFC / DXF / GLB / OBJ / STL)`);
                     } else skipped.push(file.name);
+                    // Запоминаем, откуда файл приехал: с handle его удастся
+                    // перечитать молча, без диалога (кнопка «Обновить модель»).
+                    for (const [id, mod] of loadedModels) {
+                        if (knownIDs.has(id)) continue;
+                        mod.sourceFile = file;
+                        mod.sourceHandle = pendingFileHandles.get(file) || null;
+                    }
                     // Модель прибавилась — значит файл действительно загрузился,
                     // а не просто отработал без исключения (skip тоже не бросает)
                     if (multi) {
@@ -18779,10 +18903,13 @@ ${componentXml || '    '}
             e.preventDefault(); 
             stage.classList.remove('dragover'); 
         }));
-        stage.addEventListener('drop', e => {
+        stage.addEventListener('drop', async e => {
             // rvt/rfa/rte пропускаем дальше намеренно: пусть диспетчер объяснит,
             // почему Revit не открыть, вместо молчаливого отсева.
-            const files = Array.from(e.dataTransfer.files).filter(f => /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|rvt|rfa|rte)$/i.test(f.name));
+            const SUPPORTED = /\.(ifc|fbx|dxf|dwg|xml|glb|obj|stl|rvt|rfa|rte)$/i;
+            // Через handle тот же файл потом можно перечитать без диалога
+            const viaHandles = await captureDropHandles(e.dataTransfer);
+            const files = (viaHandles || Array.from(e.dataTransfer.files)).filter(f => SUPPORTED.test(f.name));
             if (files.length) {
                 loadSourceHint = 'drag_drop';
                 handleFiles(files).finally(() => { loadSourceHint = 'local'; });
@@ -18902,6 +19029,32 @@ ${componentXml || '    '}
         $('ctxAddBranch').addEventListener('click', () => {
             if (!treeContextRow) return;
             openBranchModalForRow(treeContextRow);
+        });
+
+        /** modelID по строке дерева, на которой открыли контекстное меню. */
+        function modelIDFromContextRow() {
+            const fileRoot = treeContextRow && treeContextRow.closest('.file-root');
+            const fileRow = fileRoot && fileRoot.firstElementChild;
+            if (!fileRow || fileRow.dataset.mid === undefined) return null;
+            const raw = fileRow.dataset.mid;
+            return isNaN(raw) ? raw : parseInt(raw, 10);
+        }
+
+        $('ctxReloadFile').addEventListener('click', async () => {
+            const modelID = modelIDFromContextRow();
+            treeContextRow = null;
+            if (modelID === null || !loadedModels.has(modelID)) {
+                notifyError('Не удалось определить загруженный файл для этой ветки.');
+                return;
+            }
+            const name = loadedModels.get(modelID).filename;
+            const ok = await reloadLoadedModel(modelID);
+            if (ok) notify(`Модель обновлена: ${name}`);
+        });
+
+        $('ctxReloadAll').addEventListener('click', async () => {
+            treeContextRow = null;
+            await reloadAllModels();
         });
 
         $('ctxRemoveFile').addEventListener('click', () => {

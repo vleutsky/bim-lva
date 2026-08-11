@@ -28,6 +28,8 @@ const problems = [];
 let train = null;
 let coordPin = null;
 let ruler = null;
+let reload = null;
+let bvhPeak = -1;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -193,6 +195,69 @@ async function checkCoordPin(page) {
     }
 
     return { shown, diff, movedBy };
+}
+
+/**
+ * «Обновить модель» из контекстного меню дерева. Перечитать файл «по пути»
+ * браузер не даёт, поэтому подменяем showOpenFilePicker — тот же путь, что
+ * отработает у пользователя без FileSystemFileHandle.
+ */
+async function checkReload(page, port) {
+    const fresh = path.join(ROOT, 'tools', 'fixtures', 'reload-b.ifc');
+    await fs.writeFile(fresh, makeGeoIfc({
+        worldX: 0, worldY: 0, worldZ: 0, count: 24, cols: 6, seed: 4242, name: 'reload-b.ifc'
+    }));
+    try {
+        await page.evaluate(async (url) => {
+            const text = await (await fetch(url)).text();
+            const file = new File([text], 'reload-b.ifc', { type: 'application/octet-stream' });
+            window.showOpenFilePicker = async () => [{
+                kind: 'file',
+                getFile: async () => file,
+                queryPermission: async () => 'granted'
+            }];
+        }, `http://127.0.0.1:${port}/tools/fixtures/reload-b.ifc`);
+
+        const before = await page.evaluate(() => (window.BimLvaDebug?.modelBounds || []).map((m) => m.file));
+        const opened = await page.evaluate(() => {
+            const row = document.querySelector('#tree .file-root .trow');
+            if (!row) return false;
+            row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40 }));
+            return !!document.getElementById('ctxReloadFile');
+        });
+        if (!opened) {
+            problems.push('в контекстном меню дерева нет пункта «Обновить модель»');
+            return null;
+        }
+        await page.evaluate(() => document.getElementById('ctxReloadFile').click());
+
+        const after = await page
+            .waitForFunction(() => {
+                const list = window.BimLvaDebug?.modelBounds || [];
+                return list.some((m) => /reload-b\.ifc$/i.test(m.file)) ? list : false;
+            }, { timeout: 60_000 })
+            .then((h) => h.jsonValue())
+            .catch(() => null);
+
+        if (!after) {
+            problems.push('модель не обновилась: нового файла нет в сцене');
+            return null;
+        }
+        // Обновление не должно ни плодить дубли, ни трогать соседние модели
+        const names = after.map((m) => m.file);
+        if (names.length !== before.length) {
+            problems.push(`после обновления моделей ${names.length}, было ${before.length}`);
+        }
+        const replaced = before.find((n) => !names.includes(n));
+        const untouched = before.filter((n) => names.includes(n)).length;
+        if (!replaced) problems.push('старая версия модели осталась в сцене — получился дубль');
+        if (untouched !== before.length - 1) {
+            problems.push('обновление задело соседние модели');
+        }
+        return { was: replaced, now: 'reload-b.ifc', kept: untouched };
+    } finally {
+        await fs.rm(fresh, { force: true });
+    }
 }
 
 /**
@@ -589,6 +654,10 @@ async function main() {
                     dxfBlocks = await checkDxfBlocks(page);
                     coordPin = await checkCoordPin(page);
                     ruler = await checkRuler(page);
+                    // BVH снимаем до обновления: новая модель маленькая и своего
+                    // дерева не строит, а финальная проверка смотрит на итог сцены
+                    bvhPeak = await page.evaluate(() => window.BimLvaDebug?.bvhCount ?? -1);
+                    reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
                     train = await checkTourTrain(page);
                 } finally {
@@ -609,7 +678,7 @@ async function main() {
         bvhCount: window.BimLvaDebug?.bvhCount ?? -1
     }));
 
-    if (state.bvhCount === 0) {
+    if (state.bvhCount === 0 && bvhPeak <= 0) {
         problems.push('BVH не построен ни на одном меше — пикинг остался линейным перебором');
     }
 
@@ -638,6 +707,12 @@ async function main() {
         console.log(
             `линейка:   L3D ${ruler.l3d.toFixed(2)} · L2D ${ruler.l2d.toFixed(2)} · ` +
             `ΔZ ${ruler.dz.toFixed(2)} · i ${ruler.perMille.toFixed(1)} ‰`
+        );
+    }
+    if (reload) {
+        console.log(
+            `обновление: «${reload.was}» → «${reload.now}», ` +
+            `соседних моделей не тронуто ${reload.kept}`
         );
     }
     if (train) {
