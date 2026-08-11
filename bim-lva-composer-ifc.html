@@ -1003,13 +1003,17 @@
             padding: 30px;
         }
 
-        #labels-container {
+        #labels-container,
+        #coord-pins-container {
             position: absolute;
             inset: 0;
             pointer-events: none;
             z-index: 15;
             overflow: hidden;
         }
+        /* Метки координат — свой слой: «очистить замеры» стирает innerHTML
+           контейнера подписей целиком, и метки уезжали вместе с ним. */
+        #coord-pins-container { z-index: 16; }
 
         #boxSelectRect {
             position: absolute;
@@ -1046,6 +1050,36 @@
             border-color: transparent;
             font-weight: 700;
         }
+
+        .coord-pin-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            background: rgba(19, 32, 51, .92);
+            color: #eaf2fb;
+            border: 1px solid #3a5f86;
+            padding: 5px 7px;
+            border-radius: 5px;
+            font-family: 'IBM Plex Mono';
+            font-size: 11px;
+            line-height: 1.35;
+            white-space: pre;
+            transform: translate(-50%, -50%);
+            pointer-events: auto;
+            cursor: copy;
+            box-shadow: 0 4px 14px rgba(10, 20, 32, .35);
+        }
+        .coord-pin-label:hover { border-color: #6fa8dc; }
+        .coord-pin-label .cp-x {
+            cursor: pointer;
+            color: #93a7bd;
+            font-weight: 700;
+            padding: 0 2px;
+        }
+        .coord-pin-label .cp-x:hover { color: #ff8f8f; }
 
         .measure-label {
             position: absolute;
@@ -2229,6 +2263,7 @@
             <div class="tb-rail" id="tbRailMain">
                 <div class="tb-seg" id="tbSegTools" data-tb-overflow="3">
                     <button class="btn" id="btnMeasure" disabled title="Инструмент замеров"><span class="tb-ico">📏</span><span class="tb-txt">Замер</span></button>
+                    <button class="btn" id="btnCoordPin" disabled title="Метка координат: клик по модели ставит подпись с X, Y, Z (абсолютные, в метрах)"><span class="tb-ico">📍</span><span class="tb-txt">Метка XYZ</span></button>
                     <select id="measureModeSelect" class="tool-select" disabled title="Режим замера">
                         <option value="distance">м</option>
                         <option value="chain">∑</option>
@@ -2381,7 +2416,7 @@
                 <span style="color:var(--accent);font-size:12px;margin-top:6px;display:inline-block">Нажмите здесь или кнопку «ЛОКАЛЬНО» для выбора файла</span>
             </p>
         </div>
-        <div id="labels-container"></div> <div id="boxSelectRect"></div>
+        <div id="labels-container"></div> <div id="coord-pins-container"></div> <div id="boxSelectRect"></div>
         <div id="tourHud" class="tour-hud" hidden>
             <span id="tourHudText">Проезд…</span>
             <select id="tourHudCamView" class="editInput" title="Вид камеры" style="max-width:160px;padding:4px 8px;font-size:12px">
@@ -3219,6 +3254,7 @@
         const treeBox = document.getElementById('tree');
         const propsBox = document.getElementById('props');
         const labelsContainer = document.getElementById('labels-container');
+        const coordPinsContainer = document.getElementById('coord-pins-container');
         const $ = id => document.getElementById(id);
 
         function trackUsage(event, props) {
@@ -3913,6 +3949,16 @@
                     });
                 }
                 return out;
+            },
+            /** Метки координат: позиции в сцене (для проверки, что подпись не врёт). */
+            get coordPins() {
+                return (typeof coordPins !== 'undefined' ? coordPins : [])
+                    .map((p) => ({ x: p.pos.x, y: p.pos.y, z: p.pos.z }));
+            },
+            /** Точка сцены → абсолютные east/north/высота, как их печатает статус-бар. */
+            absoluteAt(x, y, z) {
+                const abs = worldPointToAbsoluteXYZ(new THREE.Vector3(x, y, z));
+                return abs ? { e: abs.x, n: abs.y, h: abs.z } : null;
             },
             /** Габарит транспорта тура в метрах — чем едем и какого он размера. */
             get tourVehicleBox() {
@@ -5188,6 +5234,90 @@
             labelsList = [];
         }
 
+        /* --- Метки координат -------------------------------------------------
+         * Свой слой, не общий с замерами: «Очистить замеры» их не трогает.
+         * Числа берём через worldPointToAbsoluteXYZ — тот же путь, что печатает
+         * строка состояния, чтобы метка и статус-бар не могли разойтись.
+         */
+        let coordPinMode = false;
+        let coordPins = [];
+        const coordPinVisuals = new THREE.Group();
+        coordPinVisuals.name = 'CoordPins';
+        scene.add(coordPinVisuals);
+
+        function formatCoordPinText(abs) {
+            return `X ${abs.x.toFixed(3)}\nY ${abs.y.toFixed(3)}\nZ ${abs.z.toFixed(3)}`;
+        }
+
+        function removeCoordPin(pin) {
+            const i = coordPins.indexOf(pin);
+            if (i >= 0) coordPins.splice(i, 1);
+            pin.div?.remove();
+            if (pin.marker) {
+                coordPinVisuals.remove(pin.marker);
+                pin.marker.geometry?.dispose();
+                pin.marker.material?.dispose();
+            }
+            markNeedsRender();
+        }
+
+        function clearCoordPins() {
+            [...coordPins].forEach(removeCoordPin);
+            coordPins = [];
+        }
+
+        function addCoordPin(worldPoint, hitObject = null) {
+            const abs = worldPointToAbsoluteXYZ(worldPoint, hitObject) || worldPoint.clone();
+            const marker = new THREE.Mesh(
+                new THREE.SphereGeometry(0.35, 12, 10),
+                new THREE.MeshBasicMaterial({ color: 0xff8f3f, depthTest: false })
+            );
+            marker.position.copy(worldPoint);
+            marker.renderOrder = 999;
+            coordPinVisuals.add(marker);
+
+            const div = document.createElement('div');
+            div.className = 'coord-pin-label';
+            const text = document.createElement('span');
+            text.textContent = formatCoordPinText(abs);
+            const close = document.createElement('span');
+            close.className = 'cp-x';
+            close.textContent = '✕';
+            close.title = 'Убрать метку';
+            div.append(text, close);
+            coordPinsContainer.appendChild(div);
+
+            const pin = { pos: worldPoint.clone(), div, marker, abs };
+            coordPins.push(pin);
+
+            close.addEventListener('click', (e) => {
+                e.stopPropagation();
+                removeCoordPin(pin);
+            });
+            div.addEventListener('click', async () => {
+                const line = `${abs.x.toFixed(3)} ${abs.y.toFixed(3)} ${abs.z.toFixed(3)}`;
+                try {
+                    await navigator.clipboard.writeText(line);
+                    notify('Координаты метки скопированы: ' + line);
+                } catch (_) {
+                    notify('Координаты метки: ' + line);
+                }
+            });
+
+            trackUsage('coord_pin');
+            markNeedsRender();
+            return pin;
+        }
+
+        function setCoordPinMode(on) {
+            coordPinMode = !!on;
+            $('btnCoordPin')?.classList.toggle('on', coordPinMode);
+            if (coordPinMode && isMeasuring) $('btnMeasure').click();
+            $('stage').style.cursor = coordPinMode ? 'crosshair' : '';
+        }
+
+        $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
+
         function addMeasureMarker(pt) {
             const sphere = new THREE.Mesh(
                 new THREE.SphereGeometry(0.15),
@@ -5293,6 +5423,7 @@
 
         $('btnMeasure').addEventListener('click', () => {
             isMeasuring = !isMeasuring;
+            if (isMeasuring && coordPinMode) setCoordPinMode(false);
             $('btnMeasure').classList.toggle('on', isMeasuring);
             $('measureModeSelect').disabled = !isMeasuring && $('btnMeasure').disabled;
             if (!isMeasuring) {
@@ -5354,6 +5485,17 @@
                 sceneNeedsRender = false;
             }
             
+            if (coordPins.length) {
+                coordPins.forEach(pin => {
+                    const p = pin.pos.clone().project(camera);
+                    const x = (p.x * .5 + .5) * stage.clientWidth;
+                    const y = (p.y * -.5 + .5) * stage.clientHeight;
+                    // За спиной камеры проекция переворачивается — прячем
+                    pin.div.style.display = p.z > 1 ? 'none' : '';
+                    pin.div.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+                });
+            }
+
             if (labelsList.length) {
                 labelsList.forEach(lbl => {
                     const pos = lbl.pos.clone();
@@ -6079,7 +6221,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -7236,6 +7378,12 @@ uniform vec3 uBatchSelColor;
                 tourWaypoints.forEach(p => p.add(negCw));
                 rebuildTourVisuals?.();
             }
+            // Метки координат живут в сцене, а не в модели: без этого сдвига
+            // они остались бы на старом месте и стали бы врать.
+            coordPins.forEach(pin => {
+                pin.pos.add(negCw);
+                pin.marker?.position.add(negCw);
+            });
             if (tourCar) tourCar.position.add(negCw);
 
             sceneViewPan.set(0, 0, 0);
@@ -11418,8 +11566,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const validHits = validHit ? [validHit] : [];
 
             if (validHits.length === 0) { 
-                if (!isMeasuring) selectMultiple([]); 
+                if (!isMeasuring && !coordPinMode) selectMultiple([]); 
                 return; 
+            }
+
+            // МЕТКА КООРДИНАТ
+            if (coordPinMode) {
+                addCoordPin(validHits[0].point, validHits[0].object);
+                return;
             }
 
             // ЗАМЕРЫ
@@ -16527,7 +16681,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -17169,6 +17323,8 @@ ${componentXml || '    '}
             
             measurePoints = []; 
             measureVisuals.clear(); 
+            clearCoordPins();
+            setCoordPinMode(false);
             labelsContainer.innerHTML = ''; 
             labelsList = [];
             appearanceDraftTexture = null;
@@ -17186,7 +17342,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;

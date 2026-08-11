@@ -26,6 +26,7 @@ function isLocal(url, port) {
 
 const problems = [];
 let train = null;
+let coordPin = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -83,6 +84,77 @@ async function checkPicking(page) {
     }
     problems.push('клик по геометрии не выделил ни одного элемента');
     return { ok: false };
+}
+
+/**
+ * Метка координат. Проверяем не «появилась подпись», а совпадение чисел с тем,
+ * что вьювер считает абсолютной координатой той же точки: метка и строка
+ * состояния обязаны показывать одно и то же, иначе по ней нельзя сверяться
+ * с Civil 3D.
+ */
+async function checkCoordPin(page) {
+    const box = await page.locator('#stage canvas').boundingBox();
+    if (!box) {
+        problems.push('не найден холст для метки координат');
+        return null;
+    }
+    await page.evaluate(() => document.getElementById('btnCoordPin')?.click());
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const offsets = [0, 0.08, -0.08, 0.16, -0.16];
+
+    let text = null;
+    for (const dx of offsets) {
+        for (const dy of offsets) {
+            if (text) break;
+            await page.mouse.click(cx + dx * box.width, cy + dy * box.height);
+            text = await page
+                .waitForFunction(
+                    () => document.querySelector('.coord-pin-label')?.textContent || false,
+                    { timeout: 1500 }
+                )
+                .then((h) => h.jsonValue())
+                .catch(() => null);
+        }
+    }
+    await page.evaluate(() => document.getElementById('btnCoordPin')?.click());
+
+    if (!text) {
+        problems.push('метка координат не поставилась по клику');
+        return null;
+    }
+    const nums = /X\s*(-?[\d.]+)\s*Y\s*(-?[\d.]+)\s*Z\s*(-?[\d.]+)/.exec(text.replace(/\s+/g, ' '));
+    if (!nums) {
+        problems.push('в метке нет трёх координат: ' + text.slice(0, 60));
+        return null;
+    }
+    const shown = [Number(nums[1]), Number(nums[2]), Number(nums[3])];
+
+    // Тот же пересчёт, но от позиции самой метки в сцене
+    const truth = await page.evaluate(() => {
+        const pin = window.BimLvaDebug?.coordPins?.[0];
+        if (!pin) return null;
+        return window.BimLvaDebug.absoluteAt(pin.x, pin.y, pin.z);
+    });
+    if (!truth) {
+        problems.push('метка не попала в BimLvaDebug.coordPins');
+        return null;
+    }
+    const diff = Math.max(
+        Math.abs(shown[0] - truth.e),
+        Math.abs(shown[1] - truth.n),
+        Math.abs(shown[2] - truth.h)
+    );
+    if (diff > 0.01) {
+        problems.push(`метка показывает не те координаты: расхождение ${diff.toFixed(3)} м`);
+    }
+    // Метка не должна исчезать при очистке замеров — это разные слои
+    await page.evaluate(() => document.getElementById('btnMeasure')?.click());
+    await page.evaluate(() => document.getElementById('btnMeasure')?.click());
+    const stillThere = await page.evaluate(() => !!document.querySelector('.coord-pin-label'));
+    if (!stillThere) problems.push('метку стёрло переключением замеров');
+
+    return { shown, diff };
 }
 
 /**
@@ -400,6 +472,7 @@ async function main() {
                     ).catch(() => problems.push('вторая модель не загрузилась'));
                     clash = await checkClash(page);
                     dxfBlocks = await checkDxfBlocks(page);
+                    coordPin = await checkCoordPin(page);
                     geoFed = await checkGeoFederation(page);
                     train = await checkTourTrain(page);
                 } finally {
@@ -438,6 +511,12 @@ async function main() {
     console.log(`шрифт:     ${state.fontFamily}`);
     if (ifcLoaded !== null) console.log(`IFC:       ${ifcLoaded ? `загружен, узлов дерева ${state.treeItems}` : 'НЕ загрузился'}`);
     if (state.meshCount >= 0) console.log(`мешей:     ${state.meshCount}, с BVH: ${state.bvhCount}`);
+    if (coordPin) {
+        console.log(
+            `метка XYZ:  ${coordPin.shown.map((v) => v.toFixed(2)).join(' · ')} ` +
+            `(расхождение со статус-баром ${coordPin.diff.toFixed(3)} м)`
+        );
+    }
     if (train) {
         console.log(
             `локомотив: ${train.length.toFixed(2)} × ${train.width.toFixed(2)} × ${train.height.toFixed(2)} м ` +
