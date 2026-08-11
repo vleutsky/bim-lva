@@ -4016,6 +4016,16 @@
                 }
                 return out;
             },
+            /** До-центрирование сцены: сколько раз и на какой суммарный вектор. */
+            get sceneSnap() {
+                return {
+                    count: _snapStats.count,
+                    x: _snapStats.total.x,
+                    y: _snapStats.total.y,
+                    z: _snapStats.total.z,
+                    length: _snapStats.total.length()
+                };
+            },
             /** Уклон словами — проверяется числами в npm run smoke. */
             slopeText(dz, l2d) { return describeSlope(dz, l2d); },
             /** Метки координат: позиции в сцене (для проверки, что подпись не врёт). */
@@ -7019,8 +7029,15 @@ uniform vec3 uBatchSelColor;
             return c;
         }
 
+        /**
+         * Двигает вершины всех загруженных моделей на вектор сцены.
+         * @returns {THREE.Vector3|null} тот же сдвиг в осях IFC. Вызывающий обязан
+         * поправить на него `ifcWorldOrigin`: абсолютная координата точки равна
+         * «локальная + origin», и если геометрия уехала, а ноль остался, врать
+         * начинают и строка состояния, и метки, и привязка подложки.
+         */
         function shiftLoadedModelsByWorldVector(shiftWorld) {
-            if (!shiftWorld || shiftWorld.lengthSq() < 1e-12) return;
+            if (!shiftWorld || shiftWorld.lengthSq() < 1e-12) return null;
             globalGroup.updateWorldMatrix(true, true);
             globalGroup.getWorldQuaternion(_snapInvQuat).invert();
             _snapIfcShift.copy(shiftWorld).applyQuaternion(_snapInvQuat);
@@ -7049,6 +7066,7 @@ uniform vec3 uBatchSelColor;
                     obj.geometry.computeBoundingSphere();
                 });
             }
+            return _snapIfcShift.clone();
         }
 
         /** Bbox по видимым мешам (точнее setFromObject при крупных координатах). */
@@ -7608,6 +7626,9 @@ uniform vec3 uBatchSelColor;
             return any;
         }
 
+        // Сколько раз и на сколько сцена до-центрировалась после загрузки:
+        // этот сдвиг не входит в ifcWorldOrigin, поэтому его надо видеть.
+        const _snapStats = { count: 0, total: new THREE.Vector3() };
         const _snapShiftLocal = new THREE.Vector3();
         const _snapInvWorld = new THREE.Matrix4();
         const _snapIfcShift = new THREE.Vector3();
@@ -7635,7 +7656,23 @@ uniform vec3 uBatchSelColor;
             if (centerWorld.lengthSq() < 0.01) return false;
 
             const negCw = centerWorld.clone().negate();
-            shiftLoadedModelsByWorldVector(negCw);
+            _snapStats.count++;
+            _snapStats.total.add(negCw);
+            const ifcShift = shiftLoadedModelsByWorldVector(negCw);
+            // Геометрия уехала на +ifcShift — ноль сцены обязан уехать на −ifcShift.
+            // Без этого до-центрирование (оно срабатывает на «Вписать» и после
+            // загрузки второго файла) молча смещает ВСЕ абсолютные координаты на
+            // свою величину: у площадки это давало 2.4 м по высоте против Civil.
+            // Закреплено в npm run test-geo-seq.
+            if (ifcShift && ifcWorldOrigin) {
+                ifcWorldOrigin = {
+                    x: ifcWorldOrigin.x - ifcShift.x,
+                    y: ifcWorldOrigin.y - ifcShift.y,
+                    z: ifcWorldOrigin.z - ifcShift.z
+                };
+                syncGeoRasterToIfcOrigin();
+                updateCrsAutoUi();
+            }
 
             if (tourWaypoints?.length) {
                 tourWaypoints.forEach(p => p.add(negCw));

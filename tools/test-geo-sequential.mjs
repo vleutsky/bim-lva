@@ -85,7 +85,7 @@ try {
 
     // 2) затем здание — отдельной загрузкой
     await page.setInputFiles('#localFileInput', bldFile);
-    const bounds = await page
+    let bounds = await page
         .waitForFunction(() => {
             const list = (window.BimLvaDebug?.modelBounds || [])
                 .filter((m) => /seq-(site|bld)\.ifc$/i.test(m.file));
@@ -93,6 +93,23 @@ try {
         }, { timeout: 120_000 })
         .then((h) => h.jsonValue())
         .catch(() => null);
+
+    // Пользователь после загрузки жмёт «Вписать» — именно там сцена
+    // до-центрируется. Габариты надо перечитать ПОСЛЕ этого: метку он ставит
+    // на сдвинутую геометрию, и пересчёт в абсолютные обязан это учитывать.
+    await page.evaluate(() => document.getElementById('fit')?.click());
+    await page.waitForTimeout(500);
+    const snap = await page.evaluate(() => window.BimLvaDebug.sceneSnap);
+    console.log(`до-центрирований: ${snap.count}, суммарный сдвиг ${snap.length.toFixed(3)} м`);
+    // Без этого тест однажды «прошёл» вхолостую: до-центрирование не срабатывало,
+    // и проверять было нечего. Нет сдвига — фикстуры перестали воспроизводить случай.
+    if (!snap.count || snap.length < 1) {
+        problems.push(
+            `сцена не до-центрировалась (${snap.count} раз, ${snap.length.toFixed(2)} м) — ` +
+            `проверка вхолостую, поправьте фикстуры`
+        );
+    }
+    bounds = await page.evaluate(() => window.BimLvaDebug.modelBounds);
 
     if (!bounds) {
         problems.push('вторая модель не загрузилась');
