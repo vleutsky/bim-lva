@@ -33,6 +33,7 @@ let bvhPeak = -1;
 let viewCube = null;
 let draw = null;
 let dxfEntities = null;
+let sweep = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -352,6 +353,49 @@ async function checkDrawDxf(page) {
         problems.push(`в DXF нет мировой координаты X ${wantX} — выгрузка ушла в локальных`);
     }
     return { polylines: drawn.length, vertices: vertexCount, x: first.x, snaps: snaps.length };
+}
+
+/**
+ * Тело по оси. Проверяем числами: на прямой оси объём обязан быть точно
+ * «площадь сечения × длина», габарит — совпасть с размерами сечения, а труба —
+ * дать кольцевую площадь. Клики по сцене таких гарантий не дают.
+ */
+async function checkSweep(page) {
+    const cases = await page.evaluate(() => ({
+        rect: window.BimLvaDebug.sweepProbe(
+            [[0, 0, 0], [10, 0, 0]], 'rect', { width: 0.5, height: 0.3 }, 0),
+        pipe: window.BimLvaDebug.sweepProbe(
+            [[0, 0, 0], [20, 0, 0]], 'pipe', { diameter: 0.6, wall: 0.05 }, 0),
+        trap: window.BimLvaDebug.sweepProbe(
+            [[0, 0, 0], [0, 8, 0]], 'trapezoid', { width: 1, topWidth: 3, height: 1 }, 0),
+        turn: window.BimLvaDebug.sweepProbe(
+            [[0, 0, 0], [10, 0, 0], [10, 10, 0]], 'rect', { width: 1, height: 1 }, 0)
+    }));
+    if (!cases.rect) {
+        problems.push('выдавливание по оси не построилось');
+        return null;
+    }
+    const near = (got, want, tol, what) => {
+        if (Math.abs(got - want) > tol) problems.push(`тело по оси: ${what} — ${got.toFixed(4)}, ожидалось ${want}`);
+    };
+    near(cases.rect.length, 10, 1e-6, 'длина прямой оси');
+    near(cases.rect.area, 0.15, 1e-6, 'площадь прямоугольника 0.5×0.3');
+    near(cases.rect.volume, 1.5, 1e-6, 'объём при длине 10');
+    near(cases.rect.size.x, 10, 1e-3, 'габарит вдоль оси');
+    near(cases.rect.size.y, 0.5, 1e-3, 'ширина тела');
+    near(cases.rect.size.z, 0.3, 1e-3, 'высота тела');
+
+    // Труба: площадь кольца π(R² − r²), R = 0.3, стенка 0.05
+    near(cases.pipe.area, Math.PI * (0.3 * 0.3 - 0.25 * 0.25) , 2e-3, 'площадь кольца трубы');
+    // Трапеция: полусумма оснований на высоту
+    near(cases.trap.area, (1 + 3) / 2 * 1, 1e-6, 'площадь трапеции');
+    near(cases.trap.length, 8, 1e-6, 'длина оси по Y');
+    // Поворот: длина складывается из двух участков, тело не должно вырождаться
+    near(cases.turn.length, 20, 1e-6, 'длина ломаной оси');
+    if (!(cases.turn.triangles > cases.rect.triangles)) {
+        problems.push('на ломаной оси тело не набрало дополнительных граней');
+    }
+    return { volume: cases.rect.volume, pipeArea: cases.pipe.area, triangles: cases.turn.triangles };
 }
 
 /**
@@ -903,6 +947,7 @@ async function main() {
                     // дерева не строит, а финальная проверка смотрит на итог сцены
                     bvhPeak = await page.evaluate(() => window.BimLvaDebug?.bvhCount ?? -1);
                     draw = await checkDrawDxf(page);
+                    sweep = await checkSweep(page);
                     viewCube = await checkViewCube(page);
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
@@ -966,6 +1011,12 @@ async function main() {
         console.log(
             `черчение:  полилиний ${draw.polylines}, вершин в DXF ${draw.vertices}, ` +
             `мировая X ${draw.x.toFixed(2)}, привязок поймано ${draw.snaps}`
+        );
+    }
+    if (sweep) {
+        console.log(
+            `тело по оси: объём ${sweep.volume.toFixed(2)} м³, кольцо трубы ` +
+            `${sweep.pipeArea.toFixed(4)} м², граней на повороте ${sweep.triangles}`
         );
     }
     if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');

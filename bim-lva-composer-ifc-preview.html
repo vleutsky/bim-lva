@@ -2375,7 +2375,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d7d9b32</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 7e2bd9c</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2396,6 +2396,7 @@
                         <option value="3d">3D</option>
                         <option value="2d">2D</option>
                     </select>
+                    <button class="btn" id="btnSweep" disabled title="Выдавить сечение вдоль оси: осью служит выбранная линия чертежа или последняя начерченная полилиния"><span class="tb-ico">⬒</span><span class="tb-txt">Тело по оси</span></button>
                     <button class="btn on" id="btnSnap" title="Объектная привязка: вершины, середины и рёбра элементов. Работает для черчения и замеров"><span class="tb-ico">⊹</span><span class="tb-txt">Привязка</span></button>
                     <button class="btn" id="btnDrawExport" disabled title="Выгрузить начерченное и метки в DXF в мировых координатах"><span class="tb-ico">⤓</span><span class="tb-txt">DXF</span></button>
                     <select id="measureModeSelect" class="tool-select" disabled title="Режим замера. «2D/3D/i» — линейка: наклонное и горизонтальное расстояние, превышение и уклон">
@@ -3089,6 +3090,37 @@
                 <button class="btn" id="notifyLogCopy" title="Скопировать весь журнал в буфер обмена">Скопировать всё</button>
                 <button class="btn" id="notifyLogClear">Очистить</button>
                 <button class="btn" id="notifyLogClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="sweepModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(460px,100%)">
+            <h3>Тело по оси</h3>
+            <div class="bulk-note">
+                Осью служит <b>выбранная линия чертежа</b> (DWG/DXF), а если ничего не
+                выбрано — последняя начерченная полилиния. Сечение ведётся вдоль оси
+                без проворота. Размеры в метрах.
+            </div>
+            <div class="prop small">
+                <div class="k">Сечение</div>
+                <select class="editInput" id="sweepProfile">
+                    <option value="rect">Прямоугольник</option>
+                    <option value="trapezoid">Трапеция (канава, насыпь)</option>
+                    <option value="circle">Круг</option>
+                    <option value="pipe">Труба (со стенкой)</option>
+                </select>
+            </div>
+            <div class="prop small" data-field="width"><div class="k">Ширина (низ)</div><input class="editInput" id="sweepWidth" type="number" step="0.05" value="1"></div>
+            <div class="prop small" data-field="topWidth"><div class="k">Ширина (верх)</div><input class="editInput" id="sweepTopWidth" type="number" step="0.05" value="2"></div>
+            <div class="prop small" data-field="height"><div class="k">Высота</div><input class="editInput" id="sweepHeight" type="number" step="0.05" value="0.5"></div>
+            <div class="prop small" data-field="diameter"><div class="k">Диаметр</div><input class="editInput" id="sweepDiameter" type="number" step="0.01" value="0.5"></div>
+            <div class="prop small" data-field="wall"><div class="k">Толщина стенки</div><input class="editInput" id="sweepWall" type="number" step="0.001" value="0.02"></div>
+            <div class="prop small"><div class="k">Смещение по высоте</div><input class="editInput" id="sweepOffset" type="number" step="0.05" value="0"></div>
+            <div class="modal-actions">
+                <button class="btn" id="sweepClear">Убрать тела</button>
+                <button class="btn" id="sweepCancel">Закрыть</button>
+                <button class="btn load-btn" id="sweepApply">Построить</button>
             </div>
         </div>
     </div>
@@ -4142,6 +4174,18 @@
                     };
                 }
                 return null;
+            },
+            /** Выдавливание по явной оси — чтобы проверять математику числами. */
+            sweepProbe(points, kind, dims, offsetZ) {
+                const path = points.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+                const r = buildSweptSolid(path, kind, dims || {}, offsetZ || 0);
+                if (!r) return null;
+                const b = r.geometry.boundingBox;
+                r.geometry.dispose();
+                return {
+                    length: r.length, area: r.area, volume: r.volume, triangles: r.triangles,
+                    size: { x: b.max.x - b.min.x, y: b.max.y - b.min.y, z: b.max.z - b.min.z }
+                };
             },
             /** Последняя сработавшая привязка (тип и точка) — для проверок. */
             get snap() { return lastSnap ? { ...lastSnap } : null; },
@@ -5537,6 +5581,273 @@
             labelsList = [];
         }
 
+        /* --- Тело по оси (выдавливание сечения вдоль линии) --------------------
+         * Профиль ведётся вдоль оси параллельным переносом системы координат:
+         * если на каждом шаге брать нормаль заново (например, от вертикали), на
+         * поворотах сечение проворачивается вокруг оси и тело перекручивается.
+         * Здесь нормаль переносится с предыдущего шага и лишь довыпрямляется.
+         */
+        const SWEEP_PROFILES = {
+            rect: { label: 'Прямоугольник', fields: ['width', 'height'] },
+            trapezoid: { label: 'Трапеция (канава, насыпь)', fields: ['width', 'topWidth', 'height'] },
+            circle: { label: 'Круг', fields: ['diameter'] },
+            pipe: { label: 'Труба (со стенкой)', fields: ['diameter', 'wall'] }
+        };
+
+        let sweptSolids = [];
+        const sweepGroup = new THREE.Group();
+        sweepGroup.name = 'SweptSolids';
+        scene.add(sweepGroup);
+
+        /** Контур сечения в плоскости профиля (u — вбок, v — вверх). */
+        function sweepProfileRings(kind, dims) {
+            const seg = 24;
+            const w = Math.max(dims.width || 0, 1e-4);
+            const h = Math.max(dims.height || 0, 1e-4);
+            if (kind === 'rect') {
+                return [[[-w / 2, 0], [w / 2, 0], [w / 2, h], [-w / 2, h]]];
+            }
+            if (kind === 'trapezoid') {
+                const top = Math.max(dims.topWidth || 0, 0);
+                return [[[-w / 2, 0], [w / 2, 0], [top / 2, h], [-top / 2, h]]];
+            }
+            const r = Math.max((dims.diameter || 0) / 2, 1e-4);
+            const ring = (radius) => {
+                const pts = [];
+                for (let i = 0; i < seg; i++) {
+                    const a = (i / seg) * Math.PI * 2;
+                    pts.push([Math.cos(a) * radius, Math.sin(a) * radius]);
+                }
+                return pts;
+            };
+            if (kind === 'circle') return [ring(r)];
+            const wall = Math.min(Math.max(dims.wall || 0, 1e-4), r * 0.95);
+            return [ring(r), ring(r - wall)];   // внешнее и внутреннее кольцо
+        }
+
+        /** Площадь сечения — по формуле шнурков, с вычетом внутреннего контура. */
+        function sweepProfileArea(rings) {
+            const areaOf = (pts) => {
+                let a = 0;
+                for (let i = 0; i < pts.length; i++) {
+                    const [x1, y1] = pts[i];
+                    const [x2, y2] = pts[(i + 1) % pts.length];
+                    a += x1 * y2 - x2 * y1;
+                }
+                return Math.abs(a) / 2;
+            };
+            return rings.length > 1
+                ? areaOf(rings[0]) - areaOf(rings[1])
+                : areaOf(rings[0]);
+        }
+
+        /** Система координат вдоль оси без проворота (параллельный перенос). */
+        function sweepFrames(points) {
+            const frames = [];
+            let normal = null;
+            for (let i = 0; i < points.length; i++) {
+                const prev = points[Math.max(i - 1, 0)];
+                const next = points[Math.min(i + 1, points.length - 1)];
+                const tangent = new THREE.Vector3().subVectors(next, prev);
+                if (tangent.lengthSq() < 1e-12) tangent.set(1, 0, 0);
+                tangent.normalize();
+                if (!normal) {
+                    // Стартовая нормаль — «вбок», то есть поперёк оси в плане
+                    normal = new THREE.Vector3(0, 0, 1).cross(tangent);
+                    if (normal.lengthSq() < 1e-8) normal.set(1, 0, 0);
+                    normal.normalize();
+                } else {
+                    // Переносим прежнюю нормаль и убираем составляющую вдоль оси
+                    normal = normal.clone().addScaledVector(tangent, -normal.dot(tangent));
+                    if (normal.lengthSq() < 1e-8) {
+                        normal = new THREE.Vector3(0, 0, 1).cross(tangent).normalize();
+                    } else normal.normalize();
+                }
+                const up = new THREE.Vector3().crossVectors(tangent, normal).normalize();
+                frames.push({ origin: points[i].clone(), u: normal.clone(), v: up });
+            }
+            return frames;
+        }
+
+        /**
+         * Тело по оси. Возвращает геометрию и метрику: длину оси, площадь
+         * сечения и объём. Объём даётся как площадь × длина — для прямых точно,
+         * на поворотах приблизительно, и в отчёте это подписано.
+         */
+        function buildSweptSolid(points, kind, dims, offsetZ = 0) {
+            const path = [];
+            points.forEach(p => {
+                const v = p.clone();
+                if (!path.length || v.distanceToSquared(path[path.length - 1]) > 1e-8) path.push(v);
+            });
+            if (path.length < 2) return null;
+
+            const rings = sweepProfileRings(kind, dims);
+            const frames = sweepFrames(path);
+            const positions = [];
+            const pushTri = (a, b, c) => positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+
+            const worldOf = (frame, uv) =>
+                frame.origin.clone()
+                    .addScaledVector(frame.u, uv[0])
+                    .addScaledVector(frame.v, uv[1] + offsetZ);
+
+            const ringWorld = rings.map(ring => frames.map(f => ring.map(uv => worldOf(f, uv))));
+
+            // Боковые поверхности каждого контура
+            ringWorld.forEach(perFrame => {
+                for (let i = 0; i < perFrame.length - 1; i++) {
+                    const a = perFrame[i];
+                    const b = perFrame[i + 1];
+                    for (let k = 0; k < a.length; k++) {
+                        const k2 = (k + 1) % a.length;
+                        pushTri(a[k], b[k], b[k2]);
+                        pushTri(a[k], b[k2], a[k2]);
+                    }
+                }
+            });
+
+            // Торцы: у трубы — кольцо между контурами, иначе веер
+            const capAt = (frameIdx, flip) => {
+                if (rings.length > 1) {
+                    const outer = ringWorld[0][frameIdx];
+                    const inner = ringWorld[1][frameIdx];
+                    for (let k = 0; k < outer.length; k++) {
+                        const k2 = (k + 1) % outer.length;
+                        if (flip) {
+                            pushTri(outer[k], inner[k2], inner[k]);
+                            pushTri(outer[k], outer[k2], inner[k2]);
+                        } else {
+                            pushTri(outer[k], inner[k], inner[k2]);
+                            pushTri(outer[k], inner[k2], outer[k2]);
+                        }
+                    }
+                    return;
+                }
+                const ring = ringWorld[0][frameIdx];
+                for (let k = 1; k < ring.length - 1; k++) {
+                    if (flip) pushTri(ring[0], ring[k + 1], ring[k]);
+                    else pushTri(ring[0], ring[k], ring[k + 1]);
+                }
+            };
+            capAt(0, true);
+            capAt(frames.length - 1, false);
+
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.computeVertexNormals();
+            geom.computeBoundingBox();
+            geom.computeBoundingSphere();
+
+            let length = 0;
+            for (let i = 1; i < path.length; i++) length += path[i].distanceTo(path[i - 1]);
+            const area = sweepProfileArea(rings);
+            return {
+                geometry: geom,
+                length,
+                area,
+                volume: area * length,
+                triangles: positions.length / 9,
+                straight: path.length === 2
+            };
+        }
+
+        /** Ось для выдавливания: выбранная сущность чертежа или последняя полилиния. */
+        function sweepAxisPoints() {
+            const item = selectedItems[0];
+            const mod = item ? loadedModels.get(item.modelID) : null;
+            const entry = mod?.dxfEntities?.get(item?.expressID);
+            if (entry && !entry.object.isMesh) {
+                const pos = entry.object.geometry?.attributes?.position;
+                if (pos) {
+                    entry.object.updateWorldMatrix(true, false);
+                    const m = entry.object.matrixWorld;
+                    const pts = [];
+                    // Отрезки лежат парами (a,b)(b,c) — собираем цепочку без дублей
+                    for (let i = 0; i < entry.count; i++) {
+                        const v = new THREE.Vector3()
+                            .fromBufferAttribute(pos, entry.start + i)
+                            .applyMatrix4(m);
+                        if (!pts.length || v.distanceToSquared(pts[pts.length - 1]) > 1e-8) pts.push(v);
+                    }
+                    if (pts.length >= 2) return { points: pts, source: `сущность #${entry.id}` };
+                }
+            }
+            const last = drawnPolylines[drawnPolylines.length - 1];
+            if (last) {
+                const pos = last.object.geometry.attributes.position;
+                const pts = [];
+                for (let i = 0; i < pos.count; i++) {
+                    pts.push(new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)));
+                }
+                if (pts.length >= 2) return { points: pts, source: 'последняя полилиния' };
+            }
+            return null;
+        }
+
+        function readSweepDims() {
+            const num = (id, fallback) => {
+                const v = parseFloat($(id)?.value);
+                return Number.isFinite(v) ? v : fallback;
+            };
+            return {
+                width: num('sweepWidth', 1),
+                height: num('sweepHeight', 0.5),
+                topWidth: num('sweepTopWidth', 2),
+                diameter: num('sweepDiameter', 0.5),
+                wall: num('sweepWall', 0.02),
+                offsetZ: num('sweepOffset', 0)
+            };
+        }
+
+        function syncSweepFields() {
+            const kind = $('sweepProfile')?.value || 'rect';
+            const fields = SWEEP_PROFILES[kind]?.fields || [];
+            document.querySelectorAll('#sweepModal [data-field]').forEach(row => {
+                row.style.display = fields.includes(row.dataset.field) ? '' : 'none';
+            });
+        }
+
+        function applySweep() {
+            const axis = sweepAxisPoints();
+            if (!axis) {
+                notifyError('Нет оси: выберите линию чертежа или начертите полилинию.');
+                return;
+            }
+            const kind = $('sweepProfile')?.value || 'rect';
+            const dims = readSweepDims();
+            const built = buildSweptSolid(axis.points, kind, dims, dims.offsetZ);
+            if (!built) {
+                notifyError('Ось слишком короткая для выдавливания.');
+                return;
+            }
+            const mesh = new THREE.Mesh(built.geometry, new THREE.MeshStandardMaterial({
+                color: 0xc98b3a, roughness: 0.75, metalness: 0.05, side: THREE.DoubleSide
+            }));
+            mesh.name = `Тело · ${SWEEP_PROFILES[kind].label}`;
+            sweepGroup.add(mesh);
+            sweptSolids.push({ mesh, kind, ...built });
+            updateDrawUi();
+            notify(
+                `${mesh.name}: ось ${built.length.toFixed(2)} м (${axis.source}), ` +
+                `сечение ${built.area.toFixed(3)} м², объём ${built.volume.toFixed(2)} м³` +
+                (built.straight ? '' : ' (на поворотах приблизительно)')
+            );
+            trackUsage('sweep_solid', { kind, triangles: built.triangles });
+            markNeedsRender();
+        }
+
+        function clearSweptSolids() {
+            sweptSolids.forEach(s => {
+                sweepGroup.remove(s.mesh);
+                s.mesh.geometry.dispose();
+                s.mesh.material.dispose();
+            });
+            sweptSolids = [];
+            updateDrawUi();
+            markNeedsRender();
+        }
+
         /* --- Объектная привязка ----------------------------------------------
          * Ищем вершины, середины и точки на рёбрах ТОГО треугольника или
          * отрезка, в который попал луч, и выбираем ближайший кандидат в
@@ -5755,7 +6066,7 @@
 
         function updateDrawUi() {
             const btn = $('btnDrawExport');
-            if (btn) btn.disabled = !drawnPolylines.length && !coordPins.length;
+            if (btn) btn.disabled = !drawnPolylines.length && !coordPins.length && !sweptSolids.length;
         }
 
         /**
@@ -5775,11 +6086,11 @@
             g(9, '$MEASUREMENT'); g(70, 1);          // метрическая
             g(0, 'ENDSEC');
 
-            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS'];
+            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID'];
             g(0, 'SECTION'); g(2, 'TABLES');
             g(0, 'TABLE'); g(2, 'LAYER'); g(70, layers.length);
             layers.forEach((name, i) => {
-                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1][i]); g(6, 'CONTINUOUS');
+                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1, 30][i]); g(6, 'CONTINUOUS');
             });
             g(0, 'ENDTAB'); g(0, 'ENDSEC');
 
@@ -5797,6 +6108,25 @@
                 });
                 g(0, 'SEQEND'); g(8, layer);
             });
+            // Тела уходят треугольниками 3DFACE: их читает и Civil, и nanoCAD,
+            // а телесных примитивов в R12 просто нет
+            sweptSolids.forEach((solid) => {
+                const pos = solid.mesh.geometry.attributes.position;
+                for (let i = 0; i < pos.count; i += 3) {
+                    g(0, '3DFACE'); g(8, 'LVA_SOLID');
+                    for (let k = 0; k < 3; k++) {
+                        const abs = worldPointToAbsoluteXYZ(
+                            new THREE.Vector3(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k))
+                        );
+                        g(10 + k, n(abs.x)); g(20 + k, n(abs.y)); g(30 + k, n(abs.z));
+                    }
+                    // Четвёртая точка совпадает с третьей — так пишут треугольник
+                    const last = worldPointToAbsoluteXYZ(
+                        new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2))
+                    );
+                    g(13, n(last.x)); g(23, n(last.y)); g(33, n(last.z));
+                }
+            });
             pins.forEach((pin) => {
                 g(0, 'POINT'); g(8, 'LVA_POINTS');
                 g(10, n(pin.abs.x)); g(20, n(pin.abs.y)); g(30, n(pin.abs.z));
@@ -5807,8 +6137,8 @@
         }
 
         function exportDrawingDxf() {
-            if (!drawnPolylines.length && !coordPins.length) {
-                notifyError('Чертить нечего: нет ни полилиний, ни меток.');
+            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length) {
+                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел.');
                 return;
             }
             const text = buildDxf(drawnPolylines, coordPins);
@@ -6037,6 +6367,18 @@
 
         $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
         $('btnDraw')?.addEventListener('click', () => setDrawMode(!drawMode));
+        $('btnSweep')?.addEventListener('click', () => {
+            syncSweepFields();
+            $('sweepModal').classList.add('show');
+        });
+        $('sweepProfile')?.addEventListener('change', syncSweepFields);
+        $('sweepApply')?.addEventListener('click', applySweep);
+        $('sweepClear')?.addEventListener('click', clearSweptSolids);
+        $('sweepCancel')?.addEventListener('click', () => $('sweepModal').classList.remove('show'));
+        $('sweepModal')?.addEventListener('click', (e) => {
+            if (e.target === $('sweepModal')) $('sweepModal').classList.remove('show');
+        });
+
         $('btnSnap')?.addEventListener('click', () => {
             snapEnabled = !snapEnabled;
             $('btnSnap').classList.toggle('on', snapEnabled);
@@ -7155,7 +7497,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -8381,6 +8723,10 @@ uniform vec3 uBatchSelColor;
             drawnPolylines.forEach(r => {
                 r.object.geometry.translate(negCw.x, negCw.y, negCw.z);
                 r.object.geometry.computeBoundingSphere();
+            });
+            sweptSolids.forEach(s => {
+                s.mesh.geometry.translate(negCw.x, negCw.y, negCw.z);
+                s.mesh.geometry.computeBoundingSphere();
             });
             drawPoints.forEach(p => p.add(negCw));
             refreshDrawDraft();
@@ -17930,7 +18276,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -18643,6 +18989,7 @@ ${componentXml || '    '}
             setCoordPinMode(false);
             setDrawMode(false);
             clearDrawnPolylines();
+            clearSweptSolids();
             labelsContainer.innerHTML = ''; 
             labelsList = [];
             appearanceDraftTexture = null;
@@ -18660,7 +19007,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -21463,7 +21810,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: 'd7d9b32-preview',
+            buildId: '7e2bd9c-preview',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
