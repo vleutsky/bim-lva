@@ -2350,6 +2350,12 @@
                     <button class="btn" id="btnMeasure" disabled title="Инструмент замеров"><span class="tb-ico">📏</span><span class="tb-txt">Замер</span></button>
                     <button class="btn" id="btnCoordPin" disabled title="Метка координат: клик по модели ставит подпись с X, Y, Z (абсолютные, в метрах). Точку можно перетащить"><span class="tb-ico">📍</span><span class="tb-txt">Метка XYZ</span></button>
                     <button class="btn" id="btnCoordPinList" disabled title="Список меток: перелёт к метке, копирование, удаление"><span class="tb-ico">📋</span><span class="tb-txt">Метки <span id="pinsCount">0</span></span></button>
+                    <button class="btn" id="btnDraw" disabled title="Черчение полилинии по модели. Клик — точка, Esc или повторное нажатие кнопки — завершить"><span class="tb-ico">✏</span><span class="tb-txt">Полилиния</span></button>
+                    <select id="drawModeSelect" class="tool-select" disabled title="2D — все точки на отметке первой (как LWPOLYLINE), 3D — с настоящими отметками">
+                        <option value="3d">3D</option>
+                        <option value="2d">2D</option>
+                    </select>
+                    <button class="btn" id="btnDrawExport" disabled title="Выгрузить начерченное и метки в DXF в мировых координатах"><span class="tb-ico">⤓</span><span class="tb-txt">DXF</span></button>
                     <select id="measureModeSelect" class="tool-select" disabled title="Режим замера. «2D/3D/i» — линейка: наклонное и горизонтальное расстояние, превышение и уклон">
                         <option value="distance">м</option>
                         <option value="ruler">2D/3D/i</option>
@@ -4069,6 +4075,15 @@
                 }
                 return out;
             },
+            /** Начерченные полилинии в абсолютных координатах. */
+            get drawn() {
+                return (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                    .map((r) => ({ kind: r.kind, abs: r.abs, length3d: r.length3d, length2d: r.length2d }));
+            },
+            /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
+            dxfPreview() {
+                return buildDxf(drawnPolylines, coordPins);
+            },
             /** Единичный вектор «куда смотрит камера» — для проверки видов. */
             get cameraDir() {
                 const d = controls.target.clone().sub(camera.position).normalize();
@@ -5370,6 +5385,183 @@
             labelsList = [];
         }
 
+        /* --- Черчение полилиний ----------------------------------------------
+         * Точки берём тем же лучом, что и пикинг, поэтому линия ложится на
+         * геометрию. Экспорт идёт в АБСОЛЮТНЫХ координатах — файл должен
+         * открыться в Civil 3D там же, где стоит модель, а не у нуля сцены.
+         */
+        let drawMode = false;
+        let drawPoints = [];
+        let drawnPolylines = [];
+        const drawGroup = new THREE.Group();
+        drawGroup.name = 'DrawnPolylines';
+        scene.add(drawGroup);
+        const DRAW_COLOR = 0x1f8f5f;
+        let drawDraft = null;
+
+        function drawKind() {
+            return $('drawModeSelect')?.value === '2d' ? '2d' : '3d';
+        }
+
+        function refreshDrawDraft() {
+            if (drawDraft) {
+                drawGroup.remove(drawDraft);
+                drawDraft.geometry.dispose();
+                drawDraft = null;
+            }
+            if (drawPoints.length < 2) { markNeedsRender(); return; }
+            drawDraft = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(drawPoints),
+                new THREE.LineDashedMaterial({ color: DRAW_COLOR, dashSize: 1.2, gapSize: 0.6, depthTest: false })
+            );
+            drawDraft.computeLineDistances();
+            drawDraft.renderOrder = 998;
+            drawGroup.add(drawDraft);
+            markNeedsRender();
+        }
+
+        function addDrawPoint(worldPoint) {
+            const p = worldPoint.clone();
+            // 2D-полилиния лежит на отметке первой точки: так её и ждут в плане
+            if (drawKind() === '2d' && drawPoints.length) p.z = drawPoints[0].z;
+            drawPoints.push(p);
+            refreshDrawDraft();
+        }
+
+        function finishDrawPolyline() {
+            if (drawPoints.length < 2) {
+                drawPoints = [];
+                refreshDrawDraft();
+                return null;
+            }
+            const kind = drawKind();
+            const pts = drawPoints.slice();
+            const line = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(pts),
+                new THREE.LineBasicMaterial({ color: DRAW_COLOR, depthTest: false })
+            );
+            line.renderOrder = 998;
+            drawGroup.add(line);
+
+            const abs = pts.map(p => {
+                const a = worldPointToAbsoluteXYZ(p) || p.clone();
+                return { x: a.x, y: a.y, z: a.z };
+            });
+            let length3d = 0;
+            let length2d = 0;
+            for (let i = 1; i < pts.length; i++) {
+                length3d += pts[i].distanceTo(pts[i - 1]);
+                length2d += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+            }
+            const record = { kind, abs, object: line, length3d, length2d };
+            drawnPolylines.push(record);
+            drawPoints = [];
+            refreshDrawDraft();
+            updateDrawUi();
+            notify(
+                `Полилиния ${kind.toUpperCase()}: ${pts.length} точек, ` +
+                `L3D ${length3d.toFixed(2)} м · L2D ${length2d.toFixed(2)} м`
+            );
+            trackUsage('draw_polyline', { kind, points: pts.length });
+            return record;
+        }
+
+        function clearDrawnPolylines() {
+            drawnPolylines.forEach(r => {
+                drawGroup.remove(r.object);
+                r.object.geometry.dispose();
+                r.object.material.dispose();
+            });
+            drawnPolylines = [];
+            drawPoints = [];
+            refreshDrawDraft();
+            updateDrawUi();
+        }
+
+        function updateDrawUi() {
+            const btn = $('btnDrawExport');
+            if (btn) btn.disabled = !drawnPolylines.length && !coordPins.length;
+        }
+
+        /**
+         * ASCII DXF R12: HEADER с единицами (метры), TABLES со слоями и ENTITIES.
+         * R12 намеренно: его читают все, включая старые версии Civil и nanoCAD,
+         * а LWPOLYLINE из R13+ там уже не откроется.
+         * Координаты — абсолютные, иначе файл ляжет у нуля, а не на площадке.
+         */
+        function buildDxf(polylines, pins) {
+            const out = [];
+            const g = (code, value) => { out.push(String(code)); out.push(String(value)); };
+            const n = (v) => (Math.round(v * 1e6) / 1e6).toFixed(6);
+
+            g(0, 'SECTION'); g(2, 'HEADER');
+            g(9, '$ACADVER'); g(1, 'AC1009');
+            g(9, '$INSUNITS'); g(70, 6);            // 6 = метры
+            g(9, '$MEASUREMENT'); g(70, 1);          // метрическая
+            g(0, 'ENDSEC');
+
+            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS'];
+            g(0, 'SECTION'); g(2, 'TABLES');
+            g(0, 'TABLE'); g(2, 'LAYER'); g(70, layers.length);
+            layers.forEach((name, i) => {
+                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1][i]); g(6, 'CONTINUOUS');
+            });
+            g(0, 'ENDTAB'); g(0, 'ENDSEC');
+
+            g(0, 'SECTION'); g(2, 'ENTITIES');
+            polylines.forEach((poly) => {
+                const is3d = poly.kind === '3d';
+                const layer = is3d ? 'LVA_3D' : 'LVA_2D';
+                g(0, 'POLYLINE'); g(8, layer); g(66, 1);
+                g(70, is3d ? 8 : 0);                 // 8 = 3D-полилиния
+                g(10, 0); g(20, 0); g(30, is3d ? 0 : n(poly.abs[0].z));
+                poly.abs.forEach((p) => {
+                    g(0, 'VERTEX'); g(8, layer);
+                    g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
+                    if (is3d) g(70, 32);             // вершина 3D-полилинии
+                });
+                g(0, 'SEQEND'); g(8, layer);
+            });
+            pins.forEach((pin) => {
+                g(0, 'POINT'); g(8, 'LVA_POINTS');
+                g(10, n(pin.abs.x)); g(20, n(pin.abs.y)); g(30, n(pin.abs.z));
+            });
+            g(0, 'ENDSEC');
+            g(0, 'EOF');
+            return out.join('\r\n') + '\r\n';
+        }
+
+        function exportDrawingDxf() {
+            if (!drawnPolylines.length && !coordPins.length) {
+                notifyError('Чертить нечего: нет ни полилиний, ни меток.');
+                return;
+            }
+            const text = buildDxf(drawnPolylines, coordPins);
+            const blob = new Blob([text], { type: 'application/dxf' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}.dxf`;
+            a.click();
+            URL.revokeObjectURL(url);
+            notify(
+                `DXF: полилиний ${drawnPolylines.length}, точек ${coordPins.length}. ` +
+                `Координаты мировые, единицы — метры.`
+            );
+            trackUsage('draw_export_dxf', { polylines: drawnPolylines.length, pins: coordPins.length });
+        }
+
+        function setDrawMode(on) {
+            if (!on && drawMode) finishDrawPolyline();
+            drawMode = !!on;
+            $('btnDraw')?.classList.toggle('on', drawMode);
+            if (drawMode) {
+                if (isMeasuring) $('btnMeasure').click();
+                if (coordPinMode) setCoordPinMode(false);
+            }
+            $('stage').style.cursor = drawMode ? 'crosshair' : '';
+        }
+
         /* --- Метки координат -------------------------------------------------
          * Свой слой, не общий с замерами: «Очистить замеры» их не трогает.
          * Числа берём через worldPointToAbsoluteXYZ — тот же путь, что печатает
@@ -5399,6 +5591,7 @@
             pin.dot?.remove();
             pin.leader?.remove();
             renderCoordPinList();
+            updateDrawUi();
             markNeedsRender();
         }
 
@@ -5454,6 +5647,7 @@
 
             trackUsage('coord_pin');
             renderCoordPinList();
+            updateDrawUi();
             markNeedsRender();
             return pin;
         }
@@ -5566,6 +5760,11 @@
         }
 
         $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
+        $('btnDraw')?.addEventListener('click', () => setDrawMode(!drawMode));
+        $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
+        $('drawModeSelect')?.addEventListener('change', () => {
+            if (drawPoints.length) finishDrawPolyline();
+        });
         $('btnCoordPinList')?.addEventListener('click', () => {
             renderCoordPinList();
             $('pinsModal').classList.add('show');
@@ -6673,7 +6872,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -7859,6 +8058,15 @@ uniform vec3 uBatchSelColor;
             }
             // Метки координат живут в сцене, а не в модели: без этого сдвига
             // они остались бы на старом месте и стали бы врать.
+            // Начерченное живёт в координатах сцены — двигаем вместе с моделями.
+            // Абсолютные координаты в записях пересчитывать не надо: они сняты
+            // при создании и от сдвига сцены не зависят.
+            drawnPolylines.forEach(r => {
+                r.object.geometry.translate(negCw.x, negCw.y, negCw.z);
+                r.object.geometry.computeBoundingSphere();
+            });
+            drawPoints.forEach(p => p.add(negCw));
+            refreshDrawDraft();
             coordPins.forEach(pin => {
                 pin.pos.add(negCw);
                 pin.abs = worldPointToAbsoluteXYZ(pin.pos) || pin.abs;
@@ -12049,6 +12257,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (validHits.length === 0) { 
                 if (!isMeasuring && !coordPinMode) selectMultiple([]); 
                 return; 
+            }
+
+            // ЧЕРЧЕНИЕ
+            if (drawMode) {
+                addDrawPoint(validHits[0].point);
+                return;
             }
 
             // МЕТКА КООРДИНАТ
@@ -17162,7 +17376,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -17663,6 +17877,12 @@ ${componentXml || '    '}
 
         window.addEventListener('keydown', event => {
             if (event.target.closest('input, textarea, select, .editInput')) return;
+            if (event.key === 'Escape' && drawMode) {
+                event.preventDefault();
+                if (drawPoints.length) finishDrawPolyline();
+                else setDrawMode(false);
+                return;
+            }
             if (event.key === 'f' || event.key === 'F' || event.key === 'а' || event.key === 'А') {
                 if (!selectedItems.length) return;
                 event.preventDefault();
@@ -17848,6 +18068,8 @@ ${componentXml || '    '}
             measureVisuals.clear(); 
             clearCoordPins();
             setCoordPinMode(false);
+            setDrawMode(false);
+            clearDrawnPolylines();
             labelsContainer.innerHTML = ''; 
             labelsList = [];
             appearanceDraftTexture = null;
@@ -17865,7 +18087,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'drawModeSelect', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;

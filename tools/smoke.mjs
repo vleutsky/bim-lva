@@ -31,6 +31,7 @@ let ruler = null;
 let reload = null;
 let bvhPeak = -1;
 let viewCube = null;
+let draw = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -196,6 +197,76 @@ async function checkCoordPin(page) {
     }
 
     return { shown, diff, movedBy };
+}
+
+/**
+ * Черчение полилиний и выгрузка в DXF. Проверяем содержимое файла: координаты
+ * обязаны быть мировыми (иначе чертёж ляжет у нуля, а не на площадке), 2D —
+ * с одной отметкой на всю линию, и структура R12 (POLYLINE/VERTEX/SEQEND).
+ */
+async function checkDrawDxf(page) {
+    const box = await page.locator('#stage canvas').boundingBox();
+    if (!box) return null;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    const drawOne = async (kind, pts) => {
+        await page.evaluate((k) => {
+            const sel = document.getElementById('drawModeSelect');
+            sel.value = k;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            const btn = document.getElementById('btnDraw');
+            if (!btn.classList.contains('on')) btn.click();
+        }, kind);
+        for (const [dx, dy] of pts) {
+            await page.mouse.click(cx + dx * box.width, cy + dy * box.height);
+            await page.waitForTimeout(60);
+        }
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(120);
+    };
+
+    await drawOne('3d', [[-0.12, -0.06], [0.0, 0.02], [0.11, -0.04]]);
+    await drawOne('2d', [[-0.10, 0.10], [0.06, 0.12]]);
+    await page.evaluate(() => {
+        const btn = document.getElementById('btnDraw');
+        if (btn.classList.contains('on')) btn.click();
+    });
+
+    const drawn = await page.evaluate(() => window.BimLvaDebug.drawn);
+    if (drawn.length !== 2) {
+        problems.push(`начерчено ${drawn.length} полилиний вместо 2 — клики не попали по геометрии`);
+        return null;
+    }
+    const three = drawn.find((d) => d.kind === '3d');
+    const flat = drawn.find((d) => d.kind === '2d');
+    if (three.abs.length !== 3) problems.push(`в 3D-полилинии ${three.abs.length} точек вместо 3`);
+    if (flat && flat.abs.length === 2) {
+        const dz = Math.abs(flat.abs[0].z - flat.abs[1].z);
+        if (dz > 1e-6) problems.push(`2D-полилиния получилась с перепадом ${dz.toFixed(3)} м`);
+    }
+
+    const dxf = await page.evaluate(() => window.BimLvaDebug.dxfPreview());
+    const has = (t) => dxf.includes(t);
+    if (!has('AC1009')) problems.push('в DXF нет версии AC1009 (R12)');
+    if (!has('$INSUNITS')) problems.push('в DXF не указаны единицы');
+    if (!has('LVA_3D') || !has('LVA_2D')) problems.push('в DXF нет слоёв LVA_2D/LVA_3D');
+    if (!has('SEQEND')) problems.push('в DXF полилиния не закрыта SEQEND');
+    if (!has('EOF')) problems.push('DXF без EOF');
+
+    const vertexCount = (dxf.match(/\r\nVERTEX\r\n/g) || []).length;
+    const wantVertex = drawn.reduce((n, d) => n + d.abs.length, 0);
+    if (vertexCount !== wantVertex) {
+        problems.push(`в DXF ${vertexCount} вершин вместо ${wantVertex}`);
+    }
+
+    // Мировые координаты: первая точка обязана попасть в файл как есть
+    const first = three.abs[0];
+    const wantX = first.x.toFixed(6);
+    if (!dxf.includes(wantX)) {
+        problems.push(`в DXF нет мировой координаты X ${wantX} — выгрузка ушла в локальных`);
+    }
+    return { polylines: drawn.length, vertices: vertexCount, x: first.x };
 }
 
 /**
@@ -695,6 +766,7 @@ async function main() {
                     // BVH снимаем до обновления: новая модель маленькая и своего
                     // дерева не строит, а финальная проверка смотрит на итог сцены
                     bvhPeak = await page.evaluate(() => window.BimLvaDebug?.bvhCount ?? -1);
+                    draw = await checkDrawDxf(page);
                     viewCube = await checkViewCube(page);
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
@@ -746,6 +818,12 @@ async function main() {
         console.log(
             `линейка:   L3D ${ruler.l3d.toFixed(2)} · L2D ${ruler.l2d.toFixed(2)} · ` +
             `ΔZ ${ruler.dz.toFixed(2)} · i ${ruler.perMille.toFixed(1)} ‰`
+        );
+    }
+    if (draw) {
+        console.log(
+            `черчение:  полилиний ${draw.polylines}, вершин в DXF ${draw.vertices}, ` +
+            `мировая X ${draw.x.toFixed(2)}`
         );
     }
     if (viewCube) console.log('видовой куб: 6 стандартных видов встали по осям');
