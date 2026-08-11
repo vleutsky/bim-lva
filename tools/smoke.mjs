@@ -350,6 +350,44 @@ async function checkDrawDxf(page) {
         await page.waitForTimeout(120);
     };
 
+    // Резиновая нить: после ПЕРВОГО клика линия уже обязана тянуться за
+    // курсором. Раньше черновик рисовался только с двух поставленных точек —
+    // до второго клика не было видно, куда ведёшь.
+    await page.evaluate(() => {
+        const sel = document.getElementById('drawModeSelect');
+        sel.value = '3d';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        const btn = document.getElementById('btnDraw');
+        if (!btn.classList.contains('on')) btn.click();
+    });
+    await page.mouse.click(cx - 0.12 * box.width, cy - 0.06 * box.height);
+    await page.waitForTimeout(100);
+    // Нить появляется в обработчике pointermove, а он на тяжёлой сцене успевает
+    // не сразу — ждём условие, а не фиксированную паузу.
+    const rubberBand = await (async () => {
+        for (let i = 0; i < 12; i++) {
+            await page.mouse.move(
+                cx + (0.05 + i * 0.004) * box.width,
+                cy + (0.03 + i * 0.004) * box.height
+            );
+            const n = await page.waitForFunction(
+                () => (window.BimLvaDebug.drawDraftPoints >= 2 ? window.BimLvaDebug.drawDraftPoints : false),
+                { timeout: 500 }
+            ).then((h) => h.jsonValue()).catch(() => 0);
+            if (n >= 2) return n;
+        }
+        return 0;
+    })();
+    if (!rubberBand) {
+        problems.push('резиновая нить не появилась после первой точки');
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+        const btn = document.getElementById('btnDraw');
+        if (btn.classList.contains('on')) btn.click();
+    });
+
     await drawOne('3d', [[-0.12, -0.06], [0.0, 0.02], [0.11, -0.04]]);
     await drawOne('2d', [[-0.10, 0.10], [0.06, 0.12]]);
     await page.evaluate(() => {
@@ -445,6 +483,55 @@ async function checkDrawDxf(page) {
                 `(${straight.toFixed(3)} .. ${three.length3d.toFixed(3)})`
             );
         }
+    }
+
+    // Цвет и толщина: у Line2 их держит LineMaterial, а не геометрия. Сверяем
+    // именно материал — иначе проверка прошла бы и при неработающей толщине
+    // (у обычной THREE.Line linewidth в WebGL молча игнорируется).
+    await page.evaluate(() => document.getElementById('btnPolylineList')?.click());
+    await page.evaluate(() => {
+        const color = document.querySelector('#polylinesList .polyline-color');
+        color.value = '#ff0000';
+        color.dispatchEvent(new Event('input', { bubbles: true }));
+        const width = document.querySelector('#polylinesList input[type="number"]');
+        width.value = '6';
+        width.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const style = await page.evaluate(
+        (id) => window.BimLvaDebug.polylineStyle(id),
+        drawn[0].id
+    );
+    if (style?.materialColor !== '#ff0000') {
+        problems.push(`цвет полилинии не дошёл до материала: ${style?.materialColor}`);
+    }
+    if (style?.materialWidth !== 6) {
+        problems.push(`толщина полилинии не дошла до материала: ${style?.materialWidth}`);
+    }
+
+    // Правка числами: отметка, длина, уклон.
+    const editProbe = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        const before = D.drawn.find((d) => d.id === id);
+        const startAbs = before.abs[0];
+        D.editPolyline(id, 'elev', 0, startAbs.z + 5);
+        const afterElev = D.drawn.find((d) => d.id === id).abs[0].z;
+
+        D.editPolyline(id, 'length', 0, 25);
+        const segLen = D.polylineSegment(id, 0).length3d;
+
+        D.editPolyline(id, 'slope', 0, 40);
+        const segSlope = D.polylineSegment(id, 0).slopePermille;
+
+        return { wantElev: startAbs.z + 5, gotElev: afterElev, segLen, segSlope };
+    }, three.id);
+    if (Math.abs(editProbe.gotElev - editProbe.wantElev) > 1e-3) {
+        problems.push(`отметка вершины не применилась: ${editProbe.gotElev} вместо ${editProbe.wantElev}`);
+    }
+    if (Math.abs(editProbe.segLen - 25) > 1e-3) {
+        problems.push(`длина отрезка не применилась: ${editProbe.segLen.toFixed(3)} вместо 25`);
+    }
+    if (Math.abs(editProbe.segSlope - 40) > 0.05) {
+        problems.push(`уклон отрезка не применился: ${editProbe.segSlope?.toFixed(2)} вместо 40`);
     }
 
     // Список полилиний: модалка открывается, переименование и общее удаление работают.

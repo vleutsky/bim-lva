@@ -48,7 +48,13 @@ const THREE_ADDONS = [
     'loaders/PLYLoader.js',
     'loaders/ColladaLoader.js',
     'loaders/TDSLoader.js',
-    'utils/BufferGeometryUtils.js'
+    'utils/BufferGeometryUtils.js',
+    // «Толстые» линии: у обычной THREE.Line в WebGL linewidth всегда 1 px
+    // (ограничение самого API, не three). Line2 рисует линию инстансами
+    // квадов — отсюда и настраиваемая толщина, и попадание лучом.
+    'lines/Line2.js',
+    'lines/LineGeometry.js',
+    'lines/LineMaterial.js'
 ];
 
 const IMPORT_RE = /(?:import|export)\s[^'"]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)/g;

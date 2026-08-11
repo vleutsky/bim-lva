@@ -1158,20 +1158,35 @@
         .pin-row .btn { padding: 2px 8px; }
         .polyline-row {
             display: grid;
-            grid-template-columns: 130px 1fr auto auto auto;
+            grid-template-columns: 120px 1fr auto auto auto auto auto;
             align-items: center;
             gap: 6px;
             padding: 5px 4px;
             border-bottom: 1px solid var(--line, #d8dee6);
         }
+        .polyline-row.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
         .polyline-row .btn { padding: 2px 8px; }
+        .polyline-color {
+            width: 28px;
+            height: 22px;
+            padding: 0;
+            border: 1px solid var(--line, #d8dee6);
+            border-radius: 4px;
+            background: none;
+            cursor: pointer;
+        }
         .polyline-point-row {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
             padding: 4px;
             border-bottom: 1px solid var(--line, #d8dee6);
+        }
+        .polyline-field-label {
+            font-family: 'IBM Plex Mono';
+            font-size: 10.5px;
+            color: var(--dim);
         }
 
         .coord-pin-label {
@@ -2646,6 +2661,14 @@
     </div>
 
     <div class="ctx-menu" id="stageCtx">
+        <div id="ctxPolylineGroup" hidden>
+            <button class="ctx-item" id="ctxPolylineProps" title="Открыть полилинию в таблице: вершины, отметки, длины, уклоны">📐 Свойства полилинии</button>
+            <button class="ctx-item" id="ctxPolylineFillet" title="Вписать радиус во все внутренние углы этой полилинии">◜ Вписать кривую…</button>
+            <button class="ctx-item" id="ctxPolylineSweep" title="Прогнать сечение вдоль этой полилинии и получить 3D-тело">⬒ Тело по этой оси</button>
+            <button class="ctx-item danger" id="ctxPolylineDelete" title="Удалить эту полилинию">🗑 Удалить полилинию</button>
+            <div class="ctx-divider"></div>
+        </div>
+        <button class="ctx-item" id="ctxPolylineTable" title="Таблица всех начерченных полилиний">📋 Таблица полилиний</button>
         <button class="ctx-item" id="ctxSelectSimilar" title="IFC: тот же класс во всех загруженных моделях. DXF/DWG: та же сущность на том же слое">🧲 Выбрать подобные</button>
         <div class="ctx-divider"></div>
         <button class="ctx-item" id="ctxBg" title="Переключить светлый цвет фона 3D-сцены">🎨 Изменить цвет фона</button>
@@ -3160,23 +3183,43 @@
         </div>
     </div>
 
-    <div class="modal-backdrop" id="polylinesModal">
-        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(640px,100%)">
-            <h3>Полилинии</h3>
-            <div class="bulk-note">
-                Имя правится прямо в строке. «✎» раскрывает точки: радиус
-                сопряжения вписывается в любую вершину, кроме первой и
-                последней (та же вписанная кривая, что скругляет угол
-                трассы в Civil 3D). «→» подводит камеру, «✕» удаляет.
+    <div class="modal-backdrop floating-panel" id="polylinesModal">
+        <div class="modal-card" id="polylinesModalCard" role="dialog" aria-modal="true" style="width:min(600px,92vw)">
+            <div class="modal-drag-handle" id="polylinesModalDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Полилинии</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
             </div>
-            <div id="polylinesList" style="max-height:220px;overflow:auto;margin-top:8px"></div>
+            <div class="bulk-note">
+                Имя, цвет и толщина правятся прямо в строке. «✎» раскрывает
+                вершины: <b>H</b> — абсолютная отметка, <b>L</b> — длина отрезка
+                до следующей вершины, <b>i‰</b> — его уклон, <b>R</b> — радиус
+                сопряжения в углу. X и Y правятся перетаскиванием точки в сцене.
+                По линии в сцене можно кликнуть — она подсветится здесь.
+            </div>
+            <div id="polylinesList" style="max-height:200px;overflow:auto;margin-top:8px"></div>
             <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
                 <div class="bulk-note" style="margin-bottom:6px"><b id="polylinePointsTitle"></b></div>
-                <div id="polylinePointsList" style="max-height:260px;overflow:auto"></div>
+                <div id="polylinePointsList" style="max-height:240px;overflow:auto"></div>
             </div>
             <div class="modal-actions">
                 <button class="btn" id="polylinesClear">Удалить все</button>
                 <button class="btn load-btn" id="polylinesClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="filletAllModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(420px,100%)">
+            <h3>Вписать кривую</h3>
+            <div class="bulk-note" id="filletAllNote">
+                Радиус вписывается во все внутренние углы полилинии. Там, где
+                соседний отрезок короче нужного, радиус уменьшается сам —
+                об этом будет уведомление. 0 убирает сопряжения.
+            </div>
+            <div class="prop small"><div class="k">Радиус, м</div><input class="editInput" id="filletAllRadius" type="number" min="0" step="0.5" value="5"></div>
+            <div class="modal-actions">
+                <button class="btn" id="filletAllCancel">Отмена</button>
+                <button class="btn load-btn" id="filletAllApply">Вписать</button>
             </div>
         </div>
     </div>
@@ -3469,6 +3512,12 @@
         import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
         import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
         import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+        // Толщина у обычной THREE.Line в WebGL всегда 1 px — это ограничение
+        // самого WebGL, а не three. Line2 рисует линию инстансами квадов,
+        // поэтому у начерченных полилиний работает и толщина, и выбор лучом.
+        import { Line2 } from 'three/addons/lines/Line2.js';
+        import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+        import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
         import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
         import * as WebIFC from 'web-ifc';
 
@@ -4258,6 +4307,37 @@
                 if (!rec) return false;
                 setPolylineVertexRadius(rec, idx, radius);
                 return true;
+            },
+            /** Правка геометрии числами: 'elev' | 'length' | 'slope'. */
+            editPolyline(id, what, idx, value) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                if (what === 'elev') setPolylineVertexElevation(rec, idx, value);
+                else if (what === 'length') setPolylineSegmentLength(rec, idx, value);
+                else if (what === 'slope') setPolylineSegmentSlope(rec, idx, value);
+                else return false;
+                return true;
+            },
+            /** Длина и уклон отрезка — для сверки с тем, что показывает таблица. */
+            polylineSegment(id, idx) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? polylineSegmentStats(rec, idx) : null;
+            },
+            /** Цвет и толщина линии — их задаёт LineMaterial, а не BufferGeometry. */
+            polylineStyle(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return null;
+                return {
+                    color: rec.color,
+                    width: rec.width,
+                    materialColor: '#' + rec.object.material.color.getHexString(),
+                    materialWidth: rec.object.material.linewidth
+                };
+            },
+            /** Точек в черновике (резиновая нить) — 0, если её не видно. */
+            get drawDraftPoints() {
+                if (typeof drawDraft === 'undefined' || !drawDraft) return 0;
+                return drawDraft.geometry?.attributes?.instanceStart?.count + 1 || 0;
             },
             /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
             dxfPreview() {
@@ -5862,14 +5942,16 @@
                     if (pts.length >= 2) return { points: pts, source: `сущность #${entry.id}` };
                 }
             }
-            const last = drawnPolylines[drawnPolylines.length - 1];
-            if (last) {
-                const pos = last.object.geometry.attributes.position;
-                const pts = [];
-                for (let i = 0; i < pos.count; i++) {
-                    pts.push(new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)));
-                }
-                if (pts.length >= 2) return { points: pts, source: 'последняя полилиния' };
+            // Ось берём из renderPts (вершины после сопряжения), а не из буфера
+            // геометрии: у Line2 позиции лежат в instanceStart/instanceEnd, и
+            // атрибута position там нет вовсе.
+            const chosen = drawnPolylines.find((r) => r.id === polylineEditingId)
+                || drawnPolylines[drawnPolylines.length - 1];
+            if (chosen?.renderPts?.length >= 2) {
+                return {
+                    points: chosen.renderPts.map((p) => p.clone()),
+                    source: `полилиния «${chosen.name}»`
+                };
             }
             return null;
         }
@@ -6071,28 +6153,84 @@
         const drawGroup = new THREE.Group();
         drawGroup.name = 'DrawnPolylines';
         scene.add(drawGroup);
-        const DRAW_COLOR = 0x1f8f5f;
+        const DRAW_COLOR = '#1f8f5f';
+        const DRAW_WIDTH = 2;
         let drawDraft = null;
+        let drawCursorPoint = null; // куда тянется линия прямо сейчас (резиновая нить)
 
         function drawKind() {
             return $('drawModeSelect')?.value === '2d' ? '2d' : '3d';
         }
 
+        /** Все LineMaterial держат разрешение в пикселях сами — обновляем в resize(). */
+        const lineMaterials = new Set();
+
+        function makeLineMaterial(color, width, dashed = false) {
+            const mat = new LineMaterial({
+                color: new THREE.Color(color),
+                linewidth: Math.max(0.5, width),
+                worldUnits: false,          // толщина в пикселях, а не в метрах
+                dashed,
+                dashSize: dashed ? 8 : undefined,
+                gapSize: dashed ? 5 : undefined,
+                depthTest: false,
+                transparent: true
+            });
+            mat.resolution.set(Math.max(stage.clientWidth, 1), Math.max(stage.clientHeight, 1));
+            lineMaterials.add(mat);
+            return mat;
+        }
+
+        function disposeLineMaterial(mat) {
+            if (!mat) return;
+            lineMaterials.delete(mat);
+            mat.dispose();
+        }
+
+        function syncLineMaterialResolution() {
+            const w = Math.max(stage.clientWidth, 1);
+            const h = Math.max(stage.clientHeight, 1);
+            lineMaterials.forEach((m) => m.resolution.set(w, h));
+        }
+
+        function makeLineObject(points, color, width, dashed = false) {
+            const geom = new LineGeometry();
+            geom.setPositions(points.flatMap((p) => [p.x, p.y, p.z]));
+            const line = new Line2(geom, makeLineMaterial(color, width, dashed));
+            if (dashed) line.computeLineDistances();
+            line.renderOrder = 998;
+            return line;
+        }
+
+        /**
+         * Черновик: уже поставленные точки плюс та, где сейчас курсор. Без
+         * «резиновой нити» первый отрезок был невидим до второго клика —
+         * не понять, куда тянешь.
+         */
         function refreshDrawDraft() {
             if (drawDraft) {
                 drawGroup.remove(drawDraft);
                 drawDraft.geometry.dispose();
+                disposeLineMaterial(drawDraft.material);
                 drawDraft = null;
             }
-            if (drawPoints.length < 2) { markNeedsRender(); return; }
-            drawDraft = new THREE.Line(
-                new THREE.BufferGeometry().setFromPoints(drawPoints),
-                new THREE.LineDashedMaterial({ color: DRAW_COLOR, dashSize: 1.2, gapSize: 0.6, depthTest: false })
-            );
-            drawDraft.computeLineDistances();
-            drawDraft.renderOrder = 998;
+            const pts = drawCursorPoint ? [...drawPoints, drawCursorPoint] : drawPoints.slice();
+            if (pts.length < 2) { markNeedsRender(); return; }
+            drawDraft = makeLineObject(pts, DRAW_COLOR, DRAW_WIDTH, true);
             drawGroup.add(drawDraft);
             markNeedsRender();
+        }
+
+        /** Точка курсора приводится к тем же правилам, что и настоящая (2D — на отметке первой). */
+        function setDrawCursorPoint(worldPoint) {
+            if (!drawMode || !drawPoints.length || !worldPoint) {
+                if (drawCursorPoint) { drawCursorPoint = null; refreshDrawDraft(); }
+                return;
+            }
+            const p = worldPoint.clone();
+            if (drawKind() === '2d') p.z = drawPoints[0].z;
+            drawCursorPoint = p;
+            refreshDrawDraft();
         }
 
         function addDrawPoint(worldPoint) {
@@ -6100,6 +6238,7 @@
             // 2D-полилиния лежит на отметке первой точки: так её и ждут в плане
             if (drawKind() === '2d' && drawPoints.length) p.z = drawPoints[0].z;
             drawPoints.push(p);
+            drawCursorPoint = null;
             refreshDrawDraft();
         }
 
@@ -6179,8 +6318,12 @@
         /** Перестроить геометрию/длины/абсолютные координаты после правки точек или радиусов. */
         function rebuildPolylineGeometry(record, { notifyClamp = false } = {}) {
             const { points, clamped } = buildFilletedPoints(record.pts, record.radii);
+            record.renderPts = points;
+            const geom = new LineGeometry();
+            geom.setPositions(points.flatMap((p) => [p.x, p.y, p.z]));
             record.object.geometry.dispose();
-            record.object.geometry = new THREE.BufferGeometry().setFromPoints(points);
+            record.object.geometry = geom;
+            record.object.computeLineDistances();
             record.abs = points.map(p => {
                 const a = worldPointToAbsoluteXYZ(p) || p.clone();
                 return { x: a.x, y: a.y, z: a.z };
@@ -6199,19 +6342,25 @@
             markNeedsRender();
         }
 
+        function setPolylineStyle(record, { color, width } = {}) {
+            if (color != null) record.color = color;
+            if (width != null) record.width = Math.max(0.5, Number(width) || 1);
+            record.object.material.color.set(record.color);
+            record.object.material.linewidth = record.width;
+            record.object.material.needsUpdate = true;
+            markNeedsRender();
+        }
+
         function finishDrawPolyline() {
             if (drawPoints.length < 2) {
                 drawPoints = [];
+                drawCursorPoint = null;
                 refreshDrawDraft();
                 return null;
             }
             const kind = drawKind();
             const pts = drawPoints.slice();
-            const line = new THREE.Line(
-                new THREE.BufferGeometry().setFromPoints(pts),
-                new THREE.LineBasicMaterial({ color: DRAW_COLOR, depthTest: false })
-            );
-            line.renderOrder = 998;
+            const line = makeLineObject(pts, DRAW_COLOR, DRAW_WIDTH);
             drawGroup.add(line);
 
             const record = {
@@ -6220,14 +6369,19 @@
                 kind,
                 pts,
                 radii: pts.map(() => 0),
+                renderPts: [],
                 abs: [],
                 object: line,
+                color: DRAW_COLOR,
+                width: DRAW_WIDTH,
                 length3d: 0,
                 length2d: 0
             };
+            line.userData.drawnPolylineId = record.id;
             drawnPolylines.push(record);
             rebuildPolylineGeometry(record);
             drawPoints = [];
+            drawCursorPoint = null;
             refreshDrawDraft();
             updateDrawUi();
             notify(
@@ -6242,7 +6396,7 @@
             drawnPolylines.forEach(r => {
                 drawGroup.remove(r.object);
                 r.object.geometry.dispose();
-                r.object.material.dispose();
+                disposeLineMaterial(r.object.material);
             });
             drawnPolylines = [];
             drawPoints = [];
@@ -6256,7 +6410,7 @@
             if (i < 0) return;
             drawGroup.remove(record.object);
             record.object.geometry.dispose();
-            record.object.material.dispose();
+            disposeLineMaterial(record.object.material);
             drawnPolylines.splice(i, 1);
             if (polylineEditingId === record.id) polylineEditingId = null;
             updateDrawUi();
@@ -6287,6 +6441,91 @@
             renderPolylinesList();
         }
 
+        /* Правка геометрии числами. Во всех трёх случаях двигается ОДНА вершина,
+         * остальные стоят на месте: полилиния во вьювере — не связанная трасса,
+         * и «тянуть хвост» за собой было бы неожиданно. Отметка задаётся в
+         * АБСОЛЮТНЫХ координатах (как в статус-баре и в таблице), поэтому
+         * переводим её в оси сцены тем же сдвигом, что worldPointToAbsoluteXYZ. */
+
+        /** Абсолютная отметка Z → Z в осях сцены. */
+        function absoluteZToSceneZ(absZ) {
+            const shift = ifcWorldOrigin ? worldOriginSceneVec() : null;
+            return shift ? absZ - shift.z : absZ;
+        }
+
+        function setPolylineVertexElevation(record, idx, absZ) {
+            const z = Number(absZ);
+            if (!Number.isFinite(z) || idx < 0 || idx >= record.pts.length) return;
+            record.pts[idx].z = absoluteZToSceneZ(z);
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+        }
+
+        /**
+         * Длина отрезка idx→idx+1: конечная вершина едет вдоль текущего
+         * направления отрезка (в 3D — вдоль наклонного, чтобы уклон сохранился).
+         */
+        function setPolylineSegmentLength(record, idx, value) {
+            const len = Number(value);
+            if (!Number.isFinite(len) || len <= 0 || idx < 0 || idx >= record.pts.length - 1) return;
+            const a = record.pts[idx];
+            const b = record.pts[idx + 1];
+            const dir = b.clone().sub(a);
+            if (dir.lengthSq() < 1e-12) return;
+            record.pts[idx + 1] = a.clone().addScaledVector(dir.normalize(), len);
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+        }
+
+        /**
+         * Уклон отрезка idx→idx+1 в промилле: меняется только отметка конца,
+         * план (X/Y) не трогается — то же, что «задать уклон» на профиле.
+         */
+        function setPolylineSegmentSlope(record, idx, permille) {
+            const i = Number(permille);
+            if (!Number.isFinite(i) || idx < 0 || idx >= record.pts.length - 1) return;
+            const a = record.pts[idx];
+            const b = record.pts[idx + 1];
+            const run = Math.hypot(b.x - a.x, b.y - a.y);
+            if (run < 1e-6) {
+                notifyError('Отрезок вертикальный — уклон для него не определён.');
+                return;
+            }
+            b.z = a.z + run * (i / 1000);
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+        }
+
+        /** Длина и уклон отрезка idx→idx+1 (для таблицы). */
+        function polylineSegmentStats(record, idx) {
+            const a = record.pts[idx];
+            const b = record.pts[idx + 1];
+            if (!a || !b) return null;
+            const run = Math.hypot(b.x - a.x, b.y - a.y);
+            return {
+                length3d: a.distanceTo(b),
+                length2d: run,
+                slopePermille: run > 1e-6 ? ((b.z - a.z) / run) * 1000 : null
+            };
+        }
+
+        /**
+         * Клик по линии в сцене: раскрываем её в панели. Панель плавающая и
+         * сцену не перекрывает, поэтому открываем сразу — иначе непонятно, что
+         * выбор вообще произошёл.
+         */
+        function selectDrawnPolyline(record) {
+            polylineEditingId = record.id;
+            openPolylinesPanel();
+            const row = $('polylinesList')?.querySelector('.polyline-row.is-active');
+            row?.scrollIntoView({ block: 'nearest' });
+            notify(`Полилиния «${record.name}»: ${record.pts.length} вершин, L3D ${record.length3d.toFixed(2)} м`);
+            trackUsage('polyline_pick');
+        }
+
         /** Камера к полилинии по её мировому габариту (сцена, не абсолютные оси). */
         function focusPolyline(record) {
             const box = new THREE.Box3().setFromPoints(record.pts);
@@ -6311,21 +6550,41 @@
             drawnPolylines.forEach((r) => {
                 const row = document.createElement('div');
                 row.className = 'polyline-row';
+                row.classList.toggle('is-active', r.id === polylineEditingId);
                 const nameInput = document.createElement('input');
                 nameInput.className = 'editInput';
                 nameInput.style.cssText = 'width:100%;font-size:11px';
                 nameInput.value = r.name;
                 nameInput.addEventListener('change', () => renamePolyline(r, nameInput.value));
+
                 const info = document.createElement('span');
                 info.className = 'pin-xyz';
                 info.textContent = `${r.kind.toUpperCase()} · ${r.pts.length} т · L3D ${r.length3d.toFixed(2)} м`;
+
+                const colorInput = document.createElement('input');
+                colorInput.type = 'color';
+                colorInput.className = 'polyline-color';
+                colorInput.value = r.color;
+                colorInput.title = 'Цвет линии';
+                colorInput.addEventListener('input', () => setPolylineStyle(r, { color: colorInput.value }));
+
+                const widthInput = document.createElement('input');
+                widthInput.type = 'number';
+                widthInput.min = '0.5';
+                widthInput.step = '0.5';
+                widthInput.className = 'editInput';
+                widthInput.style.cssText = 'width:56px';
+                widthInput.value = String(r.width);
+                widthInput.title = 'Толщина линии, px';
+                widthInput.addEventListener('change', () => setPolylineStyle(r, { width: widthInput.value }));
+
                 const edit = document.createElement('button');
                 edit.className = 'btn';
                 edit.textContent = '✎';
-                edit.title = 'Точки и радиусы сопряжения';
+                edit.title = 'Точки: отметка, длина, уклон, радиус сопряжения';
                 edit.addEventListener('click', () => {
                     polylineEditingId = polylineEditingId === r.id ? null : r.id;
-                    renderPolylinePointsEditor(polylineEditingId ? r : null);
+                    renderPolylinesList();
                 });
                 const go = document.createElement('button');
                 go.className = 'btn';
@@ -6337,18 +6596,24 @@
                 del.textContent = '✕';
                 del.title = 'Удалить полилинию';
                 del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
-                row.append(nameInput, info, edit, go, del);
+                row.append(nameInput, info, colorInput, widthInput, edit, go, del);
                 frag.appendChild(row);
             });
             body.replaceChildren(frag);
 
-            if (polylineEditingId != null) {
-                const rec = drawnPolylines.find((r) => r.id === polylineEditingId);
-                renderPolylinePointsEditor(rec || null);
-            }
+            const rec = polylineEditingId != null
+                ? drawnPolylines.find((r) => r.id === polylineEditingId)
+                : null;
+            renderPolylinePointsEditor(rec || null);
         }
 
-        /** Раскрытая таблица точек: X/Y/Z в абсолютных координатах (только просмотр) + радиус (правится). */
+        /**
+         * Таблица вершин. Перебираем именно `pts` (реальные вершины), а не `abs`:
+         * после сопряжения в `abs` лежат ещё и точки дуг, и нумерация строк
+         * разъехалась бы с `radii`.
+         * Отметка — абсолютная, правится. Длина и уклон принадлежат ОТРЕЗКУ до
+         * следующей вершины, поэтому у последней строки их нет.
+         */
         function renderPolylinePointsEditor(record) {
             const box = $('polylinePointsBox');
             const title = $('polylinePointsTitle');
@@ -6359,42 +6624,79 @@
                 return;
             }
             box.removeAttribute('hidden');
-            if (title) title.textContent = `«${record.name}» — точки`;
+            if (title) title.textContent = `«${record.name}» — вершины`;
+
+            const num = (value, opts) => {
+                const el = document.createElement('input');
+                el.type = 'number';
+                el.className = 'editInput';
+                el.style.cssText = `width:${opts.width || 76}px`;
+                el.step = opts.step;
+                if (opts.min != null) el.min = opts.min;
+                el.value = value;
+                el.title = opts.title;
+                el.addEventListener('change', () => opts.onChange(el.value));
+                return el;
+            };
+            const label = (text) => {
+                const el = document.createElement('span');
+                el.className = 'polyline-field-label';
+                el.textContent = text;
+                return el;
+            };
+
             const frag = document.createDocumentFragment();
-            record.abs.forEach((a, i) => {
-                const isEnd = i === 0 || i === record.pts.length - 1;
+            record.pts.forEach((p, i) => {
+                const a = worldPointToAbsoluteXYZ(p) || p;
+                const isFirst = i === 0;
+                const isLast = i === record.pts.length - 1;
+                const seg = isLast ? null : polylineSegmentStats(record, i);
+
                 const row = document.createElement('div');
                 row.className = 'polyline-point-row';
-                const num = document.createElement('b');
-                num.textContent = `#${i + 1}`;
-                const val = document.createElement('span');
-                val.className = 'pin-xyz';
-                val.textContent = `${a.x.toFixed(3)} ${a.y.toFixed(3)} ${a.z.toFixed(3)}`;
-                row.append(num, val);
-                if (isEnd) {
-                    const note = document.createElement('span');
-                    note.style.cssText = 'font-size:11px;color:var(--dim)';
-                    note.textContent = 'край — без сопряжения';
-                    row.append(note);
-                } else {
-                    const rLabel = document.createElement('span');
-                    rLabel.style.fontSize = '11px';
-                    rLabel.textContent = 'R, м';
-                    const rInput = document.createElement('input');
-                    rInput.type = 'number';
-                    rInput.min = '0';
-                    rInput.step = '0.1';
-                    rInput.className = 'editInput';
-                    rInput.style.cssText = 'width:70px';
-                    rInput.value = record.radii[i] ? record.radii[i].toFixed(3) : '';
-                    rInput.placeholder = '0';
-                    rInput.addEventListener('change', () => setPolylineVertexRadius(record, i, rInput.value));
+
+                const tag = document.createElement('b');
+                tag.textContent = `#${i + 1}`;
+                const xy = document.createElement('span');
+                xy.className = 'pin-xyz';
+                xy.textContent = `${a.x.toFixed(3)} ${a.y.toFixed(3)}`;
+                xy.title = 'X и Y правятся перетаскиванием точки в сцене';
+                row.append(tag, xy);
+
+                row.append(label('H'), num(a.z.toFixed(3), {
+                    step: '0.01',
+                    title: 'Абсолютная отметка вершины, м',
+                    onChange: (v) => setPolylineVertexElevation(record, i, v)
+                }));
+
+                if (seg) {
+                    row.append(label('L'), num(seg.length3d.toFixed(3), {
+                        step: '0.1', min: '0.001',
+                        title: 'Длина отрезка до следующей вершины (по наклону), м — двигает следующую вершину вдоль текущего направления',
+                        onChange: (v) => setPolylineSegmentLength(record, i, v)
+                    }));
+                    row.append(label('i‰'), num(
+                        seg.slopePermille == null ? '' : seg.slopePermille.toFixed(2),
+                        {
+                            step: '1', width: 70,
+                            title: 'Уклон отрезка до следующей вершины, ‰ — меняет только её отметку',
+                            onChange: (v) => setPolylineSegmentSlope(record, i, v)
+                        }
+                    ));
+                }
+
+                if (!isFirst && !isLast) {
+                    row.append(label('R'), num(record.radii[i] ? record.radii[i].toFixed(3) : '', {
+                        step: '0.1', min: '0',
+                        title: 'Радиус сопряжения в этой вершине, м',
+                        onChange: (v) => setPolylineVertexRadius(record, i, v)
+                    }));
                     const delPt = document.createElement('button');
                     delPt.className = 'btn';
                     delPt.textContent = '✕';
                     delPt.title = 'Убрать эту вершину';
                     delPt.addEventListener('click', () => removePolylineVertex(record, i));
-                    row.append(rLabel, rInput, delPt);
+                    row.append(delPt);
                 }
                 frag.appendChild(row);
             });
@@ -6503,7 +6805,11 @@
                 if (coordPinMode) setCoordPinMode(false);
             }
             $('stage').style.cursor = drawMode ? 'crosshair' : '';
-            if (!drawMode) hideSnapMarker();
+            if (!drawMode) {
+                hideSnapMarker();
+                drawCursorPoint = null;
+                refreshDrawDraft();
+            }
         }
 
         /* --- Метки координат -------------------------------------------------
@@ -6750,14 +7056,58 @@
             }
         });
 
-        $('btnPolylineList')?.addEventListener('click', () => {
+        const polylinesPanel = createFloatingPanel({
+            cardId: 'polylinesModalCard', modalId: 'polylinesModal',
+            handleId: 'polylinesModalDrag', defaultWidth: 600
+        });
+
+        function openPolylinesPanel({ park = false } = {}) {
             renderPolylinesList();
-            $('polylinesModal').classList.add('show');
+            const modal = $('polylinesModal');
+            if (!modal) return;
+            const wasOpen = modal.classList.contains('show');
+            modal.classList.add('show');
+            if (!wasOpen) requestAnimationFrame(() => polylinesPanel.park());
+            else if (park) polylinesPanel.park();
+        }
+
+        let filletAllTargetId = null;
+
+        function openFilletAllModal(record) {
+            filletAllTargetId = record.id;
+            const note = $('filletAllNote');
+            if (note) {
+                note.textContent =
+                    `«${record.name}»: внутренних углов ${Math.max(0, record.pts.length - 2)}. ` +
+                    'Там, где соседний отрезок короче нужного, радиус уменьшается сам. 0 убирает сопряжения.';
+            }
+            $('filletAllModal').classList.add('show');
+        }
+
+        $('filletAllCancel')?.addEventListener('click', () => $('filletAllModal').classList.remove('show'));
+        $('filletAllModal')?.addEventListener('click', (e) => {
+            if (e.target === $('filletAllModal')) $('filletAllModal').classList.remove('show');
         });
-        $('polylinesClose')?.addEventListener('click', () => $('polylinesModal').classList.remove('show'));
-        $('polylinesModal')?.addEventListener('click', (e) => {
-            if (e.target === $('polylinesModal')) $('polylinesModal').classList.remove('show');
+        $('filletAllApply')?.addEventListener('click', () => {
+            const rec = drawnPolylines.find((r) => r.id === filletAllTargetId);
+            $('filletAllModal').classList.remove('show');
+            if (!rec) return notifyError('Полилиния не найдена.');
+            const r = Math.max(0, Number($('filletAllRadius').value) || 0);
+            for (let i = 1; i < rec.pts.length - 1; i++) rec.radii[i] = r;
+            rebuildPolylineGeometry(rec, { notifyClamp: true });
+            renderPolylinesList();
+            notify(r > 0
+                ? `«${rec.name}»: радиус ${r} м вписан в ${Math.max(0, rec.pts.length - 2)} углов.`
+                : `«${rec.name}»: сопряжения убраны.`);
+            trackUsage('polyline_fillet_all', { radius: r });
         });
+
+        $('btnPolylineList')?.addEventListener('click', () => openPolylinesPanel());
+        $('polylinesClose')?.addEventListener('click', () => {
+            $('polylinesModal').classList.remove('show');
+            polylinesPanel.reset();
+        });
+        // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
         $('polylinesClear')?.addEventListener('click', () => {
             if (!drawnPolylines.length) return;
             clearDrawnPolylines();
@@ -6950,6 +7300,8 @@
             perspCamera.aspect = w / h;
             perspCamera.updateProjectionMatrix();
             if (projectionMode === 'ortho') syncOrthoFrustum(orthoCamera.top - orthoCamera.bottom);
+            // Line2 считает толщину в пикселях, поэтому разрешение — в материале
+            syncLineMaterialResolution();
             markNeedsRender();
         }
         window.addEventListener('resize', resize);
@@ -8753,11 +9105,32 @@ uniform vec3 uBatchSelColor;
         function updateSnapPreview(clientX, clientY) {
             if (!snapEnabled || (!drawMode && !isMeasuring)) {
                 hideSnapMarker();
+                if (drawMode) updateDrawRubberBand(clientX, clientY);
                 return;
             }
             const hit = pickStageHit(clientX, clientY);
-            if (!hit) { hideSnapMarker(); return; }
-            showSnapMarker(snapPoint(hit, clientX, clientY));
+            if (!hit) {
+                hideSnapMarker();
+                if (drawMode) updateDrawRubberBand(clientX, clientY);
+                return;
+            }
+            const snap = snapPoint(hit, clientX, clientY);
+            showSnapMarker(snap);
+            // Тянем нить ровно в ту точку, куда встанет клик — включая привязку
+            if (drawMode) setDrawCursorPoint(snap.point);
+        }
+
+        /** Резиновая нить, когда привязка выключена или мимо геометрии. */
+        function updateDrawRubberBand(clientX, clientY) {
+            if (!drawPoints.length) return;
+            const hit = pickStageHit(clientX, clientY);
+            if (hit?.point) { setDrawCursorPoint(hit.point); return; }
+            const planeHit = pickScenePoint?.(clientX, clientY, {
+                forceRaycast: false,
+                allowPlaneFallback: true,
+                ignorePivotLock: true
+            });
+            setDrawCursorPoint(planeHit || null);
         }
 
         function scheduleCoordCursorUpdate(clientX, clientY) {
@@ -13764,6 +14137,28 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return validHits[0] || null;
         }
 
+        /**
+         * Начерченная полилиния под курсором. Отдельный луч: эти линии лежат в
+         * drawGroup, а не в allMeshes, и в общий пикинг элементов модели их
+         * подмешивать нельзя — они не элементы. Line2 умеет raycast сам, порог
+         * задаётся в экранных пикселях (как и у объектной привязки).
+         */
+        function pickDrawnPolyline(clientX, clientY) {
+            if (!drawnPolylines.length) return null;
+            const rect = renderer.domElement.getBoundingClientRect();
+            const pointer = new THREE.Vector2(
+                ((clientX - rect.left) / rect.width) * 2 - 1,
+                -((clientY - rect.top) / rect.height) * 2 + 1
+            );
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(pointer, camera);
+            raycaster.params.Line2 = { threshold: 8 };
+            const targets = drawnPolylines.map((r) => r.object).filter((o) => o.visible);
+            const hits = raycaster.intersectObjects(targets, false);
+            const id = hits[0]?.object?.userData?.drawnPolylineId;
+            return id == null ? null : drawnPolylines.find((r) => r.id === id) || null;
+        }
+
         /** {modelID, expressID} из попадания луча — батч-IFC и DXF/DWG разрешаются отдельно. */
         function resolveHitElementRef(hit) {
             if (!hit) return null;
@@ -13802,6 +14197,19 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
 
             if (skipOrbitClick) { skipOrbitClick = false; return; }
+
+            // Начерченная полилиния перехватывает клик раньше элементов модели:
+            // она нарисована поверх (depthTest выключен), и клик по видимой
+            // линии должен выбирать именно её. В режимах черчения/замера/метки
+            // клик значит другое — туда не лезем.
+            if (!drawMode && !isMeasuring && !coordPinMode && !bcfPickMode) {
+                const poly = pickDrawnPolyline(ev.clientX, ev.clientY);
+                if (poly) {
+                    selectDrawnPolyline(poly);
+                    return;
+                }
+            }
+
             if (allMeshes.length === 0) return;
             const validHit = pickStageHit(ev.clientX, ev.clientY);
             const validHits = validHit ? [validHit] : [];
@@ -15709,51 +16117,91 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             return 'clash-' + Date.now().toString(36);
         }
 
-        function getClashModalCard() {
-            return $('clashModalCard') || $('clashModal')?.querySelector('.modal-card');
-        }
+        /**
+         * Плавающая панель: backdrop прозрачный и не ловит указатель, поэтому
+         * сцена под окном остаётся кликабельной, а само окно таскается за
+         * заголовок. Позиция всегда зажимается в окно — иначе панель уезжает
+         * за край и её не вернуть.
+         */
+        function createFloatingPanel({ cardId, modalId, handleId, defaultWidth = 420 }) {
+            const card = () => $(cardId) || $(modalId)?.querySelector('.modal-card');
 
-        function clampClashModalPosition(left, top) {
-            const card = getClashModalCard();
-            if (!card) return { left, top };
-            const w = card.offsetWidth || 420;
-            const h = card.offsetHeight || 320;
-            const maxL = Math.max(8, window.innerWidth - w - 8);
-            const maxT = Math.max(8, window.innerHeight - Math.min(h, window.innerHeight - 16) - 8);
-            return {
-                left: Math.max(8, Math.min(left, maxL)),
-                top: Math.max(8, Math.min(top, maxT))
+            const setPosition = (left, top) => {
+                const el = card();
+                if (!el) return;
+                const w = el.offsetWidth || defaultWidth;
+                const h = el.offsetHeight || 320;
+                const maxL = Math.max(8, window.innerWidth - w - 8);
+                const maxT = Math.max(8, window.innerHeight - Math.min(h, window.innerHeight - 16) - 8);
+                el.style.left = `${Math.max(8, Math.min(left, maxL))}px`;
+                el.style.top = `${Math.max(8, Math.min(top, maxT))}px`;
+                el.style.right = 'auto';
+                el.style.bottom = 'auto';
             };
+
+            const reset = () => {
+                const el = card();
+                if (!el) return;
+                el.style.left = '';
+                el.style.top = '';
+                el.style.right = '';
+                el.style.bottom = '';
+            };
+
+            /** Увести вправо, чтобы был виден зум к выбранному объекту. */
+            const park = () => {
+                const el = card();
+                if (!el) return;
+                setPosition(Math.max(8, window.innerWidth - (el.offsetWidth || defaultWidth) - 16), 72);
+            };
+
+            const handle = $(handleId);
+            if (handle) {
+                let dragging = false;
+                let ptrId = null;
+                let startX = 0, startY = 0, origL = 0, origT = 0;
+
+                handle.addEventListener('pointerdown', (e) => {
+                    if (e.button != null && e.button !== 0) return;
+                    if (e.target.closest('button, a, input, select, textarea, label')) return;
+                    const el = card();
+                    if (!el) return;
+                    dragging = true;
+                    ptrId = e.pointerId;
+                    try { handle.setPointerCapture(ptrId); } catch (_) {}
+                    const rect = el.getBoundingClientRect();
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    origL = rect.left;
+                    origT = rect.top;
+                    setPosition(origL, origT);
+                    e.preventDefault();
+                });
+
+                handle.addEventListener('pointermove', (e) => {
+                    if (!dragging || (ptrId != null && e.pointerId !== ptrId)) return;
+                    setPosition(origL + (e.clientX - startX), origT + (e.clientY - startY));
+                });
+
+                const stop = (e) => {
+                    if (!dragging) return;
+                    if (ptrId != null && e?.pointerId != null && e.pointerId !== ptrId) return;
+                    dragging = false;
+                    try { if (ptrId != null) handle.releasePointerCapture(ptrId); } catch (_) {}
+                    ptrId = null;
+                };
+                handle.addEventListener('pointerup', stop);
+                handle.addEventListener('pointercancel', stop);
+            }
+
+            return { setPosition, reset, park };
         }
 
-        function setClashModalPosition(left, top) {
-            const card = getClashModalCard();
-            if (!card) return;
-            const p = clampClashModalPosition(left, top);
-            card.style.left = `${p.left}px`;
-            card.style.top = `${p.top}px`;
-            card.style.right = 'auto';
-            card.style.bottom = 'auto';
-        }
-
-        function resetClashModalPosition() {
-            const card = getClashModalCard();
-            if (!card) return;
-            card.style.left = '';
-            card.style.top = '';
-            card.style.right = '';
-            card.style.bottom = '';
-        }
-
-        /** Уводим панель вправо, чтобы был виден зум к паре */
-        function parkClashModalAside() {
-            const card = getClashModalCard();
-            if (!card) return;
-            const w = card.offsetWidth || 420;
-            const left = Math.max(8, window.innerWidth - w - 16);
-            const top = 72;
-            setClashModalPosition(left, top);
-        }
+        const clashPanel = createFloatingPanel({
+            cardId: 'clashModalCard', modalId: 'clashModal', handleId: 'clashModalDrag'
+        });
+        const resetClashModalPosition = clashPanel.reset;
+        const parkClashModalAside = clashPanel.park;
 
         function openClashModal() {
             fillModelSelect($('clashModelA'));
@@ -15769,45 +16217,6 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('clashModal')?.classList.remove('show');
             resetClashModalPosition();
         }
-
-        (function initClashModalDrag() {
-            const handle = $('clashModalDrag');
-            const card = getClashModalCard();
-            if (!handle || !card) return;
-            let dragging = false;
-            let ptrId = null;
-            let startX = 0, startY = 0, origL = 0, origT = 0;
-
-            handle.addEventListener('pointerdown', (e) => {
-                if (e.button != null && e.button !== 0) return;
-                if (e.target.closest('button, a, input, select, textarea, label')) return;
-                dragging = true;
-                ptrId = e.pointerId;
-                try { handle.setPointerCapture(ptrId); } catch (_) {}
-                const rect = card.getBoundingClientRect();
-                startX = e.clientX;
-                startY = e.clientY;
-                origL = rect.left;
-                origT = rect.top;
-                setClashModalPosition(origL, origT);
-                e.preventDefault();
-            });
-
-            handle.addEventListener('pointermove', (e) => {
-                if (!dragging || (ptrId != null && e.pointerId !== ptrId)) return;
-                setClashModalPosition(origL + (e.clientX - startX), origT + (e.clientY - startY));
-            });
-
-            const stop = (e) => {
-                if (!dragging) return;
-                if (ptrId != null && e?.pointerId != null && e.pointerId !== ptrId) return;
-                dragging = false;
-                try { if (ptrId != null) handle.releasePointerCapture(ptrId); } catch (_) {}
-                ptrId = null;
-            };
-            handle.addEventListener('pointerup', stop);
-            handle.addEventListener('pointercancel', stop);
-        })();
 
         $('btnClash').addEventListener('click', openClashModal);
         $('cancelClash').addEventListener('click', closeClashModal);
@@ -20890,6 +21299,7 @@ ${componentXml || '    '}
         const treeCtx = $('treeCtx'), stageCtx = $('stageCtx');
         let treeContextRow = null;
         let stageContextElementRef = null;
+        let stageContextPolyline = null;
         
         window.addEventListener('click', () => { 
             treeCtx.classList.remove('show'); 
@@ -20953,6 +21363,10 @@ ${componentXml || '    '}
             }
             stageContextElementRef = resolveHitElementRef(pickStageHit(e.clientX, e.clientY));
             $('ctxSelectSimilar').classList.toggle('disabled', !stageContextElementRef);
+            // Блок команд полилинии показываем, только если ПКМ пришёлся по ней
+            stageContextPolyline = pickDrawnPolyline(e.clientX, e.clientY);
+            $('ctxPolylineGroup').hidden = !stageContextPolyline;
+            $('ctxPolylineTable').classList.toggle('disabled', !drawnPolylines.length);
             stageCtx.style.left = e.clientX + 'px';
             stageCtx.style.top = e.clientY + 'px';
             stageCtx.classList.add('show');
@@ -20962,6 +21376,29 @@ ${componentXml || '    '}
         $('ctxHide').addEventListener('click', () => $('btnHide').click());
         $('ctxDeleteSel').addEventListener('click', deleteSelectedElementsFromScene);
         $('ctxDeleteStage').addEventListener('click', deleteSelectedElementsFromScene);
+        $('ctxPolylineTable').addEventListener('click', () => openPolylinesPanel());
+        $('ctxPolylineProps').addEventListener('click', () => {
+            if (stageContextPolyline) selectDrawnPolyline(stageContextPolyline);
+        });
+        $('ctxPolylineFillet').addEventListener('click', () => {
+            if (stageContextPolyline) openFilletAllModal(stageContextPolyline);
+        });
+        $('ctxPolylineSweep').addEventListener('click', () => {
+            if (!stageContextPolyline) return;
+            // Тело строится по «выбранной» полилинии — sweepAxisPoints берёт ту,
+            // что раскрыта в панели, поэтому сначала выбираем эту.
+            polylineEditingId = stageContextPolyline.id;
+            renderPolylinesList();
+            syncSweepFields();
+            $('sweepModal').classList.add('show');
+        });
+        $('ctxPolylineDelete').addEventListener('click', () => {
+            if (!stageContextPolyline) return;
+            const name = stageContextPolyline.name;
+            deleteDrawnPolyline(stageContextPolyline);
+            renderPolylinesList();
+            notify(`Полилиния «${name}» удалена.`);
+        });
         $('ctxSelectSimilar').addEventListener('click', () => {
             if (stageContextElementRef) selectSimilarElements(stageContextElementRef);
         });
@@ -22511,7 +22948,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: 'cf9b21a',
+            buildId: 'c718fe7',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
