@@ -1003,6 +1003,27 @@
             padding: 30px;
         }
 
+        /* Маркер объектной привязки */
+        #snapMarker {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 14px;
+            height: 14px;
+            z-index: 17;
+            pointer-events: none;
+            border: 2px solid #ff5722;
+            background: rgba(255, 87, 34, .18);
+        }
+        #snapMarker[data-type="vertex"] { border-radius: 0; }
+        #snapMarker[data-type="mid"] {
+            border-radius: 0;
+            transform-origin: center;
+            clip-path: polygon(50% 0, 100% 100%, 0 100%);
+        }
+        #snapMarker[data-type="edge"] { border-radius: 50%; }
+        #snapMarker[hidden] { display: none; }
+
         /* Видовой куб: сетка 3×3, по сторонам света — как на плане */
         #viewCube {
             position: absolute;
@@ -2356,6 +2377,7 @@
                         <option value="3d">3D</option>
                         <option value="2d">2D</option>
                     </select>
+                    <button class="btn on" id="btnSnap" title="Объектная привязка: вершины, середины и рёбра элементов. Работает для черчения и замеров"><span class="tb-ico">⊹</span><span class="tb-txt">Привязка</span></button>
                     <button class="btn" id="btnDrawExport" disabled title="Выгрузить начерченное и метки в DXF в мировых координатах"><span class="tb-ico">⤓</span><span class="tb-txt">DXF</span></button>
                     <select id="measureModeSelect" class="tool-select" disabled title="Режим замера. «2D/3D/i» — линейка: наклонное и горизонтальное расстояние, превышение и уклон">
                         <option value="distance">м</option>
@@ -2494,6 +2516,7 @@
     <div class="resizer" id="dragLeft"></div>
 
     <main class="stage" id="stage">
+        <div id="snapMarker" hidden aria-hidden="true"></div>
         <div id="viewCube" aria-label="Стандартные виды">
             <button class="vc-btn vc-top" data-view="top" title="Вид сверху (план)">Верх</button>
             <button class="vc-btn" data-view="left" title="Вид слева, с запада">З</button>
@@ -4077,6 +4100,8 @@
                 }
                 return out;
             },
+            /** Последняя сработавшая привязка (тип и точка) — для проверок. */
+            get snap() { return lastSnap ? { ...lastSnap } : null; },
             /** Текущая проекция: 'persp' или 'ortho'. */
             get projection() { return projectionMode; },
             /** Куда нацелена орбита и где центр выделения — для проверки видов. */
@@ -5469,6 +5494,129 @@
             labelsList = [];
         }
 
+        /* --- Объектная привязка ----------------------------------------------
+         * Ищем вершины, середины и точки на рёбрах ТОГО треугольника или
+         * отрезка, в который попал луч, и выбираем ближайший кандидат в
+         * ЭКРАННЫХ пикселях — иначе порог пришлось бы менять при каждом зуме.
+         * Линии (оси из DWG) обрабатываются отдельно: у них нет face, зато есть
+         * индекс отрезка, а привязка к концам осей нужна чаще всего.
+         */
+        const SNAP_PX = { vertex: 14, mid: 13, edge: 10 };
+        let snapEnabled = true;
+        let lastSnap = null;
+        const _snapA = new THREE.Vector3();
+        const _snapB = new THREE.Vector3();
+        const _snapC = new THREE.Vector3();
+        const _snapTmp = new THREE.Vector3();
+
+        function projectToPixels(point) {
+            _snapTmp.copy(point).project(camera);
+            return {
+                x: (_snapTmp.x * 0.5 + 0.5) * stage.clientWidth,
+                y: (_snapTmp.y * -0.5 + 0.5) * stage.clientHeight,
+                behind: _snapTmp.z > 1
+            };
+        }
+
+        function vertexFromAttr(pos, index, matrix, target) {
+            target.fromBufferAttribute(pos, index).applyMatrix4(matrix);
+            return target;
+        }
+
+        /** Вершины и рёбра примитива, в который попал луч, в мировых координатах. */
+        function snapPrimitiveOf(hit) {
+            const obj = hit.object;
+            const pos = obj.geometry?.attributes?.position;
+            if (!pos) return null;
+            obj.updateWorldMatrix(true, false);
+            const m = obj.matrixWorld;
+
+            if (hit.face) {
+                const a = vertexFromAttr(pos, hit.face.a, m, _snapA).clone();
+                const b = vertexFromAttr(pos, hit.face.b, m, _snapB).clone();
+                const c = vertexFromAttr(pos, hit.face.c, m, _snapC).clone();
+                return { verts: [a, b, c], edges: [[a, b], [b, c], [c, a]] };
+            }
+            // Отрезок линии: three отдаёт индекс его первой вершины
+            if ((obj.isLineSegments || obj.isLine) && Number.isInteger(hit.index)) {
+                const i = obj.isLineSegments ? hit.index : hit.index;
+                if (i + 1 >= pos.count) return null;
+                const a = vertexFromAttr(pos, i, m, _snapA).clone();
+                const b = vertexFromAttr(pos, i + 1, m, _snapB).clone();
+                return { verts: [a, b], edges: [[a, b]] };
+            }
+            return null;
+        }
+
+        function closestPointOnSegment(a, b, p, target) {
+            const ab = target.copy(b).sub(a);
+            const len2 = ab.lengthSq();
+            if (len2 < 1e-12) return target.copy(a);
+            const t = Math.max(0, Math.min(1, p.clone().sub(a).dot(ab) / len2));
+            return target.copy(a).addScaledVector(ab, t);
+        }
+
+        /**
+         * Точка с учётом привязки. Возвращает {point, type}: type — 'vertex'
+         * (вершина/конец), 'mid' (середина ребра), 'edge' (точка на ребре) или
+         * 'face' (просто попадание, привязки не нашлось).
+         */
+        function snapPoint(hit, clientX, clientY) {
+            const raw = { point: hit.point.clone(), type: 'face' };
+            if (!snapEnabled) return raw;
+            const prim = snapPrimitiveOf(hit);
+            if (!prim) return raw;
+            const rect = stage.getBoundingClientRect();
+            const px = clientX - rect.left;
+            const py = clientY - rect.top;
+            const dist = (p) => {
+                const s = projectToPixels(p);
+                return s.behind ? Infinity : Math.hypot(s.x - px, s.y - py);
+            };
+
+            let best = null;
+            const consider = (point, type, limit) => {
+                const d = dist(point);
+                if (d > limit) return;
+                if (!best || d < best.d) best = { point: point.clone(), type, d };
+            };
+
+            prim.verts.forEach(v => consider(v, 'vertex', SNAP_PX.vertex));
+            if (!best) prim.edges.forEach(([a, b]) => {
+                consider(a.clone().lerp(b, 0.5), 'mid', SNAP_PX.mid);
+            });
+            if (!best) prim.edges.forEach(([a, b]) => {
+                consider(closestPointOnSegment(a, b, hit.point, new THREE.Vector3()), 'edge', SNAP_PX.edge);
+            });
+            return best ? { point: best.point, type: best.type } : raw;
+        }
+
+        const SNAP_LABEL = { vertex: 'вершина', mid: 'середина', edge: 'ребро', face: '' };
+
+        function showSnapMarker(snap) {
+            const el = $('snapMarker');
+            if (!el) return;
+            lastSnap = snap && snap.type !== 'face'
+                ? { type: snap.type, x: snap.point.x, y: snap.point.y, z: snap.point.z }
+                : null;
+            if (!snap || snap.type === 'face') {
+                el.hidden = true;
+                return;
+            }
+            const s = projectToPixels(snap.point);
+            if (s.behind) { el.hidden = true; return; }
+            el.hidden = false;
+            el.dataset.type = snap.type;
+            el.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -50%)`;
+            el.title = SNAP_LABEL[snap.type] || '';
+        }
+
+        function hideSnapMarker() {
+            const el = $('snapMarker');
+            if (el) el.hidden = true;
+            lastSnap = null;
+        }
+
         /* --- Черчение полилиний ----------------------------------------------
          * Точки берём тем же лучом, что и пикинг, поэтому линия ложится на
          * геометрию. Экспорт идёт в АБСОЛЮТНЫХ координатах — файл должен
@@ -5644,6 +5792,7 @@
                 if (coordPinMode) setCoordPinMode(false);
             }
             $('stage').style.cursor = drawMode ? 'crosshair' : '';
+            if (!drawMode) hideSnapMarker();
         }
 
         /* --- Метки координат -------------------------------------------------
@@ -5845,6 +5994,12 @@
 
         $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
         $('btnDraw')?.addEventListener('click', () => setDrawMode(!drawMode));
+        $('btnSnap')?.addEventListener('click', () => {
+            snapEnabled = !snapEnabled;
+            $('btnSnap').classList.toggle('on', snapEnabled);
+            if (!snapEnabled) hideSnapMarker();
+            trackUsage('snap_toggle', { on: snapEnabled });
+        });
         $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
@@ -7838,6 +7993,16 @@ uniform vec3 uBatchSelColor;
 
         let _coordCursorRaf = 0;
         let _coordCursorPending = null;
+        function updateSnapPreview(clientX, clientY) {
+            if (!snapEnabled || (!drawMode && !isMeasuring)) {
+                hideSnapMarker();
+                return;
+            }
+            const hit = pickStageHit(clientX, clientY);
+            if (!hit) { hideSnapMarker(); return; }
+            showSnapMarker(snapPoint(hit, clientX, clientY));
+        }
+
         function scheduleCoordCursorUpdate(clientX, clientY) {
             _coordCursorPending = { clientX, clientY };
             if (_coordCursorRaf) return;
@@ -12364,7 +12529,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             // ЧЕРЧЕНИЕ
             if (drawMode) {
-                addDrawPoint(validHits[0].point);
+                addDrawPoint(snapPoint(validHits[0], ev.clientX, ev.clientY).point);
                 return;
             }
 
@@ -12376,7 +12541,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             // ЗАМЕРЫ
             if (isMeasuring) {
-                handleMeasureClick(validHits[0].point);
+                handleMeasureClick(snapPoint(validHits[0], ev.clientX, ev.clientY).point);
                 markNeedsRender();
                 return;
             }
@@ -12425,9 +12590,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         renderer.domElement.addEventListener('pointermove', e => {
             if (boxSelectDrag) return;
             scheduleCoordCursorUpdate(e.clientX, e.clientY);
+            updateSnapPreview(e.clientX, e.clientY);
         });
         renderer.domElement.addEventListener('pointerleave', () => {
             updateCoordCursorReadout(null);
+            hideSnapMarker();
         });
 
         // --- BOX SELECT (Выделение рамкой на сцене) ---

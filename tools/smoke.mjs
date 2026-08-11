@@ -233,6 +233,34 @@ async function checkDrawDxf(page) {
         if (btn.classList.contains('on')) btn.click();
     });
 
+    // Привязка: водим курсором по геометрии и ждём, что хотя бы раз поймается
+    // вершина или середина, и что точка привязки не убегает от места клика.
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (!b.classList.contains('on')) b.click();
+    });
+    const snaps = [];
+    for (let i = -6; i <= 6; i++) {
+        const x = cx + (i * 0.014) * box.width;
+        const y = cy + (i % 2 ? 0.02 : -0.02) * box.height;
+        await page.mouse.move(x, y);
+        await page.waitForTimeout(45);
+        const snap = await page.evaluate(() => window.BimLvaDebug.snap);
+        if (snap) snaps.push(snap);
+    }
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (b.classList.contains('on')) b.click();
+    });
+    if (!snaps.length) {
+        problems.push('объектная привязка ни разу не сработала на геометрии');
+    } else {
+        const kinds = new Set(snaps.map((s) => s.type));
+        if (!kinds.has('vertex') && !kinds.has('mid')) {
+            problems.push(`привязка поймала только ${[...kinds].join(', ')} — вершины и середины не находятся`);
+        }
+    }
+
     const drawn = await page.evaluate(() => window.BimLvaDebug.drawn);
     if (drawn.length !== 2) {
         problems.push(`начерчено ${drawn.length} полилиний вместо 2 — клики не попали по геометрии`);
@@ -266,7 +294,7 @@ async function checkDrawDxf(page) {
     if (!dxf.includes(wantX)) {
         problems.push(`в DXF нет мировой координаты X ${wantX} — выгрузка ушла в локальных`);
     }
-    return { polylines: drawn.length, vertices: vertexCount, x: first.x };
+    return { polylines: drawn.length, vertices: vertexCount, x: first.x, snaps: snaps.length };
 }
 
 /**
@@ -873,7 +901,7 @@ async function main() {
     if (draw) {
         console.log(
             `черчение:  полилиний ${draw.polylines}, вершин в DXF ${draw.vertices}, ` +
-            `мировая X ${draw.x.toFixed(2)}`
+            `мировая X ${draw.x.toFixed(2)}, привязок поймано ${draw.snaps}`
         );
     }
     if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');
