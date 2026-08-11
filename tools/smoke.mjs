@@ -30,6 +30,7 @@ let coordPin = null;
 let ruler = null;
 let reload = null;
 let bvhPeak = -1;
+let viewCube = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -195,6 +196,43 @@ async function checkCoordPin(page) {
     }
 
     return { shown, diff, movedBy };
+}
+
+/**
+ * Видовой куб. Проверяем не «кнопка нажалась», а куда встала камера: вид
+ * сверху обязан смотреть строго вниз, вид с юга — строго на север, иначе
+ * это не стандартный вид, а «примерно похоже».
+ */
+async function checkViewCube(page) {
+    const views = await page.evaluate(async () => {
+        const out = {};
+        const cam = () => {
+            const d = window.BimLvaDebug.cameraDir;
+            return { x: +d.x.toFixed(3), y: +d.y.toFixed(3), z: +d.z.toFixed(3) };
+        };
+        for (const name of ['top', 'bottom', 'front', 'back', 'left', 'right']) {
+            document.querySelector(`#viewCube .vc-btn[data-view="${name}"]`).click();
+            await new Promise((r) => setTimeout(r, 60));
+            out[name] = cam();
+        }
+        return out;
+    });
+    // Взгляд из камеры на цель: сверху смотрим вниз (−Z), с юга — на север (+Y)
+    const want = {
+        top: [0, 0, -1], bottom: [0, 0, 1],
+        front: [0, 1, 0], back: [0, -1, 0],
+        left: [1, 0, 0], right: [-1, 0, 0]
+    };
+    for (const [name, w] of Object.entries(want)) {
+        const got = views[name];
+        const off = Math.max(Math.abs(got.x - w[0]), Math.abs(got.y - w[1]), Math.abs(got.z - w[2]));
+        if (off > 0.02) {
+            problems.push(
+                `вид «${name}»: камера смотрит (${got.x}, ${got.y}, ${got.z}), ожидалось (${w.join(', ')})`
+            );
+        }
+    }
+    return views;
 }
 
 /**
@@ -657,6 +695,7 @@ async function main() {
                     // BVH снимаем до обновления: новая модель маленькая и своего
                     // дерева не строит, а финальная проверка смотрит на итог сцены
                     bvhPeak = await page.evaluate(() => window.BimLvaDebug?.bvhCount ?? -1);
+                    viewCube = await checkViewCube(page);
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
                     train = await checkTourTrain(page);
@@ -709,6 +748,7 @@ async function main() {
             `ΔZ ${ruler.dz.toFixed(2)} · i ${ruler.perMille.toFixed(1)} ‰`
         );
     }
+    if (viewCube) console.log('видовой куб: 6 стандартных видов встали по осям');
     if (reload) {
         console.log(
             `обновление: «${reload.was}» → «${reload.now}», ` +

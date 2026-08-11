@@ -1003,6 +1003,47 @@
             padding: 30px;
         }
 
+        /* Видовой куб: сетка 3×3, по сторонам света — как на плане */
+        #viewCube {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 18;
+            display: grid;
+            grid-template-columns: repeat(3, 34px);
+            grid-template-rows: 26px 26px 26px;
+            gap: 3px;
+            padding: 5px;
+            border-radius: 9px;
+            background: rgba(255, 255, 255, .88);
+            border: 1px solid var(--line, #c9d4e0);
+            box-shadow: 0 6px 18px rgba(15, 26, 40, .14);
+            backdrop-filter: blur(3px);
+        }
+        #viewCube .vc-btn {
+            border: 1px solid var(--line, #c9d4e0);
+            background: #fff;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--txt, #2b3a4a);
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+        #viewCube .vc-btn:hover { border-color: var(--accent, #1f6f8b); color: var(--accent, #1f6f8b); }
+        #viewCube .vc-btn.on { background: var(--accent, #1f6f8b); border-color: var(--accent, #1f6f8b); color: #fff; }
+        /* Стороны света читаются как на плане: С сверху, Ю снизу, З слева, В
+           справа. Верх и низ занимают свободные углы, чтобы не спорить с ними. */
+        #viewCube .vc-top { grid-column: 1; grid-row: 1; }
+        #viewCube .vc-btn[data-view="back"] { grid-column: 2; grid-row: 1; }
+        #viewCube .vc-bottom { grid-column: 3; grid-row: 1; }
+        #viewCube .vc-btn[data-view="left"] { grid-column: 1; grid-row: 2; }
+        #viewCube .vc-iso { grid-column: 2; grid-row: 2; }
+        #viewCube .vc-btn[data-view="right"] { grid-column: 3; grid-row: 2; }
+        #viewCube .vc-btn[data-view="front"] { grid-column: 2; grid-row: 3; }
+        @media (max-width: 720px) { #viewCube { display: none; } }
+
         #labels-container,
         #coord-pins-container {
             position: absolute;
@@ -2446,6 +2487,15 @@
     <div class="resizer" id="dragLeft"></div>
 
     <main class="stage" id="stage">
+        <div id="viewCube" aria-label="Стандартные виды">
+            <button class="vc-btn vc-top" data-view="top" title="Вид сверху (план)">Верх</button>
+            <button class="vc-btn" data-view="left" title="Вид слева, с запада">З</button>
+            <button class="vc-btn vc-iso" data-view="iso" title="Изометрия">Изо</button>
+            <button class="vc-btn" data-view="right" title="Вид справа, с востока">В</button>
+            <button class="vc-btn" data-view="front" title="Вид спереди, с юга">Ю</button>
+            <button class="vc-btn vc-bottom" data-view="bottom" title="Вид снизу">Низ</button>
+            <button class="vc-btn" data-view="back" title="Вид сзади, с севера">С</button>
+        </div>
         <div class="drop-hint" id="hint" role="button" tabindex="0" title="Нажмите или перетащите файл сюда">
             <div class="grid-ico"></div>
             <h2>BIM.LVA Composer IFC</h2>
@@ -4018,6 +4068,11 @@
                     });
                 }
                 return out;
+            },
+            /** Единичный вектор «куда смотрит камера» — для проверки видов. */
+            get cameraDir() {
+                const d = controls.target.clone().sub(camera.position).normalize();
+                return { x: d.x, y: d.y, z: d.z };
             },
             /** До-центрирование сцены: сколько раз и на какой суммарный вектор. */
             get sceneSnap() {
@@ -17305,7 +17360,7 @@ ${componentXml || '    '}
             }
         }
 
-        function frameBox(box) {
+        function frameBox(box, viewDir = null) {
             if (!box || box.isEmpty()) return;
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
@@ -17314,10 +17369,12 @@ ${componentXml || '    '}
             const dist = (maxDim / (2 * Math.tan(fov / 2))) * 1.45;
             const aspect = Math.max(camera.aspect || 1, 0.05);
             const distFit = Math.max(dist, (maxDim / (2 * Math.tan(fov / 2) * aspect)) * 1.45);
-            const dir = new THREE.Vector3(1, -1, 0.85).normalize();
+            const dir = (viewDir ? viewDir.clone() : new THREE.Vector3(1, -1, 0.85)).normalize();
             controls.target.copy(center);
             camera.position.copy(center).add(dir.multiplyScalar(distFit));
+            // Строго сверху/снизу «верх» по оси Z вырождается — берём север
             camera.up.set(0, 0, 1);
+            if (Math.abs(dir.z) > 0.999) camera.up.set(0, 1, 0);
             applyCameraNear(maxDim);
             camera.far = Math.max(maxDim * 40, camera.far, 1000);
             camera.updateProjectionMatrix();
@@ -17645,6 +17702,41 @@ ${componentXml || '    '}
             }
         });
 
+        /**
+         * Стандартные виды. Сцена Z-up (X — восток, Y — север, Z — отметка),
+         * поэтому «сверху» — это взгляд вдоль −Z, «спереди» — с юга на север.
+         */
+        const STANDARD_VIEWS = Object.freeze({
+            top: { dir: [0, 0, 1], label: 'Сверху' },
+            bottom: { dir: [0, 0, -1], label: 'Снизу' },
+            front: { dir: [0, -1, 0], label: 'Спереди (с юга)' },
+            back: { dir: [0, 1, 0], label: 'Сзади (с севера)' },
+            left: { dir: [-1, 0, 0], label: 'Слева (с запада)' },
+            right: { dir: [1, 0, 0], label: 'Справа (с востока)' },
+            iso: { dir: [1, -1, 0.85], label: 'Изометрия' }
+        });
+
+        function setStandardView(name) {
+            const view = STANDARD_VIEWS[name];
+            if (!view) return;
+            ensureSceneContentNearOrigin();
+            globalGroup.updateWorldMatrix(true, true);
+            externalGroup.updateWorldMatrix(true, true);
+            const box = selectedItems.length
+                ? (getSelectionBounds(selectedItems) || getSceneContentBox())
+                : getSceneContentBox();
+            if (!box || box.isEmpty()) {
+                notifyError('Сначала загрузите модель.');
+                return;
+            }
+            frameBox(box, new THREE.Vector3(...view.dir));
+            document.querySelectorAll('#viewCube .vc-btn').forEach(b => {
+                b.classList.toggle('on', b.dataset.view === name);
+            });
+            trackUsage('standard_view', { view: name });
+            markNeedsRender();
+        }
+
         function fitView() {
             ensureSceneContentNearOrigin();
             globalGroup.updateWorldMatrix(true, true);
@@ -17670,6 +17762,11 @@ ${componentXml || '    '}
             scene.add(grid);
             markNeedsRender();
         }
+
+        $('viewCube')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('.vc-btn');
+            if (btn) setStandardView(btn.dataset.view);
+        });
 
         $('fit').addEventListener('click', () => {
             clearViewHashFromUrl();
