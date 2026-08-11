@@ -2234,7 +2234,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 69630a0</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1982f4a</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2268,9 +2268,10 @@
 
                 <div class="tb-sep" data-tb-with="tbSegVis" aria-hidden="true"></div>
                 <div class="tb-seg" id="tbSegVis" data-tb-overflow="2">
-                    <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы"><span class="tb-ico">👁</span><span class="tb-txt">Скрыть</span></button>
-                    <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное"><span class="tb-ico">◎</span><span class="tb-txt">Isolate</span></button>
-                    <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию"><span class="tb-ico">◉</span><span class="tb-txt">Показать</span></button>
+                    <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы (Ctrl+H)"><span class="tb-ico">👁</span><span class="tb-txt">Скрыть</span></button>
+                    <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное (I)"><span class="tb-ico">◎</span><span class="tb-txt">Isolate</span></button>
+                    <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию (Shift+I)"><span class="tb-ico">◉</span><span class="tb-txt">Показать</span></button>
+                    <button class="btn" id="btnClearSelection" disabled title="Снять выделение (C)"><span class="tb-ico">∅</span><span class="tb-txt">Очистить</span></button>
                 </div>
 
                 <div class="tb-sep" aria-hidden="true"></div>
@@ -2367,7 +2368,6 @@
             <h3>Структура</h3>
             <div class="head-actions">
                 <button class="pop" id="treeSelectAll" title="Выделить все элементы всех загруженных моделей">ВСЕ</button>
-                <button class="pop" id="treeClearSelection" title="Снять выделение со всех элементов">∅</button>
                 <button class="pop panel-swap" id="treeSwap" title="Поменять панели местами (слева ↔ справа)">⇄</button>
                 <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
             </div>
@@ -2796,16 +2796,21 @@
             <div class="prop small">
                 <div class="k">Режим</div>
                 <select class="editInput" id="tourModeSelect">
-                    <option value="car">🚗 Проезд (машина GLB)</option>
+                    <option value="car">🚗 Проезд по трассе</option>
                     <option value="fly">✈️ Облёт (самолёт GLB)</option>
                     <option value="drive">🎮 Свободная езда (WASD)</option>
                 </select>
             </div>
             <div id="tourDriveHint" class="bulk-note" style="display:none">
-                <b>WASD</b> — газ/руль, <b>Space</b> — тормоз, <b>Esc</b> — выход. Машина прилипает к рельефу модели.
+                <b>WASD</b> — газ/руль, <b>Space</b> — тормоз, <b>Esc</b> — выход. Транспорт прилипает к рельефу модели.
             </div>
             <div class="prop small" id="tourCarOptions">
-                <div class="k">Камера</div>
+                <div class="k">Транспорт</div>
+                <select class="editInput" id="tourGroundVehicle">
+                    <option value="car">🚗 Машина</option>
+                    <option value="train">🚂 Локомотив (22.0 × 3.10 м, крыша 4.60)</option>
+                </select>
+                <div class="k" style="margin-top:6px">Камера</div>
                 <select class="editInput" id="tourCamView">
                     <option value="chase">Сзади (follow)</option>
                     <option value="front">Спереди</option>
@@ -2932,6 +2937,15 @@
             <div class="prop small" id="crsAutoOriginRow" style="display:none">
                 <div class="k">Авто-ноль (первая модель)</div>
                 <div class="v" id="crsAutoOriginValue">—</div>
+            </div>
+            <div id="crsExtentsBlock" style="display:none">
+                <div class="bulk-note" style="margin-top:10px">
+                    Мировой габарит файлов — как он приехал в IFC, до вычитания нуля сцены.
+                    Это те же числа, что Civil 3D показывает в «Свойства поверхности →
+                    Статистика». Сходятся — файл привёз свои координаты, вьювер их не терял;
+                    расходятся — сдвиг случился при экспорте.
+                </div>
+                <div id="crsExtentsList" style="max-height:180px;overflow:auto"></div>
             </div>
             <div class="prop small"><div class="k">ΔX (east)</div><input class="editInput" id="crsOffsetX" type="text" inputmode="decimal" value="0"></div>
             <div class="prop small"><div class="k">ΔY (north)</div><input class="editInput" id="crsOffsetY" type="text" inputmode="decimal" value="0"></div>
@@ -3916,6 +3930,30 @@
                         centerY: (box.min.y + box.max.y) / 2,
                         centerZ: (box.min.z + box.max.z) / 2
                     });
+                }
+                return out;
+            },
+            /** Габарит транспорта тура в метрах — чем едем и какого он размера. */
+            get tourVehicleBox() {
+                const obj = typeof tourCar !== 'undefined' ? tourCar : null;
+                if (!obj) return null;
+                const box = new THREE.Box3().setFromObject(obj);
+                if (box.isEmpty()) return null;
+                return {
+                    model: obj.userData?.carModel || '',
+                    kind: obj.userData?.groundKind || '',
+                    width: box.max.x - box.min.x,
+                    length: box.max.y - box.min.y,
+                    height: box.max.z - box.min.z,
+                    bottom: box.min.z
+                };
+            },
+            /** Мировой габарит файлов, как он приехал в IFC (до вычитания нуля сцены). */
+            get modelAbsExtents() {
+                const out = [];
+                for (const mod of (typeof loadedModels !== 'undefined' ? loadedModels.values() : [])) {
+                    if (!mod.absExtents) continue;
+                    out.push({ file: mod.filename || '', ...mod.absExtents });
                 }
                 return out;
             }
@@ -6060,7 +6098,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -6975,6 +7013,42 @@ uniform vec3 uBatchSelColor;
             return box.getCenter(new THREE.Vector3());
         }
 
+        /**
+         * Абсолютный габарит фрагментов ДО вычитания нуля сцены, в double и в привычных
+         * east/north/height. Ровно те числа, что Civil 3D показывает в «Свойства
+         * поверхности → Статистика», — по ним видно, приехал файл со своими мировыми
+         * координатами или его сдвинули при экспорте.
+         */
+        function computeFragmentsAbsoluteBounds(fragments) {
+            if (!fragments?.length) return null;
+            const box = new THREE.Box3();
+            const identity = new THREE.Matrix4();
+            for (let fi = 0; fi < fragments.length; fi++) {
+                const frag = fragments[fi];
+                const pos = frag?.geom?.attributes?.position;
+                if (!pos?.count) continue;
+                const arr = pos.array;
+                const e = (frag.matrix || identity).elements;
+                for (let i = 0; i < pos.count; i++) {
+                    const i3 = i * 3;
+                    const x = arr[i3];
+                    const y = arr[i3 + 1];
+                    const z = arr[i3 + 2];
+                    _meshBoundsScratch.x = e[0] * x + e[4] * y + e[8] * z + e[12];
+                    _meshBoundsScratch.y = e[1] * x + e[5] * y + e[9] * z + e[13];
+                    _meshBoundsScratch.z = e[2] * x + e[6] * y + e[10] * z + e[14];
+                    box.expandByPoint(_meshBoundsScratch);
+                }
+            }
+            if (box.isEmpty()) return null;
+            // web-ifc отдаёт Y-up: (E, h, −N)
+            return {
+                e: { min: box.min.x, max: box.max.x },
+                n: { min: -box.max.z, max: -box.min.z },
+                h: { min: box.min.y, max: box.max.y }
+            };
+        }
+
         /** Вычесть origin из вершин в double (геодезия не ломает float32 bbox). */
         function subtractVectorFromFragmentVertices(fragments, origin) {
             if (!fragments?.length || !origin) return;
@@ -7329,6 +7403,40 @@ uniform vec3 uBatchSelColor;
                 : '';
             val.textContent =
                 `X ${o.x.toFixed(2)} · Y ${o.y.toFixed(2)} · Z ${o.z.toFixed(2)} м${src}`;
+        }
+
+        /** Таблица «файл → мировой габарит» для сверки с Civil 3D. */
+        function updateCrsExtentsUi() {
+            const block = $('crsExtentsBlock');
+            const list = $('crsExtentsList');
+            if (!block || !list) return;
+            const rows = [...loadedModels.values()].filter(m => m.absExtents);
+            if (!rows.length) {
+                block.style.display = 'none';
+                list.replaceChildren();
+                return;
+            }
+            block.style.display = '';
+            const range = (r) => `${r.min.toFixed(2)} … ${r.max.toFixed(2)}`;
+            const frag = document.createDocumentFragment();
+            rows.forEach(mod => {
+                const wrap = document.createElement('div');
+                wrap.className = 'prop small';
+                wrap.style.display = 'block';
+                const name = document.createElement('div');
+                name.className = 'k';
+                name.style.marginBottom = '2px';
+                name.textContent = mod.filename || 'модель';
+                const val = document.createElement('div');
+                val.className = 'v';
+                val.style.whiteSpace = 'pre-line';
+                const a = mod.absExtents;
+                val.textContent =
+                    `X ${range(a.e)} м\nY ${range(a.n)} м\nZ ${range(a.h)} м`;
+                wrap.append(name, val);
+                frag.appendChild(wrap);
+            });
+            list.replaceChildren(frag);
         }
 
         /**
@@ -7892,6 +8000,19 @@ uniform vec3 uBatchSelColor;
                             `[BIM.LVA] IFC: declared ×${declaredLengthToMeters}, но web-ifc уже в метрах — повторный scale пропущен.`
                         );
                     }
+                }
+
+                // Габарит в мировых координатах снимаем ДО вычитания нуля сцены —
+                // потом вершины уже относительные, и сверить с Civil будет нечем.
+                modData.absExtents = computeFragmentsAbsoluteBounds(fragments);
+                if (modData.absExtents) {
+                    const ax = modData.absExtents;
+                    console.info(
+                        `[BIM.LVA] ${file.name} мировой габарит (м): ` +
+                        `X ${ax.e.min.toFixed(2)}…${ax.e.max.toFixed(2)} · ` +
+                        `Y ${ax.n.min.toFixed(2)}…${ax.n.max.toFixed(2)} · ` +
+                        `Z ${ax.h.min.toFixed(2)}…${ax.h.max.toFixed(2)}`
+                    );
                 }
 
                 const rebased = rebaseLargeCoordinateFragments(fragments, {
@@ -13936,6 +14057,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             $('crsOffsetY').value = crsOffsets.y;
             $('crsOffsetZ').value = crsOffsets.z;
             updateCrsAutoUi();
+            updateCrsExtentsUi();
             $('crsModal').classList.add('show');
         });
         $('cancelCrs').addEventListener('click', () => $('crsModal').classList.remove('show'));
@@ -15400,7 +15522,7 @@ ${componentXml || '    '}
             selectMultiple(allItems);
         });
 
-        $('treeClearSelection').addEventListener('click', () => {
+        $('btnClearSelection').addEventListener('click', () => {
             treeSelectionAnchor = null;
             selectMultiple([]);
         });
@@ -16424,7 +16546,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -16928,6 +17050,38 @@ ${componentXml || '    '}
                 event.preventDefault();
                 focusOnList(selectedItems);
             }
+            // Горячие клавиши
+            if (event.key === 'c' || event.key === 'С') {
+                event.preventDefault();
+                $('btnClearSelection').click();
+            } else if (event.key === 'i' || event.key === 'и') {
+                if (event.shiftKey) {
+                    event.preventDefault();
+                    $('btnShowAll').click();
+                } else {
+                    event.preventDefault();
+                    $('btnIsolate').click();
+                }
+            } else if (event.key === 'Delete') {
+                event.preventDefault();
+                const btnDelete = document.querySelector('[data-act="deleteSelection"]');
+                if (btnDelete) btnDelete.click();
+            } else if (event.key === 'm' || event.key === 'М') {
+                event.preventDefault();
+                const btnMeasure = $('btnMeasure');
+                if (btnMeasure) btnMeasure.click();
+            } else if (event.key === 'b' || event.key === 'И') {
+                event.preventDefault();
+                const btnBcf = $('btnBcf');
+                if (btnBcf) btnBcf.click();
+            } else if (event.shiftKey && (event.key === 'C' || event.key === 'Ы')) {
+                event.preventDefault();
+                const btnClash = $('btnClash');
+                if (btnClash) btnClash.click();
+            } else if (event.ctrlKey && (event.key === 'h' || event.key === 'р')) {
+                event.preventDefault();
+                $('btnHide').click();
+            }
         });
 
         function fitView() {
@@ -17051,7 +17205,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -18416,7 +18570,10 @@ ${componentXml || '    '}
         const DRIVE_ACCEL = 48;
         const DRIVE_TURN_MAX = 0.45;
         const DRIVE_STEER_SMOOTH = 2.4;
-        const TOUR_VEHICLE_REV = 10;
+        const TOUR_VEHICLE_REV = 11;
+        // Наземный транспорт тура: машина или локомотив (тот же слот, другая модель)
+        let tourGroundKind = 'car';
+        const TOUR_TRAIN_CAM = Object.freeze({ dist: 3.1, eye: 2.7 });
         const _driveRay = new THREE.Raycaster();
         const _driveRayO = new THREE.Vector3();
         const _driveDown = new THREE.Vector3(0, 0, -1);
@@ -18436,6 +18593,11 @@ ${componentXml || '    '}
             tourEyeHeight = Math.max(0.6, parseFloat($('tourEyeHeight')?.value) || 1.45);
             tourChaseDist = Math.max(2, parseFloat($('tourChaseDist')?.value) || 9);
             tourShowCar = !!$('tourShowCar')?.checked;
+            const groundKind = $('tourGroundVehicle')?.value === 'train' ? 'train' : 'car';
+            if (groundKind !== tourGroundKind) {
+                tourGroundKind = groundKind;
+                ensureTourVehicle('car');
+            }
             tourSpeed = parseFloat($('tourSpeed')?.value) || 0.12;
             const carOpts = $('tourCarOptions');
             const isDrive = tourStyle === 'drive';
@@ -18504,7 +18666,7 @@ ${componentXml || '    '}
         }
 
         let tourPlane = null;
-        const tourVehicleLoad = { car: null, plane: null };
+        const tourVehicleLoad = Object.create(null);
 
         /** BBox только по mesh — иначе камеры ToyCar раздувают габарит и машина становится микроскопической. */
         function computeMeshWorldBox(object) {
@@ -18655,7 +18817,157 @@ ${componentXml || '    '}
             root.userData.isTourCar = true;
             root.userData.meshRev = TOUR_VEHICLE_REV;
             root.userData.vehicleKind = 'car';
+            root.userData.groundKind = 'car';
             root.userData.carModel = 'fallback-box';
+            return root;
+        }
+
+        /**
+         * Магистральный локомотив в натуральную величину: 22.0 м по осям
+         * автосцепок (кузов 20.8), ширина 3.10, крыша 4.60 от УГР, сложенный
+         * токоприёмник 4.97 — вписывается в габарит 1-Т (5300 мм, ГОСТ 9238).
+         * Колея 1520, две трёхосные тележки, колёса Ø1220.
+         * Размеры проверяются в `npm run smoke`: поезд в туре нужен, чтобы
+         * прикинуть проезд под путепроводом, поэтому они не декоративные.
+         *
+         * Кузов — не набор коробок: боковой профиль (наклонная лобовая часть,
+         * скруглённый переход к крыше) задан контуром и выдавлен на ширину.
+         */
+        function createTourTrainMesh() {
+            const root = new THREE.Group();
+            root.name = 'TourTrainFallback';
+
+            const HALF_L = 10.4;   // половина длины по буферным брусьям
+            const HALF_W = 1.55;   // половина ширины кузова (3.10 м)
+            const RAIL_HALF = 0.76; // колея 1520 мм
+            const FLOOR = 1.15;    // низ кузова от УГР
+            const ROOF = 4.35;     // крыша (до 4.60 с оборудованием)
+
+            const body = new THREE.MeshStandardMaterial({ color: 0x8e1420, metalness: 0.35, roughness: 0.55 });
+            const roofMat = new THREE.MeshStandardMaterial({ color: 0x6b7178, metalness: 0.45, roughness: 0.6 });
+            const steel = new THREE.MeshStandardMaterial({ color: 0x2b3036, metalness: 0.7, roughness: 0.5 });
+            const dark = new THREE.MeshStandardMaterial({ color: 0x14181c, metalness: 0.3, roughness: 0.75 });
+            const glass = new THREE.MeshStandardMaterial({
+                color: 0x101c26, metalness: 0.1, roughness: 0.15,
+                transparent: true, opacity: 0.82
+            });
+            const lamp = new THREE.MeshStandardMaterial({
+                color: 0xfff3d0, emissive: 0xffe9b0, emissiveIntensity: 0.9, roughness: 0.35
+            });
+
+            const put = (geom, mat, x, y, z, rot) => {
+                const m = new THREE.Mesh(geom, mat);
+                m.position.set(x, y, z);
+                if (rot) m.rotation.set(rot[0] || 0, rot[1] || 0, rot[2] || 0);
+                root.add(m);
+                return m;
+            };
+
+            // --- кузов: контур в плоскости «длина × высота», выдавленный по ширине
+            const profile = new THREE.Shape();
+            profile.moveTo(-HALF_L, 1.60);
+            profile.lineTo(-HALF_L, 2.60);
+            profile.lineTo(-9.55, 3.85);
+            profile.lineTo(-8.95, ROOF);
+            profile.lineTo(8.95, ROOF);
+            profile.lineTo(9.55, 3.85);
+            profile.lineTo(HALF_L, 2.60);
+            profile.lineTo(HALF_L, 1.60);
+            profile.lineTo(9.95, FLOOR);
+            profile.lineTo(-9.95, FLOOR);
+            profile.closePath();
+
+            // Без фаски: она вылезает за пределы выдавливания и ширина перестаёт
+            // быть ровно 3.10 м, а размеры тут используются для прикидки габарита.
+            const shell = new THREE.ExtrudeGeometry(profile, { depth: HALF_W * 2, bevelEnabled: false });
+            // ExtrudeGeometry строит в XY и тянет по Z; разворачиваем в оси поезда
+            shell.applyMatrix4(new THREE.Matrix4().makeBasis(
+                new THREE.Vector3(0, 1, 0),
+                new THREE.Vector3(0, 0, 1),
+                new THREE.Vector3(1, 0, 0)
+            ));
+            shell.translate(-HALF_W, 0, 0);
+            shell.computeVertexNormals();
+            root.add(new THREE.Mesh(shell, body));
+
+            // крыша отдельным цветом + вентиляционные решётки
+            put(new THREE.BoxGeometry(HALF_W * 1.86, 17.6, 0.12), roofMat, 0, 0, ROOF + 0.05);
+            for (const y of [-6.2, -3.1, 0, 3.1, 6.2]) {
+                put(new THREE.CylinderGeometry(0.62, 0.62, 0.16, 16), steel, 0, y, ROOF + 0.16, [Math.PI / 2, 0, 0]);
+            }
+
+            // --- токоприёмники, сложенные: поднятый уходит на 6+ м и модель
+            // перестаёт влезать в габарит подвижного состава (5300 мм по ГОСТ 9238)
+            for (const sy of [-1, 1]) {
+                const baseY = sy * 4.6;
+                put(new THREE.BoxGeometry(2.2, 0.12, 0.1), steel, 0, baseY, ROOF + 0.14);
+                for (const sx of [-1, 1]) {
+                    put(new THREE.CylinderGeometry(0.05, 0.05, 1.7, 8), steel,
+                        sx * 0.9, baseY + sy * 0.55, ROOF + 0.30, [0.24 * sy, 0, 0]);
+                    put(new THREE.CylinderGeometry(0.04, 0.04, 1.5, 8), steel,
+                        sx * 0.9, baseY - sy * 0.35, ROOF + 0.45, [-0.2 * sy, 0, 0]);
+                }
+                put(new THREE.BoxGeometry(1.9, 0.18, 0.07), dark, 0, baseY - sy * 0.95, ROOF + 0.58);
+            }
+
+            // --- окна: лобовые на наклоне и боковые вдоль кузова
+            for (const sy of [-1, 1]) {
+                for (const sx of [-1, 1]) {
+                    put(new THREE.BoxGeometry(1.15, 0.06, 0.95), glass,
+                        sx * 0.72, sy * 9.35, 3.35, [Math.PI / 2.55 * -sy, 0, 0]);
+                }
+                put(new THREE.BoxGeometry(0.04, 1.05, 0.85), glass, -(HALF_W - 0.019), sy * 7.9, 3.25);
+                put(new THREE.BoxGeometry(0.04, 1.05, 0.85), glass, HALF_W - 0.019, sy * 7.9, 3.25);
+            }
+            for (const y of [-5.1, -2.4, 2.4, 5.1]) {
+                put(new THREE.BoxGeometry(0.04, 1.5, 0.7), glass, -(HALF_W - 0.019), y, 3.3);
+                put(new THREE.BoxGeometry(0.04, 1.5, 0.7), glass, HALF_W - 0.019, y, 3.3);
+            }
+
+            // --- рама, буфера, автосцепка, прожекторы, поручни
+            put(new THREE.BoxGeometry(HALF_W * 1.9, 19.9, 0.22), steel, 0, 0, FLOOR - 0.06);
+            for (const sy of [-1, 1]) {
+                put(new THREE.BoxGeometry(HALF_W * 2, 0.28, 0.55), steel, 0, sy * (HALF_L + 0.1), 1.35);
+                for (const sx of [-1, 1]) {
+                    put(new THREE.CylinderGeometry(0.28, 0.28, 0.34, 12), dark,
+                        sx * 1.0, sy * (HALF_L + 0.15), 1.35, [Math.PI / 2, 0, 0]);
+                    // поручни у лобовой части
+                    put(new THREE.CylinderGeometry(0.035, 0.035, 1.5, 6), steel,
+                        sx * 1.28, sy * 9.9, 2.2, [Math.PI / 12 * -sy, 0, 0]);
+                }
+                // автосцепка: по ней и меряется длина, 22.0 м по осям сцепок
+                put(new THREE.BoxGeometry(0.44, 0.5, 0.36), dark, 0, sy * (HALF_L + 0.35), 1.15);
+                put(new THREE.CylinderGeometry(0.19, 0.19, 0.14, 12), lamp, 0, sy * (HALF_L - 0.02), 3.95, [Math.PI / 2, 0, 0]);
+                for (const sx of [-1, 1]) {
+                    put(new THREE.CylinderGeometry(0.13, 0.13, 0.12, 12), lamp,
+                        sx * 1.12, sy * (HALF_L - 0.02), 2.05, [Math.PI / 2, 0, 0]);
+                }
+                // подножки
+                put(new THREE.BoxGeometry(HALF_W * 1.4, 0.5, 0.06), steel, 0, sy * 9.7, 0.72);
+            }
+
+            // --- тележки: две трёхосные, межцентровое 12.8 м
+            const wheel = new THREE.CylinderGeometry(0.61, 0.61, 0.14, 20);
+            for (const sy of [-1, 1]) {
+                const bogieY = sy * 6.4;
+                put(new THREE.BoxGeometry(2.5, 5.2, 0.42), steel, 0, bogieY, 0.98);
+                put(new THREE.BoxGeometry(1.5, 2.0, 0.5), dark, 0, bogieY, 1.42);
+                for (const dy of [-1.85, 0, 1.85]) {
+                    for (const sx of [-1, 1]) {
+                        put(wheel, dark, sx * RAIL_HALF, bogieY + dy, 0.61, [0, 0, Math.PI / 2]);
+                        put(new THREE.BoxGeometry(0.3, 0.42, 0.42), steel,
+                            sx * (RAIL_HALF + 0.36), bogieY + dy, 0.75);
+                    }
+                    put(new THREE.CylinderGeometry(0.09, 0.09, RAIL_HALF * 2, 10), steel,
+                        0, bogieY + dy, 0.61, [0, 0, Math.PI / 2]);
+                }
+            }
+
+            root.userData.isTourCar = true;
+            root.userData.meshRev = TOUR_VEHICLE_REV;
+            root.userData.vehicleKind = 'car';
+            root.userData.groundKind = 'train';
+            root.userData.carModel = 'train-procedural';
             return root;
         }
 
@@ -18679,17 +18991,25 @@ ${componentXml || '    '}
             return root;
         }
 
-        async function loadTourVehicleGltf(kind) {
-            const url = tourVehicleUrl(kind);
-            const targetLength = kind === 'plane' ? 1.4 : 4.6;
+        async function loadTourVehicleGltf(kind, ground = tourGroundKind) {
+            const isTrain = kind !== 'plane' && ground === 'train';
+            // Локомотив строим сами: готовой модели в assets/vehicles нет, а ходить
+            // за ней в сеть нельзя — вьювер обязан работать офлайн. Появится свой
+            // train.glb — грузить его отсюда же, как машину и самолёт.
+            if (isTrain) return createTourTrainMesh();
+            const url = tourVehicleUrl(kind, ground);
+            // Локомотив не масштабируем «на глаз»: 20.8 м по буферам — реальный размер
+            const targetLength = kind === 'plane' ? 1.4 : (isTrain ? 20.8 : 4.6);
             try {
                 console.info('[BIM.LVA] loading vehicle', url);
                 const gltf = await gltfLoader.loadAsync(url);
-                return fitGltfToTourAxes(gltf.scene, {
+                const fitted = fitGltfToTourAxes(gltf.scene, {
                     kind,
                     targetLength,
-                    name: kind === 'plane' ? 'TourPlane' : 'TourCar'
+                    name: kind === 'plane' ? 'TourPlane' : (isTrain ? 'TourTrain' : 'TourCar')
                 });
+                if (kind !== 'plane') fitted.userData.groundKind = ground;
+                return fitted;
             } catch (err) {
                 console.warn('[BIM.LVA] GLB vehicle load failed:', url, err);
                 return kind === 'plane' ? createTourPlaneMeshFallback() : createTourCarMeshFallback();
@@ -18708,13 +19028,19 @@ ${componentXml || '    '}
         async function ensureTourVehicle(kind = 'car') {
             const isPlane = kind === 'plane';
             const current = isPlane ? tourPlane : tourCar;
-            if (current && current.userData.meshRev === TOUR_VEHICLE_REV && current.userData.vehicleKind === kind) {
+            if (current && current.userData.meshRev === TOUR_VEHICLE_REV
+                && current.userData.vehicleKind === kind
+                && (isPlane || current.userData.groundKind === tourGroundKind)) {
                 return current;
             }
-            if (tourVehicleLoad[kind]) return tourVehicleLoad[kind];
-            tourVehicleLoad[kind] = (async () => {
+            // Ключ с видом транспорта: иначе переключение «машина → поезд» во время
+            // загрузки машины возвращало её же и помечало поездом.
+            const wantGround = isPlane ? '' : tourGroundKind;
+            const slot = isPlane ? 'plane' : `car:${wantGround}`;
+            if (tourVehicleLoad[slot]) return tourVehicleLoad[slot];
+            tourVehicleLoad[slot] = (async () => {
                 disposeTourVehicleSlot(kind);
-                const root = await loadTourVehicleGltf(kind);
+                const root = await loadTourVehicleGltf(kind, wantGround);
                 const shouldShow = tourShowCar && (
                     (isPlane && (tourStyle === 'fly' && tourPlaying)) ||
                     (!isPlane && (driveModeActive || (tourStyle === 'car' && tourPlaying)))
@@ -18724,15 +19050,19 @@ ${componentXml || '    '}
                 if (isPlane) tourPlane = root;
                 else tourCar = root;
                 if (!isPlane && driveModeActive) syncDriveCarTransform();
-                tourVehicleLoad[kind] = null;
+                tourVehicleLoad[slot] = null;
                 markNeedsRender();
+                // Пока грузились, выбор мог смениться ещё раз
+                if (!isPlane && tourGroundKind !== wantGround) return ensureTourVehicle('car');
                 return root;
             })();
-            return tourVehicleLoad[kind];
+            return tourVehicleLoad[slot];
         }
 
         function ensureTourCar() {
-            if (tourCar && tourCar.userData.meshRev === TOUR_VEHICLE_REV && tourCar.userData.vehicleKind === 'car') {
+            if (tourCar && tourCar.userData.meshRev === TOUR_VEHICLE_REV
+                && tourCar.userData.vehicleKind === 'car'
+                && tourCar.userData.groundKind === tourGroundKind) {
                 return tourCar;
             }
             ensureTourVehicle('car');
@@ -19033,8 +19363,9 @@ ${componentXml || '    '}
             }
             _tourRight.crossVectors(_tourFwd, _tourUp).normalize();
 
-            const dist = tourChaseDist;
-            const eye = tourEyeHeight;
+            const trainNow = tourGroundKind === 'train' && tourStyle !== 'fly';
+            const dist = tourChaseDist * (trainNow ? TOUR_TRAIN_CAM.dist : 1);
+            const eye = tourEyeHeight + (trainNow ? TOUR_TRAIN_CAM.eye : 0);
             const look = _tourLook.copy(anchor).addScaledVector(_tourUp, eye * 0.55);
 
             if (tourCamView === 'orbit') {
@@ -19256,9 +19587,10 @@ ${componentXml || '    '}
                     camera.position.copy(pos).addScaledVector(_tourFwd, 0.5).addScaledVector(_tourUp, 0.4);
                     controls.target.copy(ahead);
                 } else {
+                    const chase = tourChaseDist * (tourGroundKind === 'train' ? TOUR_TRAIN_CAM.dist : 1);
                     camera.position.copy(pos)
-                        .addScaledVector(_tourFwd, -tourChaseDist * 0.85)
-                        .addScaledVector(_tourUp, Math.max(tourEyeHeight, tourChaseDist * 0.35));
+                        .addScaledVector(_tourFwd, -chase * 0.85)
+                        .addScaledVector(_tourUp, Math.max(tourEyeHeight, chase * 0.35));
                     controls.target.copy(pos).addScaledVector(_tourUp, 0.5);
                 }
                 camera.up.copy(_tourUp);
@@ -19370,6 +19702,7 @@ ${componentXml || '    '}
             setTourCamView($('tourHudCamView').value);
         });
         $('tourHudCamCycle')?.addEventListener('click', () => cycleTourCamView(1));
+        $('tourGroundVehicle')?.addEventListener('change', readTourSettingsFromUi);
         $('tourEyeHeight')?.addEventListener('change', readTourSettingsFromUi);
         $('tourChaseDist')?.addEventListener('change', readTourSettingsFromUi);
         $('tourShowCar')?.addEventListener('change', readTourSettingsFromUi);
@@ -19645,8 +19978,8 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.09',
-            buildId: '69630a0-preview',
+            version: '2026.08.11',
+            buildId: '1982f4a-preview',
             released: '2026-08-09',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
