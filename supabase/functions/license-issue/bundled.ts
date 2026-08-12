@@ -444,10 +444,31 @@ Deno.serve(async (req) => {
     const { error: insErr } = await admin.from("licenses").insert(rows);
     if (insErr) return json({ error: `Не удалось сохранить: ${insErr.message}` }, 500);
 
+    // Если ключ выдан по заявке — закрываем её, иначе она так и висит в
+    // «на рассмотрении», хотя человек лицензию уже получил. Условие по
+    // status='new' защищает от повторного решения по уже закрытой заявке.
+    let requestClosed = false;
+    const requestId = String(body.requestId ?? "");
+    if (requestId) {
+      const { data: closed } = await admin
+        .from("license_requests")
+        .update({
+          status: "approved",
+          decided_at: new Date().toISOString(),
+          decided_by: caller.id,
+          decision_note: String(body.note ?? "Учтён ключ, выданный офлайн"),
+        })
+        .eq("id", requestId)
+        .eq("status", "new")
+        .select("id");
+      requestClosed = !!closed?.length;
+    }
+
     return json({
       ok: true,
       imported: rows.length,
       linkedToAccount: !!targetUserId,
+      requestClosed,
     });
   }
 
