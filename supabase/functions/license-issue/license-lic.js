@@ -120,6 +120,80 @@ export async function signLicenseFile(o, signingKey) {
 }
 
 /**
+ * Разбирает содержимое готового файла license.lic.
+ *
+ * Нужно для учёта лицензий, выданных офлайн-скриптом Tools\New-LvaLicense.ps1:
+ * они существуют у клиентов, но в базе сайта их нет, и в кабинете список
+ * выглядит пустым. Подпись здесь НЕ проверяется намеренно: офлайн-лицензии
+ * подписаны сертификатом «LVA Code Signing», а у веб-контура своя пара ключей —
+ * публичной части офлайн-сертификата на сервере нет. Проверять подпись всё
+ * равно будет плагин у клиента; задача разбора — вытащить поля для учёта и не
+ * дать записать в базу что-то, что лицензией не является.
+ *
+ * @param {string|object} source текст файла или уже разобранный объект
+ * @returns {{payload: object, signature: string, products: string[], issuedUtc: string, expiresUtc: string|null, hostLock: string, licenseId: string, clientName: string}}
+ */
+export function parseLicenseFile(source) {
+    let file = source;
+    if (typeof source === 'string') {
+        const text = source.trim();
+        if (!text) throw new Error('Файл лицензии пуст.');
+        try {
+            file = JSON.parse(text);
+        } catch {
+            throw new Error('Это не похоже на license.lic: внутри должен быть JSON {Payload, Signature}.');
+        }
+    }
+    if (!file || typeof file !== 'object') throw new Error('Ожидался объект лицензии.');
+
+    const payload = file.Payload ?? file.payload;
+    const signature = file.Signature ?? file.signature;
+    if (!payload || typeof payload !== 'object') throw new Error('В файле нет раздела Payload.');
+    if (!signature || typeof signature !== 'string') throw new Error('В файле нет подписи Signature.');
+
+    const licenseId = String(payload.LicenseId ?? '').trim();
+    if (!licenseId) throw new Error('В лицензии нет LicenseId.');
+
+    // Products в файле — массив; строку с запятыми тоже принимаем: так проще
+    // импортировать лицензию, отредактированную вручную.
+    const rawProducts = payload.Products;
+    const products = (Array.isArray(rawProducts)
+        ? rawProducts
+        : String(rawProducts ?? '').split(',')
+    ).map((p) => String(p).trim()).filter(Boolean);
+    if (!products.length) throw new Error('В лицензии не указан ни один продукт.');
+
+    const issuedUtc = String(payload.IssuedUtc ?? '').trim();
+    if (!issuedUtc || Number.isNaN(Date.parse(issuedUtc))) {
+        throw new Error('В лицензии нет разбираемой даты выпуска IssuedUtc.');
+    }
+
+    // Бессрочная лицензия: в JSON это null, но офлайн-скрипт и правки руками
+    // могут дать пустую строку — оба варианта означают «без срока».
+    const rawExpires = payload.ExpiresUtc;
+    const expiresText = rawExpires == null ? '' : String(rawExpires).trim();
+    if (expiresText && Number.isNaN(Date.parse(expiresText))) {
+        throw new Error('Срок ExpiresUtc не разбирается как дата.');
+    }
+
+    const hostLock = String(payload.HostLock ?? '').trim().toUpperCase();
+    if (hostLock && !isMachineId(hostLock)) {
+        throw new Error('HostLock в лицензии не похож на Machine ID (64 знака 0-9 A-F).');
+    }
+
+    return {
+        payload,
+        signature,
+        licenseId,
+        clientName: String(payload.ClientName ?? '').trim(),
+        products,
+        issuedUtc,
+        expiresUtc: expiresText || null,
+        hostLock
+    };
+}
+
+/**
  * Проверяет лицензию так же, как LicenseGate: подпись, срок, привязка, продукт.
  * Порядок вердиктов повторяет CheckInternal — чтобы причина отказа совпадала
  * с той, что увидит пользователь в плагине.

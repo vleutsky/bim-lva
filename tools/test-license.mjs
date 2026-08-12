@@ -22,7 +22,8 @@ import {
     importRsaVerifyKey,
     signLicenseFile,
     verifyLicenseFile,
-    isMachineId
+    isMachineId,
+    parseLicenseFile
 } from '../supabase/functions/license-issue/license-lic.js';
 
 let failures = 0;
@@ -162,6 +163,49 @@ check('HostLock приводится к верхнему регистру',
         licenseId: samplePayload.LicenseId, clientName: 'x', products: ['Civil'],
         issuedUtc: d, expiresUtc: null, hostLock: '  a1b2c3'.padEnd(64, 'f').trim()
     }, signKey)).Payload.HostLock.match(/^[0-9A-F]+$/) !== null);
+
+// -------------------------------------------------- разбор файла .lic ----
+// Нужен для учёта лицензий, выданных офлайн-скриптом: подпись не проверяем
+// (сертификат другой), но поля обязаны читаться ровно те же.
+const licText = JSON.stringify(lic, null, 2);
+const parsed = parseLicenseFile(licText);
+check('разбор .lic достаёт LicenseId', parsed.licenseId === samplePayload.LicenseId);
+check('разбор .lic достаёт продукты массивом',
+    Array.isArray(parsed.products) && parsed.products.join(',') === 'Civil,Navis');
+check('разбор .lic сохраняет HostLock в верхнем регистре',
+    parsed.hostLock === samplePayload.HostLock.toUpperCase());
+check('разбор .lic не портит подпись — файл собирается обратно тем же',
+    JSON.stringify({ Payload: parsed.payload, Signature: parsed.signature }) === JSON.stringify(lic));
+check('разобранная лицензия по-прежнему проходит проверку',
+    (await verifyLicenseFile({ Payload: parsed.payload, Signature: parsed.signature }, verKey,
+        { product: 'Civil', machineId: samplePayload.HostLock })).ok);
+
+const perpetual = await signLicenseFile({
+    licenseId: samplePayload.LicenseId, clientName: 'Бессрочная', products: ['Civil'],
+    issuedUtc: d, expiresUtc: null, hostLock: ''
+}, signKey);
+check('у бессрочной после разбора срок null, а не 1970 год',
+    parseLicenseFile(JSON.stringify(perpetual)).expiresUtc === null);
+check('пустая строка в ExpiresUtc тоже читается как бессрочная',
+    parseLicenseFile({ Payload: { ...perpetual.Payload, ExpiresUtc: '' }, Signature: 'x' }).expiresUtc === null);
+check('лицензия без привязки к машине даёт пустой HostLock',
+    parseLicenseFile(JSON.stringify(perpetual)).hostLock === '');
+
+function rejects(name, source) {
+    let threw = false;
+    try { parseLicenseFile(source); } catch { threw = true; }
+    check(name, threw);
+}
+rejects('пустой файл отклоняется', '   ');
+rejects('не-JSON отклоняется', 'это не лицензия');
+rejects('файл без Payload отклоняется', JSON.stringify({ Signature: 'abc' }));
+rejects('файл без Signature отклоняется', JSON.stringify({ Payload: samplePayload }));
+rejects('файл без продуктов отклоняется',
+    JSON.stringify({ Payload: { ...samplePayload, Products: [] }, Signature: 'abc' }));
+rejects('файл без даты выпуска отклоняется',
+    JSON.stringify({ Payload: { ...samplePayload, IssuedUtc: '' }, Signature: 'abc' }));
+rejects('мусор вместо HostLock отклоняется',
+    JSON.stringify({ Payload: { ...samplePayload, HostLock: 'не-машина' }, Signature: 'abc' }));
 
 // ------------------------------------------ однофайловая сборка ----------
 // Её собирает механический скрипт для развёртывания через дашборд. Разойдётся

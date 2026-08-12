@@ -24,7 +24,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 // Формат общий с тестами — см. комментарий в license-lic.js.
-import { importRsaSigningKey, signLicenseFile, isMachineId } from "./license-lic.js";
+import { importRsaSigningKey, signLicenseFile, isMachineId, parseLicenseFile } from "./license-lic.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -169,6 +169,111 @@ Deno.serve(async (req) => {
       licenseId,
       licenseText,
       expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    });
+  }
+
+  // ------------------------------------------------------------ импорт -----
+  // Учёт лицензии, выданной офлайн-скриптом Tools\New-LvaLicense.ps1. Такие
+  // ключи уже работают у клиентов, но в базе их нет — список в кабинете
+  // выглядит пустым. Здесь ничего не подписывается: файл принимается как есть,
+  // разбираются только поля. Подпись проверять нечем и незачем — офлайн-ключи
+  // подписаны сертификатом «LVA Code Signing», публичной части которого на
+  // сервере нет, а настоящую проверку всё равно делает плагин у клиента.
+  if (action === "import") {
+    let parsed: ReturnType<typeof parseLicenseFile>;
+    try {
+      parsed = parseLicenseFile(body.licenseText ?? body.license ?? "");
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+
+    const unknown = parsed.products.filter((p: string) => !PRODUCTS.includes(p));
+    if (unknown.length) {
+      return json({ error: `Неизвестный продукт «${unknown.join(", ")}»` }, 400);
+    }
+    // Одна строка учёта = один продукт: так устроена колонка product и так же
+    // ведёт себя выпуск через сайт. Комплект «*» — это тоже одно значение.
+    if (parsed.products.length > 1) {
+      return json({
+        error: "В файле несколько продуктов. Учтите их отдельными лицензиями или используйте комплект «*».",
+      }, 400);
+    }
+
+    const email = String(body.email ?? "").trim().toLowerCase();
+
+    // Кому принадлежит лицензия. Аккаунт больше не обязателен (миграция
+    // 20260812180000), но если он есть — привяжем, чтобы человек увидел ключ в
+    // своём кабинете. Ищем без обращения к auth.users: по уже известным нам
+    // строкам заявок и лицензий.
+    let ownerId: string | null = null;
+    if (email && email === String(caller.email ?? "").toLowerCase()) {
+      ownerId = caller.id;
+    } else if (email) {
+      const { data: byReq } = await admin
+        .from("license_requests")
+        .select("user_id")
+        .eq("email", email)
+        .not("user_id", "is", null)
+        .limit(1)
+        .maybeSingle();
+      ownerId = byReq?.user_id ?? null;
+      if (!ownerId) {
+        const { data: byLic } = await admin
+          .from("licenses")
+          .select("user_id")
+          .eq("email", email)
+          .not("user_id", "is", null)
+          .limit(1)
+          .maybeSingle();
+        ownerId = byLic?.user_id ?? null;
+      }
+    }
+
+    // LicenseId из файла — естественный ключ: повторный импорт того же файла
+    // не должен плодить дубли. Если он не UUID (лицензия из другого
+    // генератора), берём свой — тогда защита от дублей делается по машине.
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      .test(parsed.licenseId);
+    const rowId = isUuid ? parsed.licenseId.toLowerCase() : crypto.randomUUID();
+
+    if (isUuid) {
+      const { data: dup } = await admin
+        .from("licenses")
+        .select("id")
+        .eq("id", rowId)
+        .maybeSingle();
+      if (dup) return json({ error: "Эта лицензия уже учтена." }, 409);
+    }
+
+    const licenseText = JSON.stringify(
+      { Payload: parsed.payload, Signature: parsed.signature },
+      null,
+      2,
+    );
+
+    const { error: insErr } = await admin.from("licenses").insert({
+      id: rowId,
+      request_id: null,
+      user_id: ownerId,
+      email: email || parsed.clientName,
+      org: parsed.clientName,
+      product: parsed.products[0],
+      machine_id: parsed.hostLock,
+      license_key: licenseText,
+      issued_at: new Date(parsed.issuedUtc).toISOString(),
+      expires_at: parsed.expiresUtc ? new Date(parsed.expiresUtc).toISOString() : null,
+      issued_by: caller.id,
+    });
+    if (insErr) return json({ error: `Не удалось учесть лицензию: ${insErr.message}` }, 500);
+
+    return json({
+      ok: true,
+      licenseId: rowId,
+      product: parsed.products[0],
+      clientName: parsed.clientName,
+      machineId: parsed.hostLock,
+      linkedToAccount: !!ownerId,
+      expiresAt: parsed.expiresUtc ? new Date(parsed.expiresUtc).toISOString() : null,
     });
   }
 

@@ -511,6 +511,25 @@
                     а не по списку email в конфиге.
                 </p>
 
+                <h3 class="lic-admin-h3">Учесть выданный ключ (.lic)</h3>
+                <div class="lic-admin-card">
+                    <p class="lic-empty" style="margin-top:0">
+                        Для лицензий, выданных офлайн через <code>Tools\New-LvaLicense.ps1</code>:
+                        они уже работают у клиента, но в списке ниже их нет. Подпись не
+                        переделывается — файл заносится как есть. Если у получателя есть аккаунт
+                        BIM.LVA, укажите его почту, и ключ появится у него в кабинете.
+                    </p>
+                    <div class="row">
+                        <input type="file" id="licImportFile" accept=".lic,.json,application/json">
+                        <input class="lic-adminnote" type="email" id="licImportEmail"
+                               placeholder="Почта получателя (необязательно)">
+                        <button type="button" class="btn btn-primary" id="licImportBtn">Учесть лицензию</button>
+                    </div>
+                    <textarea class="lic-key" id="licImportText" rows="5"
+                              placeholder="…либо вставьте содержимое license.lic сюда"></textarea>
+                    <p class="lic-empty" id="licImportStatus"></p>
+                </div>
+
                 <h3 class="lic-admin-h3">Заявки на рассмотрении</h3>
                 <div id="licAdminPending"><p class="lic-empty">Загрузка…</p></div>
 
@@ -616,7 +635,10 @@
 
                 const parts = [];
                 for (const l of licenses) {
-                    const dead = l.revoked_at || new Date(l.expires_at) < new Date();
+                    // Пустой срок — бессрочная лицензия (LicenseGate считает
+                    // ExpiresUtc = null действующей всегда). Через new Date(null)
+                    // это превращалось в 1970 год и «Истекла».
+                    const dead = l.revoked_at || (l.expires_at && new Date(l.expires_at) < new Date());
                     const [label, cls] = l.revoked_at
                         ? ['Отозвана', 'no']
                         : dead ? ['Истекла', 'no'] : ['Действует', 'ok'];
@@ -625,7 +647,7 @@
                             <div class="lic-head">
                                 <strong>${esc(lic().productTitle(l.product))}</strong>
                                 <span class="lic-status ${cls}">${label}</span>
-                                <span class="lic-when">до ${asDate(l.expires_at)}</span>
+                                <span class="lic-when">${l.expires_at ? 'до ' + asDate(l.expires_at) : 'бессрочная'}</span>
                             </div>
                             <textarea class="lic-key" rows="3" readonly onclick="this.select()">${esc(l.license_key)}</textarea>
                             <div class="row" style="margin-top:.4rem">
@@ -767,14 +789,14 @@
                         <table class="lic-table">
                             <tr><th>Продукт</th><th>Кому</th><th>Выдана</th><th>Действует до</th><th></th><th></th></tr>
                             ${rows.map((l) => {
-                                const dead = l.revoked_at || new Date(l.expires_at) < new Date();
+                                const dead = l.revoked_at || (l.expires_at && new Date(l.expires_at) < new Date());
                                 const label = l.revoked_at ? 'Отозвана' : dead ? 'Истекла' : 'Действует';
                                 const cls = l.revoked_at || dead ? 'no' : 'ok';
                                 return `<tr>
                                     <td>${esc(lic().productTitle(l.product))}</td>
                                     <td>${esc(l.email)}${l.org ? '<br><span class="lic-empty">' + esc(l.org) + '</span>' : ''}</td>
                                     <td>${asDate(l.issued_at)}</td>
-                                    <td>${asDate(l.expires_at)}</td>
+                                    <td>${l.expires_at ? asDate(l.expires_at) : 'бессрочная'}</td>
                                     <td><span class="lic-status ${cls}">${label}</span></td>
                                     <td>${l.revoked_at ? '' :
                                         `<button type="button" class="btn btn-outline" data-revoke="${esc(l.id)}">Отозвать</button>`}</td>
@@ -819,6 +841,49 @@
                 } catch (err) {
                     alert(err.message || String(err));
                     card.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                }
+            });
+
+            // Файл выбрали — сразу показываем текст в поле: видно, что взялось
+            // именно то, и остаётся возможность поправить руками.
+            document.getElementById('licImportFile')?.addEventListener('change', async (ev) => {
+                const file = ev.target.files?.[0];
+                if (!file) return;
+                const status = document.getElementById('licImportStatus');
+                try {
+                    document.getElementById('licImportText').value = await file.text();
+                    if (status) status.textContent = `Файл прочитан: ${file.name}. Нажмите «Учесть лицензию».`;
+                } catch (err) {
+                    if (status) status.textContent = err.message || String(err);
+                }
+            });
+
+            document.getElementById('licImportBtn')?.addEventListener('click', async () => {
+                const btn = document.getElementById('licImportBtn');
+                const area = document.getElementById('licImportText');
+                const status = document.getElementById('licImportStatus');
+                const text = (area?.value || '').trim();
+                if (!text) {
+                    if (status) status.textContent = 'Выберите файл license.lic или вставьте его содержимое.';
+                    return;
+                }
+                btn.disabled = true;
+                if (status) status.textContent = 'Заношу в базу…';
+                try {
+                    const res = await lic().importLicense(text, document.getElementById('licImportEmail').value.trim());
+                    if (status) {
+                        status.textContent = `Учтено: ${lic().productTitle(res.product)}`
+                            + (res.clientName ? ` · ${res.clientName}` : '')
+                            + (res.machineId ? ` · компьютер ${res.machineId.slice(0, 8)}…` : ' · без привязки к компьютеру')
+                            + (res.linkedToAccount ? ' · привязано к аккаунту' : ' · без аккаунта (виден только вам)');
+                    }
+                    area.value = '';
+                    document.getElementById('licImportFile').value = '';
+                    await renderAdminIssued();
+                } catch (err) {
+                    if (status) status.textContent = err.message || String(err);
+                } finally {
+                    btn.disabled = false;
                 }
             });
 
