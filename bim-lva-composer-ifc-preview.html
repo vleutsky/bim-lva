@@ -2511,7 +2511,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1154b2f</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 89f7611</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -3271,13 +3271,20 @@
         </div>
     </div>
 
-    <div class="modal-backdrop" id="sweepModal">
-        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(460px,100%)">
-            <h3>Тело по оси</h3>
+    <div class="modal-backdrop floating-panel" id="sweepModal">
+        <div class="modal-card" id="sweepModalCard" role="dialog" aria-modal="true" style="width:min(480px,94vw)">
+            <div class="modal-drag-handle" id="sweepModalDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Тело по оси</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
+            </div>
             <div class="bulk-note">
-                Осью служит <b>выбранная линия чертежа</b> (DWG/DXF), а если ничего не
-                выбрано — последняя начерченная полилиния. Сечение ведётся вдоль оси
-                без проворота. Размеры в метрах.
+                Сечение ведётся вдоль оси без проворота. Размеры в метрах.
+                При включённой связи тело перестраивается само, как только ось
+                изменилась.
+            </div>
+            <div class="prop small">
+                <div class="k">Ось</div>
+                <select class="editInput" id="sweepAxisSelect"></select>
             </div>
             <div class="prop small">
                 <div class="k">Сечение</div>
@@ -3294,8 +3301,15 @@
             <div class="prop small" data-field="diameter"><div class="k">Диаметр</div><input class="editInput" id="sweepDiameter" type="number" step="0.01" value="0.5"></div>
             <div class="prop small" data-field="wall"><div class="k">Толщина стенки</div><input class="editInput" id="sweepWall" type="number" step="0.001" value="0.02"></div>
             <div class="prop small"><div class="k">Смещение по высоте</div><input class="editInput" id="sweepOffset" type="number" step="0.05" value="0"></div>
+            <div class="prop small"><div class="k">Цвет</div><input type="color" class="polyline-color" id="sweepColor" value="#c98b3a"></div>
+            <div class="prop small">
+                <div class="k">Связать с осью</div>
+                <input type="checkbox" id="sweepLive" checked title="Перестраивать тело автоматически при изменении полилинии">
+            </div>
+            <div class="bulk-note" id="sweepStatus">—</div>
             <div class="modal-actions">
                 <button class="btn" id="sweepClear">Убрать тела</button>
+                <button class="btn" id="sweepRebuild" title="Пересобрать тела по текущим осям">⟳ Обновить</button>
                 <button class="btn" id="sweepCancel">Закрыть</button>
                 <button class="btn load-btn" id="sweepApply">Построить</button>
             </div>
@@ -4455,6 +4469,29 @@
                 return null;
             },
             /** Выдавливание по явной оси — чтобы проверять математику числами. */
+            /** Тела по осям: объём и привязка — для проверки авто-перестроения. */
+            get sweeps() {
+                return (typeof sweptSolids !== 'undefined' ? sweptSolids : []).map((s) => ({
+                    kind: s.kind, volume: s.volume, length: s.length,
+                    polylineId: s.polylineId ?? null, live: !!s.live,
+                    color: '#' + s.mesh.material.color.getHexString()
+                }));
+            },
+            /** Построить тело по выбранной оси (тот же путь, что кнопка «Построить»). */
+            buildSweepOnPolyline(id, kind, dims) {
+                const sel = $('sweepAxisSelect');
+                fillSweepAxisSelect();
+                if (sel) sel.value = `poly:${id}`;
+                if (kind) { $('sweepProfile').value = kind; syncSweepFields(); }
+                if (dims) {
+                    for (const [k, v] of Object.entries(dims)) {
+                        const el = $('sweep' + k.charAt(0).toUpperCase() + k.slice(1));
+                        if (el) el.value = String(v);
+                    }
+                }
+                applySweep();
+                return (typeof sweptSolids !== 'undefined' ? sweptSolids.length : 0);
+            },
             sweepProbe(points, kind, dims, offsetZ) {
                 const path = points.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
                 const r = buildSweptSolid(path, kind, dims || {}, offsetZ || 0);
@@ -6280,10 +6317,53 @@
             });
         }
 
+        /** Заполнить выпадающий список осей: полилинии + выбранная линия чертежа. */
+        function fillSweepAxisSelect() {
+            const sel = $('sweepAxisSelect');
+            if (!sel) return;
+            const prev = sel.value;
+            const opts = drawnPolylines.map(
+                (r) => `<option value="poly:${r.id}">${esc(r.name)} · ${r.pts.length} т</option>`
+            );
+            const item = selectedItems[0];
+            const mod = item ? loadedModels.get(item.modelID) : null;
+            const entry = mod?.dxfEntities?.get(item?.expressID);
+            if (entry && !entry.object.isMesh) {
+                opts.unshift(`<option value="dxf">Выбранная линия чертежа · #${entry.id}</option>`);
+            }
+            sel.innerHTML = opts.join('') || '<option value="">— нет осей —</option>';
+            if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+        }
+
+        /** Точки оси по выбору в списке; без выбора — прежнее поведение. */
+        function sweepAxisFromSelect() {
+            const v = $('sweepAxisSelect')?.value || '';
+            if (v.startsWith('poly:')) {
+                const id = Number(v.slice(5));
+                const rec = drawnPolylines.find((r) => r.id === id);
+                if (rec?.renderPts?.length >= 2) {
+                    return {
+                        points: rec.renderPts.map((p) => p.clone()),
+                        source: `полилиния «${rec.name}»`,
+                        polylineId: rec.id
+                    };
+                }
+                return null;
+            }
+            return sweepAxisPoints();
+        }
+
+        function sweepMaterial() {
+            return new THREE.MeshStandardMaterial({
+                color: new THREE.Color($('sweepColor')?.value || '#c98b3a'),
+                roughness: 0.75, metalness: 0.05, side: THREE.DoubleSide
+            });
+        }
+
         function applySweep() {
-            const axis = sweepAxisPoints();
+            const axis = sweepAxisFromSelect();
             if (!axis) {
-                notifyError('Нет оси: выберите линию чертежа или начертите полилинию.');
+                notifyError('Нет оси: выберите её в списке, начертите полилинию или выберите линию чертежа.');
                 return;
             }
             const kind = $('sweepProfile')?.value || 'rect';
@@ -6293,13 +6373,19 @@
                 notifyError('Ось слишком короткая для выдавливания.');
                 return;
             }
-            const mesh = new THREE.Mesh(built.geometry, new THREE.MeshStandardMaterial({
-                color: 0xc98b3a, roughness: 0.75, metalness: 0.05, side: THREE.DoubleSide
-            }));
+            const mesh = new THREE.Mesh(built.geometry, sweepMaterial());
             mesh.name = `Тело · ${SWEEP_PROFILES[kind].label}`;
             sweepGroup.add(mesh);
-            sweptSolids.push({ mesh, kind, ...built });
+            // Запоминаем ось и размеры — по ним тело пересобирается при правке
+            sweptSolids.push({
+                mesh, kind, ...built,
+                polylineId: axis.polylineId ?? null,
+                dims: { ...dims },
+                color: $('sweepColor')?.value || '#c98b3a',
+                live: !!$('sweepLive')?.checked
+            });
             updateDrawUi();
+            updateSweepStatus();
             notify(
                 `${mesh.name}: ось ${built.length.toFixed(2)} м (${axis.source}), ` +
                 `сечение ${built.area.toFixed(3)} м², объём ${built.volume.toFixed(2)} м³` +
@@ -6307,6 +6393,46 @@
             );
             trackUsage('sweep_solid', { kind, triangles: built.triangles });
             markNeedsRender();
+        }
+
+        /**
+         * Пересобрать тела, привязанные к полилиниям. Зовётся из
+         * renderPolylinesList, то есть после любой правки оси. Тела без
+         * привязки (по линии чертежа) не трогаем — их ось не менялась.
+         * @param {number|null} onlyPolylineId перестроить только для этой оси
+         */
+        function rebuildLiveSweeps(onlyPolylineId = null) {
+            let n = 0;
+            sweptSolids.forEach((s) => {
+                if (!s.live || s.polylineId == null) return;
+                if (onlyPolylineId != null && s.polylineId !== onlyPolylineId) return;
+                const rec = drawnPolylines.find((r) => r.id === s.polylineId);
+                if (!rec || rec.renderPts.length < 2) return;
+                const built = buildSweptSolid(
+                    rec.renderPts.map((p) => p.clone()), s.kind, s.dims, s.dims.offsetZ
+                );
+                if (!built) return;
+                s.mesh.geometry.dispose();
+                s.mesh.geometry = built.geometry;
+                Object.assign(s, {
+                    length: built.length, area: built.area, volume: built.volume,
+                    triangles: built.triangles, straight: built.straight
+                });
+                n++;
+            });
+            if (n) { updateSweepStatus(); markNeedsRender(); }
+            return n;
+        }
+
+        function updateSweepStatus() {
+            const el = $('sweepStatus');
+            if (!el) return;
+            if (!sweptSolids.length) { el.textContent = 'Тел пока нет.'; return; }
+            const vol = sweptSolids.reduce((s, x) => s + x.volume, 0);
+            const linked = sweptSolids.filter((s) => s.live && s.polylineId != null).length;
+            el.textContent =
+                `Тел: ${sweptSolids.length}, суммарный объём ${vol.toFixed(2)} м³` +
+                (linked ? ` · связано с осями: ${linked}` : ' · связей с осями нет');
         }
 
         function clearSweptSolids() {
@@ -6317,6 +6443,7 @@
             });
             sweptSolids = [];
             updateDrawUi();
+            updateSweepStatus();
             markNeedsRender();
         }
 
@@ -7347,6 +7474,8 @@
             renderPolylinePointsEditor(rec || null);
             rebuildPolylineHandles();
             refreshPolylineProfileIfOpen();
+            rebuildLiveSweeps();
+            fillSweepAxisSelect();
         }
 
         /**
@@ -7771,17 +7900,45 @@
 
         $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
         $('btnDraw')?.addEventListener('click', () => setDrawMode(!drawMode));
-        $('btnSweep')?.addEventListener('click', () => {
-            syncSweepFields();
-            $('sweepModal').classList.add('show');
+        const sweepPanel = createFloatingPanel({
+            cardId: 'sweepModalCard', modalId: 'sweepModal',
+            handleId: 'sweepModalDrag', defaultWidth: 480
         });
+
+        function openSweepPanel() {
+            syncSweepFields();
+            fillSweepAxisSelect();
+            updateSweepStatus();
+            const modal = $('sweepModal');
+            const wasOpen = modal.classList.contains('show');
+            modal.classList.add('show');
+            if (!wasOpen) requestAnimationFrame(() => sweepPanel.park());
+        }
+
+        $('btnSweep')?.addEventListener('click', openSweepPanel);
         $('sweepProfile')?.addEventListener('change', syncSweepFields);
         $('sweepApply')?.addEventListener('click', applySweep);
         $('sweepClear')?.addEventListener('click', clearSweptSolids);
-        $('sweepCancel')?.addEventListener('click', () => $('sweepModal').classList.remove('show'));
-        $('sweepModal')?.addEventListener('click', (e) => {
-            if (e.target === $('sweepModal')) $('sweepModal').classList.remove('show');
+        $('sweepRebuild')?.addEventListener('click', () => {
+            const n = rebuildLiveSweeps();
+            notify(n ? `Пересобрано тел: ${n}.` : 'Нечего пересобирать: нет тел, связанных с осями.');
         });
+        $('sweepColor')?.addEventListener('input', () => {
+            const c = new THREE.Color($('sweepColor').value);
+            sweptSolids.forEach((s) => { s.mesh.material.color.copy(c); s.color = $('sweepColor').value; });
+            markNeedsRender();
+        });
+        $('sweepLive')?.addEventListener('change', () => {
+            const on = !!$('sweepLive').checked;
+            sweptSolids.forEach((s) => { s.live = on; });
+            updateSweepStatus();
+            if (on) rebuildLiveSweeps();
+        });
+        $('sweepCancel')?.addEventListener('click', () => {
+            $('sweepModal').classList.remove('show');
+            sweepPanel.reset();
+        });
+        // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
 
         $('btnSnap')?.addEventListener('click', () => {
             snapEnabled = !snapEnabled;
@@ -22694,12 +22851,11 @@ ${componentXml || '    '}
         });
         $('ctxPolylineSweep').addEventListener('click', () => {
             if (!stageContextPolyline) return;
-            // Тело строится по «выбранной» полилинии — sweepAxisPoints берёт ту,
-            // что раскрыта в панели, поэтому сначала выбираем эту.
-            polylineEditingId = stageContextPolyline.id;
-            renderPolylinesList();
-            syncSweepFields();
-            $('sweepModal').classList.add('show');
+            openSweepPanel();
+            // Ось выбирается прямо в списке — обходной путь через «раскрытую
+            // в панели полилинию» больше не нужен.
+            const sel = $('sweepAxisSelect');
+            if (sel) sel.value = `poly:${stageContextPolyline.id}`;
         });
         $('ctxPolylineDelete').addEventListener('click', () => {
             if (!stageContextPolyline) return;
@@ -24257,7 +24413,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: '1154b2f-preview',
+            buildId: '89f7611-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

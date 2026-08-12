@@ -839,6 +839,28 @@ async function checkDrawDxf(page) {
         problems.push('профиль не обновился после правки отметки вершины');
     }
 
+    // «Тело по оси»: строим по конкретной полилинии и проверяем, что при
+    // изменении этой оси тело перестраивается САМО (связь включена).
+    const sweepLive = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        D.buildSweepOnPolyline(id, 'rect', { width: 1, height: 1 });
+        const before = D.sweeps[D.sweeps.length - 1];
+        // Удлиняем первый отрезок оси — объём обязан вырасти
+        const seg = D.polylineSegment(id, 0);
+        D.editPolyline(id, 'length', 0, seg.length3d + 20);
+        const after = D.sweeps[D.sweeps.length - 1];
+        return { before, after };
+    }, three.id);
+    if (!sweepLive.before || sweepLive.before.polylineId !== three.id) {
+        problems.push('тело не привязалось к выбранной оси');
+    } else if (!(sweepLive.after.length > sweepLive.before.length + 1)) {
+        problems.push(
+            `тело не перестроилось за осью: длина ${sweepLive.before.length?.toFixed(2)} → ` +
+            `${sweepLive.after.length?.toFixed(2)}`
+        );
+    }
+    await page.evaluate(() => document.getElementById('sweepClear')?.click());
+
     // Картограмма. Точного ответа для сетки коробок нет, зато есть точный
     // ИНВАРИАНТ: поднимаем проектную отметку на Δ — баланс обязан вырасти
     // ровно на «измеренная площадь × Δ», потому что у каждой ячейки рабочая
