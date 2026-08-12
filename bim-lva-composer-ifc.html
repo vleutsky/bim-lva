@@ -3680,14 +3680,17 @@
             </div>
             <div class="bulk-note">
                 От каждой точки линии откос идёт по нормали в плане до пересечения
-                с рельефом: выше земли на бровке — насыпь, ниже — выемка. Линия
-                выхода откоса на землю добавляется отдельной полилинией (правится,
+                с рельефом или с уже построенными откосами и площадками: выше
+                земли на бровке — насыпь, ниже — выемка. Линия
+                выхода добавляется отдельной полилинией (правится,
                 уходит в DXF). У замкнутого контура середина заполняется как
-                площадка (заливка поверх рельефа, цвет задаётся отдельно),
-                у разомкнутой — торцы закрываются откосом вдоль оси. На вогнутых
+                площадка (заливка поверх рельефа, цвет задаётся отдельно);
+                внутрь своей площадки откос не идёт. У разомкнутой линии
+                торцы закрываются откосом вдоль оси. На вогнутых
                 углах соседние откосы могут
-                налезать друг на друга — это не вычищается. Где рельеф не найден
-                или откос не дотянулся за максимальный вылет — участок пропускается.
+                налезать друг на друга — это не вычищается. Где поверхность не
+                найдена или откос не дотянулся за максимальный вылет — участок
+                пропускается.
                 Готовый TIN уходит в Civil 3D как DXF (3DFACE) или LandXML (Surface).
             </div>
             <div class="prop small"><div class="k">Линия (бровка)</div><select class="editInput" id="slopeSelect"></select></div>
@@ -5116,7 +5119,10 @@
                         skippedNoGround: s.skippedNoGround,
                         skippedNotReached: s.skippedNotReached,
                         exitPolylineIds: s.exitPolylineIds.slice(),
-                        triangles: s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0
+                        triangles: s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0,
+                        exits: s.sections.map((sec) => sec.valid
+                            ? { d: sec.distance, mode: sec.mode, x: sec.exit.x, y: sec.exit.y, z: sec.exit.z }
+                            : { valid: false, reason: sec.reason })
                     })),
                     tin: model.tin ? {
                         points: model.tin.points.length,
@@ -7032,11 +7038,14 @@
         }
 
         /* ------------------------------------------------------------------
-         * Откосы до рельефа.
+         * Откосы до рельефа / до уже построенных площадок.
          *
          * От каждой вершины renderPts идём наружу по нормали в плане с шагом
          * (slopeStep), пока отметка откоса (постоянный проектный уклон 1:m от
-         * бровки) не сойдётся с рельефом (sampleTerrainZ). Выше земли на
+         * бровки) не сойдётся с целевой поверхностью: сначала уже построенные
+         * откосы и площадки (они заменяют исходный рельеф там, где есть),
+         * иначе sampleTerrainZ. Своя середина замкнутого контура — тоже
+         * поверхность: внутрь контура откос не идёт. Выше земли на
          * бровке — насыпь (вниз по 1:mFill), ниже — выемка (вверх по 1:mCut).
          * Профиль откоса ЛИНЕЕН по построению (постоянный уклон), поэтому саму
          * поверхность можно тянуть прямой от бровки до найденной точки выхода —
@@ -7101,8 +7110,61 @@
          * там, где земля найдена — как в картограмме: иначе объём соврал бы
          * там, где рельефа под откосом нет.
          */
-        function computeSlopeCrossSection(edge, normal, mFill, mCut, step, maxReach) {
+        /**
+         * Отметка в треугольниках площадки (план XY, Z — линейная интерполяция).
+         * Строго внутри: граница кольца не считается, иначе бровка на ребре
+         * площадки дала бы «уже на земле» и наружный откос не построился бы.
+         */
+        function sampleTrianglesZ(tris, x, y) {
+            if (!tris || !tris.length) return null;
+            for (let t = 0; t < tris.length; t++) {
+                const a = tris[t][0], b = tris[t][1], c = tris[t][2];
+                const den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+                if (Math.abs(den) < 1e-18) continue;
+                const u = ((b.y - c.y) * (x - c.x) + (c.x - b.x) * (y - c.y)) / den;
+                const v = ((c.y - a.y) * (x - c.x) + (a.x - c.x) * (y - c.y)) / den;
+                const w = 1 - u - v;
+                if (u > 1e-7 && v > 1e-7 && w > 1e-7) return u * a.z + v * b.z + w * c.z;
+            }
+            return null;
+        }
+
+        function collectSlopeDesignTargets() {
+            slopeGroup.updateMatrixWorld(true);
+            const targets = [];
+            slopeGroup.traverse((o) => {
+                if (o.isMesh && o.visible && o.userData?.isSlopeSurface) targets.push(o);
+            });
+            return targets;
+        }
+
+        /**
+         * Целевая отметка для откоса: своя площадка (строго внутри контура),
+         * иначе уже построенные откосы/площадки, иначе исходный рельеф.
+         * Проектная поверхность важнее рельефа даже когда она ниже (выемка):
+         * иначе соседний откос «не видел» бы заглублённую площадку.
+         */
+        function makeSlopeGroundSampler(ownPadTris) {
+            const design = collectSlopeDesignTargets();
+            const raycaster = new THREE.Raycaster();
+            const down = new THREE.Vector3(0, 0, -1);
+            const from = new THREE.Vector3();
+            return (x, y, fallback) => {
+                const ownZ = sampleTrianglesZ(ownPadTris, x, y);
+                if (ownZ != null) return ownZ;
+                if (design.length) {
+                    from.set(x, y, 1e7);
+                    raycaster.set(from, down);
+                    const hits = raycaster.intersectObjects(design, false);
+                    if (hits.length) return hits[0].point.z;
+                }
+                return sampleTerrainZ(x, y, fallback);
+            };
+        }
+
+        function computeSlopeCrossSection(edge, normal, mFill, mCut, step, maxReach, sampleZ) {
             const MISS = Number.NEGATIVE_INFINITY;
+            const sample = sampleZ || ((x, y, fb) => sampleTerrainZ(x, y, fb));
             let mode = null, m = null, area = 0;
             let prevD = 0, prevDiff = 0, havePrev = false;
             const diffAt = (d, groundZ) => {
@@ -7114,7 +7176,7 @@
                 const d = i === 0 ? 0 : Math.min(i * step, maxReach);
                 const x = edge.x + normal.x * d;
                 const y = edge.y + normal.y * d;
-                const g = sampleTerrainZ(x, y, MISS);
+                const g = sample(x, y, MISS);
                 if (g === MISS) {
                     havePrev = false;
                     if (d >= maxReach) break;
@@ -7143,7 +7205,7 @@
                     area += 0.5 * prevDiff * (dExit - prevD);
                     const ex = edge.x + normal.x * dExit;
                     const ey = edge.y + normal.y * dExit;
-                    const ez = sampleTerrainZ(ex, ey, g);
+                    const ez = sample(ex, ey, g);
                     return { valid: true, mode, exit: { x: ex, y: ey, z: ez }, distance: dExit, area };
                 }
                 if (havePrev) area += 0.5 * (prevDiff + diff) * (d - prevD);
@@ -7249,6 +7311,7 @@
             });
             const mesh = new THREE.Mesh(geom, mat);
             mesh.name = name;
+            mesh.userData.isSlopeSurface = true;
             slopeGroup.add(mesh);
             return mesh;
         }
@@ -7274,6 +7337,7 @@
             const mesh = new THREE.Mesh(geom, mat);
             mesh.name = 'Площадка';
             mesh.renderOrder = 6;
+            mesh.userData.isSlopeSurface = true;
             slopeGroup.add(mesh);
             return mesh;
         }
@@ -7346,7 +7410,7 @@
          * как в дыру палатки. Объём торца копится отдельно, чтобы не сдвигать
          * уже проверенные объёмы бортов.
          */
-        function buildSlopeEndCaps(record, sideResults, opts) {
+        function buildSlopeEndCaps(record, sideResults, opts, sampleZ) {
             const empty = { meshes: [], triangles: [], fill: 0, cut: 0, capExits: [null, null] };
             if (record.closed) return empty;
             const ring = record.renderPts;
@@ -7373,7 +7437,7 @@
                 if (len < 1e-9) return;
                 const normal = { x: end.dir.x / len, y: end.dir.y / len };
                 const C = ring[end.i];
-                const cap = computeSlopeCrossSection(C, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach);
+                const cap = computeSlopeCrossSection(C, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach, sampleZ);
                 const exits = [];
                 sideResults.forEach((s) => {
                     const sec = s.sections?.[end.i];
@@ -7405,16 +7469,25 @@
         }
 
         /** Один откос (одна сторона) по всей линии: поверхность + линия выхода + объёмы. */
-        function computeSlopeSide(record, side, opts) {
+        function computeSlopeSide(record, side, opts, sampleZ, ownPadTris) {
             const closed = !!record.closed;
             const ring = closed ? record.renderPts.slice(0, -1) : record.renderPts.slice();
             if (ring.length < 2) return null;
             const normals = slopeVertexNormals(ring, closed, side);
+            // 1 мм вдоль нормали: если сразу попадаем внутрь своего контура —
+            // это внутренняя сторона площадки, откос туда не идёт.
+            const look = 0.001;
             const sections = ring.map((p, i) => {
                 const normal = normals[i];
-                return normal
-                    ? computeSlopeCrossSection(p, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach)
-                    : { valid: false, reason: 'no-ground' };
+                if (!normal) return { valid: false, reason: 'no-ground' };
+                if (ownPadTris && sampleTrianglesZ(
+                    ownPadTris, p.x + normal.x * look, p.y + normal.y * look
+                ) != null) {
+                    return { valid: false, reason: 'own-pad' };
+                }
+                return computeSlopeCrossSection(
+                    p, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach, sampleZ
+                );
             });
 
             let fill = 0, cut = 0;
@@ -7507,12 +7580,15 @@
             // Повторное «Построить» по той же бровке заменяет старое, а не
             // копит вторую площадку и вторую линию выхода.
             removeSlopeModelsForPolyline(record.id);
+            const ownRing = record.closed ? record.renderPts.slice(0, -1) : null;
+            const ownPadTris = ownRing && ownRing.length >= 3 ? triangulateRingXY(ownRing) : null;
+            const sampleZ = makeSlopeGroundSampler(ownPadTris);
             const sides = opts.side === 'both' ? ['left', 'right'] : [opts.side === 'left' ? 'left' : 'right'];
-            const results = sides.map((side) => computeSlopeSide(record, side, opts)).filter(Boolean);
+            const results = sides.map((side) => computeSlopeSide(record, side, opts, sampleZ, ownPadTris)).filter(Boolean);
             if (!results.length) return null;
             const padColor = opts.padColor || '#d4a05a';
             const pad = buildSlopePadInterior(record, padColor);
-            const caps = buildSlopeEndCaps(record, results, opts);
+            const caps = buildSlopeEndCaps(record, results, opts, sampleZ);
             const contour = buildSlopeOuterContour(record, results, caps.capExits, opts);
             const model = {
                 id: ++slopeSeq,
@@ -27261,7 +27337,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.12: таблица полилиний компактная (одна строка на линию); откосы — таблица площадок; удаление линии больше не оставляет контур-сироту на сцене.',
+                '2026.08.12: откос выходит на уже построенные откосы и площадки, а не сквозь них на исходный рельеф; таблица полилиний компактная; удаление линии больше не оставляет контур-сироту.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',

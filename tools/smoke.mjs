@@ -1285,6 +1285,9 @@ async function checkSlopeToTerrain(page) {
 
     // Максимальный вылет меньше экзит-дистанции — сечения обязаны выпасть из
     // расчёта (пропущены), а не подставить какой-то объём.
+    // Насыпь с прошлого шага лежит на той же бровке: без очистки новый откос
+    // вышел бы на её поверхность, а не в «недолёт».
+    await page.evaluate(() => window.BimLvaDebug.clearSlopes());
     const short = await page.evaluate(([h, m, g]) => {
         const D = window.BimLvaDebug;
         const id = D.createPolylineFromPoints(
@@ -1311,6 +1314,7 @@ async function checkSlopeToTerrain(page) {
     // (2 треугольника), иначе в TIN дыра до исходного рельефа. LandXML —
     // northing easting elev, DXF — 3DFACE на слое LVA_SLOPE; оба в абсолютных
     // метрах, как ждёт Civil 3D.
+    await page.evaluate(() => window.BimLvaDebug.clearSlopes());
     const pad = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
         const z = g + 2;
@@ -1444,6 +1448,82 @@ async function checkSlopeToTerrain(page) {
         if (!(padsUi.count >= 1)) {
             problems.push(`площадки: счётчик ${padsUi.count}`);
         }
+    }
+
+    // Соседние откосы и площадки — целевая поверхность, а не «дырка до
+    // исходного рельефа». Считаем аналитически на ровной площадке.
+    const interact = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const m = 1.5;
+        // 1) Выход на чужую площадку: у A почти нет бортов (maxReach мал),
+        //    середина есть. Бровка C в 2 м от края, H=4 → без площадки экзит
+        //    6 м сквозь неё на рельеф; с площадкой — на её отметке, d=3 м.
+        const padA = D.createPolylineFromPoints(
+            [
+                { x: -24, y: 28, z: g + 2 }, { x: -16, y: 28, z: g + 2 },
+                { x: -16, y: 36, z: g + 2 }, { x: -24, y: 36, z: g + 2 }
+            ],
+            { name: 'Откос-тест-цель-площадка', closed: true }
+        );
+        D.buildSlopeOnPolyline(padA, { side: 'right', mFill: m, mCut: 1, step: 0.5, maxReach: 0.25 });
+        const lineC = D.createPolylineFromPoints(
+            [{ x: -14, y: 30, z: g + 4 }, { x: -14, y: 34, z: g + 4 }],
+            { name: 'Откос-тест-на-площадку' }
+        );
+        const toPad = D.buildSlopeOnPolyline(lineC, { side: 'left', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const padHits = (toPad?.sides?.[0]?.exits || []).filter((e) => e.d != null);
+
+        // 2) Выход на чужой откос: две параллельные бровки, зазор 4 м, обе
+        //    на g+3, 1:1.5. Без учёта соседа экзит 4.5 м на рельеф; с учётом —
+        //    встреча посередине, d=2 м, z = g+3 − 2/1.5. Прямые, не квадрат:
+        //    у квадрата нормаль в углу — биссектриса, и аналитика разъезжается.
+        const a2 = D.createPolylineFromPoints(
+            [{ x: 8, y: -36, z: g + 3 }, { x: 8, y: -28, z: g + 3 }],
+            { name: 'Откос-тест-сосед-A' }
+        );
+        D.buildSlopeOnPolyline(a2, { side: 'right', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const b2 = D.createPolylineFromPoints(
+            [{ x: 12, y: -36, z: g + 3 }, { x: 12, y: -28, z: g + 3 }],
+            { name: 'Откос-тест-сосед-B' }
+        );
+        const toSlope = D.buildSlopeOnPolyline(b2, { side: 'left', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const west = (toSlope?.sides?.[0]?.exits || []).filter((e) => e.d != null);
+
+        // 3) Своя площадка: «в обе стороны» на замкнутом контуре — внутрь
+        //    откос не идёт (own-pad), наружу — как раньше, d = H·m.
+        const self = D.createPolylineFromPoints(
+            [
+                { x: -8, y: -36, z: g + 2 }, { x: -4, y: -36, z: g + 2 },
+                { x: -4, y: -32, z: g + 2 }, { x: -8, y: -32, z: g + 2 }
+            ],
+            { name: 'Откос-тест-своя-площадка', closed: true }
+        );
+        const both = D.buildSlopeOnPolyline(self, { side: 'both', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const left = both?.sides?.find((s) => s.side === 'left');
+        const right = both?.sides?.find((s) => s.side === 'right');
+        return {
+            padHits: padHits.map((e) => ({ d: e.d, x: e.x, z: e.z })),
+            west: west.map((e) => ({ d: e.d, x: e.x, z: e.z })),
+            inward: (left?.exits || []).map((e) => e.reason || e.mode),
+            outwardD: (right?.exits || []).filter((e) => e.d != null).map((e) => e.d)
+        };
+    }, groundZ);
+    const padHitOk = interact.padHits.length >= 2 &&
+        interact.padHits.every((e) => Math.abs(e.d - 3) < 0.08 && Math.abs(e.x - (-17)) < 0.08 && Math.abs(e.z - (groundZ + 2)) < 0.08);
+    if (!padHitOk) {
+        problems.push(`откосы: выход на чужую площадку ${JSON.stringify(interact.padHits)} — ждали d≈3, x≈-17, z≈g+2`);
+    }
+    const wantZ = groundZ + 3 - 2 / 1.5;
+    const slopeHitOk = interact.west.length >= 2 &&
+        interact.west.every((e) => Math.abs(e.d - 2) < 0.08 && Math.abs(e.x - 10) < 0.08 && Math.abs(e.z - wantZ) < 0.08);
+    if (!slopeHitOk) {
+        problems.push(`откосы: выход на чужой откос ${JSON.stringify(interact.west)} — ждали d≈2, x≈10, z≈g+1.667`);
+    }
+    if (!interact.inward.length || interact.inward.some((r) => r !== 'own-pad')) {
+        problems.push(`откосы: внутрь своей площадки откос не должен идти (${JSON.stringify(interact.inward)})`);
+    }
+    if (!interact.outwardD.length || interact.outwardD.some((d) => Math.abs(d - 3) > 0.08)) {
+        problems.push(`откосы: наружу от своей площадки d ${JSON.stringify(interact.outwardD)} вместо ≈3`);
     }
 
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
