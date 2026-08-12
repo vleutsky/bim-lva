@@ -46,18 +46,22 @@
     /** Machine ID из Get-LvaMachineId.ps1: SHA-256 hex, 64 знака. */
     const isMachineId = (v) => /^[0-9a-fA-F]{64}$/.test(String(v || '').trim());
 
-    function client() {
+    /** getSupabaseClient() в auth.js асинхронная (может догружать SDK с CDN) —
+     * client() тоже обязан быть async, иначе вызывающий получит Promise вместо
+     * клиента и упадёт на первом же .auth/.from/.functions с невнятной ошибкой. */
+    async function client() {
         const auth = global.BimLvaAuth;
         if (!auth || auth.mode?.() !== 'supabase') {
             throw new Error('Лицензии работают только при входе через аккаунт BIM.LVA.');
         }
-        const sb = auth.getSupabaseClient();
+        const sb = await auth.getSupabaseClient();
         if (!sb) throw new Error('Нет связи с сервером аккаунтов.');
         return sb;
     }
 
     async function currentUser() {
-        const { data } = await client().auth.getUser();
+        const sb = await client();
+        const { data } = await sb.auth.getUser();
         if (!data?.user) throw new Error('Сначала войдите в аккаунт.');
         return data.user;
     }
@@ -65,7 +69,8 @@
     /** Свои заявки — новые сверху. */
     async function listMyRequests() {
         const user = await currentUser();
-        const { data, error } = await client()
+        const sb = await client();
+        const { data, error } = await sb
             .from('license_requests')
             .select('id, product, org, status, comment, decision_note, machine_id, created_at, decided_at')
             .eq('user_id', user.id)
@@ -77,7 +82,8 @@
     /** Свои лицензии. */
     async function listMyLicenses() {
         const user = await currentUser();
-        const { data, error } = await client()
+        const sb = await client();
+        const { data, error } = await sb
             .from('licenses')
             .select('id, product, org, license_key, machine_id, issued_at, expires_at, revoked_at, revoke_reason')
             .eq('user_id', user.id)
@@ -98,7 +104,8 @@
             throw new Error('Код компьютера — это 64 знака из цифр и букв A–F. Похоже, скопировалось не полностью.');
         }
         const user = await currentUser();
-        const { error } = await client().from('license_requests').insert({
+        const sb = await client();
+        const { error } = await sb.from('license_requests').insert({
             user_id: user.id,
             email: user.email,
             product,
@@ -120,7 +127,8 @@
     async function isAdmin() {
         try {
             const user = await currentUser();
-            const { data } = await client()
+            const sb = await client();
+            const { data } = await sb
                 .from('license_admins')
                 .select('user_id')
                 .eq('user_id', user.id)
@@ -133,7 +141,8 @@
 
     /** Все заявки — вернёт что-то только админу, так настроен RLS. */
     async function listAllRequests(status) {
-        let q = client()
+        const sb = await client();
+        let q = sb
             .from('license_requests')
             .select('id, user_id, email, product, org, full_name, comment, machine_id, status, decision_note, created_at, decided_at')
             .order('created_at', { ascending: false })
@@ -145,7 +154,8 @@
     }
 
     async function listAllLicenses() {
-        const { data, error } = await client()
+        const sb = await client();
+        const { data, error } = await sb
             .from('licenses')
             .select('id, email, org, product, machine_id, issued_at, expires_at, revoked_at')
             .order('issued_at', { ascending: false })
@@ -156,7 +166,8 @@
 
     /** Вызов Edge Function. Ключ подписи здесь недоступен — и в этом смысл. */
     async function callIssueFunction(payload) {
-        const { data, error } = await client().functions.invoke('license-issue', { body: payload });
+        const sb = await client();
+        const { data, error } = await sb.functions.invoke('license-issue', { body: payload });
         if (error) {
             // Тело ответа полезнее, чем «non-2xx status code».
             let detail = '';
