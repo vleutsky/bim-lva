@@ -5017,6 +5017,28 @@
                 const rec = addPolylineFromPoints(points, opts || {});
                 return rec ? rec.id : null;
             },
+            /** Удалить полилинию тем же путём, что кнопка ✕ в списке. */
+            deletePolyline(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                deleteDrawnPolyline(rec);
+                return true;
+            },
+            /**
+             * Объекты в группе чертежа, которых нет в drawnPolylines —
+             * «призрак» после удаления: в списке пусто, на сцене линия есть.
+             */
+            get drawOrphans() {
+                const keep = new Set();
+                if (typeof drawDraft !== 'undefined' && drawDraft) keep.add(drawDraft);
+                (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).forEach((r) => {
+                    if (r.object) keep.add(r.object);
+                    if (r.filletGuideGroup) keep.add(r.filletGuideGroup);
+                });
+                return (typeof drawGroup !== 'undefined' ? drawGroup.children : [])
+                    .filter((ch) => !keep.has(ch))
+                    .map((ch) => ch.type || ch.name || '?');
+            },
             /** Откосы до рельефа по выбранной линии — тот же путь, что кнопка «△ Откосы». */
             buildSlopeOnPolyline(id, opts) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -7423,6 +7445,9 @@
         function buildSlopeToTerrain(record, opts) {
             if (!record.renderPts || record.renderPts.length < 2) return null;
             if (!allMeshes.length) return null;
+            // Повторное «Построить» по той же бровке заменяет старое, а не
+            // копит вторую площадку и вторую линию выхода.
+            removeSlopeModelsForPolyline(record.id);
             const sides = opts.side === 'both' ? ['left', 'right'] : [opts.side === 'left' ? 'left' : 'right'];
             const results = sides.map((side) => computeSlopeSide(record, side, opts)).filter(Boolean);
             if (!results.length) return null;
@@ -8366,6 +8391,35 @@
             drawGroup.remove(record.object);
             record.object.geometry.dispose();
             disposeLineMaterial(record.object.material);
+            record.object = null;
+        }
+
+        /**
+         * Линия могла выпасть из drawnPolylines (устаревший splice после
+         * dropPoly линии выхода), а объект остаться в drawGroup — тогда в
+         * списке пусто, а контур на сцене висит. Сверяем детей группы с
+         * записями и выкидываем сирот.
+         */
+        function purgeOrphanDrawObjects() {
+            const keep = new Set();
+            if (drawDraft) keep.add(drawDraft);
+            drawnPolylines.forEach((r) => {
+                if (r.object) keep.add(r.object);
+                if (r.filletGuideGroup) keep.add(r.filletGuideGroup);
+            });
+            drawGroup.children.slice().forEach((ch) => {
+                if (keep.has(ch)) return;
+                const dump = (obj) => {
+                    obj.children?.slice().forEach(dump);
+                    obj.parent?.remove(obj);
+                    obj.geometry?.dispose?.();
+                    if (obj.material) {
+                        if (lineMaterials.has(obj.material)) disposeLineMaterial(obj.material);
+                        else obj.material.dispose?.();
+                    }
+                };
+                dump(ch);
+            });
         }
 
         function setPolylineStyle(record, { color, width } = {}) {
@@ -8442,9 +8496,11 @@
         }
 
         function clearDrawnPolylines() {
-            clearSlopeModels();
-            drawnPolylines.forEach(disposePolylineObject);
+            const leftover = drawnPolylines.slice();
             drawnPolylines = [];
+            leftover.forEach(disposePolylineObject);
+            clearSlopeModels();
+            purgeOrphanDrawObjects();
             drawPoints = [];
             polylineEditingId = null;
             clearPolylineHandles();
@@ -8454,12 +8510,19 @@
         }
 
         function deleteDrawnPolyline(record) {
-            const i = drawnPolylines.indexOf(record);
-            if (i < 0) return;
-            removeSlopeModelsForPolyline(record.id);
-            disposePolylineObject(record);
-            drawnPolylines.splice(i, 1);
-            if (polylineEditingId === record.id) polylineEditingId = null;
+            if (!record) return;
+            const id = record.id;
+            // Сначала откосы: dropPoly вынимает линию выхода из массива.
+            // Индекс, снятый ДО этого, указывал бы уже на соседа — его бы
+            // вычеркнули из списка, не убрав с сцены.
+            removeSlopeModelsForPolyline(id);
+            const i = drawnPolylines.findIndex((r) => r.id === id);
+            if (i >= 0) {
+                disposePolylineObject(drawnPolylines[i]);
+                drawnPolylines.splice(i, 1);
+            }
+            if (polylineEditingId === id) polylineEditingId = null;
+            purgeOrphanDrawObjects();
             updateDrawUi();
             markNeedsRender();
         }
@@ -27129,7 +27192,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.12: откосы — таблица площадок, заливка поверх рельефа (свой цвет), линия выхода замкнута, TIN в DXF/LandXML.',
+                '2026.08.12: откосы — таблица площадок; удаление линии больше не оставляет контур-сироту на сцене.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',

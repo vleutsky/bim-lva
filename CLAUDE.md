@@ -56,7 +56,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v125`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v126`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `FEATURES.md` — трекер фич вьювера (пункты 1–53 закрыты).
 - `LICENSE` — права на код: смотреть можно, копировать и использовать
@@ -685,6 +685,15 @@ null` обычный пользователь не видит, а админ в�
   откосом вдоль оси. Выгрузка: DXF слой `LVA_SLOPE` (3DFACE) и LandXML 1.2
   Surface (`Pnts`/`Faces`, northing=Y easting=X — как читает сам вьювер и
   Civil 3D Import LandXML). API: `slopeTin`, `slopeLandXml`.
+
+- **Удаление полилинии не по старому индексу.** `deleteDrawnPolyline` сначала
+  зовёт `removeSlopeModelsForPolyline`, а та через `dropPoly` уже вынимает
+  линию выхода из `drawnPolylines`. Индекс, снятый до этого, указывает на
+  соседа: его вычёркивают из списка, объект в `drawGroup` остаётся — в
+  таблице «полилиний нет», а контур на площадке виден. После dropPoly искать
+  запись заново по id; в конце сверять детей `drawGroup` с записями
+  (`purgeOrphanDrawObjects`). Повторное «Построить» по той же бровке
+  заменяет старое построение, а не копит вторую площадку.
 
 ---
 

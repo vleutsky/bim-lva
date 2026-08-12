@@ -1031,8 +1031,14 @@ async function checkDrawDxf(page) {
     const renamed = await page.evaluate(() => window.BimLvaDebug.drawn.some((d) => d.name === 'Ось-тест'));
     if (!renamed) problems.push('переименование полилинии в списке не сработало');
     await page.evaluate(() => document.getElementById('polylinesClear')?.click());
-    const afterClear = await page.evaluate(() => window.BimLvaDebug.drawn.length);
-    if (afterClear !== 0) problems.push(`«Удалить все» оставило ${afterClear} полилиний`);
+    const afterClear = await page.evaluate(() => ({
+        n: window.BimLvaDebug.drawn.length,
+        orphans: window.BimLvaDebug.drawOrphans
+    }));
+    if (afterClear.n !== 0) problems.push(`«Удалить все» оставило ${afterClear.n} полилиний`);
+    if (afterClear.orphans?.length) {
+        problems.push(`«Удалить все» оставило в сцене сирот: ${afterClear.orphans.join(', ')}`);
+    }
     await page.evaluate(() => document.getElementById('polylinesClose')?.click());
 
     // Ввод точки числами. Оси сцены: X — восток, Y — север, азимут в геодезии
@@ -1235,6 +1241,45 @@ async function checkSlopeToTerrain(page) {
         }, cut.res.contourPolylineId);
         if (!contour?.closed || contour.points < 4) {
             problems.push(`откосы: контур выхода «в обе стороны» не замкнут (${JSON.stringify(contour)})`);
+        }
+    }
+
+    // Удаление линии выхода не должно вычёркивать из списка СОСЕДНЮЮ полилинию,
+    // оставляя её объект в сцене: в таблице пусто, а контур на площадке виден.
+    const ghost = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const keepId = D.createPolylineFromPoints(
+            [{ x: -30, y: 12, z: g + 1 }, { x: -26, y: 12, z: g + 1 }],
+            { name: 'Не-трогать' }
+        );
+        const srcId = D.createPolylineFromPoints(
+            [{ x: 10, y: 12, z: g + 2 }, { x: 14.4, y: 12, z: g + 2 }],
+            { name: 'Бровка-выход' }
+        );
+        const res = D.buildSlopeOnPolyline(srcId, { side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const exitId = res?.sides?.[0]?.exitPolylineIds?.[0];
+        const deleted = D.deletePolyline(exitId);
+        const after = D.drawn;
+        return {
+            deleted, exitId, keepId, srcId,
+            keepAlive: after.some((d) => d.id === keepId),
+            srcAlive: after.some((d) => d.id === srcId),
+            exitGone: !after.some((d) => d.id === exitId),
+            orphans: D.drawOrphans.slice()
+        };
+    }, groundZ);
+    if (!ghost.deleted || ghost.exitId == null) {
+        problems.push(`откосы: не удалось удалить линию выхода (${JSON.stringify(ghost)})`);
+    } else {
+        if (!ghost.keepAlive) {
+            problems.push('откосы: удаление линии выхода вычеркнуло соседнюю полилинию из списка, оставив её на сцене');
+        }
+        if (!ghost.srcAlive) {
+            problems.push('откосы: удаление линии выхода сняло и бровку');
+        }
+        if (!ghost.exitGone) problems.push('откосы: линия выхода осталась в списке после удаления');
+        if (ghost.orphans.length) {
+            problems.push(`откосы: после удаления выхода в сцене сироты ${JSON.stringify(ghost.orphans)}`);
         }
     }
 
