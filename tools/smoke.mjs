@@ -505,6 +505,31 @@ async function checkDrawDxf(page) {
         problems.push(`клик по линии в сцене не попадает в ${linePick.filter((v) => !v).length} вершинах из ${linePick.length}`);
     }
 
+    // Ручки вершин и перетаскивание. Сначала выбираем линию так же, как это
+    // делает пользователь — кликом по ней в сцене (ручки показываются только у
+    // раскрытой полилинии).
+    const spSelect = await page.evaluate((id) => window.BimLvaDebug.polylineScreenPts(id), three.id);
+    await page.mouse.click(spSelect[1].clientX, spSelect[1].clientY);
+    await page.waitForTimeout(250);
+    const handles = await page.evaluate(() => window.BimLvaDebug.polylineHandleCount);
+    if (handles !== three.abs.length) {
+        problems.push(`ручек вершин ${handles} вместо ${three.abs.length}`);
+    } else {
+        const before = await page.evaluate((id) => window.BimLvaDebug.drawn.find((d) => d.id === id).vertsAbs[0], three.id);
+        const sp = await page.evaluate((id) => window.BimLvaDebug.polylineScreenPts(id), three.id);
+        // Тянем первую вершину заметно в сторону и ждём, что план изменился
+        await page.mouse.move(sp[0].clientX, sp[0].clientY);
+        await page.mouse.down();
+        await page.mouse.move(sp[0].clientX + 60, sp[0].clientY + 30, { steps: 6 });
+        await page.mouse.up();
+        await page.waitForTimeout(200);
+        const after = await page.evaluate((id) => window.BimLvaDebug.drawn.find((d) => d.id === id).vertsAbs[0], three.id);
+        const moved = Math.hypot(after.x - before.x, after.y - before.y);
+        if (moved < 0.5) {
+            problems.push(`перетаскивание вершины не сдвинуло её (${moved.toFixed(3)} м)`);
+        }
+    }
+
     // Выбор угла «под курсором»: просим угол рядом с вершиной #3 (индекс 2) и
     // ждём именно его, а не первый попавшийся внутренний.
     const cornerPick = await page.evaluate((id) => {
@@ -571,6 +596,36 @@ async function checkDrawDxf(page) {
     if (Math.abs(editProbe.segSlope - 40) > 0.05) {
         problems.push(`уклон отрезка не применился: ${editProbe.segSlope?.toFixed(2)} вместо 40`);
     }
+
+    // Замыкание контура: площадь считаем сами по вершинам (формула шнурков) и
+    // сверяем с тем, что показывает вьювер. Радиусы предварительно снимаем —
+    // иначе дуги срежут углы и площадь честно станет меньше.
+    const closeProbe = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        const rec = D.drawn.find((d) => d.id === id);
+        for (let i = 0; i < rec.points; i++) D.setPolylineRadius(id, i, 0);
+        D.setPolylineClosed(id, true);
+        const after = D.drawn.find((d) => d.id === id);
+        const p = after.vertsAbs;
+        let s = 0;
+        for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+            s += (p[j].x + p[i].x) * (p[j].y - p[i].y);
+        }
+        return { closed: after.closed, area: after.area, want: Math.abs(s) / 2 };
+    }, three.id);
+    if (!closeProbe.closed) {
+        problems.push('контур не замкнулся');
+    } else if (Math.abs(closeProbe.area - closeProbe.want) > 0.01) {
+        problems.push(`площадь контура ${closeProbe.area?.toFixed(2)} вместо ${closeProbe.want.toFixed(2)} м²`);
+    }
+    // В DXF замкнутый контур — флагом, а не повторной вершиной
+    const dxfClosed = await page.evaluate(() => window.BimLvaDebug.dxfPreview());
+    const closedVerts = (dxfClosed.match(/\r\nVERTEX\r\n/g) || []).length;
+    const openVerts = (dxf.match(/\r\nVERTEX\r\n/g) || []).length;
+    if (closedVerts !== openVerts) {
+        problems.push(`замыкание изменило число вершин в DXF: ${openVerts} → ${closedVerts}`);
+    }
+    await page.evaluate((id) => window.BimLvaDebug.setPolylineClosed(id, false), three.id);
 
     // Список полилиний: модалка открывается, переименование и общее удаление работают.
     await page.evaluate(() => document.getElementById('btnPolylineList')?.click());

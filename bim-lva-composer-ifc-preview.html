@@ -1143,6 +1143,34 @@
         }
         .coord-pin-dot:active { cursor: grabbing; }
 
+        /* Ручки вершин выбранной полилинии — тот же приём, что у меток: HTML
+           поверх канваса, чтобы их было видно сквозь геометрию и можно было
+           схватить мышью. */
+        #polyline-handles {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 17;
+            overflow: hidden;
+        }
+        .poly-handle {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 11px;
+            height: 11px;
+            margin: -5.5px 0 0 -5.5px;
+            background: #fff;
+            border: 2px solid #1f8f5f;
+            box-shadow: 0 1px 4px rgba(10, 20, 32, .45);
+            pointer-events: auto;
+            cursor: grab;
+            touch-action: none;
+        }
+        .poly-handle:hover { background: #d8f3e6; }
+        .poly-handle:active { cursor: grabbing; }
+        .poly-handle.is-end { border-radius: 50%; }
+
         .pin-row {
             display: grid;
             grid-template-columns: 40px 1fr auto auto auto;
@@ -1158,7 +1186,7 @@
         .pin-row .btn { padding: 2px 8px; }
         .polyline-row {
             display: grid;
-            grid-template-columns: 120px 1fr auto auto auto auto auto;
+            grid-template-columns: 120px 1fr auto auto auto auto auto auto;
             align-items: center;
             gap: 6px;
             padding: 5px 4px;
@@ -2413,7 +2441,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · ed01f12</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · aeb3701</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2615,7 +2643,7 @@
         </div>
         <div id="labels-container"></div>
         <svg id="coord-pin-leaders"></svg>
-        <div id="coord-pins-container"></div> <div id="boxSelectRect"></div>
+        <div id="coord-pins-container"></div> <div id="polyline-handles"></div> <div id="boxSelectRect"></div>
         <div id="tourHud" class="tour-hud" hidden>
             <span id="tourHudText">Проезд…</span>
             <select id="tourHudCamView" class="editInput" title="Вид камеры" style="max-width:160px;padding:4px 8px;font-size:12px">
@@ -3212,8 +3240,9 @@
                 Имя, цвет и толщина правятся прямо в строке. «✎» раскрывает
                 вершины: <b>H</b> — абсолютная отметка, <b>L</b> — длина отрезка
                 до следующей вершины, <b>i‰</b> — его уклон, <b>R</b> — радиус
-                сопряжения в углу. X и Y правятся перетаскиванием точки в сцене.
-                По линии в сцене можно кликнуть — она подсветится здесь.
+                сопряжения в углу. X и Y — перетаскиванием ручек вершин в сцене
+                (появляются у раскрытой полилинии). По линии можно кликнуть в
+                сцене — она раскроется здесь.
             </div>
             <div id="polylinesList" style="max-height:200px;overflow:auto;margin-top:8px"></div>
             <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
@@ -4321,7 +4350,8 @@
                             return { x: a.x, y: a.y, z: a.z };
                         }),
                         length3d: r.length3d, length2d: r.length2d,
-                        points: r.pts.length, radii: r.radii.slice()
+                        points: r.pts.length, radii: r.radii.slice(),
+                        closed: !!r.closed, area: polylinePlanArea(r)
                     }));
             },
             /** Задать радиус сопряжения в вершине полилинии (для проверки фаски). */
@@ -4330,6 +4360,10 @@
                 if (!rec) return false;
                 setPolylineVertexRadius(rec, idx, radius);
                 return true;
+            },
+            /** Сколько ручек вершин сейчас на экране (у раскрытой полилинии). */
+            get polylineHandleCount() {
+                return typeof polylineHandles === 'undefined' ? 0 : polylineHandles.length;
             },
             /** Вершины полилинии в пикселях холста — то же, чем меряет пикинг. */
             polylineScreenPts(id) {
@@ -4358,6 +4392,11 @@
             nearestPolylineCorner(id, x, y, z) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 return rec ? nearestInteriorVertex(rec, new THREE.Vector3(x, y, z)) : -1;
+            },
+            /** Замкнуть/разомкнуть контур. */
+            setPolylineClosed(id, closed) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? setPolylineClosed(rec, closed) : false;
             },
             /** Правка геометрии числами: 'elev' | 'length' | 'slope'. */
             editPolyline(id, what, idx, value) {
@@ -6348,27 +6387,55 @@
             return { points: pts, radius: rEff, clamped: t < tWant - 1e-9 };
         }
 
-        /** Полилиния с фасками: прямые вершины как есть, вершины с радиусом — дугой. */
-        function buildFilletedPoints(pts, radii, segments = 20) {
-            const out = [pts[0].clone()];
+        /**
+         * Полилиния с фасками: прямые вершины как есть, вершины с радиусом — дугой.
+         * У замкнутого контура углами становятся ВСЕ вершины, включая первую и
+         * последнюю: соседями для них служат концы замыкающего отрезка.
+         */
+        function buildFilletedPoints(pts, radii, segments = 20, closed = false) {
+            const n = pts.length;
+            const prevOf = (i) => pts[(i - 1 + n) % n];
+            const nextOf = (i) => pts[(i + 1) % n];
             let clamped = false;
-            for (let i = 1; i < pts.length - 1; i++) {
+            const corner = (i) => {
                 const r = radii[i] || 0;
-                const arc = r > 0 ? computeFilletArc(pts[i - 1], pts[i], pts[i + 1], r, segments) : null;
-                if (arc) {
-                    if (arc.clamped) clamped = true;
-                    out.push(...arc.points);
-                } else {
-                    out.push(pts[i].clone());
-                }
+                const arc = r > 0 ? computeFilletArc(prevOf(i), pts[i], nextOf(i), r, segments) : null;
+                if (!arc) return [pts[i].clone()];
+                if (arc.clamped) clamped = true;
+                return arc.points;
+            };
+
+            const out = [];
+            if (closed) {
+                for (let i = 0; i < n; i++) out.push(...corner(i));
+                out.push(out[0].clone());          // замыкающий отрезок
+            } else {
+                out.push(pts[0].clone());
+                for (let i = 1; i < n - 1; i++) out.push(...corner(i));
+                out.push(pts[n - 1].clone());
             }
-            out.push(pts[pts.length - 1].clone());
             return { points: out, clamped };
+        }
+
+        /**
+         * Площадь замкнутого контура в плане (проекция на XY), формула шнурков.
+         * Считается по renderPts, поэтому дуги сопряжения учитываются.
+         */
+        function polylinePlanArea(record) {
+            if (!record.closed) return null;
+            const p = record.renderPts;
+            let s = 0;
+            for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+                s += (p[j].x + p[i].x) * (p[j].y - p[i].y);
+            }
+            return Math.abs(s) / 2;
         }
 
         /** Перестроить геометрию/длины/абсолютные координаты после правки точек или радиусов. */
         function rebuildPolylineGeometry(record, { notifyClamp = false } = {}) {
-            const { points, clamped } = buildFilletedPoints(record.pts, record.radii);
+            const { points, clamped } = buildFilletedPoints(
+                record.pts, record.radii, 20, !!record.closed
+            );
             record.renderPts = points;
             const geom = new LineGeometry();
             geom.setPositions(points.flatMap((p) => [p.x, p.y, p.z]));
@@ -6425,6 +6492,7 @@
                 object: line,
                 color: DRAW_COLOR,
                 width: DRAW_WIDTH,
+                closed: false,
                 length3d: 0,
                 length2d: 0
             };
@@ -6452,6 +6520,7 @@
             drawnPolylines = [];
             drawPoints = [];
             polylineEditingId = null;
+            clearPolylineHandles();
             refreshDrawDraft();
             updateDrawUi();
         }
@@ -6473,19 +6542,60 @@
             renderPolylinesList();
         }
 
-        /** Убрать вершину: минимум 2 точки должны остаться. */
+        /** Замкнуть/разомкнуть контур. Замкнуть можно от трёх вершин. */
+        function setPolylineClosed(record, closed) {
+            const want = !!closed;
+            if (want && record.pts.length < 3) {
+                notifyError(`«${record.name}»: чтобы замкнуть контур, нужно минимум 3 вершины.`);
+                return false;
+            }
+            record.closed = want;
+            // У разомкнутой полилинии у концов углов нет — снимаем с них радиусы,
+            // иначе после размыкания остался бы «висячий» радиус, который не
+            // применяется, но показывается в таблице.
+            if (!want && record.radii.length) {
+                record.radii[0] = 0;
+                record.radii[record.radii.length - 1] = 0;
+            }
+            rebuildPolylineGeometry(record, { notifyClamp: true });
+            renderPolylinesList();
+            const area = polylinePlanArea(record);
+            notify(want
+                ? `«${record.name}»: контур замкнут, площадь в плане ${area.toFixed(2)} м².`
+                : `«${record.name}»: контур разомкнут.`);
+            trackUsage('polyline_closed', { on: want });
+            return true;
+        }
+
+        /** Убрать вершину: у разомкнутой должно остаться 2, у замкнутой — 3. */
         function removePolylineVertex(record, idx) {
-            if (record.pts.length <= 2 || idx < 0 || idx >= record.pts.length) return;
+            const min = record.closed ? 3 : 2;
+            if (record.pts.length <= min || idx < 0 || idx >= record.pts.length) {
+                if (record.pts.length <= min) {
+                    notifyError(`«${record.name}»: меньше ${min} вершин оставить нельзя.`);
+                }
+                return;
+            }
             record.pts.splice(idx, 1);
             record.radii.splice(idx, 1);
-            if (record.radii.length) { record.radii[0] = 0; record.radii[record.radii.length - 1] = 0; }
+            if (!record.closed && record.radii.length) {
+                record.radii[0] = 0;
+                record.radii[record.radii.length - 1] = 0;
+            }
             rebuildPolylineGeometry(record);
             renderPolylinePointsEditor(record);
             renderPolylinesList();
         }
 
+        /** Есть ли у вершины угол: у разомкнутой полилинии концы углами не являются. */
+        function polylineVertexIsCorner(record, idx) {
+            if (idx < 0 || idx >= record.pts.length) return false;
+            if (record.closed) return record.pts.length >= 3;
+            return idx > 0 && idx < record.pts.length - 1;
+        }
+
         function setPolylineVertexRadius(record, idx, value) {
-            if (idx <= 0 || idx >= record.pts.length - 1) return; // первая/последняя точка без сопряжения
+            if (!polylineVertexIsCorner(record, idx)) return;
             const r = Math.max(0, Number(value) || 0);
             record.radii[idx] = r;
             rebuildPolylineGeometry(record, { notifyClamp: true });
@@ -6521,12 +6631,13 @@
          */
         function setPolylineSegmentLength(record, idx, value) {
             const len = Number(value);
-            if (!Number.isFinite(len) || len <= 0 || idx < 0 || idx >= record.pts.length - 1) return;
+            const j = polylineNextIndex(record, idx);
+            if (!Number.isFinite(len) || len <= 0 || idx < 0 || j < 0) return;
             const a = record.pts[idx];
-            const b = record.pts[idx + 1];
+            const b = record.pts[j];
             const dir = b.clone().sub(a);
             if (dir.lengthSq() < 1e-12) return;
-            record.pts[idx + 1] = a.clone().addScaledVector(dir.normalize(), len);
+            record.pts[j] = a.clone().addScaledVector(dir.normalize(), len);
             rebuildPolylineGeometry(record);
             renderPolylinePointsEditor(record);
             renderPolylinesList();
@@ -6538,9 +6649,10 @@
          */
         function setPolylineSegmentSlope(record, idx, permille) {
             const i = Number(permille);
-            if (!Number.isFinite(i) || idx < 0 || idx >= record.pts.length - 1) return;
+            const j = polylineNextIndex(record, idx);
+            if (!Number.isFinite(i) || idx < 0 || j < 0) return;
             const a = record.pts[idx];
-            const b = record.pts[idx + 1];
+            const b = record.pts[j];
             const run = Math.hypot(b.x - a.x, b.y - a.y);
             if (run < 1e-6) {
                 notifyError('Отрезок вертикальный — уклон для него не определён.');
@@ -6552,10 +6664,18 @@
             renderPolylinesList();
         }
 
-        /** Длина и уклон отрезка idx→idx+1 (для таблицы). */
+        /** Следующая вершина: у замкнутого контура за последней идёт первая. */
+        function polylineNextIndex(record, idx) {
+            if (idx < record.pts.length - 1) return idx + 1;
+            return record.closed ? 0 : -1;
+        }
+
+        /** Длина и уклон отрезка idx→следующая (для таблицы). */
         function polylineSegmentStats(record, idx) {
+            const j = polylineNextIndex(record, idx);
+            if (j < 0) return null;
             const a = record.pts[idx];
-            const b = record.pts[idx + 1];
+            const b = record.pts[j];
             if (!a || !b) return null;
             const run = Math.hypot(b.x - a.x, b.y - a.y);
             return {
@@ -6588,6 +6708,96 @@
             markNeedsRender();
         }
 
+        /* --- Ручки вершин ------------------------------------------------------
+         * Показываются только у раскрытой в панели полилинии. Живут в HTML-слое
+         * поверх канваса (как метки координат): так их видно сквозь геометрию и
+         * можно схватить мышью. Позиции пересчитываются каждый кадр в
+         * updatePolylineHandles(), которую зовёт тот же цикл, что двигает подписи.
+         */
+        const polylineHandlesLayer = document.getElementById('polyline-handles');
+        let polylineHandles = [];       // {el, idx}
+        let polylineHandleDrag = null;
+
+        function clearPolylineHandles() {
+            polylineHandles.forEach((h) => h.el.remove());
+            polylineHandles = [];
+        }
+
+        function rebuildPolylineHandles() {
+            clearPolylineHandles();
+            const rec = drawnPolylines.find((r) => r.id === polylineEditingId);
+            if (!rec || !polylineHandlesLayer) { markNeedsRender(); return; }
+            rec.pts.forEach((_, idx) => {
+                const el = document.createElement('div');
+                el.className = 'poly-handle';
+                if (idx === 0 || idx === rec.pts.length - 1) el.classList.add('is-end');
+                el.title = `Вершина #${idx + 1} — тяните, чтобы передвинуть`;
+                polylineHandlesLayer.appendChild(el);
+                attachPolylineHandleDrag(rec, idx, el);
+                polylineHandles.push({ el, idx });
+            });
+            updatePolylineHandles();
+        }
+
+        function updatePolylineHandles() {
+            if (!polylineHandles.length) return;
+            const rec = drawnPolylines.find((r) => r.id === polylineEditingId);
+            if (!rec) { clearPolylineHandles(); return; }
+            polylineHandles.forEach(({ el, idx }) => {
+                const p = rec.pts[idx];
+                if (!p) { el.hidden = true; return; }
+                const s = projectToPixels(p);
+                if (s.behind) { el.hidden = true; return; }
+                el.hidden = false;
+                el.style.transform = `translate(${s.x}px, ${s.y}px)`;
+            });
+        }
+
+        /**
+         * Тянем вершину по геометрии — тем же лучом и с той же привязкой, что и
+         * черчение, иначе точка «плавала бы» мимо модели. Орбита на время
+         * перетаскивания выключается, иначе камера уедет вместе с вершиной.
+         */
+        function attachPolylineHandleDrag(record, idx, el) {
+            el.addEventListener('pointerdown', (down) => {
+                if (down.button !== 0) return;
+                down.preventDefault();
+                down.stopPropagation();
+                const wasControls = controls.enabled;
+                controls.enabled = false;
+                polylineHandleDrag = { id: record.id, idx };
+                try { el.setPointerCapture(down.pointerId); } catch (_) {}
+
+                const move = (e) => {
+                    const hit = pickStageHit(e.clientX, e.clientY);
+                    let p = null;
+                    if (hit) p = snapPoint(hit, e.clientX, e.clientY).point;
+                    else {
+                        p = pickScenePoint?.(e.clientX, e.clientY, {
+                            forceRaycast: false, allowPlaneFallback: true, ignorePivotLock: true
+                        });
+                    }
+                    if (!p) return;
+                    // 2D-полилиния остаётся на своей отметке
+                    if (record.kind === '2d') p = new THREE.Vector3(p.x, p.y, record.pts[0].z);
+                    record.pts[idx].copy(p);
+                    rebuildPolylineGeometry(record);
+                    updatePolylineHandles();
+                };
+                const up = () => {
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                    controls.enabled = wasControls;
+                    polylineHandleDrag = null;
+                    renderPolylinePointsEditor(record);
+                    renderPolylinesList();
+                    trackUsage('polyline_vertex_drag');
+                };
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+            });
+        }
+
         function renderPolylinesList() {
             const body = $('polylinesList');
             const count = $('polylinesCount');
@@ -6612,7 +6822,17 @@
 
                 const info = document.createElement('span');
                 info.className = 'pin-xyz';
-                info.textContent = `${r.kind.toUpperCase()} · ${r.pts.length} т · L3D ${r.length3d.toFixed(2)} м`;
+                const area = polylinePlanArea(r);
+                info.textContent =
+                    `${r.kind.toUpperCase()} · ${r.pts.length} т · L3D ${r.length3d.toFixed(2)} м` +
+                    (area != null ? ` · S ${area.toFixed(2)} м²` : '');
+
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'btn';
+                closeBtn.textContent = '⭘';
+                closeBtn.classList.toggle('on', !!r.closed);
+                closeBtn.title = r.closed ? 'Разомкнуть контур' : 'Замкнуть контур (нужно ≥3 вершин)';
+                closeBtn.addEventListener('click', () => setPolylineClosed(r, !r.closed));
 
                 const colorInput = document.createElement('input');
                 colorInput.type = 'color';
@@ -6649,7 +6869,7 @@
                 del.textContent = '✕';
                 del.title = 'Удалить полилинию';
                 del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
-                row.append(nameInput, info, colorInput, widthInput, edit, go, del);
+                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, go, del);
                 frag.appendChild(row);
             });
             body.replaceChildren(frag);
@@ -6658,6 +6878,7 @@
                 ? drawnPolylines.find((r) => r.id === polylineEditingId)
                 : null;
             renderPolylinePointsEditor(rec || null);
+            rebuildPolylineHandles();
         }
 
         /**
@@ -6701,9 +6922,8 @@
             const frag = document.createDocumentFragment();
             record.pts.forEach((p, i) => {
                 const a = worldPointToAbsoluteXYZ(p) || p;
-                const isFirst = i === 0;
-                const isLast = i === record.pts.length - 1;
-                const seg = isLast ? null : polylineSegmentStats(record, i);
+                const seg = polylineSegmentStats(record, i);
+                const isCorner = polylineVertexIsCorner(record, i);
 
                 const row = document.createElement('div');
                 row.className = 'polyline-point-row';
@@ -6713,7 +6933,7 @@
                 const xy = document.createElement('span');
                 xy.className = 'pin-xyz';
                 xy.textContent = `${a.x.toFixed(3)} ${a.y.toFixed(3)}`;
-                xy.title = 'X и Y правятся перетаскиванием точки в сцене';
+                xy.title = 'X и Y — тяните квадратную ручку этой вершины в сцене';
                 row.append(tag, xy);
 
                 row.append(label('H'), num(a.z.toFixed(3), {
@@ -6738,7 +6958,7 @@
                     ));
                 }
 
-                if (!isFirst && !isLast) {
+                if (isCorner) {
                     row.append(label('R'), num(record.radii[i] ? record.radii[i].toFixed(3) : '', {
                         step: '0.1', min: '0',
                         title: 'Радиус сопряжения в этой вершине, м',
@@ -6791,10 +7011,13 @@
             polylines.forEach((poly) => {
                 const is3d = poly.kind === '3d';
                 const layer = is3d ? 'LVA_3D' : 'LVA_2D';
+                // У замкнутого контура последняя точка renderPts дублирует первую:
+                // в DXF замыкание задаётся флагом (бит 1), а не повторной вершиной.
+                const verts = poly.closed ? poly.abs.slice(0, -1) : poly.abs;
                 g(0, 'POLYLINE'); g(8, layer); g(66, 1);
-                g(70, is3d ? 8 : 0);                 // 8 = 3D-полилиния
-                g(10, 0); g(20, 0); g(30, is3d ? 0 : n(poly.abs[0].z));
-                poly.abs.forEach((p) => {
+                g(70, (is3d ? 8 : 0) | (poly.closed ? 1 : 0));
+                g(10, 0); g(20, 0); g(30, is3d ? 0 : n(verts[0].z));
+                verts.forEach((p) => {
                     g(0, 'VERTEX'); g(8, layer);
                     g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
                     if (is3d) g(70, 32);             // вершина 3D-полилинии
@@ -7171,6 +7394,10 @@
         $('polylinesClose')?.addEventListener('click', () => {
             $('polylinesModal').classList.remove('show');
             polylinesPanel.reset();
+            // Ручки принадлежат раскрытой полилинии — закрыли панель, убрали их
+            polylineEditingId = null;
+            clearPolylineHandles();
+            markNeedsRender();
         });
         // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
         $('polylinesClear')?.addEventListener('click', () => {
@@ -7428,6 +7655,10 @@
                     lbl.div.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
                 });
             }
+
+            // Ручки вершин — в том же кадре, что и подписи: иначе отстают от
+            // модели при вращении камеры.
+            updatePolylineHandles();
 
             frames++; 
             acc += now - last; 
@@ -9527,11 +9758,15 @@ uniform vec3 uBatchSelColor;
             // Метки координат живут в сцене, а не в модели: без этого сдвига
             // они остались бы на старом месте и стали бы врать.
             // Начерченное живёт в координатах сцены — двигаем вместе с моделями.
-            // Абсолютные координаты в записях пересчитывать не надо: они сняты
-            // при создании и от сдвига сцены не зависят.
+            // Двигаем именно ВЕРШИНЫ (pts), а не буфер геометрии: pts — источник
+            // правды, и при любой следующей правке геометрия пересобирается из
+            // них. Сдвинь только буфер — и полилиния прыгнет назад на первом же
+            // изменении радиуса или отметки.
+            // ifcWorldOrigin выше уже обновлён, поэтому пересчитанные в
+            // rebuildPolylineGeometry абсолютные координаты остаются прежними.
             drawnPolylines.forEach(r => {
-                r.object.geometry.translate(negCw.x, negCw.y, negCw.z);
-                r.object.geometry.computeBoundingSphere();
+                r.pts.forEach(p => p.add(negCw));
+                rebuildPolylineGeometry(r);
             });
             sweptSolids.forEach(s => {
                 s.mesh.geometry.translate(negCw.x, negCw.y, negCw.z);
@@ -23052,7 +23287,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: 'ed01f12-preview',
+            buildId: 'aeb3701-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
