@@ -1202,6 +1202,14 @@ async function checkSlopeToTerrain(page) {
         if (!(cut.res.tin?.capFaces > 0)) {
             problems.push('откосы: торцы разомкнутой линии не закрылись — в TIN дыра с конца');
         }
+        const contour = await page.evaluate((pid) => {
+            const D = window.BimLvaDebug;
+            const rec = D.drawn.find((d) => d.id === pid);
+            return rec ? { closed: rec.closed, points: rec.points } : null;
+        }, cut.res.contourPolylineId);
+        if (!contour?.closed || contour.points < 4) {
+            problems.push(`откосы: контур выхода «в обе стороны» не замкнут (${JSON.stringify(contour)})`);
+        }
     }
 
     // Максимальный вылет меньше экзит-дистанции — сечения обязаны выпасть из
@@ -1248,6 +1256,8 @@ async function checkSlopeToTerrain(page) {
         const dxf = D.dxfPreview();
         const p1 = xml.match(/<P id="1">([^<]+)<\/P>/);
         const xyz = p1 ? p1[1].trim().split(/\s+/).map(Number) : null;
+        const exitId = res?.sides?.[0]?.exitPolylineIds?.[0];
+        const exit = exitId != null ? D.drawn.find((d) => d.id === exitId) : null;
         return {
             res, tin,
             xmlFaces: (xml.match(/<F>/g) || []).length,
@@ -1255,8 +1265,12 @@ async function checkSlopeToTerrain(page) {
             xmlHasSurface: /<Surface /i.test(xml) && /surfType="TIN"/i.test(xml),
             dxfFaces: (dxf.match(/\r\n3DFACE\r\n/g) || []).length,
             dxfSlopeLayer: /LVA_SLOPE/.test(dxf),
+            dxfClosed3d: (dxf.match(/\r\n70\r\n9\r\n/g) || []).length,
             p1: xyz,
-            tin0: tin?.points?.[0] || null
+            tin0: tin?.points?.[0] || null,
+            exitClosed: !!exit?.closed,
+            exitPoints: exit?.points || 0,
+            exitDxfVerts: exitId != null ? (D.dxfVertices(exitId)?.verts.length || 0) : 0
         };
     }, groundZ);
     if (!pad.res?.tin) {
@@ -1293,6 +1307,18 @@ async function checkSlopeToTerrain(page) {
         }
         if (!pad.dxfSlopeLayer || pad.dxfFaces < pad.res.tin.faces) {
             problems.push(`откосы: DXF площадки — 3DFACE ${pad.dxfFaces}, слой LVA_SLOPE ${pad.dxfSlopeLayer}`);
+        }
+        if (!pad.exitClosed) {
+            problems.push('откосы: линия выхода площадки не замкнута — в DXF Civil откроет её разомкнутой');
+        }
+        if (pad.exitClosed && pad.exitDxfVerts !== pad.exitPoints) {
+            problems.push(
+                `откосы: в DXF у линии выхода ${pad.exitDxfVerts} вершин при ${pad.exitPoints} в контуре — ` +
+                `замыкание должно быть флагом, без повторной вершины`
+            );
+        }
+        if (pad.dxfClosed3d < 2) {
+            problems.push(`откосы: в DXF замкнутых 3D-полилиний ${pad.dxfClosed3d} (флаг 70=9) — ждали бровку и линию выхода`);
         }
     }
 

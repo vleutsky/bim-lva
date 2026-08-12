@@ -4976,7 +4976,8 @@
                         faces: model.tin.faces.length,
                         padFaces: model.padFaces || 0,
                         capFaces: model.capFaces || 0
-                    } : null
+                    } : null,
+                    contourPolylineId: model.contourPolylineId || null
                 };
             },
             /** Все текущие построения откосов — сводка (без геометрии). */
@@ -4995,7 +4996,8 @@
                         faces: sm.tin.faces.length,
                         padFaces: sm.padFaces || 0,
                         capFaces: sm.capFaces || 0
-                    } : null
+                    } : null,
+                    contourPolylineId: sm.contourPolylineId || null
                 }));
             },
             /** Убрать все построенные откосы (то же, что «Убрать откосы»). */
@@ -6985,8 +6987,13 @@
             return { valid: false, reason: 'not-reached', mode };
         }
 
-        /** Разбить сечения на непрерывные валидные группы — для линии выхода. */
-        function slopeValidGroups(sections) {
+        /**
+         * Непрерывные куски линии выхода. У замкнутого кольца кусок, который
+         * переходит через первую/последнюю вершину, склеивается; если все
+         * сечения валидны — это замкнутый контур (в DXF уйдёт флагом, а не
+         * повторной вершиной).
+         */
+        function slopeValidGroups(sections, closedRing) {
             const groups = [];
             let cur = [];
             sections.forEach((s) => {
@@ -6994,7 +7001,15 @@
                 else if (cur.length) { groups.push(cur); cur = []; }
             });
             if (cur.length) groups.push(cur);
-            return groups.filter((g) => g.length >= 2);
+            if (closedRing && groups.length >= 2 && sections[0]?.valid && sections[sections.length - 1]?.valid) {
+                const first = groups.shift();
+                groups[groups.length - 1] = groups[groups.length - 1].concat(first);
+            }
+            const allValid = !!closedRing && sections.length >= 3 && sections.every((s) => s.valid);
+            return groups.filter((g) => g.length >= 2).map((pts) => ({
+                pts,
+                closed: allValid && pts.length === sections.length
+            }));
         }
 
         /**
@@ -7142,7 +7157,7 @@
          * уже проверенные объёмы бортов.
          */
         function buildSlopeEndCaps(record, sideResults, opts) {
-            const empty = { meshes: [], triangles: [], fill: 0, cut: 0 };
+            const empty = { meshes: [], triangles: [], fill: 0, cut: 0, capExits: [null, null] };
             if (record.closed) return empty;
             const ring = record.renderPts;
             if (!ring || ring.length < 2) return empty;
@@ -7152,6 +7167,7 @@
             const colors = [];
             const triangles = [];
             let fill = 0, cut = 0;
+            const capExits = [null, null];
             const ends = [
                 { i: 0, dir: { x: ring[0].x - ring[1].x, y: ring[0].y - ring[1].y } },
                 {
@@ -7162,7 +7178,7 @@
                     }
                 }
             ];
-            ends.forEach((end) => {
+            ends.forEach((end, ei) => {
                 const len = Math.hypot(end.dir.x, end.dir.y);
                 if (len < 1e-9) return;
                 const normal = { x: end.dir.x / len, y: end.dir.y / len };
@@ -7176,6 +7192,7 @@
                 const col = (cap.valid && cap.mode === 'cut') ? cutColor : fillColor;
                 if (cap.valid) {
                     const E = new THREE.Vector3(cap.exit.x, cap.exit.y, cap.exit.z);
+                    capExits[ei] = E;
                     exits.forEach((S) => {
                         slopePushTri(positions, colors, C, S, E, col);
                         triangles.push([C.clone(), S.clone(), E.clone()]);
@@ -7194,7 +7211,7 @@
                 }
             });
             const mesh = slopeMakeMesh(positions, colors, 'Откос · торцы');
-            return { meshes: mesh ? [mesh] : [], triangles, fill, cut };
+            return { meshes: mesh ? [mesh] : [], triangles, fill, cut, capExits };
         }
 
         /** Один откос (одна сторона) по всей линии: поверхность + линия выхода + объёмы. */
@@ -7241,12 +7258,13 @@
 
             const skippedNoGround = sections.filter((s) => !s.valid && s.reason === 'no-ground').length;
             const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
-            const groups = slopeValidGroups(sections);
-            const exitLines = groups.map((pts, gi) => addPolylineFromPoints(pts, {
+            const groups = slopeValidGroups(sections, closed);
+            const exitLines = groups.map((g, gi) => addPolylineFromPoints(g.pts, {
                 name: `${record.name} — откос (${side === 'left' ? 'влево' : 'вправо'})` +
                     (groups.length > 1 ? ` #${gi + 1}` : ''),
                 color: opts.exitColor || '#2c8f4a',
-                width: 1.5
+                width: 1.5,
+                closed: g.closed
             }));
 
             return {
@@ -7254,6 +7272,34 @@
                 exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
                 skippedNoGround, skippedNotReached
             };
+        }
+
+        /**
+         * Замкнутый контур выхода для разомкнутой бровки «в обе стороны»:
+         * левый выход + торец конца + правый выход назад + торец начала.
+         * Без этого в DXF уезжают две разомкнутые линии, и Civil не видит
+         * границу площадки.
+         */
+        function buildSlopeOuterContour(record, sideResults, capExits, opts) {
+            if (record.closed) return null;
+            const left = sideResults.find((s) => s.side === 'left');
+            const right = sideResults.find((s) => s.side === 'right');
+            if (!left?.sections || !right?.sections) return null;
+            const leftG = slopeValidGroups(left.sections, false)[0];
+            const rightG = slopeValidGroups(right.sections, false)[0];
+            if (!leftG || !rightG) return null;
+            const ring = [];
+            leftG.pts.forEach((p) => ring.push(p));
+            if (capExits?.[1]) ring.push(capExits[1]);
+            rightG.pts.slice().reverse().forEach((p) => ring.push(p));
+            if (capExits?.[0]) ring.push(capExits[0]);
+            if (ring.length < 3) return null;
+            return addPolylineFromPoints(ring, {
+                name: `${record.name} — контур откоса`,
+                color: opts.exitColor || '#2c8f4a',
+                width: 1.5,
+                closed: true
+            });
         }
 
         function collectSlopeTin(model) {
@@ -7273,6 +7319,7 @@
             if (!results.length) return null;
             const pad = buildSlopePadInterior(record, opts.fillColor);
             const caps = buildSlopeEndCaps(record, results, opts);
+            const contour = buildSlopeOuterContour(record, results, caps.capExits, opts);
             const model = {
                 id: ++slopeSeq,
                 polylineId: record.id,
@@ -7285,7 +7332,8 @@
                 capFill: caps.fill,
                 capCut: caps.cut,
                 padFaces: pad.triangles.length,
-                capFaces: caps.triangles.length
+                capFaces: caps.triangles.length,
+                contourPolylineId: contour ? contour.id : null
             };
             model.tin = collectSlopeTin(model);
             slopeModels.push(model);
@@ -7414,23 +7462,25 @@
          * означало бы дозвониться до самой себя на ещё не отключённой модели.
          */
         function disposeSlopeModel(sm) {
+            const dropPoly = (id) => {
+                const i = drawnPolylines.findIndex((r) => r.id === id);
+                if (i < 0) return;
+                const rec = drawnPolylines[i];
+                drawGroup.remove(rec.object);
+                rec.object.geometry.dispose();
+                disposeLineMaterial(rec.object.material);
+                drawnPolylines.splice(i, 1);
+                if (polylineEditingId === rec.id) polylineEditingId = null;
+            };
             sm.sides.forEach((s) => {
                 if (s.mesh) {
                     slopeGroup.remove(s.mesh);
                     s.mesh.geometry.dispose();
                     s.mesh.material.dispose();
                 }
-                s.exitPolylineIds.forEach((id) => {
-                    const i = drawnPolylines.findIndex((r) => r.id === id);
-                    if (i < 0) return;
-                    const rec = drawnPolylines[i];
-                    drawGroup.remove(rec.object);
-                    rec.object.geometry.dispose();
-                    disposeLineMaterial(rec.object.material);
-                    drawnPolylines.splice(i, 1);
-                    if (polylineEditingId === rec.id) polylineEditingId = null;
-                });
+                s.exitPolylineIds.forEach(dropPoly);
             });
+            if (sm.contourPolylineId) dropPoly(sm.contourPolylineId);
             const extra = [sm.padMesh, ...(sm.capMeshes || [])].filter(Boolean);
             extra.forEach((mesh) => {
                 slopeGroup.remove(mesh);
@@ -7445,6 +7495,7 @@
             let touched = false;
             slopeModels.forEach((sm) => {
                 const touches = sm.polylineId === id ||
+                    sm.contourPolylineId === id ||
                     sm.sides.some((s) => s.exitPolylineIds.includes(id));
                 if (touches) { disposeSlopeModel(sm); touched = true; } else keep.push(sm);
             });
@@ -26689,7 +26740,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.12: откосы до рельефа — площадка без дыры в середине/торцах, выгрузка TIN в DXF (3DFACE) и LandXML для Civil 3D.',
+                '2026.08.12: откосы до рельефа — площадка без дыры, линия выхода замкнута (DXF 70=9), TIN в DXF (3DFACE) и LandXML для Civil 3D.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
