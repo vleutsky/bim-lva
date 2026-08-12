@@ -249,6 +249,13 @@ async function loadSigningKey(): Promise<CryptoKey> {
 /** Продукты, которые проверяются в коде плагинов. Ничего другого не бывает. */
 const PRODUCTS = ["Civil", "Navis", "Inventor", "*"];
 
+/**
+ * Что умеет эта версия функции. Список возвращается в ответе на неизвестное
+ * действие: «Неизвестное действие: import» сам по себе не говорит, старая в
+ * дашборде версия или опечатка в клиенте, — а список говорит сразу.
+ */
+const ACTIONS = ["issue", "import", "reject", "revoke"];
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return json({ error: "Только POST" }, 405);
@@ -479,5 +486,11 @@ Deno.serve(async (req) => {
     return json({ ok: true });
   }
 
-  return json({ error: `Неизвестное действие: ${action}` }, 400);
+  // Список — это то, что умеет ИМЕННО развёрнутая версия. Видите в ответе
+  // действие, которого ждали, — дело в клиенте; не видите — в дашборде лежит
+  // старый bundled.ts, и надо вставить свежий.
+  return json({
+    error: `Неизвестное действие: ${action}. Эта версия функции умеет: ${ACTIONS.join(", ")}.`,
+    supportedActions: ACTIONS,
+  }, 400);
 });
