@@ -173,10 +173,12 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
       (`license_admins`, `license_requests`, `licenses`, RLS, `is_license_admin()`)
 - [x] владелец добавлен в `license_admins`
       (`user_id 46427174-fff1-47a5-bfbb-ad1384472ae7`)
-- [ ] миграция `20260806140000_licenses_lic_format.sql` — добавляет `machine_id`,
-      снимает NOT NULL с `expires_at`, ограничивает `product`
+- [x] миграция `20260806140000_licenses_lic_format.sql` применена — добавляет
+      `machine_id`, снимает NOT NULL с `expires_at`, ограничивает `product`
+      (проверено в базе 12.08.2026: `machine_id` есть, `expires_at` nullable)
 - [ ] миграция `20260812180000_licenses_user_id_optional.sql` — снимает NOT NULL
       с `licenses.user_id`; нужна для учёта лицензий, выданных офлайн
+      (на 12.08.2026 `user_id` ещё NOT NULL)
 - [ ] секрет `LICENSE_SIGNING_KEY` заменить: сейчас там **устаревший Ed25519**
 - [ ] развернуть функцию `license-issue`
 
