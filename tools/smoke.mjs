@@ -599,6 +599,25 @@ async function checkDrawDxf(page) {
         if (moved < 0.5) {
             problems.push(`перетаскивание вершины не сдвинуло её (${moved.toFixed(3)} м)`);
         }
+
+        // Ctrl + тянуть — только высота: план обязан остаться на месте.
+        const sp2 = await page.evaluate((id) => window.BimLvaDebug.polylineScreenPts(id), three.id);
+        const beforeZ = await page.evaluate((id) => window.BimLvaDebug.drawn.find((d) => d.id === id).vertsAbs[0], three.id);
+        await page.keyboard.down('Control');
+        await page.mouse.move(sp2[0].clientX, sp2[0].clientY);
+        await page.mouse.down();
+        await page.mouse.move(sp2[0].clientX + 40, sp2[0].clientY - 70, { steps: 6 });
+        await page.mouse.up();
+        await page.keyboard.up('Control');
+        await page.waitForTimeout(200);
+        const afterZ = await page.evaluate((id) => window.BimLvaDebug.drawn.find((d) => d.id === id).vertsAbs[0], three.id);
+        const planShift = Math.hypot(afterZ.x - beforeZ.x, afterZ.y - beforeZ.y);
+        if (planShift > 1e-6) {
+            problems.push(`Ctrl-перетаскивание сдвинуло план на ${planShift.toFixed(3)} м — должно менять только высоту`);
+        }
+        if (afterZ.z - beforeZ.z < 0.5) {
+            problems.push(`Ctrl-перетаскивание вверх не подняло вершину (Δ ${(afterZ.z - beforeZ.z).toFixed(3)} м)`);
+        }
     }
 
     // Выбор угла «под курсором»: просим угол рядом с вершиной #3 (индекс 2) и
@@ -773,6 +792,51 @@ async function checkDrawDxf(page) {
         if (atStart?.ground != null && Math.abs(atStart.work) > 1e-6) {
             problems.push(`после посадки рабочая отметка в начале ${atStart.work.toFixed(4)} вместо 0`);
         }
+    }
+
+    // Кадрирование полилинии: «→» обязано СОХРАНИТЬ текущее направление взгляда
+    // (раньше сбрасывало в изометрию), «⬓» — поставить строго сверху.
+    const framing = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        const norm = (d) => {
+            const l = Math.hypot(d.x, d.y, d.z) || 1;
+            return { x: d.x / l, y: d.y / l, z: d.z / l };
+        };
+        const before = norm(D.cameraDir);
+        D.focusPolyline(id, 'keep');
+        const keep = norm(D.cameraDir);
+        D.focusPolyline(id, 'plan');
+        const plan = norm(D.cameraDir);
+        return { before, keep, plan };
+    }, three.id);
+    const dirOff = Math.max(
+        Math.abs(framing.keep.x - framing.before.x),
+        Math.abs(framing.keep.y - framing.before.y),
+        Math.abs(framing.keep.z - framing.before.z)
+    );
+    if (dirOff > 0.02) {
+        problems.push(`«приблизить» сменило направление взгляда на ${dirOff.toFixed(3)} — должно сохранять вид`);
+    }
+    if (Math.abs(framing.plan.z + 1) > 0.02) {
+        problems.push(`«в плане» смотрит (${framing.plan.x.toFixed(2)}, ${framing.plan.y.toFixed(2)}, ${framing.plan.z.toFixed(2)}), а не строго вниз`);
+    }
+
+    // Профиль в ОТКРЫТОЙ панели обязан пересчитываться при правке геометрии,
+    // а не залипать на снятом однажды: именно это и было сломано.
+    const profileLive = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        D.openPolylineProfile(id);
+        const rowsBefore = document.getElementById('polyProfileTable').textContent;
+        const p0 = D.drawn.find((d) => d.id === id).vertsAbs[0];
+        D.editPolyline(id, 'elev', 0, p0.z + 25);   // правка идёт мимо панели
+        const rowsAfter = document.getElementById('polyProfileTable').textContent;
+        document.getElementById('polyProfileClose').click();
+        return { changed: rowsBefore !== rowsAfter, had: rowsBefore.length > 0 };
+    }, three.id);
+    if (!profileLive.had) {
+        problems.push('таблица профиля пуста — проверка обновления вхолостую');
+    } else if (!profileLive.changed) {
+        problems.push('профиль не обновился после правки отметки вершины');
     }
 
     // Картограмма. Точного ответа для сетки коробок нет, зато есть точный

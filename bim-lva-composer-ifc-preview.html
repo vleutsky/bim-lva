@@ -1170,6 +1170,12 @@
         .poly-handle:hover { background: #d8f3e6; }
         .poly-handle:active { cursor: grabbing; }
         .poly-handle.is-end { border-radius: 50%; }
+        /* Режим «только высота» (Ctrl): другой цвет и курсор-вертикаль */
+        .poly-handle.is-z {
+            border-color: #f06424;
+            background: #ffe3d3;
+            cursor: ns-resize;
+        }
 
         .pin-row {
             display: grid;
@@ -1186,14 +1192,25 @@
         .pin-row .btn { padding: 2px 8px; }
         .polyline-row {
             display: grid;
-            grid-template-columns: 120px 1fr auto auto auto auto auto auto auto;
+            grid-template-columns: 116px minmax(0, 1fr) auto auto auto auto auto auto auto auto;
             align-items: center;
             gap: 6px;
             padding: 5px 4px;
             border-bottom: 1px solid var(--line, #d8dee6);
         }
         .polyline-row.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-        .polyline-row .btn { padding: 2px 8px; }
+        /* Кнопки в строке — с рамкой: без неё значки читались как просто текст */
+        .polyline-row .btn {
+            padding: 2px 7px;
+            border: 1px solid var(--line, #d8dee6);
+            border-radius: 6px;
+            line-height: 1.5;
+        }
+        .polyline-row .polyline-close-btn { font-size: 11px; white-space: nowrap; }
+        .polyline-row .btn.on {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
         .polyline-color {
             width: 28px;
             height: 22px;
@@ -2494,7 +2511,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · cc47e8d</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1154b2f</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2780,6 +2797,7 @@
             <button class="ctx-item" id="ctxPolylineContinue" title="Дописать вершины с конца полилинии">✚ Продолжить с конца</button>
             <button class="ctx-item" id="ctxPolylineContinueStart" title="Дописать вершины с начала полилинии">✚ Продолжить с начала</button>
             <button class="ctx-item" id="ctxPolylineClose" title="Замкнуть или разомкнуть контур">⭘ Замкнуть / разомкнуть</button>
+            <button class="ctx-item" id="ctxPolylinePlan" title="Кадрировать эту полилинию строго сверху">⬓ Посмотреть в плане</button>
             <button class="ctx-item" id="ctxPolylineProfile" title="Продольный профиль: отметки земли под осью, пикетаж, рабочие отметки">〰 Профиль по этой оси</button>
             <button class="ctx-item" id="ctxPolylineEarthwork" title="Объёмы выемки и насыпи внутри замкнутого контура">⛰ Картограмма по контуру</button>
             <button class="ctx-item" id="ctxPolylineSweep" title="Прогнать сечение вдоль этой полилинии и получить 3D-тело">⬒ Тело по этой оси</button>
@@ -3312,8 +3330,10 @@
                 вершины: <b>H</b> — абсолютная отметка, <b>L</b> — длина отрезка
                 до следующей вершины, <b>i‰</b> — его уклон, <b>R</b> — радиус
                 сопряжения в углу. X и Y — перетаскиванием ручек вершин в сцене
-                (появляются у раскрытой полилинии). По линии можно кликнуть в
-                сцене — она раскроется здесь.
+                (появляются у раскрытой полилинии), <b>Ctrl + тянуть</b> — только
+                по высоте. По линии можно кликнуть в сцене — она раскроется здесь.
+                <b>⭘ Замкнуть</b> — сомкнуть контур (нужен для площади и
+                картограммы), <b>〰</b> — продольный профиль по оси.
             </div>
             <div id="polylinesList" style="max-height:200px;overflow:auto;margin-top:8px"></div>
             <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
@@ -4588,6 +4608,20 @@
             earthwork(id, cell, mode, level) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 return rec ? computeEarthwork(rec, cell, mode, level) : null;
+            },
+            /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
+            focusPolyline(id, how) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                focusPolyline(rec, how);
+                return true;
+            },
+            /** Открыть панель профиля по оси. */
+            openPolylineProfile(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                openPolylineProfile(rec);
+                return true;
             },
             /** Профиль по оси: пикеты с отметками земли и оси. */
             polylineProfile(id, step) {
@@ -7081,12 +7115,23 @@
             trackUsage('polyline_pick');
         }
 
-        /** Камера к полилинии по её мировому габариту (сцена, не абсолютные оси). */
-        function focusPolyline(record) {
+        /**
+         * Камера к полилинии по её мировому габариту (сцена, не абсолютные оси).
+         * По умолчанию СОХРАНЯЕМ текущее направление взгляда — иначе кнопка
+         * «приблизить» сбрасывала выставленный вид в изометрию.
+         * @param {'keep'|'plan'} how
+         */
+        function focusPolyline(record, how = 'keep') {
             const box = new THREE.Box3().setFromPoints(record.pts);
             if (box.isEmpty()) return;
             box.expandByScalar(Math.max(2, box.getSize(new THREE.Vector3()).length() * 0.15));
-            frameBox(box);
+            if (how === 'plan') {
+                // Строго сверху: взгляд вниз, север вверх
+                frameBox(box, new THREE.Vector3(0, 0, 1));
+            } else {
+                const dir = camera.position.clone().sub(controls.target);
+                frameBox(box, dir.lengthSq() > 1e-9 ? dir : null);
+            }
             markNeedsRender();
         }
 
@@ -7113,7 +7158,9 @@
                 const el = document.createElement('div');
                 el.className = 'poly-handle';
                 if (idx === 0 || idx === rec.pts.length - 1) el.classList.add('is-end');
-                el.title = `Вершина #${idx + 1} — тяните, чтобы передвинуть`;
+                el.title =
+                    `Вершина #${idx + 1}: тяните — двигать по плану, ` +
+                    'Ctrl + тянуть — только по высоте';
                 polylineHandlesLayer.appendChild(el);
                 attachPolylineHandleDrag(rec, idx, el);
                 polylineHandles.push({ el, idx });
@@ -7139,6 +7186,11 @@
          * Тянем вершину по геометрии — тем же лучом и с той же привязкой, что и
          * черчение, иначе точка «плавала бы» мимо модели. Орбита на время
          * перетаскивания выключается, иначе камера уедет вместе с вершиной.
+         *
+         * С зажатым Ctrl вершина едет ТОЛЬКО по высоте (как в InfraWorks): план
+         * замораживается, а Z меняется по вертикальному смещению курсора.
+         * Масштаб перевода пикселей в метры берём из текущего охвата кадра,
+         * иначе на общем виде вершина летала бы, а вблизи почти не двигалась.
          */
         function attachPolylineHandleDrag(record, idx, el) {
             el.addEventListener('pointerdown', (down) => {
@@ -7150,19 +7202,33 @@
                 polylineHandleDrag = { id: record.id, idx };
                 try { el.setPointerCapture(down.pointerId); } catch (_) {}
 
+                // Режим фиксируется на нажатии: отпустишь Ctrl посреди
+                // перетаскивания — вершина не прыгнет в план.
+                const zMode = down.ctrlKey || down.metaKey;
+                const startY = down.clientY;
+                const startZ = record.pts[idx].z;
+                // Метров на пиксель по вертикали в текущем кадре
+                const mPerPx = currentFrameHeight() / Math.max(stage.clientHeight, 1);
+                el.classList.toggle('is-z', zMode);
+
                 const move = (e) => {
-                    const hit = pickStageHit(e.clientX, e.clientY);
-                    let p = null;
-                    if (hit) p = snapPoint(hit, e.clientX, e.clientY).point;
-                    else {
-                        p = pickScenePoint?.(e.clientX, e.clientY, {
-                            forceRaycast: false, allowPlaneFallback: true, ignorePivotLock: true
-                        });
+                    if (zMode) {
+                        if (record.kind === '2d') return;   // плоская линия высоту не меняет
+                        record.pts[idx].z = startZ + (startY - e.clientY) * mPerPx;
+                    } else {
+                        const hit = pickStageHit(e.clientX, e.clientY);
+                        let p = null;
+                        if (hit) p = snapPoint(hit, e.clientX, e.clientY).point;
+                        else {
+                            p = pickScenePoint?.(e.clientX, e.clientY, {
+                                forceRaycast: false, allowPlaneFallback: true, ignorePivotLock: true
+                            });
+                        }
+                        if (!p) return;
+                        // 2D-полилиния остаётся на своей отметке
+                        if (record.kind === '2d') p = new THREE.Vector3(p.x, p.y, record.pts[0].z);
+                        record.pts[idx].copy(p);
                     }
-                    if (!p) return;
-                    // 2D-полилиния остаётся на своей отметке
-                    if (record.kind === '2d') p = new THREE.Vector3(p.x, p.y, record.pts[0].z);
-                    record.pts[idx].copy(p);
                     rebuildPolylineGeometry(record);
                     updatePolylineHandles();
                 };
@@ -7171,12 +7237,17 @@
                     window.removeEventListener('pointerup', up);
                     controls.enabled = wasControls;
                     polylineHandleDrag = null;
+                    el.classList.remove('is-z');
                     renderPolylinePointsEditor(record);
                     renderPolylinesList();
-                    trackUsage('polyline_vertex_drag');
+                    trackUsage('polyline_vertex_drag', { mode: zMode ? 'z' : 'plan' });
                 };
                 window.addEventListener('pointermove', move);
                 window.addEventListener('pointerup', up);
+
+                if (zMode && record.kind === '2d') {
+                    notify('У 2D-полилинии все точки на одной отметке — высоту вершины не изменить.');
+                }
             });
         }
 
@@ -7209,11 +7280,15 @@
                     `${r.kind.toUpperCase()} · ${r.pts.length} т · L3D ${r.length3d.toFixed(2)} м` +
                     (area != null ? ` · S ${area.toFixed(2)} м²` : '');
 
+                // Подписанная кнопка, а не значок: «замкнуть» искали и не нашли,
+                // когда здесь стоял голый кружок.
                 const closeBtn = document.createElement('button');
-                closeBtn.className = 'btn';
-                closeBtn.textContent = '⭘';
+                closeBtn.className = 'btn polyline-close-btn';
+                closeBtn.textContent = r.closed ? '⭘ Разомкнуть' : '⭘ Замкнуть';
                 closeBtn.classList.toggle('on', !!r.closed);
-                closeBtn.title = r.closed ? 'Разомкнуть контур' : 'Замкнуть контур (нужно ≥3 вершин)';
+                closeBtn.title = r.closed
+                    ? 'Разомкнуть контур'
+                    : 'Замкнуть контур (нужно не меньше 3 вершин). Замкнутый нужен для площади и картограммы';
                 closeBtn.addEventListener('click', () => setPolylineClosed(r, !r.closed));
 
                 const colorInput = document.createElement('input');
@@ -7249,14 +7324,19 @@
                 const go = document.createElement('button');
                 go.className = 'btn';
                 go.textContent = '→';
-                go.title = 'Приблизить камеру';
-                go.addEventListener('click', () => focusPolyline(r));
+                go.title = 'Приблизить камеру, не меняя текущий вид';
+                go.addEventListener('click', () => focusPolyline(r, 'keep'));
+                const plan = document.createElement('button');
+                plan.className = 'btn';
+                plan.textContent = '⬓';
+                plan.title = 'Посмотреть в плане (строго сверху)';
+                plan.addEventListener('click', () => focusPolyline(r, 'plan'));
                 const del = document.createElement('button');
                 del.className = 'btn';
                 del.textContent = '✕';
                 del.title = 'Удалить полилинию';
                 del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
-                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, go, del);
+                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, go, plan, del);
                 frag.appendChild(row);
             });
             body.replaceChildren(frag);
@@ -7266,6 +7346,7 @@
                 : null;
             renderPolylinePointsEditor(rec || null);
             rebuildPolylineHandles();
+            refreshPolylineProfileIfOpen();
         }
 
         /**
@@ -7942,6 +8023,25 @@
         let polyProfileData = null;
         let polyProfileRecordId = null;
 
+        /**
+         * Пересчёт профиля после правки геометрии. Зовётся из renderPolylinesList,
+         * то есть отовсюду, где полилиния изменилась «насовсем» (конец
+         * перетаскивания, правка в таблице, вставка/удаление вершины,
+         * замыкание). ВНУТРИ перетаскивания не зовём: там на каждый кадр
+         * пришлось бы стрелять лучами по всем пикетам.
+         */
+        function refreshPolylineProfileIfOpen() {
+            if (!$('polyProfileModal')?.classList.contains('show')) return;
+            if (polyProfileRecordId == null) return;
+            if (!drawnPolylines.some((r) => r.id === polyProfileRecordId)) {
+                // Полилинию удалили — закрываем панель, чтобы не показывать старое
+                $('polyProfileModal').classList.remove('show');
+                polyProfileData = null;
+                return;
+            }
+            renderPolylineProfile();
+        }
+
         function renderPolylineProfile() {
             const svg = $('polyProfileChart');
             const meta = $('polyProfileMeta');
@@ -8059,8 +8159,7 @@
                 return;
             }
             rebuildPolylineGeometry(record);
-            renderPolylinesList();
-            renderPolylineProfile();
+            renderPolylinesList();   // внутри — и пересчёт профиля, если он открыт
             notify(
                 `«${record.name}»: посажено вершин ${moved}` +
                 (missed ? `, без отметки земли осталось ${missed}` : '')
@@ -22584,6 +22683,9 @@ ${componentXml || '    '}
         $('ctxPolylineClose').addEventListener('click', () => {
             if (stageContextPolyline) setPolylineClosed(stageContextPolyline, !stageContextPolyline.closed);
         });
+        $('ctxPolylinePlan').addEventListener('click', () => {
+            if (stageContextPolyline) focusPolyline(stageContextPolyline, 'plan');
+        });
         $('ctxPolylineProfile').addEventListener('click', () => {
             if (stageContextPolyline) openPolylineProfile(stageContextPolyline);
         });
@@ -24155,7 +24257,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: 'cc47e8d-preview',
+            buildId: '1154b2f-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
