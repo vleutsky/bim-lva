@@ -140,7 +140,8 @@ select policyname, cmd, qual from pg_policies where tablename='licenses';
 | `policy … does not exist, skipping` | первый запуск, сносить было нечего — норма |
 | `check constraint "licenses_product_known" is violated by some row` | в таблице лежит продукт вне списка `Civil`/`Navis`/`Inventor`/`*` — найдите его запросом из шага 1 и поправьте |
 | `null value in column "user_id" … violates not-null constraint` при импорте `.lic` | не применена миграция `20260812180000` |
-| `Эта лицензия уже учтена.` | защита от повторного импорта того же файла: совпал `LicenseId` |
+| `Неизвестное действие: import` в кабинете | в дашборде развёрнута **старая** версия функции: вставьте свежий `bundled.ts` и нажмите Deploy. Свежая версия в этой же ошибке перечисляет, что она умеет — если `import` в списке нет, значит код точно старый |
+| `duplicate key value violates unique constraint "licenses_pkey"` | тот же файл импортируется второй раз — защита от двойного учёта |
 | `permission denied for table licenses` | запрос выполняется не в SQL Editor, а от имени клиента; выпуск и импорт идут только через Edge Function |
 
 ## Как это проверено
