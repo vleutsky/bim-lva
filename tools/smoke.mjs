@@ -1199,6 +1199,9 @@ async function checkSlopeToTerrain(page) {
         });
         const sides = cut.res.sides.map((s) => s.side).sort().join(',');
         if (sides !== 'left,right') problems.push(`откосы: «в обе стороны» дала стороны ${sides} вместо left,right`);
+        if (!(cut.res.tin?.capFaces > 0)) {
+            problems.push('откосы: торцы разомкнутой линии не закрылись — в TIN дыра с конца');
+        }
     }
 
     // Максимальный вылет меньше экзит-дистанции — сечения обязаны выпасть из
@@ -1223,6 +1226,74 @@ async function checkSlopeToTerrain(page) {
             problems.push(`откосы: при недолёте объём не нулевой (насыпь ${s.fill}, выемка ${s.cut})`);
         }
         if (s.exitPolylineIds.length) problems.push('откосы: при недолёте всё равно создалась линия выхода');
+    }
+
+    // Площадка: замкнутый квадрат 4×4 м. Середина обязана заполниться
+    // (2 треугольника), иначе в TIN дыра до исходного рельефа. LandXML —
+    // northing easting elev, DXF — 3DFACE на слое LVA_SLOPE; оба в абсолютных
+    // метрах, как ждёт Civil 3D.
+    const pad = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const z = g + 2;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 15, z }, { x: 24, y: 15, z },
+                { x: 24, y: 19, z }, { x: 20, y: 19, z }
+            ],
+            { name: 'Откос-тест-площадка', closed: true }
+        );
+        const res = D.buildSlopeOnPolyline(id, { side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const tin = D.slopeTin(res?.id);
+        const xml = D.slopeLandXml(res?.id) || '';
+        const dxf = D.dxfPreview();
+        const p1 = xml.match(/<P id="1">([^<]+)<\/P>/);
+        const xyz = p1 ? p1[1].trim().split(/\s+/).map(Number) : null;
+        return {
+            res, tin,
+            xmlFaces: (xml.match(/<F>/g) || []).length,
+            xmlPnts: (xml.match(/<P id="/g) || []).length,
+            xmlHasSurface: /<Surface /i.test(xml) && /surfType="TIN"/i.test(xml),
+            dxfFaces: (dxf.match(/\r\n3DFACE\r\n/g) || []).length,
+            dxfSlopeLayer: /LVA_SLOPE/.test(dxf),
+            p1: xyz,
+            tin0: tin?.points?.[0] || null
+        };
+    }, groundZ);
+    if (!pad.res?.tin) {
+        problems.push('откосы: площадка не собрала TIN');
+    } else {
+        if (pad.res.tin.padFaces !== 2) {
+            problems.push(`откосы: середина площадки ${pad.res.tin.padFaces} треугольников вместо 2 — дыра в TIN`);
+        }
+        if (pad.res.tin.capFaces) {
+            problems.push(`откосы: у замкнутой площадки не должно быть торцов (${pad.res.tin.capFaces})`);
+        }
+        if (pad.res.tin.faces < 10) {
+            problems.push(`откосы: TIN площадки ${pad.res.tin.faces} граней — мало (середина 2 + 4 борта по 2)`);
+        }
+        if (!pad.xmlHasSurface || pad.xmlFaces !== pad.res.tin.faces || pad.xmlPnts !== pad.res.tin.points) {
+            problems.push(
+                `откосы: LandXML не сходится с TIN (граней xml ${pad.xmlFaces}/${pad.res.tin.faces}, ` +
+                `точек ${pad.xmlPnts}/${pad.res.tin.points})`
+            );
+        }
+        if (pad.p1 && pad.tin0) {
+            // LandXML: northing easting elev = Y X Z абсолютные
+            const dn = Math.abs(pad.p1[0] - pad.tin0.y);
+            const de = Math.abs(pad.p1[1] - pad.tin0.x);
+            const dz = Math.abs(pad.p1[2] - pad.tin0.z);
+            if (dn > 1e-5 || de > 1e-5 || dz > 1e-5) {
+                problems.push(
+                    `откосы: LandXML точка 1 (${pad.p1.join(', ')}) не совпала с TIN ` +
+                    `(N=${pad.tin0.y}, E=${pad.tin0.x}, Z=${pad.tin0.z})`
+                );
+            }
+        } else {
+            problems.push('откосы: в LandXML нет точки id=1');
+        }
+        if (!pad.dxfSlopeLayer || pad.dxfFaces < pad.res.tin.faces) {
+            problems.push(`откосы: DXF площадки — 3DFACE ${pad.dxfFaces}, слой LVA_SLOPE ${pad.dxfSlopeLayer}`);
+        }
     }
 
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:

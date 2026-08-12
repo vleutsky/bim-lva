@@ -3605,9 +3605,12 @@
                 От каждой точки линии откос идёт по нормали в плане до пересечения
                 с рельефом: выше земли на бровке — насыпь, ниже — выемка. Линия
                 выхода откоса на землю добавляется отдельной полилинией (правится,
-                уходит в DXF). На вогнутых углах соседние откосы могут налезать
-                друг на друга — это не вычищается. Где рельеф не найден или откос
-                не дотянулся за максимальный вылет — участок пропускается.
+                уходит в DXF). У замкнутого контура середина заполняется как
+                площадка (иначе в TIN дыра), у разомкнутой — торцы закрываются
+                откосом вдоль оси. На вогнутых углах соседние откосы могут
+                налезать друг на друга — это не вычищается. Где рельеф не найден
+                или откос не дотянулся за максимальный вылет — участок пропускается.
+                Готовый TIN уходит в Civil 3D как DXF (3DFACE) или LandXML (Surface).
             </div>
             <div class="prop small"><div class="k">Линия (бровка)</div><select class="editInput" id="slopeSelect"></select></div>
             <div class="prop small">
@@ -3625,6 +3628,8 @@
             <div class="prop small"><div class="k">Цвет</div><input type="color" class="polyline-color" id="slopeColor" value="#c9793a"></div>
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
+                <button class="btn" id="slopeExportDxf" title="Площадка и откосы треугольниками 3DFACE, координаты абсолютные, единицы — метры. Civil и nanoCAD открывают R12">⬇ DXF</button>
+                <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
                 <button class="btn" id="slopeCancel">Закрыть</button>
                 <button class="btn load-btn" id="slopeApply">Построить</button>
@@ -4960,12 +4965,18 @@
                     id: model.id,
                     sides: model.sides.map((s) => ({
                         side: s.side, fill: s.fill, cut: s.cut,
-                        sections: s.sections,
+                        sections: s.sections.length,
                         skippedNoGround: s.skippedNoGround,
                         skippedNotReached: s.skippedNotReached,
                         exitPolylineIds: s.exitPolylineIds.slice(),
                         triangles: s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0
-                    }))
+                    })),
+                    tin: model.tin ? {
+                        points: model.tin.points.length,
+                        faces: model.tin.faces.length,
+                        padFaces: model.padFaces || 0,
+                        capFaces: model.capFaces || 0
+                    } : null
                 };
             },
             /** Все текущие построения откосов — сводка (без геометрии). */
@@ -4974,17 +4985,46 @@
                     id: sm.id, polylineId: sm.polylineId, side: sm.side,
                     sides: sm.sides.map((s) => ({
                         side: s.side, fill: s.fill, cut: s.cut,
-                        sections: s.sections,
+                        sections: s.sections.length,
                         skippedNoGround: s.skippedNoGround,
                         skippedNotReached: s.skippedNotReached,
                         exitPolylineIds: s.exitPolylineIds.slice()
-                    }))
+                    })),
+                    tin: sm.tin ? {
+                        points: sm.tin.points.length,
+                        faces: sm.tin.faces.length,
+                        padFaces: sm.padFaces || 0,
+                        capFaces: sm.capFaces || 0
+                    } : null
                 }));
             },
             /** Убрать все построенные откосы (то же, что «Убрать откосы»). */
             clearSlopes() {
                 clearSlopeModels();
                 return true;
+            },
+            /**
+             * TIN площадки в абсолютных координатах — для сверки экспорта.
+             * id построения или 0/null — последнее.
+             */
+            slopeTin(id) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                if (!sm?.tin) return null;
+                return {
+                    points: sm.tin.points.map((p) => scenePointToAbs(p)),
+                    faces: sm.tin.faces.map((f) => f.slice()),
+                    padFaces: sm.padFaces || 0,
+                    capFaces: sm.capFaces || 0
+                };
+            },
+            /** Текст LandXML площадки без скачивания. */
+            slopeLandXml(id) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                return sm ? buildSlopeLandXml(sm) : null;
             },
             /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
             focusPolyline(id, how) {
@@ -6957,6 +6997,206 @@
             return groups.filter((g) => g.length >= 2);
         }
 
+        /**
+         * Триангуляция кольца в плане (ear clipping). Нужна для середины
+         * замкнутой площадки: веер от первой вершины ломается на вогнутом
+         * контуре, а дыра как раз там и оставалась. Winding берём из
+         * шнурков — треугольники смотрят вверх при CCW.
+         */
+        function triangulateRingXY(ring) {
+            const n0 = ring.length;
+            if (n0 < 3) return [];
+            let area2 = 0;
+            for (let i = 0; i < n0; i++) {
+                const j = (i + 1) % n0;
+                area2 += ring[i].x * ring[j].y - ring[j].x * ring[i].y;
+            }
+            const ccw = area2 > 0;
+            const idx = [];
+            for (let i = 0; i < n0; i++) idx.push(i);
+            const areaOf = (a, b, c) =>
+                (ring[b].x - ring[a].x) * (ring[c].y - ring[a].y) -
+                (ring[b].y - ring[a].y) * (ring[c].x - ring[a].x);
+            const inside = (a, b, c, p) => {
+                const a1 = areaOf(a, b, p), a2 = areaOf(b, c, p), a3 = areaOf(c, a, p);
+                if (ccw) return a1 >= -1e-12 && a2 >= -1e-12 && a3 >= -1e-12;
+                return a1 <= 1e-12 && a2 <= 1e-12 && a3 <= 1e-12;
+            };
+            const faces = [];
+            let guard = n0 * n0;
+            while (idx.length > 3 && guard-- > 0) {
+                let clipped = false;
+                for (let i = 0; i < idx.length; i++) {
+                    const prev = idx[(i + idx.length - 1) % idx.length];
+                    const cur = idx[i];
+                    const next = idx[(i + 1) % idx.length];
+                    const a = areaOf(prev, cur, next);
+                    if (ccw ? a <= 1e-12 : a >= -1e-12) continue;
+                    let ear = true;
+                    for (let k = 0; k < idx.length; k++) {
+                        const p = idx[k];
+                        if (p === prev || p === cur || p === next) continue;
+                        if (inside(prev, cur, next, p)) { ear = false; break; }
+                    }
+                    if (!ear) continue;
+                    faces.push([ring[prev], ring[cur], ring[next]]);
+                    idx.splice(i, 1);
+                    clipped = true;
+                    break;
+                }
+                if (!clipped) break;
+            }
+            if (idx.length === 3) {
+                faces.push([ring[idx[0]], ring[idx[1]], ring[idx[2]]]);
+            }
+            return faces;
+        }
+
+        function slopeMakeMesh(positions, colors, name) {
+            if (!positions.length) return null;
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            if (colors && colors.length) {
+                geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            }
+            geom.computeVertexNormals();
+            const mat = new THREE.MeshStandardMaterial({
+                vertexColors: !!(colors && colors.length),
+                color: colors && colors.length ? 0xffffff : 0xc9793a,
+                roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide
+            });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.name = name;
+            slopeGroup.add(mesh);
+            return mesh;
+        }
+
+        function slopePushTri(positions, colors, a, b, c, col) {
+            positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+            if (colors && col) {
+                for (let k = 0; k < 3; k++) colors.push(col.r, col.g, col.b);
+            }
+        }
+
+        /** Склеить треугольники в TIN с общими вершинами — так Civil любит Surface. */
+        function weldTin(tris) {
+            const points = [];
+            const faces = [];
+            const map = new Map();
+            const keyOf = (p) => `${p.x.toFixed(5)},${p.y.toFixed(5)},${p.z.toFixed(5)}`;
+            const idxOf = (p) => {
+                const k = keyOf(p);
+                if (map.has(k)) return map.get(k);
+                const i = points.length;
+                points.push({ x: p.x, y: p.y, z: p.z });
+                map.set(k, i);
+                return i;
+            };
+            tris.forEach((t) => {
+                if (!t || t.length < 3) return;
+                const ia = idxOf(t[0]), ib = idxOf(t[1]), ic = idxOf(t[2]);
+                if (ia === ib || ib === ic || ic === ia) return;
+                faces.push([ia, ib, ic]);
+            });
+            return { points, faces };
+        }
+
+        function slopeMeshTriangles(mesh) {
+            if (!mesh?.geometry?.attributes?.position) return [];
+            const pos = mesh.geometry.attributes.position;
+            const out = [];
+            for (let i = 0; i + 2 < pos.count; i += 3) {
+                out.push([
+                    new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)),
+                    new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)),
+                    new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2))
+                ]);
+            }
+            return out;
+        }
+
+        /**
+         * Середина замкнутого контура — сама площадка. Без этого TIN откосов
+         * это только борта, а в середине дыра до исходного рельефа.
+         */
+        function buildSlopePadInterior(record, color) {
+            if (!record.closed) return { mesh: null, triangles: [] };
+            const ring = record.renderPts.slice(0, -1);
+            if (ring.length < 3) return { mesh: null, triangles: [] };
+            const faces = triangulateRingXY(ring);
+            if (!faces.length) return { mesh: null, triangles: [] };
+            const col = new THREE.Color(color || '#d4a05a');
+            const positions = [];
+            const colors = [];
+            faces.forEach(([a, b, c]) => slopePushTri(positions, colors, a, b, c, col));
+            return {
+                mesh: slopeMakeMesh(positions, colors, 'Площадка'),
+                triangles: faces
+            };
+        }
+
+        /**
+         * Торцы разомкнутой линии: откос вдоль оси на начале и конце, плюс
+         * треугольник бровка–левый выход–правый выход — иначе в торец смотришь
+         * как в дыру палатки. Объём торца копится отдельно, чтобы не сдвигать
+         * уже проверенные объёмы бортов.
+         */
+        function buildSlopeEndCaps(record, sideResults, opts) {
+            const empty = { meshes: [], triangles: [], fill: 0, cut: 0 };
+            if (record.closed) return empty;
+            const ring = record.renderPts;
+            if (!ring || ring.length < 2) return empty;
+            const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
+            const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
+            const positions = [];
+            const colors = [];
+            const triangles = [];
+            let fill = 0, cut = 0;
+            const ends = [
+                { i: 0, dir: { x: ring[0].x - ring[1].x, y: ring[0].y - ring[1].y } },
+                {
+                    i: ring.length - 1,
+                    dir: {
+                        x: ring[ring.length - 1].x - ring[ring.length - 2].x,
+                        y: ring[ring.length - 1].y - ring[ring.length - 2].y
+                    }
+                }
+            ];
+            ends.forEach((end) => {
+                const len = Math.hypot(end.dir.x, end.dir.y);
+                if (len < 1e-9) return;
+                const normal = { x: end.dir.x / len, y: end.dir.y / len };
+                const C = ring[end.i];
+                const cap = computeSlopeCrossSection(C, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach);
+                const exits = [];
+                sideResults.forEach((s) => {
+                    const sec = s.sections?.[end.i];
+                    if (sec?.valid) exits.push(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z));
+                });
+                const col = (cap.valid && cap.mode === 'cut') ? cutColor : fillColor;
+                if (cap.valid) {
+                    const E = new THREE.Vector3(cap.exit.x, cap.exit.y, cap.exit.z);
+                    exits.forEach((S) => {
+                        slopePushTri(positions, colors, C, S, E, col);
+                        triangles.push([C.clone(), S.clone(), E.clone()]);
+                    });
+                    if (exits.length === 2) {
+                        slopePushTri(positions, colors, exits[0], exits[1], E, col);
+                        triangles.push([exits[0].clone(), exits[1].clone(), E.clone()]);
+                    }
+                    fill += cap.mode === 'cut' ? 0 : cap.area * 0.5 * (cap.distance || 0);
+                    cut += cap.mode === 'cut' ? cap.area * 0.5 * (cap.distance || 0) : 0;
+                } else if (exits.length === 2) {
+                    // Рельеф за торцом не найден — хотя бы закроем портал,
+                    // иначе дыра остаётся. В объём это не идёт: земли нет.
+                    slopePushTri(positions, colors, C, exits[0], exits[1], fillColor);
+                    triangles.push([C.clone(), exits[0].clone(), exits[1].clone()]);
+                }
+            });
+            const mesh = slopeMakeMesh(positions, colors, 'Откос · торцы');
+            return { meshes: mesh ? [mesh] : [], triangles, fill, cut };
+        }
+
         /** Один откос (одна сторона) по всей линии: поверхность + линия выхода + объёмы. */
         function computeSlopeSide(record, side, opts) {
             const closed = !!record.closed;
@@ -6975,10 +7215,6 @@
             const colors = [];
             const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
             const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
-            const pushTri = (a, b, c, col) => {
-                positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-                for (let k = 0; k < 3; k++) colors.push(col.r, col.g, col.b);
-            };
             const last = closed ? ring.length : ring.length - 1;
             for (let i = 0; i < last; i++) {
                 const j = (i + 1) % ring.length;
@@ -6994,39 +7230,38 @@
                 const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
                 const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
                 const col = a.mode === 'cut' ? cutColor : fillColor;
-                pushTri(edgeA, exitA, exitB, col);
-                pushTri(edgeA, exitB, edgeB, col);
+                slopePushTri(positions, colors, edgeA, exitA, exitB, col);
+                slopePushTri(positions, colors, edgeA, exitB, edgeB, col);
             }
 
-            let mesh = null;
-            if (positions.length) {
-                const geom = new THREE.BufferGeometry();
-                geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-                geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-                geom.computeVertexNormals();
-                const mat = new THREE.MeshStandardMaterial({
-                    vertexColors: true, roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide
-                });
-                mesh = new THREE.Mesh(geom, mat);
-                mesh.name = `Откос · ${side === 'left' ? 'влево' : 'вправо'}`;
-                slopeGroup.add(mesh);
-            }
+            const mesh = slopeMakeMesh(
+                positions, colors,
+                `Откос · ${side === 'left' ? 'влево' : 'вправо'}`
+            );
 
             const skippedNoGround = sections.filter((s) => !s.valid && s.reason === 'no-ground').length;
             const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
-            const exitLines = slopeValidGroups(sections).map((pts, gi) => addPolylineFromPoints(pts, {
+            const groups = slopeValidGroups(sections);
+            const exitLines = groups.map((pts, gi) => addPolylineFromPoints(pts, {
                 name: `${record.name} — откос (${side === 'left' ? 'влево' : 'вправо'})` +
-                    (slopeValidGroups(sections).length > 1 ? ` #${gi + 1}` : ''),
+                    (groups.length > 1 ? ` #${gi + 1}` : ''),
                 color: opts.exitColor || '#2c8f4a',
                 width: 1.5
             }));
 
             return {
-                side, mesh, fill, cut,
+                side, mesh, fill, cut, sections,
                 exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
-                sections: sections.length,
                 skippedNoGround, skippedNotReached
             };
+        }
+
+        function collectSlopeTin(model) {
+            const tris = [];
+            model.sides.forEach((s) => slopeMeshTriangles(s.mesh).forEach((t) => tris.push(t)));
+            if (model.padMesh) slopeMeshTriangles(model.padMesh).forEach((t) => tris.push(t));
+            (model.capMeshes || []).forEach((m) => slopeMeshTriangles(m).forEach((t) => tris.push(t)));
+            return weldTin(tris);
         }
 
         /** Построить откосы по всей линии — одна или обе стороны. */
@@ -7036,17 +7271,140 @@
             const sides = opts.side === 'both' ? ['left', 'right'] : [opts.side === 'left' ? 'left' : 'right'];
             const results = sides.map((side) => computeSlopeSide(record, side, opts)).filter(Boolean);
             if (!results.length) return null;
+            const pad = buildSlopePadInterior(record, opts.fillColor);
+            const caps = buildSlopeEndCaps(record, results, opts);
             const model = {
                 id: ++slopeSeq,
                 polylineId: record.id,
+                name: record.name,
                 side: opts.side,
                 mFill: opts.mFill, mCut: opts.mCut, step: opts.step, maxReach: opts.maxReach,
-                sides: results
+                sides: results,
+                padMesh: pad.mesh,
+                capMeshes: caps.meshes,
+                capFill: caps.fill,
+                capCut: caps.cut,
+                padFaces: pad.triangles.length,
+                capFaces: caps.triangles.length
             };
+            model.tin = collectSlopeTin(model);
             slopeModels.push(model);
             updateSlopeStatus();
             markNeedsRender();
             return model;
+        }
+
+        function scenePointToAbs(p) {
+            const a = worldPointToAbsoluteXYZ(p instanceof THREE.Vector3 ? p : new THREE.Vector3(p.x, p.y, p.z));
+            return a ? { x: a.x, y: a.y, z: a.z } : { x: p.x, y: p.y, z: p.z };
+        }
+
+        /**
+         * LandXML 1.2 Surface/TIN — тот же формат, который этот вьювер сам
+         * читает (Pnts/Faces, northing easting elev). Civil 3D открывает через
+         * Import LandXML без конвертации.
+         */
+        function buildSlopeLandXml(model) {
+            const tin = model?.tin;
+            if (!tin?.faces?.length) return null;
+            const escXml = (s) => String(s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const n = (v) => (Math.round(v * 1e6) / 1e6).toFixed(6);
+            const absPts = tin.points.map((p) => scenePointToAbs(p));
+            let zMin = Infinity, zMax = -Infinity;
+            absPts.forEach((p) => {
+                zMin = Math.min(zMin, p.z);
+                zMax = Math.max(zMax, p.z);
+            });
+            const name = escXml(`LVA ${model.name || 'площадка'} ${model.id}`);
+            const now = new Date();
+            const date = now.toISOString().slice(0, 10);
+            const time = now.toISOString().slice(11, 19);
+            const lines = [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                `<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2" date="${date}" time="${time}">`,
+                '  <Units>',
+                '    <Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter" temperatureUnit="celsius" pressureUnit="HPA"/>',
+                '  </Units>',
+                `  <Application name="BIM.LVA Composer IFC" version="${COMPOSER_ABOUT.version}" manufacturer="LVA"/>`,
+                `  <Project name="${name}"/>`,
+                '  <Surfaces>',
+                `    <Surface name="${name}">`,
+                `      <Definition surfType="TIN" elevMin="${n(zMin)}" elevMax="${n(zMax)}">`,
+                '        <Pnts>'
+            ];
+            absPts.forEach((p, i) => {
+                // LandXML: northing easting elevation. У нас X — восток, Y — север.
+                lines.push(`          <P id="${i + 1}">${n(p.y)} ${n(p.x)} ${n(p.z)}</P>`);
+            });
+            lines.push('        </Pnts>', '        <Faces>');
+            tin.faces.forEach((f) => {
+                lines.push(`          <F>${f[0] + 1} ${f[1] + 1} ${f[2] + 1}</F>`);
+            });
+            lines.push(
+                '        </Faces>',
+                '      </Definition>',
+                '    </Surface>',
+                '  </Surfaces>',
+                '</LandXML>',
+                ''
+            );
+            return lines.join('\n');
+        }
+
+        function slopeTinFacesToDxfPairs(g, n) {
+            const faces = [];
+            slopeModels.forEach((sm) => {
+                (sm.tin?.faces || []).forEach((f) => {
+                    const pts = f.map((i) => scenePointToAbs(sm.tin.points[i]));
+                    faces.push(pts);
+                });
+            });
+            faces.forEach((pts) => {
+                g(0, '3DFACE'); g(8, 'LVA_SLOPE');
+                for (let k = 0; k < 3; k++) {
+                    g(10 + k, n(pts[k].x)); g(20 + k, n(pts[k].y)); g(30 + k, n(pts[k].z));
+                }
+                g(13, n(pts[2].x)); g(23, n(pts[2].y)); g(33, n(pts[2].z));
+            });
+            return faces.length;
+        }
+
+        function downloadTextFile(text, filename, mime) {
+            const blob = new Blob([text], { type: mime || 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function exportSlopeDxf(model) {
+            const target = model || slopeModels[slopeModels.length - 1];
+            if (!target?.tin?.faces?.length) {
+                notifyError('Сначала постройте откосы — выгружать нечего.');
+                return false;
+            }
+            const text = buildDxf(drawnPolylines, coordPins);
+            downloadTextFile(text, `bim-lva-pad-${new Date().toISOString().slice(0, 10)}.dxf`, 'application/dxf');
+            notify(`DXF площадки: ${target.tin.faces.length} треугольников, координаты мировые, метры.`);
+            trackUsage('slope_export_dxf', { faces: target.tin.faces.length });
+            return true;
+        }
+
+        function exportSlopeLandXml(model) {
+            const target = model || slopeModels[slopeModels.length - 1];
+            const xml = buildSlopeLandXml(target);
+            if (!xml) {
+                notifyError('Сначала постройте откосы — выгружать нечего.');
+                return false;
+            }
+            downloadTextFile(xml, `bim-lva-pad-${new Date().toISOString().slice(0, 10)}.xml`, 'application/xml');
+            notify(`LandXML: поверхность «${target.name}», ${target.tin.points.length} точек, ${target.tin.faces.length} граней. Civil 3D → Import LandXML.`);
+            trackUsage('slope_export_landxml', { faces: target.tin.faces.length });
+            return true;
         }
 
         /**
@@ -7072,6 +7430,12 @@
                     drawnPolylines.splice(i, 1);
                     if (polylineEditingId === rec.id) polylineEditingId = null;
                 });
+            });
+            const extra = [sm.padMesh, ...(sm.capMeshes || [])].filter(Boolean);
+            extra.forEach((mesh) => {
+                slopeGroup.remove(mesh);
+                mesh.geometry.dispose();
+                mesh.material.dispose();
             });
         }
 
@@ -7107,7 +7471,10 @@
             }));
             el.textContent =
                 `Построек: ${slopeModels.length} · насыпь ${fill.toFixed(2)} м³ · выемка ${cut.toFixed(2)} м³` +
-                (skipped ? ` · пропущено сечений: ${skipped}` : '');
+                (skipped ? ` · пропущено сечений: ${skipped}` : '') +
+                (slopeModels.some((sm) => sm.tin?.faces?.length)
+                    ? ` · TIN ${slopeModels.reduce((n, sm) => n + (sm.tin?.faces?.length || 0), 0)} граней`
+                    : '');
         }
 
         /* --- Объектная привязка ----------------------------------------------
@@ -8831,11 +9198,11 @@
             g(9, '$MEASUREMENT'); g(70, 1);          // метрическая
             g(0, 'ENDSEC');
 
-            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID'];
+            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE'];
             g(0, 'SECTION'); g(2, 'TABLES');
             g(0, 'TABLE'); g(2, 'LAYER'); g(70, layers.length);
             layers.forEach((name, i) => {
-                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1, 30][i]); g(6, 'CONTINUOUS');
+                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1, 30, 32][i]); g(6, 'CONTINUOUS');
             });
             g(0, 'ENDTAB'); g(0, 'ENDSEC');
 
@@ -8877,6 +9244,7 @@
                     g(13, n(last.x)); g(23, n(last.y)); g(33, n(last.z));
                 }
             });
+            slopeTinFacesToDxfPairs(g, n);
             pins.forEach((pin) => {
                 g(0, 'POINT'); g(8, 'LVA_POINTS');
                 g(10, n(pin.abs.x)); g(20, n(pin.abs.y)); g(30, n(pin.abs.z));
@@ -8887,8 +9255,8 @@
         }
 
         function exportDrawingDxf() {
-            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length) {
-                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел.');
+            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length && !slopeModels.length) {
+                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел, ни откосов.');
                 return;
             }
             const text = buildDxf(drawnPolylines, coordPins);
@@ -10162,6 +10530,8 @@
         }
 
         $('slopeApply')?.addEventListener('click', runSlopeBuild);
+        $('slopeExportDxf')?.addEventListener('click', () => exportSlopeDxf());
+        $('slopeExportXml')?.addEventListener('click', () => exportSlopeLandXml());
         $('slopeSelect')?.addEventListener('change', () => {
             slopeRecordId = Number($('slopeSelect').value);
         });
@@ -26319,7 +26689,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.12: откосы до рельефа по полилинии (влево/вправо/в обе) — поверхность в сцене, линия выхода на землю отдельной полилинией, объёмы насыпи и выемки.',
+                '2026.08.12: откосы до рельефа — площадка без дыры в середине/торцах, выгрузка TIN в DXF (3DFACE) и LandXML для Civil 3D.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',

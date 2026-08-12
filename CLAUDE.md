@@ -680,6 +680,11 @@ null` обычный пользователь не видит, а админ в�
   «3» (как в самом IFC-файле), а `3 − sizeZ/2` от центрирования. Держать
   отметку земли числом в тесте нельзя, снимать через
   `BimLvaDebug.modelBounds` (`centerZ + sizeZ/2`) в момент прогона.
+  У замкнутого контура середина — ear clipping в плане (`triangulateRingXY`),
+  иначе TIN это только борта и в середине дыра; у разомкнутой торцы закрываются
+  откосом вдоль оси. Выгрузка: DXF слой `LVA_SLOPE` (3DFACE) и LandXML 1.2
+  Surface (`Pnts`/`Faces`, northing=Y easting=X — как читает сам вьювер и
+  Civil 3D Import LandXML). API: `slopeTin`, `slopeLandXml`.
 
 ---
 
