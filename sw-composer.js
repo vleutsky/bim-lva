@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-v118';
+const CACHE = 'bimlva-composer-shell-v119';
 const SHELL = [
   './',
   './index.html',

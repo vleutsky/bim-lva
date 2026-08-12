@@ -1293,6 +1293,37 @@
             transform: translate(-50%, 8px);
         }
         .poly-vz-label:hover { background: rgba(23, 88, 111, .97); }
+        /* Радиус сопряжения — над вершиной, чтобы не спорить с отметкой,
+           которая висит под ней. */
+        .poly-r-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            white-space: nowrap;
+            padding: 2px 6px;
+            border-radius: 4px;
+            box-shadow: 0 1px 4px rgba(10, 20, 32, .35);
+            background: rgba(240, 100, 36, .94);
+            border: 1px solid #c24d17;
+            color: #fff;
+            pointer-events: auto;
+            cursor: text;
+            transform: translate(-50%, calc(-100% - 8px));
+        }
+        .poly-r-label:hover { background: rgba(214, 86, 28, .97); }
+        .poly-r-label.is-editing { padding: 0; border-color: #1f8f5f; }
+        .poly-r-label input {
+            width: 72px;
+            font: inherit;
+            padding: 2px 5px;
+            border: 0;
+            border-radius: 3px;
+            background: #fff;
+            color: #10202c;
+        }
         .poly-vz-label.is-editing { padding: 0; border-color: #f06424; }
         .poly-vz-label input {
             width: 84px;
@@ -1317,23 +1348,33 @@
             font-size: 11.5px;
         }
         .pin-row .btn { padding: 2px 8px; }
+        /* Окно полилиний плотное: строк бывает много, и стандартный кегль
+           панели превращал список в простыню. */
+        #polylinesList, #polylinePointsList { font-size: 11px; }
         .polyline-row {
             display: grid;
-            grid-template-columns: 116px minmax(0, 1fr) auto auto auto auto auto auto auto auto;
+            grid-template-columns: 104px minmax(0, 1fr) auto auto auto auto auto auto auto auto;
             align-items: center;
-            gap: 6px;
-            padding: 5px 4px;
+            gap: 4px;
+            padding: 3px 3px;
             border-bottom: 1px solid var(--line, #d8dee6);
+        }
+        #polylinesList .editInput,
+        #polylinePointsList .editInput,
+        #polylinePointsList input {
+            font-size: 11px;
+            padding: 2px 5px;
         }
         .polyline-row.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
         /* Кнопки в строке — с рамкой: без неё значки читались как просто текст */
         .polyline-row .btn {
-            padding: 2px 7px;
+            padding: 1px 6px;
+            font-size: 11px;
             border: 1px solid var(--line, #d8dee6);
             border-radius: 6px;
             line-height: 1.5;
         }
-        .polyline-row .polyline-close-btn { font-size: 11px; white-space: nowrap; }
+        .polyline-row .polyline-close-btn { font-size: 10.5px; white-space: nowrap; }
         .polyline-row .btn.on {
             border-color: var(--accent);
             color: var(--accent);
@@ -1351,10 +1392,14 @@
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 5px;
-            padding: 4px;
+            gap: 3px 4px;
+            padding: 2px 3px;
             border-bottom: 1px solid var(--line, #d8dee6);
+            font-family: 'IBM Plex Mono', monospace;
+            font-variant-numeric: tabular-nums;
         }
+        .polyline-point-row .polyline-field-label { font-size: 10px; opacity: .75; }
+        .polyline-point-row .pin-xyz { font-size: 10.5px; }
         #drawInput {
             position: absolute;
             left: 50%;
@@ -3460,12 +3505,13 @@
                 <b>⭘ Замкнуть</b> — сомкнуть контур (нужен для площади и
                 картограммы), <b>〰</b> — продольный профиль по оси.
             </div>
-            <div id="polylinesList" style="max-height:200px;overflow:auto;margin-top:8px"></div>
+            <div id="polylinesList" style="max-height:190px;overflow:auto;margin-top:6px"></div>
             <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
                 <div class="bulk-note" style="margin-bottom:6px"><b id="polylinePointsTitle"></b></div>
-                <div id="polylinePointsList" style="max-height:240px;overflow:auto"></div>
+                <div id="polylinePointsList" style="max-height:260px;overflow:auto"></div>
             </div>
             <div class="modal-actions">
+                <button class="btn" id="polylinesExcel" title="Все полилинии в Excel: сводка по осям и построчно по вершинам, координаты абсолютные">⬇ Все параметры в Excel</button>
                 <button class="btn" id="polylinesClear">Удалить все</button>
                 <button class="btn load-btn" id="polylinesClose">Закрыть</button>
             </div>
@@ -7814,7 +7860,9 @@
         const polylineAnnotLayer = document.getElementById('polyline-annot');
         let polylineSegLabels = [];     // {el, i, j}
         let polylineVzLabels = [];      // {el, idx}
+        let polylineRLabels = [];       // {el, idx} — радиусы сопряжения
         let polylineVzEditing = null;   // idx вершины, которую сейчас правят
+        let polylineREditing = null;
         let polylineAnnotKey = '';      // на каком составе точек собран слой
 
         /** Ниже этой экранной длины подпись отрезка не рисуем — иначе на
@@ -7824,9 +7872,12 @@
         function clearPolylineAnnotations() {
             polylineSegLabels.forEach((s) => s.el.remove());
             polylineVzLabels.forEach((v) => v.el.remove());
+            polylineRLabels.forEach((v) => v.el.remove());
             polylineSegLabels = [];
             polylineVzLabels = [];
+            polylineRLabels = [];
             polylineVzEditing = null;
+            polylineREditing = null;
             polylineAnnotKey = '';
         }
 
@@ -7847,11 +7898,19 @@
             return { pts: rec.pts, kind: rec.kind, closed: !!rec.closed, record: rec, tag: 'rec' + rec.id };
         }
 
+        /** Из чего собран слой подписей: состав точек и то, где вписаны радиусы. */
+        function polylineAnnotSignature(src) {
+            const withR = src.record
+                ? src.record.radii.map((r, i) => (r > 0 ? i : -1)).filter((i) => i >= 0).join(',')
+                : '';
+            return `${src.tag}:${src.pts.length}:${src.closed}:${withR}`;
+        }
+
         function rebuildPolylineAnnotations() {
             clearPolylineAnnotations();
             const src = polylineAnnotSource();
             if (!src || !polylineAnnotLayer) { markNeedsRender(); return; }
-            polylineAnnotKey = `${src.tag}:${src.pts.length}:${src.closed}`;
+            polylineAnnotKey = polylineAnnotSignature(src);
 
             const last = src.closed ? src.pts.length : src.pts.length - 1;
             for (let i = 0; i < last; i++) {
@@ -7882,6 +7941,24 @@
                     }
                     polylineAnnotLayer.appendChild(el);
                     polylineVzLabels.push({ el, idx });
+                });
+            }
+
+            // Радиус показываем там, где он ВПИСАН: подпись «R 0» у каждого
+            // угла была бы шумом. Ставить радиус с нуля — из таблицы вершин.
+            if (src.record) {
+                src.pts.forEach((_, idx) => {
+                    if (!(src.record.radii?.[idx] > 0)) return;
+                    const el = document.createElement('div');
+                    el.className = 'poly-r-label';
+                    el.title = 'Радиус сопряжения в этом углу, м. Нажмите, чтобы изменить';
+                    el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                    el.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        startVertexRadiusEdit(idx);
+                    });
+                    polylineAnnotLayer.appendChild(el);
+                    polylineRLabels.push({ el, idx });
                 });
             }
             updatePolylineAnnotations();
@@ -7936,7 +8013,7 @@
             // Состав точек меняется на каждом клике при черчении, а звать
             // пересборку из всех этих мест пришлось бы вручную — дешевле
             // сверить ключ здесь, в кадре.
-            const key = `${src.tag}:${src.pts.length}:${src.closed}`;
+            const key = polylineAnnotSignature(src);
             if (key !== polylineAnnotKey) { rebuildPolylineAnnotations(); return; }
 
             for (const { el, i, j } of polylineSegLabels) {
@@ -7971,6 +8048,60 @@
                 }
                 el.style.transform = `translate(-50%, 8px) translate(${s.x}px, ${s.y}px)`;
             }
+
+            for (const { el, idx } of polylineRLabels) {
+                const p = src.pts[idx];
+                const r = src.record?.radii?.[idx];
+                if (!p || !(r > 0)) { el.hidden = true; continue; }
+                const s = projectToPixels(p);
+                if (s.behind) { el.hidden = true; continue; }
+                el.hidden = false;
+                if (polylineREditing !== idx) el.textContent = `R ${r.toFixed(2)}`;
+                el.style.transform =
+                    `translate(-50%, calc(-100% - 8px)) translate(${s.x}px, ${s.y}px)`;
+            }
+        }
+
+        /** Подпись радиуса → поле ввода прямо в сцене. */
+        function startVertexRadiusEdit(idx) {
+            const src = polylineAnnotSource();
+            const rec = src?.record;
+            const slot = polylineRLabels.find((v) => v.idx === idx);
+            if (!rec || !slot || polylineREditing === idx) return;
+            polylineREditing = idx;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = '0.1';
+            input.min = '0';
+            input.value = (rec.radii[idx] || 0).toFixed(3);
+            slot.el.classList.add('is-editing');
+            slot.el.textContent = '';
+            slot.el.appendChild(input);
+            input.focus();
+            input.select();
+
+            let done = false;
+            const finish = (apply) => {
+                if (done) return;
+                done = true;
+                const v = Number(input.value);
+                polylineREditing = null;
+                slot.el.classList.remove('is-editing');
+                if (apply && Number.isFinite(v) && v >= 0) {
+                    // Ноль убирает сопряжение — и подпись вместе с ним:
+                    // пересборку слоя сделает сверка ключа в кадре.
+                    setPolylineVertexRadius(rec, idx, v);
+                    trackUsage('polyline_radius_inline', {});
+                }
+                updatePolylineAnnotations();
+            };
+            input.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', () => finish(true));
         }
 
         function renderPolylinesList() {
@@ -9521,6 +9652,14 @@
             markNeedsRender();
         });
         // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
+        $('polylinesExcel')?.addEventListener('click', () => {
+            try {
+                exportPolylinesExcel();
+            } catch (err) {
+                console.error(err);
+                notifyError('Не удалось выгрузить Excel: ' + (err?.message || err));
+            }
+        });
         $('polylinesClear')?.addEventListener('click', () => {
             if (!drawnPolylines.length) return;
             clearDrawnPolylines();
@@ -18017,6 +18156,73 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 filenameHint || `bim-lva-props-${nElements}.xls`
             );
             trackUsage('props_export_excel', { rows: rows.length - 1, elements: nElements });
+            return true;
+        }
+
+        /**
+         * Все параметры всех полилиний в Excel: сводка по осям и построчно по
+         * вершинам. Координаты — АБСОЛЮТНЫЕ: файл нужен, чтобы отдать трассу
+         * смежнику или свериться с Civil, а не чтобы посмотреть локальные.
+         */
+        function exportPolylinesExcel() {
+            if (!drawnPolylines.length) {
+                notifyError('Полилиний нет.');
+                return false;
+            }
+            const summary = [[
+                'Полилиния', 'Тип', 'Вершин', 'Замкнута',
+                'L 3D, м', 'L 2D, м', 'Площадь, м²', 'Цвет', 'Толщина, px'
+            ]];
+            const verts = [[
+                'Полилиния', 'Вершина', 'X, м', 'Y, м', 'Z, м',
+                'Пикет, м', 'L до след., м', 'Уклон, ‰', 'Радиус, м'
+            ]];
+
+            for (const rec of drawnPolylines) {
+                summary.push([
+                    rec.name,
+                    rec.kind === '2d' ? '2D' : '3D',
+                    rec.pts.length,
+                    rec.closed ? 'да' : 'нет',
+                    Number(rec.length3d.toFixed(3)),
+                    Number(rec.length2d.toFixed(3)),
+                    rec.closed ? Number(polylinePlanArea(rec).toFixed(3)) : '',
+                    '#' + Number(rec.color).toString(16).padStart(6, '0'),
+                    rec.width
+                ]);
+
+                // Пикет вершины считаем тем же способом, что и профиль, —
+                // вдоль отрисованной линии, иначе числа в двух местах разойдутся.
+                let sta = 0;
+                rec.pts.forEach((p, i) => {
+                    const a = worldPointToAbsoluteXYZ(p) || p;
+                    const seg = polylineSegmentStats(rec, i);
+                    verts.push([
+                        rec.name,
+                        i + 1,
+                        Number(a.x.toFixed(3)),
+                        Number(a.y.toFixed(3)),
+                        Number(a.z.toFixed(3)),
+                        Number(sta.toFixed(3)),
+                        seg ? Number(seg.length3d.toFixed(3)) : '',
+                        seg && seg.slopePermille != null ? Number(seg.slopePermille.toFixed(2)) : '',
+                        rec.radii[i] ? Number(rec.radii[i].toFixed(3)) : ''
+                    ]);
+                    const next = polylineNextIndex(rec, i);
+                    if (next >= 0) {
+                        sta += Math.hypot(rec.pts[next].x - p.x, rec.pts[next].y - p.y);
+                    }
+                });
+            }
+
+            downloadWorkbookSheets(
+                [{ name: 'Полилинии', rows: summary }, { name: 'Вершины', rows: verts }],
+                `bim-lva-polylines-${drawnPolylines.length}.xls`
+            );
+            notifyOk(`Выгружено полилиний: ${drawnPolylines.length}, вершин: ${verts.length - 1}.`);
+            trackUsage('polylines_export_excel', {
+                polylines: drawnPolylines.length, vertices: verts.length - 1
+            });
             return true;
         }
 
