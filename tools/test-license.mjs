@@ -22,7 +22,8 @@ import {
     importRsaVerifyKey,
     signLicenseFile,
     verifyLicenseFile,
-    isMachineId
+    isMachineId,
+    parseLicenseFile
 } from '../supabase/functions/license-issue/license-lic.js';
 
 let failures = 0;
@@ -162,6 +163,33 @@ check('HostLock приводится к верхнему регистру',
         licenseId: samplePayload.LicenseId, clientName: 'x', products: ['Civil'],
         issuedUtc: d, expiresUtc: null, hostLock: '  a1b2c3'.padEnd(64, 'f').trim()
     }, signKey)).Payload.HostLock.match(/^[0-9A-F]+$/) !== null);
+
+// --------------------------------------- импорт офлайн-лицензий -----------
+// parseLicenseFile проверяет только форму (для импорта уже подписанных
+// файлов в базу учёта) — не подпись: публичного ключа кода подписи у веба
+// нет и не должно быть, это отдельный офлайн-контур.
+{
+    const offlineLic = await signLicenseFile({
+        licenseId: samplePayload.LicenseId, clientName: 'a.piatnitsa (L000295)',
+        products: ['Civil'], issuedUtc: d, expiresUtc: null, hostLock: samplePayload.HostLock
+    }, signKey); // ключ здесь любой — parseLicenseFile подпись не проверяет
+
+    const parsed = parseLicenseFile(JSON.stringify(offlineLic));
+    check('parseLicenseFile разбирает валидный license.lic',
+        parsed.Payload.LicenseId === samplePayload.LicenseId);
+
+    check('parseLicenseFile отвергает не-JSON',
+        (() => { try { parseLicenseFile('это не json'); return false; } catch { return true; } })());
+    check('parseLicenseFile отвергает файл без Payload',
+        (() => { try { parseLicenseFile(JSON.stringify({ Signature: 'x' })); return false; } catch { return true; } })());
+    check('parseLicenseFile отвергает файл без Signature',
+        (() => { try { parseLicenseFile(JSON.stringify({ Payload: offlineLic.Payload })); return false; } catch { return true; } })());
+    check('parseLicenseFile отвергает пустой список продуктов',
+        (() => {
+            try { parseLicenseFile(JSON.stringify({ ...offlineLic, Payload: { ...offlineLic.Payload, Products: [] } })); return false; }
+            catch { return true; }
+        })());
+}
 
 // ------------------------------------------ однофайловая сборка ----------
 // Её собирает механический скрипт для развёртывания через дашборд. Разойдётся

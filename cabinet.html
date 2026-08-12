@@ -516,6 +516,31 @@
 
                 <h3 class="lic-admin-h3">Выданные лицензии</h3>
                 <div class="lic-admin-card"><div id="licAdminIssued"><p class="lic-empty">Загрузка…</p></div></div>
+
+                <h3 class="lic-admin-h3">Импортировать уже выданную лицензию</h3>
+                <div class="lic-admin-card">
+                    <p class="lic-note" style="margin-top:0">
+                        Для ключей, выданных офлайн через <code>New-LvaLicense.ps1</code>, —
+                        чтобы они тоже попали в список выше. Аккаунт в кабинете
+                        получателю для этого <b>не обязателен</b>: без него лицензия
+                        всё равно сохранится и будет видна здесь, просто не
+                        появится в «Мои заявки» у самого получателя, пока он не
+                        зарегистрируется с тем же email.
+                    </p>
+                    <label class="lic-field">
+                        <span>Email получателя</span>
+                        <input id="licImportEmail" type="text" spellcheck="false" placeholder="user@example.com">
+                    </label>
+                    <label class="lic-field">
+                        <span>Содержимое license.lic</span>
+                        <textarea id="licImportText" rows="6" spellcheck="false"
+                                  placeholder='{"Payload": {...}, "Signature": "..."}'></textarea>
+                    </label>
+                    <div class="row">
+                        <button type="button" class="btn btn-primary" id="licImportBtn">Импортировать</button>
+                    </div>
+                    <p class="lic-msg" id="licImportMsg" hidden></p>
+                </div>
             </div>
         </div>
     </main>
@@ -833,6 +858,33 @@
                     await renderAdminIssued();
                 } catch (err) {
                     alert(err.message || String(err));
+                    btn.disabled = false;
+                }
+            });
+
+            document.getElementById('licImportBtn')?.addEventListener('click', async () => {
+                const btn = document.getElementById('licImportBtn');
+                const msgBox = document.getElementById('licImportMsg');
+                const emailField = document.getElementById('licImportEmail');
+                const textField = document.getElementById('licImportText');
+
+                msgBox.hidden = true;
+                btn.disabled = true;
+                try {
+                    const res = await lic().importLicense(emailField.value.trim(), textField.value);
+                    msgBox.textContent = res.linkedToAccount
+                        ? `Импортировано (строк: ${res.imported}) и связано с аккаунтом получателя.`
+                        : `Импортировано (строк: ${res.imported}). Аккаунта с этим email в кабинете пока нет — `
+                            + 'запись видна только вам, у получателя появится в «Мои заявки», когда он зарегистрируется с тем же email.';
+                    msgBox.classList.remove('is-error');
+                    msgBox.hidden = false;
+                    textField.value = '';
+                    await renderAdminIssued();
+                } catch (err) {
+                    msgBox.textContent = err.message || String(err);
+                    msgBox.classList.add('is-error');
+                    msgBox.hidden = false;
+                } finally {
                     btn.disabled = false;
                 }
             });

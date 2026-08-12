@@ -120,6 +120,35 @@ export async function signLicenseFile(o, signingKey) {
 }
 
 /**
+ * Разбирает уже готовый license.lic для импорта в базу учёта — файлы,
+ * выданные офлайн через Tools/New-LvaLicense.ps1 (сертификат «LVA Code
+ * Signing», а не веб-ключ). Подпись здесь НЕ проверяется: публичного ключа
+ * кода подписи (pubkey.cer) у веба нет и быть не должно — это отдельный,
+ * офлайн контур. Импорт — учёт задним числом того, что админ и так уже
+ * выпустил и передал, а не повторная выдача.
+ */
+export function parseLicenseFile(text) {
+    let parsed;
+    try {
+        parsed = JSON.parse(text);
+    } catch {
+        throw new Error('Это не похоже на JSON — вставьте содержимое license.lic целиком.');
+    }
+    const p = parsed?.Payload;
+    if (!p || typeof p !== 'object') throw new Error('В файле нет Payload — это не license.lic.');
+    if (!parsed.Signature || typeof parsed.Signature !== 'string') {
+        throw new Error('В файле нет Signature — это не license.lic.');
+    }
+    if (!Array.isArray(p.Products) || !p.Products.length) {
+        throw new Error('Payload.Products пуст или это не список.');
+    }
+    if (!p.LicenseId || !p.IssuedUtc) {
+        throw new Error('В Payload не хватает LicenseId или IssuedUtc.');
+    }
+    return parsed;
+}
+
+/**
  * Проверяет лицензию так же, как LicenseGate: подпись, срок, привязка, продукт.
  * Порядок вердиктов повторяет CheckInternal — чтобы причина отказа совпадала
  * с той, что увидит пользователь в плагине.

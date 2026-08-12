@@ -20,7 +20,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIR = path.join(ROOT, 'supabase', 'functions', 'license-issue');
 const OUT = path.join(DIR, 'bundled.ts');
 
-const IMPORT_LINE = 'import { importRsaSigningKey, signLicenseFile, isMachineId } from "./license-lic.js";';
+const IMPORT_LINE = 'import { importRsaSigningKey, signLicenseFile, isMachineId, parseLicenseFile } from "./license-lic.js";';
 
 const index = await fs.readFile(path.join(DIR, 'index.ts'), 'utf8');
 const format = await fs.readFile(path.join(DIR, 'license-lic.js'), 'utf8');

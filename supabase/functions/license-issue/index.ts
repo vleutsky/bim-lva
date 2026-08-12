@@ -24,7 +24,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 // Формат общий с тестами — см. комментарий в license-lic.js.
-import { importRsaSigningKey, signLicenseFile, isMachineId } from "./license-lic.js";
+import { importRsaSigningKey, signLicenseFile, isMachineId, parseLicenseFile } from "./license-lic.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -169,6 +169,81 @@ Deno.serve(async (req) => {
       licenseId,
       licenseText,
       expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    });
+  }
+
+  // -------------------------------------------------- импорт офлайн-ключа ---
+  // Учёт лицензий, выданных Tools\New-LvaLicense.ps1 (сертификат «LVA Code
+  // Signing», не веб-ключ) — чтобы админ видел их в «Выданные лицензии»
+  // наравне с выпущенными через сайт. Подпись не перепроверяем: доверяем
+  // тому, что вставляет сам админ. Аккаунт получателя необязателен — если
+  // человека с таким email в кабинете нет, лицензия всё равно сохраняется
+  // (user_id = null), просто не попадёт в его «Мои заявки», пока он не
+  // зарегистрируется с этим же email.
+  if (action === "import") {
+    const email = String(body.email ?? "").trim().toLowerCase();
+    const licenseText = String(body.licenseText ?? "").trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return json({ error: "Укажите корректный email получателя" }, 400);
+    }
+    if (!licenseText) return json({ error: "Вставьте содержимое license.lic" }, 400);
+
+    let parsed: { Payload: Record<string, unknown> };
+    try {
+      parsed = parseLicenseFile(licenseText) as { Payload: Record<string, unknown> };
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+
+    const products = parsed.Payload.Products as string[];
+    const unknown = products.find((p) => !PRODUCTS.includes(p));
+    if (unknown) {
+      return json({ error: `Неизвестный продукт «${unknown}» — бывают только Civil, Navis, Inventor, *` }, 400);
+    }
+
+    // Ищем аккаунт получателя по email — best-effort, не блокирует импорт.
+    // listUsers без email-фильтра (не во всех версиях SDK есть) — при
+    // тысячах пользователей потребует постраничный обход, но пока проект
+    // только запускается, одной страницы с запасом достаточно.
+    let targetUserId: string | null = null;
+    let targetEmail = email;
+    const { data: usersPage, error: listErr } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (listErr) return json({ error: `Не удалось прочитать список пользователей: ${listErr.message}` }, 500);
+    const found = usersPage?.users?.find((u) => (u.email ?? "").toLowerCase() === email);
+    if (found) {
+      targetUserId = found.id;
+      targetEmail = found.email ?? email;
+    }
+
+    const issuedAt = parsed.Payload.IssuedUtc ? new Date(String(parsed.Payload.IssuedUtc)) : new Date();
+    const expiresAt = parsed.Payload.ExpiresUtc ? new Date(String(parsed.Payload.ExpiresUtc)) : null;
+    const org = String(parsed.Payload.ClientName ?? "").trim();
+    const licenseId = String(parsed.Payload.LicenseId ?? "");
+
+    // Одна лицензия может закрывать несколько продуктов, а строка в таблице —
+    // всегда один (так же, как при обычной выдаче через issue). Первая строка
+    // берёт «родной» LicenseId файла, остальные — новые, иначе конфликт PK.
+    const rows = products.map((product, i) => ({
+      id: i === 0 && licenseId ? licenseId : crypto.randomUUID(),
+      request_id: null,
+      user_id: targetUserId,
+      email: targetEmail,
+      org,
+      product,
+      machine_id: String(parsed.Payload.HostLock ?? ""),
+      license_key: licenseText,
+      issued_at: issuedAt.toISOString(),
+      expires_at: expiresAt ? expiresAt.toISOString() : null,
+      issued_by: caller.id,
+    }));
+
+    const { error: insErr } = await admin.from("licenses").insert(rows);
+    if (insErr) return json({ error: `Не удалось сохранить: ${insErr.message}` }, 500);
+
+    return json({
+      ok: true,
+      imported: rows.length,
+      linkedToAccount: !!targetUserId,
     });
   }
 
