@@ -793,6 +793,82 @@
             font-size: 10px;
             fill: var(--txt-dim);
         }
+
+        /* Профиль: панель масштаба и компактная таблица вершин.
+           Таблица показывает ВЕРШИНЫ, а не пикеты с шагом: промежуточные
+           точки на прямой между вершинами ничего не сообщают, а список
+           раздувают. */
+        #polyProfileChart { height: 260px; }
+        .profile-scale { display: flex; gap: 6px; align-items: center; }
+        .profile-scale select { flex: 1; min-width: 0; }
+        .profile-scale .btn { padding: 3px 8px; white-space: nowrap; }
+
+        .profile-table {
+            max-height: 200px;
+            overflow: auto;
+            margin-top: 8px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+        }
+        table.profile-grid {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 10.5px;
+            font-variant-numeric: tabular-nums;
+        }
+        table.profile-grid th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: var(--panel, #eef2f6);
+            color: var(--txt-dim);
+            font-weight: 600;
+            text-align: right;
+            padding: 3px 6px;
+            border-bottom: 1px solid var(--line);
+            white-space: nowrap;
+        }
+        table.profile-grid th:first-child,
+        table.profile-grid td:first-child { text-align: left; }
+        table.profile-grid td {
+            text-align: right;
+            padding: 1px 6px;
+            border-bottom: 1px solid var(--line-soft, rgba(140, 150, 165, .18));
+            white-space: nowrap;
+        }
+        table.profile-grid tr:last-child td { border-bottom: 0; }
+        table.profile-grid tr.is-active td { background: rgba(232, 68, 42, .1); }
+        table.profile-grid tr:hover td { background: rgba(36, 120, 181, .07); }
+        /* Поля правки узкие и без рамки: таблица должна читаться как таблица,
+           а не как форма из двадцати инпутов. */
+        table.profile-grid input {
+            width: 68px;
+            font: inherit;
+            text-align: right;
+            padding: 1px 3px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            color: var(--txt);
+        }
+        table.profile-grid input:hover { border-color: var(--line); }
+        table.profile-grid input:focus {
+            border-color: var(--accent, #e8442a);
+            background: var(--panel, #fff);
+            outline: none;
+        }
+        table.profile-grid button.prow-del {
+            border: 0;
+            background: none;
+            color: var(--txt-dim);
+            cursor: pointer;
+            padding: 0 4px;
+            font-size: 12px;
+            line-height: 1;
+        }
+        table.profile-grid button.prow-del:hover { color: #d43c59; }
+        .profile-empty { padding: 8px; color: var(--txt-dim); font-size: 11px; }
         .timeline-4d-row {
             display: flex;
             align-items: center;
@@ -1177,6 +1253,88 @@
             cursor: ns-resize;
         }
 
+        /* Подписи прямо на линии: длина и уклон посередине отрезка, отметка у
+           вершины. Слой отдельный от #labels-container — тот целиком чистится
+           clearMeasureAll(), и подписи полилинии уносило бы вместе с замерами. */
+        #polyline-annot {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 16;
+            overflow: hidden;
+        }
+        .poly-seg-label,
+        .poly-vz-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            white-space: nowrap;
+            padding: 2px 6px;
+            border-radius: 4px;
+            box-shadow: 0 1px 4px rgba(10, 20, 32, .35);
+            /* Небольшой зазор от самой черты: подпись, посаженная ровно на
+               линию, закрывает её собой. */
+            transform: translate(-50%, calc(-100% - 6px));
+        }
+        .poly-seg-label {
+            background: rgba(255, 255, 255, .94);
+            border: 1px solid #1f8f5f;
+            color: #10321f;
+        }
+        .poly-vz-label {
+            background: rgba(31, 111, 139, .94);
+            border: 1px solid #16556c;
+            color: #fff;
+            pointer-events: auto;
+            cursor: text;
+            transform: translate(-50%, 8px);
+        }
+        .poly-vz-label:hover { background: rgba(23, 88, 111, .97); }
+        /* Радиус сопряжения — над вершиной, чтобы не спорить с отметкой,
+           которая висит под ней. */
+        .poly-r-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            white-space: nowrap;
+            padding: 2px 6px;
+            border-radius: 4px;
+            box-shadow: 0 1px 4px rgba(10, 20, 32, .35);
+            background: rgba(240, 100, 36, .94);
+            border: 1px solid #c24d17;
+            color: #fff;
+            pointer-events: auto;
+            cursor: text;
+            transform: translate(-50%, calc(-100% - 8px));
+        }
+        .poly-r-label:hover { background: rgba(214, 86, 28, .97); }
+        .poly-r-label.is-editing { padding: 0; border-color: #1f8f5f; }
+        .poly-r-label input {
+            width: 72px;
+            font: inherit;
+            padding: 2px 5px;
+            border: 0;
+            border-radius: 3px;
+            background: #fff;
+            color: #10202c;
+        }
+        .poly-vz-label.is-editing { padding: 0; border-color: #f06424; }
+        .poly-vz-label input {
+            width: 84px;
+            font: inherit;
+            padding: 2px 5px;
+            border: 0;
+            border-radius: 3px;
+            background: #fff;
+            color: #10202c;
+        }
+
         .pin-row {
             display: grid;
             grid-template-columns: 40px 1fr auto auto auto;
@@ -1190,23 +1348,33 @@
             font-size: 11.5px;
         }
         .pin-row .btn { padding: 2px 8px; }
+        /* Окно полилиний плотное: строк бывает много, и стандартный кегль
+           панели превращал список в простыню. */
+        #polylinesList, #polylinePointsList { font-size: 11px; }
         .polyline-row {
             display: grid;
-            grid-template-columns: 116px minmax(0, 1fr) auto auto auto auto auto auto auto auto;
+            grid-template-columns: 104px minmax(0, 1fr) repeat(10, auto);
             align-items: center;
-            gap: 6px;
-            padding: 5px 4px;
+            gap: 4px;
+            padding: 3px 3px;
             border-bottom: 1px solid var(--line, #d8dee6);
+        }
+        #polylinesList .editInput,
+        #polylinePointsList .editInput,
+        #polylinePointsList input {
+            font-size: 11px;
+            padding: 2px 5px;
         }
         .polyline-row.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
         /* Кнопки в строке — с рамкой: без неё значки читались как просто текст */
         .polyline-row .btn {
-            padding: 2px 7px;
+            padding: 1px 6px;
+            font-size: 11px;
             border: 1px solid var(--line, #d8dee6);
             border-radius: 6px;
             line-height: 1.5;
         }
-        .polyline-row .polyline-close-btn { font-size: 11px; white-space: nowrap; }
+        .polyline-row .polyline-close-btn { font-size: 10.5px; white-space: nowrap; }
         .polyline-row .btn.on {
             border-color: var(--accent);
             color: var(--accent);
@@ -1224,10 +1392,14 @@
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 5px;
-            padding: 4px;
+            gap: 3px 4px;
+            padding: 2px 3px;
             border-bottom: 1px solid var(--line, #d8dee6);
+            font-family: 'IBM Plex Mono', monospace;
+            font-variant-numeric: tabular-nums;
         }
+        .polyline-point-row .polyline-field-label { font-size: 10px; opacity: .75; }
+        .polyline-point-row .pin-xyz { font-size: 10.5px; }
         #drawInput {
             position: absolute;
             left: 50%;
@@ -2511,7 +2683,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 89f7611</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b1ae69c</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2726,7 +2898,7 @@
         </div>
         <div id="labels-container"></div>
         <svg id="coord-pin-leaders"></svg>
-        <div id="coord-pins-container"></div> <div id="polyline-handles"></div> <div id="boxSelectRect"></div>
+        <div id="coord-pins-container"></div> <div id="polyline-annot"></div> <div id="polyline-handles"></div> <div id="boxSelectRect"></div>
         <div id="tourHud" class="tour-hud" hidden>
             <span id="tourHudText">Проезд…</span>
             <select id="tourHudCamView" class="editInput" title="Вид камеры" style="max-width:160px;padding:4px 8px;font-size:12px">
@@ -2794,6 +2966,9 @@
         <div id="ctxPolylineGroup" hidden>
             <button class="ctx-item" id="ctxPolylineProps" title="Открыть полилинию в таблице: вершины, отметки, длины, уклоны">📐 Свойства полилинии</button>
             <button class="ctx-item" id="ctxPolylineFillet" title="Вписать радиус в угол, ближайший к точке правого клика">◜ Вписать кривую в этот угол…</button>
+            <button class="ctx-item" id="ctxPolylineAddVertex" title="Вставить вершину точно в точку правого клика и сразу задать ей отметку">✛ Вершина здесь + отметка…</button>
+            <button class="ctx-item" id="ctxPolylineAddVertexTerrain" title="Вставить вершину в точке правого клика и посадить её на рельеф под ней">⛰ Вершина здесь по рельефу</button>
+            <button class="ctx-item" id="ctxPolylineVertTransition" title="Вертикальный переход: укажите начало и конец, участок между ними уйдёт на другую отметку через вертикальные стояки">⤒ Вертикальный переход…</button>
             <button class="ctx-item" id="ctxPolylineContinue" title="Дописать вершины с конца полилинии">✚ Продолжить с конца</button>
             <button class="ctx-item" id="ctxPolylineContinueStart" title="Дописать вершины с начала полилинии">✚ Продолжить с начала</button>
             <button class="ctx-item" id="ctxPolylineClose" title="Замкнуть или разомкнуть контур">⭘ Замкнуть / разомкнуть</button>
@@ -3347,14 +3522,17 @@
                 (появляются у раскрытой полилинии), <b>Ctrl + тянуть</b> — только
                 по высоте. По линии можно кликнуть в сцене — она раскроется здесь.
                 <b>⭘ Замкнуть</b> — сомкнуть контур (нужен для площади и
-                картограммы), <b>〰</b> — продольный профиль по оси.
+                картограммы), <b>〰</b> — продольный профиль по оси,
+                <b>⛰</b> — картограмма земляных работ по замкнутому контуру,
+                <b>⤒</b> — поднять или опустить всю линию.
             </div>
-            <div id="polylinesList" style="max-height:200px;overflow:auto;margin-top:8px"></div>
+            <div id="polylinesList" style="max-height:190px;overflow:auto;margin-top:6px"></div>
             <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
                 <div class="bulk-note" style="margin-bottom:6px"><b id="polylinePointsTitle"></b></div>
-                <div id="polylinePointsList" style="max-height:240px;overflow:auto"></div>
+                <div id="polylinePointsList" style="max-height:260px;overflow:auto"></div>
             </div>
             <div class="modal-actions">
+                <button class="btn" id="polylinesExcel" title="Все полилинии в Excel: сводка по осям и построчно по вершинам, координаты абсолютные">⬇ Все параметры в Excel</button>
                 <button class="btn" id="polylinesClear">Удалить все</button>
                 <button class="btn load-btn" id="polylinesClose">Закрыть</button>
             </div>
@@ -3368,18 +3546,35 @@
                 <span class="modal-drag-hint">⠿ перетащить</span>
             </div>
             <div class="bulk-note">
-                Отметки снимаются лучом вниз по загруженной геометрии (рельеф,
-                TIN из DXF, IFC). Красная линия — сама полилиния, синяя — земля
-                под ней. Где луч не попал (за краем поверхности, в дыре) —
-                разрыв, такие пикеты помечены отдельно.
+                Отметки земли снимаются лучом вниз по загруженной геометрии
+                (рельеф, TIN из DXF, IFC). Красная линия — ось, синяя — земля.
+                Где луч не попал — разрыв, это честно, а не ноль.
+                <b>Кружки — вершины оси:</b> тяните вверх-вниз, чтобы менять
+                отметку. Колесо — зум, перетаскивание фона — сдвиг,
+                двойной клик по оси — новая вершина.
             </div>
             <div class="prop small"><div class="k">Полилиния</div><select class="editInput" id="polyProfileSelect"></select></div>
-            <div class="prop small"><div class="k">Шаг пикета, м</div><input class="editInput" id="polyProfileStep" type="number" min="0.1" step="0.5" value="5"></div>
+            <div class="prop small">
+                <div class="k">Верт. масштаб</div>
+                <div class="profile-scale">
+                    <select class="editInput" id="polyProfileExag" title="Во сколько раз вертикаль растянута относительно плана. На профилях это норма: иначе уклоны не разглядеть">
+                        <option value="auto" selected>авто (вписать)</option>
+                        <option value="1">1 : 1</option>
+                        <option value="2">2 : 1</option>
+                        <option value="5">5 : 1</option>
+                        <option value="10">10 : 1</option>
+                        <option value="20">20 : 1</option>
+                        <option value="50">50 : 1</option>
+                    </select>
+                    <button class="btn" id="polyProfileFit" title="Вписать весь профиль в окно">⤢ Вписать</button>
+                </div>
+            </div>
             <div class="bulk-note" id="polyProfileMeta">—</div>
-            <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 220" preserveAspectRatio="none"></svg>
-            <div id="polyProfileTable" style="max-height:180px;overflow:auto;margin-top:8px"></div>
+            <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 260"
+                 preserveAspectRatio="none" style="touch-action:none;cursor:grab"></svg>
+            <div id="polyProfileTable" class="profile-table"></div>
             <div class="modal-actions">
-                <button class="btn" id="polyProfileCsv" title="Пикет; отметка земли; отметка оси; рабочая отметка">Копировать CSV</button>
+                <button class="btn" id="polyProfileCsv" title="Вершина; пикет; отметка земли; отметка оси; рабочая отметка; уклон">Копировать CSV</button>
                 <button class="btn" id="polyProfileDrape" title="Посадить вершины полилинии на землю по снятым отметкам">⤓ Посадить ось на землю</button>
                 <button class="btn load-btn" id="polyProfileClose">Закрыть</button>
             </div>
@@ -3413,6 +3608,41 @@
                 <button class="btn" id="earthworkCopy">Копировать отчёт</button>
                 <button class="btn load-btn" id="earthworkRun">Посчитать</button>
                 <button class="btn" id="earthworkClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop floating-panel" id="slopeModal">
+        <div class="modal-card" id="slopeCard" role="dialog" aria-modal="true" style="width:min(560px,94vw)">
+            <div class="modal-drag-handle" id="slopeDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Откосы до рельефа</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
+            </div>
+            <div class="bulk-note">
+                От каждой вершины линии откос идёт наружу по нормали в плане,
+                пока не встретит землю. Бровка выше земли — насыпь (вниз),
+                ниже — выемка (вверх). Честно: на вогнутых углах соседние откосы
+                налезают друг на друга — это не вычищается; где земля не найдена
+                или откос не дотянулся за макс. вылет, участок пропускается и
+                считается отдельно.
+            </div>
+            <div class="prop small"><div class="k">Ось</div><select class="editInput" id="slopeSelect"></select></div>
+            <div class="prop small"><div class="k">Сторона</div>
+                <select class="editInput" id="slopeSide">
+                    <option value="both">В обе</option>
+                    <option value="left">Влево по ходу</option>
+                    <option value="right">Вправо по ходу</option>
+                </select>
+            </div>
+            <div class="prop small"><div class="k">Насыпь 1:m</div><input class="editInput" id="slopeFill" type="number" min="0.1" step="0.1" value="1.5"></div>
+            <div class="prop small"><div class="k">Выемка 1:m</div><input class="editInput" id="slopeCut" type="number" min="0.1" step="0.1" value="1"></div>
+            <div class="prop small"><div class="k">Макс. вылет, м</div><input class="editInput" id="slopeMaxWidth" type="number" min="1" step="5" value="30"></div>
+            <div class="bulk-note" id="slopeResult">Нажмите «Построить».</div>
+            <div class="modal-actions">
+                <button class="btn" id="slopeToPolyline">Линии выхода → полилинии</button>
+                <button class="btn" id="slopeClear">Убрать откосы</button>
+                <button class="btn load-btn" id="slopeRun">Построить</button>
+                <button class="btn" id="slopeClose">Закрыть</button>
             </div>
         </div>
     </div>
@@ -4518,9 +4748,56 @@
             get projection() { return projectionMode; },
             /** Видимая высота кадра ортокамеры (м) — для проверки зума колесом. */
             get orthoFrustumHeight() { return orthoCamera.top - orthoCamera.bottom; },
+            /** Где стоит камера. Цель орбиты для проверки «вид не сбросился» не
+             *  годится: сцена до-центрируется, и цель остаётся у нуля в обоих
+             *  случаях — а вот позиция при вписывании уезжает. */
+            get cameraPos() {
+                return { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+            },
             /** Куда нацелена орбита и где центр выделения — для проверки видов. */
             get cameraTarget() {
                 return { x: controls.target.x, y: controls.target.y, z: controls.target.z };
+            },
+            /**
+             * Что реально на материале элемента: назначенный цвет, цвет меша и
+             * свечение выделения. Нужен, чтобы проверять покраску числами —
+             * по картинке «подсвечен или нет» на скриншоте не различить.
+             */
+            meshAppearance(modelID, expressID) {
+                const mod = loadedModels.get(modelID);
+                if (!mod) return null;
+                const stored = mod.appearanceByID?.get(expressID) || null;
+                const meshes = mod.meshesByID?.get(expressID) || [];
+                const mat = meshes[0] && (Array.isArray(meshes[0].material)
+                    ? meshes[0].material[0] : meshes[0].material);
+                return {
+                    batched: !!mod.batched,
+                    storedColor: stored?.color ?? null,
+                    meshColor: mat?.color ? mat.color.getHex() : null,
+                    emissive: mat?.emissive ? mat.emissive.getHex() : null,
+                    emissiveIntensity: mat?.emissiveIntensity ?? null,
+                    meshes: meshes.length
+                };
+            },
+            /** Первый элемент с геометрией — точка входа для проверок покраски. */
+            firstElementRef() {
+                for (const [modelID, mod] of loadedModels) {
+                    const it = mod.meshesByID?.keys?.().next?.();
+                    if (it && !it.done) return { modelID, expressID: it.value };
+                }
+                return null;
+            },
+            /** Покрасить элемент тем же путём, что и кнопка «Применить оформление». */
+            paintElement(modelID, expressID, hex) {
+                return applyAppearanceToSelection(
+                    { color: hex, preset: 'custom', materialName: '', roughness: 0.55,
+                      metalness: 0.05, opacity: 1, repeatU: 1, repeatV: 1, texture: null },
+                    [{ modelID, expressID }]
+                );
+            },
+            /** Текущее выделение как список ссылок. */
+            get selectionRefs() {
+                return selectedItems.map((i) => ({ modelID: i.modelID, expressID: i.expressID }));
             },
             get selectionCentre() {
                 if (!selectedItems.length) return null;
@@ -4553,6 +4830,60 @@
                 if (!rec) return false;
                 setPolylineVertexRadius(rec, idx, radius);
                 return true;
+            },
+            /**
+             * Вертикальный переход по долям вдоль отрезков — вход для тестов.
+             * Кликами это не проверить надёжно: попадание в линию зависит от
+             * ракурса, а проверять надо геометрию, а не меткость мыши.
+             * tA/tB — {i, t}: номер отрезка исходных вершин и доля вдоль него.
+             */
+            verticalTransition(id, tA, tB, opts) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                const at = (s) => {
+                    const j = polylineNextIndex(rec, s.i);
+                    if (j < 0) return null;
+                    const a = rec.pts[s.i];
+                    const b = rec.pts[j];
+                    return { i: s.i, j, t: s.t, point: a.clone().lerp(b, s.t) };
+                };
+                const A = at(tA);
+                const B = at(tB);
+                if (!A || !B) return false;
+                return applyVerticalTransition(rec, A, B, opts);
+            },
+            /**
+             * Полилиния из готовых точек сцены — тесту нужна линия в заведомо
+             * известном месте, а не там, куда попал клик. Возвращает id.
+             */
+            makePolyline(points, name) {
+                const rec = createPolylineFromPoints(points, name || 'Отладочная линия');
+                if (rec && typeof renderPolylinesList === 'function') renderPolylinesList();
+                return rec ? rec.id : null;
+            },
+            /**
+             * Откосы до рельефа без окна: возвращает сводку и сами сечения,
+             * чтобы тест мог проверить геометрию (отметку точки выхода против
+             * заданного заложения), а не только «что-то посчиталось».
+             */
+            slopes(id, opts) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return null;
+                const res = computeSlopes(rec, opts || {});
+                if (!res) return null;
+                buildSlopeSurfaces(res.runs);
+                return {
+                    fillVol: res.fillVol, cutVol: res.cutVol,
+                    sections: res.sections, total: res.total,
+                    noGround: res.noGround, notReached: res.notReached, flat: res.flat,
+                    maxHeight: res.maxHeight, maxWidth: res.maxWidth,
+                    surfaces: slopeGroup.children.length,
+                    runs: res.runs.map((run) => run.map((s) => ({
+                        isFill: s.isFill, height: s.height, width: s.out.d,
+                        crown: { x: s.crown.x, y: s.crown.y, z: s.crown.z },
+                        out: { x: s.out.x, y: s.out.y, z: s.out.z }
+                    })))
+                };
             },
             /** Сколько ручек вершин сейчас на экране (у раскрытой полилинии). */
             get polylineHandleCount() {
@@ -4640,6 +4971,12 @@
                 set('drawInputDz', dz);
                 const p = drawInputNextPoint();
                 return p ? { x: p.x, y: p.y, z: p.z } : null;
+            },
+            /** Завершить черчение (то же, что Esc) — для тестов, которым нужна
+             *  готовая запись, а не черновик. */
+            finishDrawnPolyline() {
+                const rec = finishDrawPolyline();
+                return rec ? rec.id : null;
             },
             /** Картограмма: объёмы выемки/насыпи внутри замкнутого контура. */
             earthwork(id, cell, mode, level) {
@@ -7017,6 +7354,7 @@
             drawPoints = [];
             polylineEditingId = null;
             clearPolylineHandles();
+            clearPolylineAnnotations();
             refreshDrawDraft();
             updateDrawUi();
         }
@@ -7159,6 +7497,235 @@
             return p.sub(shift);
         }
 
+        /* ------------------------------------------------------------------
+         * Вертикальный переход: «разрезать и поднять середину».
+         *
+         * Та же модель, что у команды LVA_RaisePipeVertical в плагине Civil:
+         * участок между двумя указанными точками уходит на другую отметку, а
+         * на границах встают ВЕРТИКАЛЬНЫЕ стояки — в плане переломов нет,
+         * поэтому отводы потом сядут сами. В точке A появляются две вершины с
+         * одинаковым X/Y (старая отметка и новая), то же в точке B.
+         *
+         * Режим 'z' — середина ложится горизонтально на заданную отметку;
+         * 'dz' — сдвигается на величину, сохраняя собственный уклон.
+         * ------------------------------------------------------------------ */
+        function applyVerticalTransition(record, hitA, hitB, { mode, value }) {
+            if (!record || !hitA || !hitB) return false;
+            // Упорядочиваем по ходу линии: пользователь мог ткнуть в обратную сторону.
+            let a = hitA;
+            let b = hitB;
+            if (b.i < a.i || (b.i === a.i && b.t < a.t)) { const t = a; a = b; b = t; }
+            if (a.i === b.i && Math.abs(a.t - b.t) < 1e-6) {
+                notifyError('Начало и конец перехода совпали — укажите две разные точки.');
+                return false;
+            }
+
+            const shiftZ = worldOriginSceneVec().z;
+            // Вершины между точками A и B — те, что попадают внутрь участка.
+            const midIdx = [];
+            for (let k = a.i + 1; k <= b.i; k++) midIdx.push(k);
+
+            const zOf = (p) => p.z;
+            const targetWorldZ = mode === 'z'
+                ? absoluteXYZToWorldPoint(0, 0, value).z
+                : null;
+
+            // Новые отметки середины считаем ДО вставки — иначе индексы поедут.
+            const newZ = (p) => (mode === 'z' ? targetWorldZ : zOf(p) + value);
+
+            const aRise = a.point.clone();      // низ стояка в точке A
+            const aTop = a.point.clone();
+            aTop.z = newZ(a.point);
+            const bTop = b.point.clone();
+            bTop.z = newZ(b.point);
+            const bFall = b.point.clone();      // возврат на прежнюю отметку
+
+            if (Math.abs(aTop.z - aRise.z) < 1e-6 && Math.abs(bTop.z - bFall.z) < 1e-6) {
+                notifyError('Отметка перехода совпадает с текущей — двигать нечего.');
+                return false;
+            }
+
+            // Сначала правим отметки промежуточных вершин, потом вставляем
+            // стояки: вставка сдвигает индексы, и порядок здесь принципиален.
+            for (const k of midIdx) {
+                if (k >= 0 && k < record.pts.length) record.pts[k].z = newZ(record.pts[k]);
+            }
+
+            // Вставки идут с конца, чтобы индекс A не съехал от вставки в B.
+            record.pts.splice(b.i + 1, 0, bTop, bFall);
+            record.radii.splice(b.i + 1, 0, 0, 0);
+            record.pts.splice(a.i + 1, 0, aRise, aTop);
+            record.radii.splice(a.i + 1, 0, 0, 0);
+
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+
+            const absTop = (aTop.z + shiftZ).toFixed(3);
+            notifyOk(
+                `«${record.name}»: вертикальный переход. Середина на отметке ${absTop} м, ` +
+                `стояков 2, вершин стало ${record.pts.length}.`
+            );
+            trackUsage('polyline_vertical_transition', { mode });
+            return true;
+        }
+
+        /* Режим «укажи начало и конец» для вертикального перехода. */
+        let vertTransitionPick = null;   // {recordId, first}
+
+        function startVerticalTransitionPick(record) {
+            if (record.kind === '2d') {
+                notifyError('У 2D-полилинии все точки на одной отметке — вертикальный переход ей не сделать.');
+                return;
+            }
+            if (record.pts.length < 2) return;
+            vertTransitionPick = { recordId: record.id, first: null };
+            stage.style.cursor = 'crosshair';
+            notify(`«${record.name}»: укажите НАЧАЛО перехода — кликните по линии. Esc — отмена.`);
+        }
+
+        function cancelVerticalTransitionPick(quiet) {
+            if (!vertTransitionPick) return;
+            vertTransitionPick = null;
+            stage.style.cursor = '';
+            if (!quiet) notify('Вертикальный переход отменён.');
+        }
+
+        /**
+         * Клик в режиме перехода. Возвращает true, если клик «съеден» — тогда
+         * обычная обработка (выделение элемента) не запускается.
+         */
+        function handleVerticalTransitionClick(clientX, clientY) {
+            if (!vertTransitionPick) return false;
+            const rec = drawnPolylines.find((r) => r.id === vertTransitionPick.recordId);
+            if (!rec) { cancelVerticalTransitionPick(true); return false; }
+
+            const hit = pickDrawnPolyline(clientX, clientY);
+            if (!hit || hit.record.id !== rec.id) {
+                notify('Мимо линии — кликните по самой полилинии.');
+                return true;
+            }
+            const seg = nearestPolylineSegment(rec, hit.point);
+            if (!seg) return true;
+
+            if (!vertTransitionPick.first) {
+                vertTransitionPick.first = seg;
+                notify('Теперь укажите КОНЕЦ перехода.');
+                return true;
+            }
+
+            const first = vertTransitionPick.first;
+            cancelVerticalTransitionPick(true);
+
+            const shiftZ = worldOriginSceneVec().z;
+            const nowAbs = ((first.point.z + seg.point.z) / 2 + shiftZ).toFixed(3);
+            const answer = prompt(
+                'Отметка участка между указанными точками, м.\n' +
+                'Число — абсолютная отметка (участок ляжет горизонтально).\n' +
+                'Со знаком + или − — сдвиг от текущей (уклон сохранится).',
+                nowAbs
+            );
+            if (answer === null) { notify('Вертикальный переход отменён.'); return true; }
+
+            const raw = String(answer).trim().replace(',', '.');
+            const relative = /^[+−-]/.test(raw);
+            const value = Number(raw.replace('−', '-'));
+            if (!Number.isFinite(value)) {
+                notifyError('Не похоже на число — переход не сделан.');
+                return true;
+            }
+            applyVerticalTransition(rec, first, seg, {
+                mode: relative ? 'dz' : 'z',
+                value
+            });
+            return true;
+        }
+
+        /**
+         * Вершина на заданном пикете — для двойного клика по профилю.
+         *
+         * Пикет отмеряется вдоль ОТРИСОВАННОЙ линии (renderPts, с дугами) —
+         * тем же способом, что и подписи пикетажа на профиле. Найденная точка
+         * потом ложится на ближайший отрезок исходных вершин: вставлять надо
+         * между pts, а не между точками дуги.
+         */
+        function insertPolylineVertexAtStation(record, sta) {
+            const rp = record.renderPts;
+            if (!rp || rp.length < 2) return -1;
+            const cum = [0];
+            for (let i = 1; i < rp.length; i++) {
+                cum.push(cum[i - 1] + Math.hypot(rp[i].x - rp[i - 1].x, rp[i].y - rp[i - 1].y));
+            }
+            const total = cum[cum.length - 1];
+            const s = Math.max(0, Math.min(total, Number(sta)));
+            if (!(total > 1e-6)) return -1;
+
+            let hi = 1;
+            while (hi < cum.length - 1 && cum[hi] < s) hi++;
+            const lo = hi - 1;
+            const seg = cum[hi] - cum[lo];
+            const t = seg < 1e-9 ? 0 : (s - cum[lo]) / seg;
+            const point = rp[lo].clone().lerp(rp[hi], t);
+
+            const on = nearestPolylineSegment(record, point);
+            if (!on) return -1;
+            // Отметку берём с самого отрезка: вставка не должна менять профиль,
+            // она только добавляет точку, за которую можно взяться.
+            return insertPolylineVertexAt(record, on.i, on.point);
+        }
+
+        /**
+         * Поднять/опустить всю линию: либо положить её горизонтально на
+         * отметку, либо сдвинуть на Δ, сохранив продольный профиль.
+         *
+         * Знак решает, что имелось в виду: «120» — это отметка, «+2» и «−0.5» —
+         * сдвиг. Так же читается ввод в вертикальном переходе, чтобы не
+         * заводить два разных соглашения в одном инструменте.
+         */
+        function liftPolyline(record, { mode, value }) {
+            const shiftZ = worldOriginSceneVec().z;
+            let moved = 0;
+            record.pts.forEach((p) => {
+                const before = p.z;
+                p.z = mode === 'z'
+                    ? absoluteXYZToWorldPoint(0, 0, value).z
+                    : p.z + value;
+                if (Math.abs(p.z - before) > 1e-9) moved++;
+            });
+            if (!moved) {
+                notify(`«${record.name}»: линия уже на этой отметке.`);
+                return false;
+            }
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+            const z0 = (record.pts[0].z + shiftZ).toFixed(3);
+            notifyOk(mode === 'z'
+                ? `«${record.name}»: линия положена на отметку ${z0} м (вершин ${moved}).`
+                : `«${record.name}»: сдвинута на ${value > 0 ? '+' : ''}${value} м, профиль сохранён.`);
+            trackUsage('polyline_lift', { mode });
+            return true;
+        }
+
+        function liftPolylinePrompt(record) {
+            const cur = worldPointToAbsoluteXYZ(record.pts[0]) || record.pts[0];
+            const answer = prompt(
+                `«${record.name}» — поднять или опустить всю линию.\n` +
+                'Число — абсолютная отметка, линия ляжет горизонтально.\n' +
+                'Со знаком + или − — сдвиг на столько метров, уклоны сохранятся.',
+                cur.z.toFixed(3)
+            );
+            if (answer === null) return;
+            const raw = String(answer).trim().replace(',', '.');
+            const relative = /^[+−-]/.test(raw);
+            const value = Number(raw.replace('−', '-'));
+            if (!Number.isFinite(value)) {
+                notifyError('Не похоже на число — линия не тронута.');
+                return;
+            }
+            liftPolyline(record, { mode: relative ? 'dz' : 'z', value });
+        }
+
         function setPolylineVertexElevation(record, idx, absZ) {
             const z = Number(absZ);
             if (!Number.isFinite(z) || idx < 0 || idx >= record.pts.length) return;
@@ -7211,6 +7778,51 @@
         function polylineNextIndex(record, idx) {
             if (idx < record.pts.length - 1) return idx + 1;
             return record.closed ? 0 : -1;
+        }
+
+        /**
+         * Ближайший к точке отрезок ИСХОДНЫХ вершин (pts), а не renderPts.
+         * Пикинг возвращает точку на отрисованной линии, где после сопряжения
+         * лежат ещё и точки дуг — по ним нельзя понять, между какими вершинами
+         * вставлять новую. Поэтому проецируем на отрезки pts заново.
+         *
+         * Возвращает {i, j, t, point}: t — доля вдоль отрезка i→j, point —
+         * проекция на него (уже в осях сцены).
+         */
+        function nearestPolylineSegment(record, point) {
+            let best = null;
+            const last = record.closed ? record.pts.length : record.pts.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = polylineNextIndex(record, i);
+                if (j < 0) continue;
+                const a = record.pts[i];
+                const b = record.pts[j];
+                const ab = b.clone().sub(a);
+                const len2 = ab.lengthSq();
+                const t = len2 < 1e-12
+                    ? 0
+                    : Math.max(0, Math.min(1, point.clone().sub(a).dot(ab) / len2));
+                const proj = a.clone().addScaledVector(ab, t);
+                const d = proj.distanceToSquared(point);
+                if (!best || d < best.d) best = { i, j, t, point: proj, d };
+            }
+            return best;
+        }
+
+        /**
+         * Вставить вершину в точке на отрезке. В отличие от insertPolylineVertex,
+         * которая всегда делит отрезок пополам, эта кладёт вершину туда, куда
+         * ткнули. Радиус сопряжения у новой вершины — 0: гнуть её никто не просил.
+         */
+        function insertPolylineVertexAt(record, segIndex, point) {
+            if (segIndex < 0 || segIndex >= record.pts.length) return -1;
+            const at = segIndex + 1;
+            record.pts.splice(at, 0, point.clone());
+            record.radii.splice(at, 0, 0);
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+            return at;
         }
 
         /** Длина и уклон отрезка idx→следующая (для таблицы). */
@@ -7378,6 +7990,261 @@
             });
         }
 
+        /* ------------------------------------------------------------------
+         * Подписи прямо на линии: длина и уклон посередине отрезка, отметка
+         * у вершины. Раньше эти числа жили только в таблице вершин, и при
+         * вытягивании ручкой приходилось смотреть в панель, а не на модель.
+         *
+         * Слой пересобирается при смене состава вершин, а позиционируется
+         * каждый кадр — тем же циклом, что двигает ручки.
+         * ------------------------------------------------------------------ */
+        const polylineAnnotLayer = document.getElementById('polyline-annot');
+        let polylineSegLabels = [];     // {el, i, j}
+        let polylineVzLabels = [];      // {el, idx}
+        let polylineRLabels = [];       // {el, idx} — радиусы сопряжения
+        let polylineVzEditing = null;   // idx вершины, которую сейчас правят
+        let polylineREditing = null;
+        let polylineAnnotKey = '';      // на каком составе точек собран слой
+
+        /** Ниже этой экранной длины подпись отрезка не рисуем — иначе на
+         *  частой ломаной они наезжают друг на друга и читать нечего. */
+        const SEG_LABEL_MIN_PX = 46;
+
+        function clearPolylineAnnotations() {
+            polylineSegLabels.forEach((s) => s.el.remove());
+            polylineVzLabels.forEach((v) => v.el.remove());
+            polylineRLabels.forEach((v) => v.el.remove());
+            polylineSegLabels = [];
+            polylineVzLabels = [];
+            polylineRLabels = [];
+            polylineVzEditing = null;
+            polylineREditing = null;
+            polylineAnnotKey = '';
+        }
+
+        /**
+         * Откуда берём точки для подписей. Два источника, и оба нужны:
+         * черновик во время черчения (числа видны сразу, ещё до фиксации
+         * линии) и раскрытая на правку полилиния (числа меняются, пока
+         * тянешь ручку). Правка отметки возможна только во втором случае —
+         * у черновика ещё нет записи, которой принадлежала бы вершина.
+         */
+        function polylineAnnotSource() {
+            if (drawMode && drawPoints.length) {
+                const pts = drawCursorPoint ? [...drawPoints, drawCursorPoint] : drawPoints;
+                return { pts, kind: drawKind(), closed: false, record: null, tag: 'draft' };
+            }
+            const rec = drawnPolylines.find((r) => r.id === polylineEditingId);
+            if (!rec) return null;
+            return { pts: rec.pts, kind: rec.kind, closed: !!rec.closed, record: rec, tag: 'rec' + rec.id };
+        }
+
+        /** Из чего собран слой подписей: состав точек и то, где вписаны радиусы. */
+        function polylineAnnotSignature(src) {
+            const withR = src.record
+                ? src.record.radii.map((r, i) => (r > 0 ? i : -1)).filter((i) => i >= 0).join(',')
+                : '';
+            return `${src.tag}:${src.pts.length}:${src.closed}:${withR}`;
+        }
+
+        function rebuildPolylineAnnotations() {
+            clearPolylineAnnotations();
+            const src = polylineAnnotSource();
+            if (!src || !polylineAnnotLayer) { markNeedsRender(); return; }
+            polylineAnnotKey = polylineAnnotSignature(src);
+
+            const last = src.closed ? src.pts.length : src.pts.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = src.closed && i === src.pts.length - 1 ? 0 : i + 1;
+                const el = document.createElement('div');
+                el.className = 'poly-seg-label';
+                polylineAnnotLayer.appendChild(el);
+                polylineSegLabels.push({ el, i, j });
+            }
+
+            // У 2D-полилинии все отметки равны — столбик одинаковых чисел
+            // вдоль линии ничего не сообщает, поэтому там подписей нет.
+            if (src.kind !== '2d') {
+                src.pts.forEach((_, idx) => {
+                    const el = document.createElement('div');
+                    el.className = 'poly-vz-label';
+                    if (src.record) {
+                        el.title = 'Абсолютная отметка вершины. Нажмите, чтобы изменить';
+                        el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                        el.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            startVertexElevationEdit(idx);
+                        });
+                    } else {
+                        // Черновик: показываем, но править нечего — линии ещё нет.
+                        el.title = 'Абсолютная отметка точки';
+                        el.style.pointerEvents = 'none';
+                    }
+                    polylineAnnotLayer.appendChild(el);
+                    polylineVzLabels.push({ el, idx });
+                });
+            }
+
+            // Радиус показываем там, где он ВПИСАН: подпись «R 0» у каждого
+            // угла была бы шумом. Ставить радиус с нуля — из таблицы вершин.
+            if (src.record) {
+                src.pts.forEach((_, idx) => {
+                    if (!(src.record.radii?.[idx] > 0)) return;
+                    const el = document.createElement('div');
+                    el.className = 'poly-r-label';
+                    el.title = 'Радиус сопряжения в этом углу, м. Нажмите, чтобы изменить';
+                    el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                    el.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        startVertexRadiusEdit(idx);
+                    });
+                    polylineAnnotLayer.appendChild(el);
+                    polylineRLabels.push({ el, idx });
+                });
+            }
+            updatePolylineAnnotations();
+        }
+
+        /** Подпись отметки → поле ввода прямо в сцене. */
+        function startVertexElevationEdit(idx) {
+            const src = polylineAnnotSource();
+            const rec = src?.record;
+            const slot = polylineVzLabels.find((v) => v.idx === idx);
+            if (!rec || !slot || polylineVzEditing === idx) return;
+            polylineVzEditing = idx;
+
+            const abs = worldPointToAbsoluteXYZ(rec.pts[idx]) || rec.pts[idx];
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = '0.01';
+            input.value = abs.z.toFixed(3);
+            slot.el.classList.add('is-editing');
+            slot.el.textContent = '';
+            slot.el.appendChild(input);
+            input.focus();
+            input.select();
+
+            let closed = false;
+            const finish = (apply) => {
+                if (closed) return;
+                closed = true;
+                const v = Number(input.value);
+                polylineVzEditing = null;
+                slot.el.classList.remove('is-editing');
+                if (apply && Number.isFinite(v)) {
+                    setPolylineVertexElevation(rec, idx, v);
+                    trackUsage('polyline_vertex_z_inline', {});
+                }
+                updatePolylineAnnotations();
+            };
+            input.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', () => finish(true));
+        }
+
+        function updatePolylineAnnotations() {
+            const src = polylineAnnotSource();
+            if (!src) {
+                if (polylineSegLabels.length || polylineVzLabels.length) clearPolylineAnnotations();
+                return;
+            }
+            // Состав точек меняется на каждом клике при черчении, а звать
+            // пересборку из всех этих мест пришлось бы вручную — дешевле
+            // сверить ключ здесь, в кадре.
+            const key = polylineAnnotSignature(src);
+            if (key !== polylineAnnotKey) { rebuildPolylineAnnotations(); return; }
+
+            for (const { el, i, j } of polylineSegLabels) {
+                const a = src.pts[i];
+                const b = src.pts[j];
+                if (!a || !b) { el.hidden = true; continue; }
+                const sa = projectToPixels(a);
+                const sb = projectToPixels(b);
+                if (sa.behind || sb.behind) { el.hidden = true; continue; }
+                if (Math.hypot(sb.x - sa.x, sb.y - sa.y) < SEG_LABEL_MIN_PX) { el.hidden = true; continue; }
+                el.hidden = false;
+                const l3d = a.distanceTo(b);
+                const l2d = Math.hypot(b.x - a.x, b.y - a.y);
+                const dz = b.z - a.z;
+                // На плоской линии уклон всегда 0 — не занимаем им место.
+                el.textContent = src.kind === '2d' || Math.abs(dz) < 1e-6
+                    ? `${l3d.toFixed(2)} м`
+                    : `${l3d.toFixed(2)} м · ${(dz / (l2d || 1e-9) * 1000).toFixed(1)} ‰`;
+                el.style.transform =
+                    `translate(-50%, calc(-100% - 6px)) translate(${(sa.x + sb.x) / 2}px, ${(sa.y + sb.y) / 2}px)`;
+            }
+
+            for (const { el, idx } of polylineVzLabels) {
+                const p = src.pts[idx];
+                if (!p) { el.hidden = true; continue; }
+                const s = projectToPixels(p);
+                if (s.behind) { el.hidden = true; continue; }
+                el.hidden = false;
+                if (polylineVzEditing !== idx) {
+                    const abs = worldPointToAbsoluteXYZ(p) || p;
+                    el.textContent = abs.z.toFixed(3);
+                }
+                el.style.transform = `translate(-50%, 8px) translate(${s.x}px, ${s.y}px)`;
+            }
+
+            for (const { el, idx } of polylineRLabels) {
+                const p = src.pts[idx];
+                const r = src.record?.radii?.[idx];
+                if (!p || !(r > 0)) { el.hidden = true; continue; }
+                const s = projectToPixels(p);
+                if (s.behind) { el.hidden = true; continue; }
+                el.hidden = false;
+                if (polylineREditing !== idx) el.textContent = `R ${r.toFixed(2)}`;
+                el.style.transform =
+                    `translate(-50%, calc(-100% - 8px)) translate(${s.x}px, ${s.y}px)`;
+            }
+        }
+
+        /** Подпись радиуса → поле ввода прямо в сцене. */
+        function startVertexRadiusEdit(idx) {
+            const src = polylineAnnotSource();
+            const rec = src?.record;
+            const slot = polylineRLabels.find((v) => v.idx === idx);
+            if (!rec || !slot || polylineREditing === idx) return;
+            polylineREditing = idx;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = '0.1';
+            input.min = '0';
+            input.value = (rec.radii[idx] || 0).toFixed(3);
+            slot.el.classList.add('is-editing');
+            slot.el.textContent = '';
+            slot.el.appendChild(input);
+            input.focus();
+            input.select();
+
+            let done = false;
+            const finish = (apply) => {
+                if (done) return;
+                done = true;
+                const v = Number(input.value);
+                polylineREditing = null;
+                slot.el.classList.remove('is-editing');
+                if (apply && Number.isFinite(v) && v >= 0) {
+                    // Ноль убирает сопряжение — и подпись вместе с ним:
+                    // пересборку слоя сделает сверка ключа в кадре.
+                    setPolylineVertexRadius(rec, idx, v);
+                    trackUsage('polyline_radius_inline', {});
+                }
+                updatePolylineAnnotations();
+            };
+            input.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', () => finish(true));
+        }
+
         function renderPolylinesList() {
             const body = $('polylinesList');
             const count = $('polylinesCount');
@@ -7458,12 +8325,36 @@
                 plan.textContent = '⬓';
                 plan.title = 'Посмотреть в плане (строго сверху)';
                 plan.addEventListener('click', () => focusPolyline(r, 'plan'));
+                // Картограмма жила только в контекстном меню сцены — её там
+                // никто не находил. Кнопка неактивна на незамкнутой линии:
+                // объём считается внутри контура, и без замыкания его нет.
+                const earth = document.createElement('button');
+                earth.className = 'btn';
+                earth.textContent = '⛰';
+                earth.disabled = !r.closed;
+                earth.title = r.closed
+                    ? 'Картограмма земляных работ по этому контуру'
+                    : 'Картограмма считается по замкнутому контуру — сначала «⭘ Замкнуть»';
+                earth.addEventListener('click', () => openEarthworkModal(r));
+
+                const slope = document.createElement('button');
+                slope.className = 'btn';
+                slope.textContent = '◺';
+                slope.title = 'Откосы до рельефа от этой линии';
+                slope.addEventListener('click', () => openSlopeModal(r));
+
+                const lift = document.createElement('button');
+                lift.className = 'btn';
+                lift.textContent = '⤒';
+                lift.title = 'Поднять или опустить всю линию: на отметку либо на Δ';
+                lift.addEventListener('click', () => liftPolylinePrompt(r));
+
                 const del = document.createElement('button');
                 del.className = 'btn';
                 del.textContent = '✕';
                 del.title = 'Удалить полилинию';
                 del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
-                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, go, plan, del);
+                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, earth, slope, lift, go, plan, del);
                 frag.appendChild(row);
             });
             body.replaceChildren(frag);
@@ -7473,6 +8364,7 @@
                 : null;
             renderPolylinePointsEditor(rec || null);
             rebuildPolylineHandles();
+            rebuildPolylineAnnotations();
             refreshPolylineProfileIfOpen();
             rebuildLiveSweeps();
             fillSweepAxisSelect();
@@ -8177,8 +9069,278 @@
             };
         }
 
+        // ── Откосы до рельефа ──────────────────────────────────────────────
+        // Сторона задаётся ПО ХОДУ линии: «влево» — нормаль (−ty, tx) в плане.
+        // Крутизна раздельная: 1:m для насыпи и 1:m для выемки (m — заложение,
+        // то есть горизонталь на единицу высоты).
+        const SLOPE_MARCH = 0.5;          // шаг марша наружу, м
+        const slopeGroup = new THREE.Group();
+        slopeGroup.name = 'SlopeSurfaces';
+        scene.add(slopeGroup);
+
+        /**
+         * Построение откосов от полилинии до рельефа.
+         *
+         * От каждой точки renderPts идём наружу по нормали в плане шагом
+         * SLOPE_MARCH. На вылете d отметка откоса = z_бровки ∓ d/m; земля
+         * снимается лучом вниз (sampleTerrainZ). Первая смена знака разности
+         * «откос − земля» и есть точка выхода — она уточняется линейной
+         * интерполяцией внутри шага, а не берётся узлом сетки.
+         *
+         * Площадь сечения между откосом и землёй копится трапециями по тому же
+         * маршу, объём между соседними сечениями — метод средних площадей
+         * (полусумма площадей × расстояние между сечениями в плане).
+         *
+         * Промах луча (земли под точкой нет) и «не дотянулся за макс. вылет» —
+         * это НЕ ноль: такие сечения выпадают, рвут ленту откоса и считаются
+         * отдельными счётчиками. Подставить туда число значило бы соврать.
+         */
+        function computeSlopes(record, opts) {
+            const pts = record?.renderPts;
+            if (!pts || pts.length < 2) return null;
+            const mFill = Math.max(0.05, Number(opts.mFill) || 1.5);
+            const mCut = Math.max(0.05, Number(opts.mCut) || 1);
+            const maxW = Math.max(1, Number(opts.maxWidth) || 30);
+            const sides = opts.side === 'both'
+                ? [1, -1]
+                : [opts.side === 'right' ? -1 : 1];
+            const MISS = Number.NEGATIVE_INFINITY;
+            const closed = !!record.closed;
+            const n = pts.length;
+            let noGround = 0, notReached = 0, flat = 0;
+            const runs = [];
+            let fillVol = 0, cutVol = 0, built = 0;
+            let maxHeight = 0, maxWidth = 0;
+
+            sides.forEach((sgn) => {
+                const sections = [];
+                for (let i = 0; i < n; i++) {
+                    // Касательная в плане по соседям; на концах незамкнутой
+                    // линии — по единственному примыкающему отрезку. У замкнутой
+                    // renderPts уже содержит дубль первой точки в конце, поэтому
+                    // «через край» соседи берутся штатно.
+                    const prev = pts[i > 0 ? i - 1 : (closed ? n - 2 : 0)];
+                    const next = pts[i < n - 1 ? i + 1 : (closed ? 1 : n - 1)];
+                    let tx = next.x - prev.x, ty = next.y - prev.y;
+                    const tl = Math.hypot(tx, ty);
+                    if (tl < 1e-9) { sections.push(null); continue; }
+                    tx /= tl; ty /= tl;
+                    const nx = -ty * sgn, ny = tx * sgn;
+                    const p0 = pts[i];
+                    const g0 = sampleTerrainZ(p0.x, p0.y, MISS);
+                    if (g0 === MISS) { noGround++; sections.push(null); continue; }
+                    const h0 = p0.z - g0;
+                    if (Math.abs(h0) < 1e-3) { flat++; sections.push(null); continue; }
+                    const isFill = h0 > 0;
+                    const m = isFill ? mFill : mCut;
+
+                    let prevD = 0, prevF = h0, prevAbs = Math.abs(h0);
+                    let area = 0, hit = null, lost = false;
+                    for (let d = SLOPE_MARCH; d <= maxW + 1e-9; d += SLOPE_MARCH) {
+                        const x = p0.x + nx * d, y = p0.y + ny * d;
+                        const gz = sampleTerrainZ(x, y, MISS);
+                        if (gz === MISS) { lost = true; break; }
+                        const zs = isFill ? p0.z - d / m : p0.z + d / m;
+                        const f = zs - gz;
+                        if (isFill ? f <= 0 : f >= 0) {
+                            const t = prevF / (prevF - f);
+                            const dd = prevD + t * (d - prevD);
+                            area += 0.5 * prevAbs * (dd - prevD);
+                            hit = {
+                                x: p0.x + nx * dd, y: p0.y + ny * dd,
+                                z: isFill ? p0.z - dd / m : p0.z + dd / m,
+                                d: dd
+                            };
+                            break;
+                        }
+                        area += 0.5 * (prevAbs + Math.abs(f)) * (d - prevD);
+                        prevD = d; prevF = f; prevAbs = Math.abs(f);
+                    }
+                    if (!hit) {
+                        if (lost) noGround++; else notReached++;
+                        sections.push(null);
+                        continue;
+                    }
+                    built++;
+                    maxHeight = Math.max(maxHeight, Math.abs(h0));
+                    maxWidth = Math.max(maxWidth, hit.d);
+                    sections.push({ crown: p0, out: hit, isFill, area, height: Math.abs(h0) });
+                }
+
+                // Ленты — только по подряд идущим удачным сечениям: разрыв
+                // означает, что между ними откоса нет, и «сшивать» их нельзя.
+                let run = [];
+                const flush = () => { if (run.length > 1) runs.push(run); run = []; };
+                sections.forEach((s) => {
+                    if (!s) { flush(); return; }
+                    if (run.length) {
+                        const a = run[run.length - 1];
+                        const L = Math.hypot(s.crown.x - a.crown.x, s.crown.y - a.crown.y);
+                        if (a.isFill === s.isFill) {
+                            const v = (a.area + s.area) / 2 * L;
+                            if (s.isFill) fillVol += v; else cutVol += v;
+                        } else {
+                            // Переход насыпь↔выемка внутри участка: половина
+                            // объёма честно принадлежит каждому виду работ.
+                            if (a.isFill) fillVol += a.area / 2 * L; else cutVol += a.area / 2 * L;
+                            if (s.isFill) fillVol += s.area / 2 * L; else cutVol += s.area / 2 * L;
+                        }
+                    }
+                    run.push(s);
+                });
+                flush();
+            });
+
+            return {
+                runs, fillVol, cutVol,
+                sections: built, total: n * sides.length,
+                noGround, notReached, flat, maxHeight, maxWidth
+            };
+        }
+
+        function clearSlopeSurfaces() {
+            while (slopeGroup.children.length) {
+                const m = slopeGroup.children.pop();
+                m.geometry?.dispose();
+                m.material?.dispose();
+                slopeGroup.remove(m);
+            }
+        }
+
+        /**
+         * Поверхность откоса: четырёхугольник «бровка–подошва» между соседними
+         * сечениями, двумя треугольниками. Цвет берётся по первому сечению пары
+         * (на стыке насыпь/выемка квад достаётся насыпи — граница проходит
+         * внутри квада, дробить его ради окраски смысла нет).
+         */
+        function buildSlopeSurfaces(runs) {
+            clearSlopeSurfaces();
+            const posFill = [], posCut = [];
+            runs.forEach((run) => {
+                for (let i = 1; i < run.length; i++) {
+                    const a = run[i - 1], b = run[i];
+                    const arr = a.isFill ? posFill : posCut;
+                    arr.push(
+                        a.crown.x, a.crown.y, a.crown.z,
+                        a.out.x, a.out.y, a.out.z,
+                        b.out.x, b.out.y, b.out.z,
+                        a.crown.x, a.crown.y, a.crown.z,
+                        b.out.x, b.out.y, b.out.z,
+                        b.crown.x, b.crown.y, b.crown.z
+                    );
+                }
+            });
+            const mk = (arr, color) => {
+                if (!arr.length) return;
+                const g = new THREE.BufferGeometry();
+                g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+                g.computeVertexNormals();
+                const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+                    color, side: THREE.DoubleSide, transparent: true, opacity: 0.78,
+                    roughness: 0.95, metalness: 0
+                }));
+                mesh.userData.isSlopeSurface = true;
+                mesh.renderOrder = 2;
+                slopeGroup.add(mesh);
+            };
+            mk(posFill, 0xd98a3a);   // насыпь — охра
+            mk(posCut, 0x3a86c8);    // выемка — синий
+        }
+
+        /** Полилиния из готовых точек (линия выхода откоса, и не только). */
+        function createPolylineFromPoints(points, name, color = DRAW_COLOR, width = DRAW_WIDTH) {
+            const pts = points.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+            if (pts.length < 2) return null;
+            const line = makeLineObject(pts, color, width);
+            drawGroup.add(line);
+            const record = {
+                id: ++drawPolylineSeq,
+                name,
+                kind: '3d',
+                pts,
+                radii: pts.map(() => 0),
+                renderPts: [],
+                abs: [],
+                object: line,
+                color,
+                width,
+                closed: false,
+                length3d: 0,
+                length2d: 0
+            };
+            line.userData.drawnPolylineId = record.id;
+            drawnPolylines.push(record);
+            rebuildPolylineGeometry(record);
+            return record;
+        }
+
         let polyProfileData = null;
         let polyProfileRecordId = null;
+
+        /**
+         * Вершины оси в терминах профиля: пикет, отметка оси и земли под ней,
+         * рабочая отметка, уклон к следующей вершине.
+         *
+         * Считается по record.pts (реальным вершинам), а НЕ по renderPts: в
+         * renderPts после сопряжения лежат ещё и точки дуг, и номера строк
+         * разъехались бы с вершинами — на этом уже попадались в таблице
+         * полилинии. Пикет при этом меряется вдоль отрисованной линии
+         * (с дугами), иначе он не сойдётся с длиной, которую показывает панель.
+         */
+        function polylineProfileVertices(record) {
+            const pts = record.pts;
+            if (!pts || pts.length < 2) return null;
+
+            // Пикет вершины = длина в плане по renderPts до ближайшей к ней
+            // точки. Для линии без сопряжений это ровно сумма отрезков.
+            const rp = record.renderPts;
+            const cum = [0];
+            for (let i = 1; i < rp.length; i++) {
+                cum.push(cum[i - 1] + Math.hypot(rp[i].x - rp[i - 1].x, rp[i].y - rp[i - 1].y));
+            }
+            const staOf = (p) => {
+                let best = 0;
+                let bestD = Infinity;
+                for (let i = 0; i < rp.length; i++) {
+                    const d = (rp[i].x - p.x) ** 2 + (rp[i].y - p.y) ** 2;
+                    if (d < bestD) { bestD = d; best = i; }
+                }
+                return cum[best];
+            };
+
+            const MISS = Number.NEGATIVE_INFINITY;
+            const rows = pts.map((p, i) => {
+                const gz = sampleTerrainZ(p.x, p.y, MISS);
+                const axisAbs = worldPointToAbsoluteXYZ(p) || p;
+                const groundAbs = gz === MISS
+                    ? null
+                    : (worldPointToAbsoluteXYZ(new THREE.Vector3(p.x, p.y, gz)) || { z: gz });
+                return {
+                    idx: i,
+                    sta: staOf(p),
+                    x: p.x, y: p.y,
+                    axis: axisAbs.z,
+                    ground: groundAbs ? groundAbs.z : null,
+                    work: groundAbs ? axisAbs.z - groundAbs.z : null,
+                    slope: null
+                };
+            });
+
+            // Уклон к следующей вершине — по плановому проложению, как принято
+            // на профиле (не по наклонной длине).
+            for (let i = 0; i < rows.length - 1; i++) {
+                const a = pts[i];
+                const b = pts[i + 1];
+                const run = Math.hypot(b.x - a.x, b.y - a.y);
+                rows[i].slope = run < 1e-6 ? null : (rows[i + 1].axis - rows[i].axis) / run * 1000;
+            }
+            return rows;
+        }
+
+        /* Окно просмотра профиля: какой участок пикетажа виден и с каким
+         * вертикальным растяжением. exag = null — вписать всё. */
+        let polyProfileView = { from: 0, to: 0, exag: null, zCentre: null };
+        let polyProfileActiveVertex = -1;
 
         /**
          * Пересчёт профиля после правки геометрии. Зовётся из renderPolylinesList,
@@ -8199,6 +9361,75 @@
             renderPolylineProfile();
         }
 
+        /* Геометрия кадра профиля — одна на отрисовку и на попадание мышью. */
+        /* Размеры кадра берём с самого элемента и держим viewBox равным им:
+         * при растянутом viewBox (preserveAspectRatio="none") единица по X и
+         * по Y — разной длины, и заявленный вертикальный масштаб врал бы. */
+        let PROFILE_W = 760;
+        let PROFILE_H = 260;
+        const PROFILE_PAD = { l: 46, r: 14, t: 16, b: 30 };
+
+        function syncProfileViewBox() {
+            const svg = $('polyProfileChart');
+            if (!svg) return;
+            const box = svg.getBoundingClientRect();
+            PROFILE_W = Math.max(320, Math.round(box.width) || 760);
+            PROFILE_H = Math.max(180, Math.round(box.height) || 260);
+            svg.setAttribute('viewBox', `0 0 ${PROFILE_W} ${PROFILE_H}`);
+        }
+
+        /**
+         * Пересчёт «пикет ↔ пиксель» и «отметка ↔ пиксель» для текущего окна.
+         *
+         * Вертикальный масштаб задаётся ОТНОСИТЕЛЬНО горизонтального: на
+         * профилях так и принято (гор. 1:1000 / верт. 1:100 — это 10:1).
+         * При exag = null окно подбирается по данным.
+         */
+        function profileFrame(rows, groundSamples) {
+            const iw = PROFILE_W - PROFILE_PAD.l - PROFILE_PAD.r;
+            const ih = PROFILE_H - PROFILE_PAD.t - PROFILE_PAD.b;
+            const from = polyProfileView.from;
+            const to = polyProfileView.to;
+            const span = Math.max(1e-6, to - from);
+            const mPerPxX = span / iw;
+
+            const inWindow = (s) => s.sta >= from - span && s.sta <= to + span;
+            const zs = [
+                ...rows.filter(inWindow).map((r) => r.axis),
+                ...groundSamples.filter((s) => s.ground != null && inWindow(s)).map((s) => s.ground)
+            ];
+            let zMin = zs.length ? Math.min(...zs) : 0;
+            let zMax = zs.length ? Math.max(...zs) : 1;
+            if (zMax - zMin < 1e-6) { zMin -= 0.5; zMax += 0.5; }
+
+            let mPerPxY;
+            if (polyProfileView.exag == null) {
+                mPerPxY = (zMax - zMin) * 1.12 / ih;      // вписать с полями
+            } else {
+                mPerPxY = mPerPxX / polyProfileView.exag;
+            }
+            const centre = polyProfileView.zCentre != null
+                ? polyProfileView.zCentre
+                : (zMin + zMax) / 2;
+            const zTop = centre + (ih / 2) * mPerPxY;
+
+            return {
+                iw, ih, from, to, mPerPxX, mPerPxY, zTop, zMin, zMax,
+                exag: mPerPxX / mPerPxY,
+                px: (sta) => PROFILE_PAD.l + (sta - from) / mPerPxX,
+                py: (z) => PROFILE_PAD.t + (zTop - z) / mPerPxY,
+                staAt: (px) => from + (px - PROFILE_PAD.l) * mPerPxX,
+                zAt: (py) => zTop - (py - PROFILE_PAD.t) * mPerPxY
+            };
+        }
+
+        /** Круглый шаг сетки, близкий к желаемому: 1·2·5 на порядок. */
+        function niceStep(raw) {
+            const p = Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, raw))));
+            const n = raw / p;
+            return (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * p;
+        }
+
         function renderPolylineProfile() {
             const svg = $('polyProfileChart');
             const meta = $('polyProfileMeta');
@@ -8206,74 +9437,152 @@
             if (!svg) return;
             const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
             if (!rec) return;
-            const data = samplePolylineProfile(rec, $('polyProfileStep')?.value);
-            polyProfileData = data;
-            if (!data) {
+
+            // Земля рисуется по частому опросу — иначе линия срежет все складки
+            // рельефа между вершинами. Шаг подбирается сам от длины: наружу его
+            // не выносим, пользователю он ничего не решает.
+            // Длину в плане уже посчитал rebuildPolylineGeometry — второй раз
+            // стрелять лучами только ради неё незачем.
+            const total = rec.length2d || 0;
+            const step = total > 0 ? Math.max(0.25, total / 400) : 1;
+            const data = samplePolylineProfile(rec, step);
+            const rows = polylineProfileVertices(rec);
+            polyProfileData = data && rows ? { ...data, vertices: rows } : null;
+
+            if (!data || !rows) {
                 svg.innerHTML = '';
                 if (meta) meta.textContent = 'Полилиния слишком короткая для профиля.';
-                if (table) table.innerHTML = '';
+                if (table) table.innerHTML = '<div class="profile-empty">Нет данных.</div>';
                 return;
             }
 
-            const w = 760, h = 220, pad = 34;
-            const withGround = data.samples.filter((s) => s.ground != null);
-            const zs = [...data.samples.map((s) => s.axis), ...withGround.map((s) => s.ground)];
-            let minZ = Math.min(...zs), maxZ = Math.max(...zs);
-            if (maxZ - minZ < 1e-6) { minZ -= 1; maxZ += 1; }
-            const sx = (w - pad * 2) / data.total;
-            const sy = (h - pad * 2) / (maxZ - minZ);
-            const px = (s) => pad + s * sx;
-            const py = (z) => h - pad - (z - minZ) * sy;
+            if (!(polyProfileView.to > polyProfileView.from)) {
+                polyProfileView.from = 0;
+                polyProfileView.to = data.total;
+            }
 
-            // Земля рвётся на промахах — рисуем отдельными кусками, а не одной
-            // линией через дыру.
+            const f = profileFrame(rows, data.samples);
+            const clipL = PROFILE_PAD.l;
+            const clipR = PROFILE_W - PROFILE_PAD.r;
+
+            // Земля рвётся на промахах луча — рисуем кусками, а не одной линией
+            // через дыру. Точки вне окна отбрасываем здесь же.
             const groundPaths = [];
             let run = [];
             data.samples.forEach((s) => {
-                if (s.ground == null) {
+                const x = f.px(s.sta);
+                if (s.ground == null || x < clipL - 20 || x > clipR + 20) {
                     if (run.length > 1) groundPaths.push(run.join(' '));
                     run = [];
                     return;
                 }
-                run.push(`${px(s.sta).toFixed(1)},${py(s.ground).toFixed(1)}`);
+                run.push(`${x.toFixed(1)},${f.py(s.ground).toFixed(1)}`);
             });
             if (run.length > 1) groundPaths.push(run.join(' '));
 
-            const axisPath = data.samples
-                .map((s) => `${px(s.sta).toFixed(1)},${py(s.axis).toFixed(1)}`)
+            const axisPath = rows
+                .map((r) => `${f.px(r.sta).toFixed(1)},${f.py(r.axis).toFixed(1)}`)
                 .join(' ');
 
+            // Сетка: горизонтали по отметкам, вертикали по пикетажу.
+            const zStep = niceStep((f.ih * f.mPerPxY) / 5);
+            const zStart = Math.ceil(f.zAt(PROFILE_H - PROFILE_PAD.b) / zStep) * zStep;
+            const grid = [];
+            for (let z = zStart; ; z += zStep) {
+                const y = f.py(z);
+                if (y < PROFILE_PAD.t) break;
+                grid.push(
+                    `<line x1="${clipL}" y1="${y.toFixed(1)}" x2="${clipR}" y2="${y.toFixed(1)}" stroke="#dde4ec"/>` +
+                    `<text x="${clipL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end">${z.toFixed(2)}</text>`
+                );
+            }
+            const sStep = niceStep((f.to - f.from) / 6);
+            const sStart = Math.ceil(f.from / sStep) * sStep;
+            for (let s = sStart; s <= f.to; s += sStep) {
+                const x = f.px(s);
+                grid.push(
+                    `<line x1="${x.toFixed(1)}" y1="${PROFILE_PAD.t}" x2="${x.toFixed(1)}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#e8edf3"/>` +
+                    `<text x="${x.toFixed(1)}" y="${PROFILE_H - PROFILE_PAD.b + 13}" text-anchor="middle">${s.toFixed(0)}</text>`
+                );
+            }
+
+            // Кружки вершин — то, за что тянут. Точки вне окна не рисуем.
+            const knots = rows.map((r) => {
+                const x = f.px(r.sta);
+                if (x < clipL - 8 || x > clipR + 8) return '';
+                const y = f.py(r.axis);
+                const on = r.idx === polyProfileActiveVertex;
+                return `<circle class="pknot" data-idx="${r.idx}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" ` +
+                    `r="${on ? 6 : 4.5}" fill="${on ? '#ffd9d0' : '#fff'}" stroke="#e8442a" stroke-width="2" ` +
+                    `style="cursor:ns-resize"><title>Вершина ${r.idx + 1}: ${r.axis.toFixed(3)} м. ` +
+                    `Тяните — менять отметку, Alt+клик — удалить</title></circle>`;
+            }).join('');
+
             svg.innerHTML = `
-                <rect x="0" y="0" width="${w}" height="${h}" fill="#f7f9fb"/>
-                <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="#c3ccd6"/>
-                <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" stroke="#c3ccd6"/>
-                ${groundPaths.map((p) => `<polyline fill="none" stroke="#2478b5" stroke-width="2" points="${p}"/>`).join('')}
-                <polyline fill="none" stroke="#e8442a" stroke-width="2" points="${axisPath}"/>
-                <text x="${pad}" y="16" font-size="11">отметка, м</text>
-                <text x="${w - pad}" y="${h - 10}" text-anchor="end" font-size="11">пикет, м</text>
-                <text x="4" y="${pad + 4}" font-size="11">${maxZ.toFixed(2)}</text>
-                <text x="4" y="${h - pad}" font-size="11">${minZ.toFixed(2)}</text>
-                <text x="${pad}" y="${h - 10}" font-size="11">0</text>
-                <text x="${w - pad}" y="16" text-anchor="end" font-size="11">L = ${data.total.toFixed(2)} м</text>
+                <rect x="0" y="0" width="${PROFILE_W}" height="${PROFILE_H}" fill="#f7f9fb"/>
+                <clipPath id="polyProfileClip">
+                    <rect x="${clipL}" y="${PROFILE_PAD.t}" width="${clipR - clipL}" height="${f.ih}"/>
+                </clipPath>
+                ${grid.join('')}
+                <g clip-path="url(#polyProfileClip)">
+                    ${groundPaths.map((p) => `<polyline fill="none" stroke="#2478b5" stroke-width="2" points="${p}"/>`).join('')}
+                    <polyline id="polyProfileAxisLine" fill="none" stroke="#e8442a" stroke-width="2" points="${axisPath}"/>
+                    ${knots}
+                </g>
+                <line x1="${clipL}" y1="${PROFILE_H - PROFILE_PAD.b}" x2="${clipR}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#c3ccd6"/>
+                <line x1="${clipL}" y1="${PROFILE_PAD.t}" x2="${clipL}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#c3ccd6"/>
+                <text x="${clipL + 4}" y="11">отм., м</text>
+                <text x="${clipR}" y="${PROFILE_H - 4}" text-anchor="end">пикет, м</text>
             `;
 
             if (meta) {
+                const shown = `${f.from.toFixed(0)}…${f.to.toFixed(0)} м`;
                 meta.textContent =
-                    `«${rec.name}»: длина в плане ${data.total.toFixed(2)} м, пикетов ${data.samples.length}` +
-                    ` (шаг ${data.step} м)` +
-                    (data.missed ? ` · без отметки земли: ${data.missed}` : ' · земля найдена везде');
+                    `«${rec.name}»: длина ${data.total.toFixed(2)} м, вершин ${rows.length}` +
+                    ` · верт. масштаб ${f.exag.toFixed(1)}:1 · видно ${shown}` +
+                    (data.missed ? ` · без отметки земли: ${data.missed} промеров` : '');
             }
 
-            if (table) {
-                const rows = data.samples.map((s) => `
-                    <div class="polyline-point-row">
-                        <b>${s.sta.toFixed(2)}</b>
-                        <span class="pin-xyz">земля ${s.ground == null ? '—' : s.ground.toFixed(3)}</span>
-                        <span class="pin-xyz">ось ${s.axis.toFixed(3)}</span>
-                        <span class="pin-xyz">раб. ${s.work == null ? '—' : (s.work > 0 ? '+' : '') + s.work.toFixed(3)}</span>
-                    </div>`).join('');
-                table.innerHTML = rows;
+            renderProfileTable(rec, rows);
+        }
+
+        /** Компактная таблица вершин с правкой отметки и уклона на месте. */
+        function renderProfileTable(rec, rows) {
+            const table = $('polyProfileTable');
+            if (!table) return;
+            // Пока в таблице что-то набирают, не пересобираем её: профиль
+            // перерисовывается из десятка мест (перетаскивание вершины, правка
+            // геометрии, пересчёт списка полилиний), и каждая такая перерисовка
+            // подменяла бы поле ввода новым — набранное пропадало бы на месте.
+            // График при этом обновляется как обычно.
+            if (table.contains(document.activeElement) &&
+                document.activeElement?.matches('input, select, textarea')) {
+                return;
             }
+            const num = (v, digits = 3) => (v == null ? '—' : v.toFixed(digits));
+            table.innerHTML = `
+                <table class="profile-grid">
+                    <thead><tr>
+                        <th>№</th><th>пикет</th><th>земля</th><th>ось</th>
+                        <th>раб.</th><th>i&#8240;</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                        ${rows.map((r) => `
+                            <tr data-idx="${r.idx}"${r.idx === polyProfileActiveVertex ? ' class="is-active"' : ''}>
+                                <td>${r.idx + 1}</td>
+                                <td>${r.sta.toFixed(2)}</td>
+                                <td>${num(r.ground)}</td>
+                                <td><input type="number" step="0.01" data-edit="axis" value="${r.axis.toFixed(3)}"
+                                     title="Отметка оси в этой вершине, м"></td>
+                                <td>${r.work == null ? '—' : (r.work > 0 ? '+' : '') + r.work.toFixed(3)}</td>
+                                <td>${r.slope == null ? '—' :
+                                    `<input type="number" step="1" data-edit="slope" value="${r.slope.toFixed(2)}"
+                                      title="Уклон до следующей вершины, ‰ — меняет её отметку">`}</td>
+                                <td><button type="button" class="prow-del" data-del="${r.idx}"
+                                     title="Удалить вершину">✕</button></td>
+                            </tr>`).join('')}
+                    </tbody>
+                </table>`;
         }
 
         function openPolylineProfile(record) {
@@ -8286,6 +9595,12 @@
                 return;
             }
             polyProfileRecordId = record.id;
+            // Окно просмотра сбрасываем на всю длину: иначе после прошлой оси
+            // новая открылась бы с чужим зумом и выглядела бы пустой.
+            polyProfileView.from = 0;
+            polyProfileView.to = Math.max(1e-6, record.length2d || 1);
+            polyProfileView.zCentre = null;
+            polyProfileActiveVertex = -1;
             const sel = $('polyProfileSelect');
             if (sel) {
                 sel.innerHTML = drawnPolylines
@@ -8333,10 +9648,204 @@
             $('polyProfileModal').classList.remove('show');
             polyProfilePanel.reset();
         });
-        $('polyProfileStep')?.addEventListener('change', renderPolylineProfile);
+        /* --- Зум, сдвиг и правка прямо на профиле ------------------------- */
+
+        function profileRecord() {
+            return drawnPolylines.find((r) => r.id === polyProfileRecordId) || null;
+        }
+
+        /** Пиксель события → координаты внутри viewBox (SVG растянут по ширине). */
+        function profilePointerXY(ev) {
+            const svg = $('polyProfileChart');
+            const box = svg.getBoundingClientRect();
+            return {
+                x: (ev.clientX - box.left) / box.width * PROFILE_W,
+                y: (ev.clientY - box.top) / box.height * PROFILE_H
+            };
+        }
+
+        function profileCurrentFrame() {
+            const rec = profileRecord();
+            if (!rec || !polyProfileData) return null;
+            return profileFrame(polyProfileData.vertices, polyProfileData.samples);
+        }
+
+        /** Вписать весь профиль обратно. */
+        function profileFitAll() {
+            const rec = profileRecord();
+            if (!rec) return;
+            polyProfileView.from = 0;
+            polyProfileView.to = Math.max(1e-6, rec.length2d || 1);
+            polyProfileView.zCentre = null;
+            renderPolylineProfile();
+        }
+
+        $('polyProfileChart')?.addEventListener('wheel', (ev) => {
+            if (!polyProfileData) return;
+            ev.preventDefault();
+            const f = profileCurrentFrame();
+            if (!f) return;
+            const p = profilePointerXY(ev);
+            const k = ev.deltaY > 0 ? 1.18 : 1 / 1.18;
+
+            if (ev.shiftKey) {
+                // Shift — вертикальный масштаб: растянуть/сжать отметки.
+                const cur = polyProfileView.exag == null ? f.exag : polyProfileView.exag;
+                const next = Math.min(500, Math.max(0.2, cur / k));
+                polyProfileView.exag = next;
+                polyProfileView.zCentre = f.zAt(p.y);
+                const sel = $('polyProfileExag');
+                if (sel) sel.value = 'auto';
+            } else {
+                // Обычное колесо — пикетаж, с сохранением точки под курсором.
+                const anchor = f.staAt(p.x);
+                const from = anchor - (anchor - f.from) * k;
+                const to = anchor + (f.to - anchor) * k;
+                if (to - from < 0.5) return;               // дальше некуда
+                polyProfileView.from = from;
+                polyProfileView.to = to;
+                if (polyProfileView.zCentre == null) polyProfileView.zCentre = (f.zMin + f.zMax) / 2;
+            }
+            renderPolylineProfile();
+        }, { passive: false });
+
+        // Перетаскивание: за кружок — отметка вершины, за фон — сдвиг окна.
+        $('polyProfileChart')?.addEventListener('pointerdown', (ev) => {
+            if (ev.button !== 0 || !polyProfileData) return;
+            const svg = $('polyProfileChart');
+            const rec = profileRecord();
+            const f = profileCurrentFrame();
+            if (!rec || !f) return;
+            const knot = ev.target.closest?.('.pknot');
+
+            // Alt + клик по кружку — удалить вершину.
+            if (knot && ev.altKey) {
+                ev.preventDefault();
+                removePolylineVertex(rec, Number(knot.dataset.idx));
+                polyProfileActiveVertex = -1;
+                renderPolylineProfile();
+                return;
+            }
+
+            ev.preventDefault();
+            try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+
+            if (knot) {
+                const idx = Number(knot.dataset.idx);
+                polyProfileActiveVertex = idx;
+                const startY = ev.clientY;
+                const startZ = rec.pts[idx].z;
+                // viewBox равен размеру элемента, поэтому метры-на-пиксель
+                // кадра — это сразу метры на пиксель экрана.
+                const mPerPx = f.mPerPxY;
+                const move = (e) => {
+                    if (rec.kind === '2d') return;
+                    rec.pts[idx].z = startZ + (startY - e.clientY) * mPerPx;
+                    rebuildPolylineGeometry(rec);
+                    renderPolylineProfile();
+                };
+                const up = () => {
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                    renderPolylinePointsEditor(rec);
+                    renderPolylinesList();
+                    trackUsage('profile_vertex_drag', {});
+                };
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+                if (rec.kind === '2d') {
+                    notify('У 2D-полилинии все точки на одной отметке — профиль ей не поправить.');
+                }
+                return;
+            }
+
+            // Фон — сдвиг окна по пикетажу и по высоте.
+            svg.style.cursor = 'grabbing';
+            const start = profilePointerXY(ev);
+            const from0 = f.from;
+            const to0 = f.to;
+            const z0 = polyProfileView.zCentre == null ? (f.zMin + f.zMax) / 2 : polyProfileView.zCentre;
+            const move = (e) => {
+                const p = profilePointerXY(e);
+                const ds = (p.x - start.x) * f.mPerPxX;
+                polyProfileView.from = from0 - ds;
+                polyProfileView.to = to0 - ds;
+                polyProfileView.zCentre = z0 + (p.y - start.y) * f.mPerPxY;
+                renderPolylineProfile();
+            };
+            const up = () => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+                svg.style.cursor = 'grab';
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+        });
+
+        // Двойной клик по полю — новая вершина на этом пикете.
+        $('polyProfileChart')?.addEventListener('dblclick', (ev) => {
+            const rec = profileRecord();
+            const f = profileCurrentFrame();
+            if (!rec || !f || ev.target.closest?.('.pknot')) return;
+            ev.preventDefault();
+            const sta = f.staAt(profilePointerXY(ev).x);
+            const at = insertPolylineVertexAtStation(rec, sta);
+            if (at < 0) {
+                notifyError('Здесь вершину не вставить — точка вне линии.');
+                return;
+            }
+            polyProfileActiveVertex = at;
+            renderPolylineProfile();
+            notify(`Вершина ${at + 1} добавлена на пикете ${sta.toFixed(2)} м.`);
+            trackUsage('profile_vertex_insert', {});
+        });
+
+        // Таблица: правка отметки и уклона, удаление вершины, подсветка.
+        $('polyProfileTable')?.addEventListener('change', (ev) => {
+            const input = ev.target.closest('input[data-edit]');
+            if (!input) return;
+            const rec = profileRecord();
+            const idx = Number(input.closest('tr').dataset.idx);
+            const v = Number(input.value);
+            if (!rec || !Number.isFinite(v)) return;
+            if (input.dataset.edit === 'axis') setPolylineVertexElevation(rec, idx, v);
+            else setPolylineSegmentSlope(rec, idx, v);
+            polyProfileActiveVertex = idx;
+            renderPolylineProfile();
+        });
+        $('polyProfileTable')?.addEventListener('click', (ev) => {
+            const rec = profileRecord();
+            if (!rec) return;
+            const del = ev.target.closest('button[data-del]');
+            if (del) {
+                removePolylineVertex(rec, Number(del.dataset.del));
+                polyProfileActiveVertex = -1;
+                renderPolylineProfile();
+                return;
+            }
+            // Клик по полю ввода — это начало правки, а не выбор строки:
+            // перерисовка подменила бы поле новым, и введённое пропадало бы,
+            // не успев дойти до change. Ровно на это и жаловались.
+            if (ev.target.closest('input, select, textarea')) return;
+            const row = ev.target.closest('tr[data-idx]');
+            if (row) {
+                polyProfileActiveVertex = Number(row.dataset.idx);
+                renderPolylineProfile();
+            }
+        });
+
+        $('polyProfileExag')?.addEventListener('change', (ev) => {
+            const v = ev.target.value;
+            polyProfileView.exag = v === 'auto' ? null : Number(v);
+            if (v === 'auto') polyProfileView.zCentre = null;
+            renderPolylineProfile();
+        });
+        $('polyProfileFit')?.addEventListener('click', profileFitAll);
+
         $('polyProfileSelect')?.addEventListener('change', () => {
             polyProfileRecordId = Number($('polyProfileSelect').value);
-            renderPolylineProfile();
+            polyProfileActiveVertex = -1;
+            profileFitAll();
         });
         $('polyProfileDrape')?.addEventListener('click', () => {
             const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
@@ -8344,17 +9853,20 @@
         });
         $('polyProfileCsv')?.addEventListener('click', async () => {
             if (!polyProfileData) return notifyError('Профиль ещё не построен.');
-            const csv = ['пикет;земля;ось;рабочая']
-                .concat(polyProfileData.samples.map((s) => [
-                    s.sta.toFixed(3),
-                    s.ground == null ? '' : s.ground.toFixed(3),
-                    s.axis.toFixed(3),
-                    s.work == null ? '' : s.work.toFixed(3)
+            const rows = polyProfileData.vertices || [];
+            const csv = ['вершина;пикет;земля;ось;рабочая;уклон,‰']
+                .concat(rows.map((r) => [
+                    r.idx + 1,
+                    r.sta.toFixed(3),
+                    r.ground == null ? '' : r.ground.toFixed(3),
+                    r.axis.toFixed(3),
+                    r.work == null ? '' : r.work.toFixed(3),
+                    r.slope == null ? '' : r.slope.toFixed(2)
                 ].join(';')))
                 .join('\n');
             try {
                 await navigator.clipboard.writeText(csv);
-                notify(`Скопировано пикетов: ${polyProfileData.samples.length}`);
+                notify(`Скопировано вершин: ${rows.length}`);
             } catch (_) {
                 notifyError('Буфер обмена недоступен.');
             }
@@ -8456,6 +9968,100 @@
         });
         syncEarthworkFields();
 
+        const slopePanel = createFloatingPanel({
+            cardId: 'slopeCard', modalId: 'slopeModal',
+            handleId: 'slopeDrag', defaultWidth: 560
+        });
+        let slopeRecordId = null;
+        let slopeLastRuns = null;
+
+        function openSlopeModal(record) {
+            if (!drawnPolylines.length) {
+                notifyError('Сначала начертите ось или контур — откосы строятся от полилинии.');
+                return;
+            }
+            if (!allMeshes.length) {
+                notifyError('Нет загруженной геометрии — до рельефа спускаться не с чего.');
+                return;
+            }
+            const target = record || drawnPolylines[0];
+            slopeRecordId = target.id;
+            const sel = $('slopeSelect');
+            if (sel) {
+                sel.innerHTML = drawnPolylines
+                    .map((r) => `<option value="${r.id}"${r.id === target.id ? ' selected' : ''}>${esc(r.name)}</option>`)
+                    .join('');
+            }
+            $('slopeResult').textContent = 'Нажмите «Построить».';
+            slopeLastRuns = null;
+            const modal = $('slopeModal');
+            const wasOpen = modal.classList.contains('show');
+            modal.classList.add('show');
+            if (!wasOpen) requestAnimationFrame(() => slopePanel.park());
+        }
+
+        function runSlopes() {
+            const rec = drawnPolylines.find((r) => r.id === slopeRecordId);
+            if (!rec) return notifyError('Ось не найдена.');
+            const side = $('slopeSide').value;
+            const res = computeSlopes(rec, {
+                side,
+                mFill: $('slopeFill').value,
+                mCut: $('slopeCut').value,
+                maxWidth: $('slopeMaxWidth').value
+            });
+            const out = $('slopeResult');
+            if (!res) { out.textContent = 'В линии меньше двух точек.'; return; }
+            slopeLastRuns = res.runs;
+            buildSlopeSurfaces(res.runs);
+            const sideText = side === 'both' ? 'в обе стороны' : (side === 'left' ? 'влево по ходу' : 'вправо по ходу');
+            out.textContent =
+                `Откосы — «${rec.name}», ${sideText}\n` +
+                `Крутизна: насыпь 1:${Number($('slopeFill').value)}, выемка 1:${Number($('slopeCut').value)}\n` +
+                `Сечений построено: ${res.sections} из ${res.total}\n` +
+                `Насыпь: ${res.fillVol.toFixed(2)} м³\n` +
+                `Выемка: ${res.cutVol.toFixed(2)} м³\n` +
+                `Наибольшая высота откоса: ${res.maxHeight.toFixed(2)} м, вылет: ${res.maxWidth.toFixed(2)} м\n` +
+                (res.flat ? `Сечений без работ (бровка на уровне земли): ${res.flat}\n` : '') +
+                (res.noGround ? `Сечений без отметки земли (пропущены): ${res.noGround}\n` : '') +
+                (res.notReached ? `Сечений, где откос не дотянулся за макс. вылет (пропущены): ${res.notReached}\n` : '');
+            if (!res.sections) {
+                notifyError('Ни одного откоса не построено — проверьте, что линия проходит над рельефом.');
+            } else {
+                notify(`Откосы: насыпь ${res.fillVol.toFixed(1)} м³, выемка ${res.cutVol.toFixed(1)} м³`);
+            }
+            trackUsage('slopes', { side, sections: res.sections });
+        }
+
+        $('slopeRun')?.addEventListener('click', runSlopes);
+        $('slopeSelect')?.addEventListener('change', () => {
+            slopeRecordId = Number($('slopeSelect').value);
+        });
+        $('slopeClear')?.addEventListener('click', () => {
+            clearSlopeSurfaces();
+            slopeLastRuns = null;
+            $('slopeResult').textContent = 'Откосы убраны из сцены.';
+        });
+        $('slopeToPolyline')?.addEventListener('click', () => {
+            if (!slopeLastRuns?.length) return notifyError('Сначала постройте откосы.');
+            const rec = drawnPolylines.find((r) => r.id === slopeRecordId);
+            let made = 0;
+            slopeLastRuns.forEach((run, i) => {
+                const line = createPolylineFromPoints(
+                    run.map((s) => s.out),
+                    `Линия выхода ${rec ? rec.name : ''} ${i + 1}`.trim(),
+                    '#c86a1e'
+                );
+                if (line) made++;
+            });
+            renderPolylinesList();
+            notify(`Линий выхода создано: ${made} — правятся и уходят в DXF как обычные полилинии.`);
+        });
+        $('slopeClose')?.addEventListener('click', () => {
+            $('slopeModal').classList.remove('show');
+            slopePanel.reset();
+        });
+
         let filletTargetId = null;
         let filletTargetVertex = -1;
 
@@ -8506,9 +10112,18 @@
             // Ручки принадлежат раскрытой полилинии — закрыли панель, убрали их
             polylineEditingId = null;
             clearPolylineHandles();
+            clearPolylineAnnotations();
             markNeedsRender();
         });
         // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
+        $('polylinesExcel')?.addEventListener('click', () => {
+            try {
+                exportPolylinesExcel();
+            } catch (err) {
+                console.error(err);
+                notifyError('Не удалось выгрузить Excel: ' + (err?.message || err));
+            }
+        });
         $('polylinesClear')?.addEventListener('click', () => {
             if (!drawnPolylines.length) return;
             clearDrawnPolylines();
@@ -8768,6 +10383,7 @@
             // Ручки вершин — в том же кадре, что и подписи: иначе отстают от
             // модели при вращении камеры.
             updatePolylineHandles();
+            updatePolylineAnnotations();
 
             frames++; 
             acc += now - last; 
@@ -9495,6 +11111,10 @@
         async function loadFilesSequentially(files) {
             $('hint').style.display = 'none';
             if (loadedModels.size === 0) treeBox.innerHTML = '';
+            // Пустая ли была сцена ДО этой пачки. Камеру вписываем только на
+            // первой загрузке: если модели уже есть, пользователь уже смотрит
+            // куда ему надо, и уводить его оттуда добавлением файла нельзя.
+            const sceneWasEmpty = loadedModels.size === 0;
 
             const ifcCount = files.filter(f => /\.ifc$/i.test(f.name)).length;
             if (ifcCount >= 3 && !perfMode) {
@@ -9618,16 +11238,21 @@
                     globalGroup.updateWorldMatrix(true, true);
                     externalGroup.updateWorldMatrix(true, true);
                     geoRasterGroup.updateWorldMatrix(true, true);
-                    clearViewHashFromUrl();
-                    fitView();
-                    restoreSharedViewFromHash({ skipCamera: true });
-                    requestAnimationFrame(() => {
+                    if (sceneWasEmpty) {
+                        clearViewHashFromUrl();
                         fitView();
-                        markNeedsRender();
-                    });
+                        restoreSharedViewFromHash({ skipCamera: true });
+                        requestAnimationFrame(() => {
+                            fitView();
+                            markNeedsRender();
+                        });
+                    }
                     markNeedsRender();
                 };
                 requestAnimationFrame(() => requestAnimationFrame(frameCamera));
+                if (!sceneWasEmpty) {
+                    notify('Файлы добавлены. Вид не менялся — «⤢ Вписать в кадр», чтобы увидеть всё.');
+                }
             } else {
                 restoreSharedViewFromHash();
             }
@@ -10075,6 +11700,18 @@ uniform vec3 uBatchSelColor;
                 if (!modData.meshesByID.has(frag.expressID)) modData.meshesByID.set(frag.expressID, []);
                 modData.meshesByID.get(frag.expressID).push(mesh);
             });
+
+            // Меши только что созданы заново из исходных цветов фрагментов —
+            // возвращаем на них назначенное пользователем оформление. Без этого
+            // любая пересборка (а она случается при добавлении следующего файла:
+            // сцена до-центрируется и двигает вершины) стирала заданный цвет и
+            // материал. У батчей это уже учтено внутри buildIfcBatches.
+            if (modData.appearanceByID?.size) {
+                modData.appearanceByID.forEach((appearance, expressID) => {
+                    const meshes = modData.meshesByID.get(expressID);
+                    if (meshes) meshes.forEach((m) => applyAppearanceToMesh(m, appearance));
+                });
+            }
             markNeedsRender();
         }
 
@@ -15014,9 +16651,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!mesh.isMesh) return;
 
             ensureMeshStandardMaterial(mesh);
+            delete mesh.userData._highlightBase;
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
             mats.forEach(mat => {
                 if (!mat) return;
+                // Свечение выделения гасим здесь же. Раньше его снимал только
+                // restoreMeshOriginalAppearance (путь «оформления нет»), а этот
+                // путь — нет: элемент с назначенным цветом оставался подсвеченным
+                // навсегда, потому что снятие выделения идёт ровно сюда.
+                // Кто выделен сейчас — решит reapplyAppearanceForItem, оно
+                // вернёт подсветку тем, кто её должен иметь.
+                if (mat.emissive) {
+                    mat.emissive.setHex(0x000000);
+                    mat.emissiveIntensity = 0;
+                }
                 if (appearance.color != null) mat.color.setHex(appearance.color);
                 if (appearance.roughness != null) mat.roughness = appearance.roughness;
                 if (appearance.metalness != null) mat.metalness = appearance.metalness;
@@ -15227,6 +16875,16 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 mod.appearanceByID.set(item.expressID, entry);
                 reapplyAppearanceForItem(item.modelID, item.expressID);
             });
+            // applyAppearanceToMesh гасит свечение, а элементы всё ещё выделены —
+            // возвращаем подсветку, чтобы картинка не расходилась с состоянием.
+            // У батчей подсветка своя (шейдер), её обновляет сам reapply.
+            if (selectedItems.length) {
+                selectedItems.forEach((i) => {
+                    const m = loadedModels.get(i.modelID);
+                    if (!m || m.batched) return;
+                    m.meshesByID.get(i.expressID)?.forEach((mesh) => setEmissive(mesh, highlightColor));
+                });
+            }
             return items.length;
         }
 
@@ -15261,13 +16919,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (count) {
                 appearanceDraftTexture = null;
                 appearanceDraftTextureName = '';
-                notifyOk(`Оформление применено к ${count} элементам.`);
-                const first = selectedItems[0];
-                if (first) {
-                    const mod0 = loadedModels.get(first.modelID);
-                    if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
-                    else showProps(first.modelID, first.expressID, selectedItems.length);
-                }
+                // Снимаем выделение: подсветка выделенного смешивается с
+                // назначенным цветом, и результат правки не разглядеть, пока
+                // элемент выбран.
+                selectMultiple([]);
+                notifyOk(`Оформление применено к ${count} элементам. Выделение снято, чтобы был виден цвет.`);
             }
         }
 
@@ -15640,6 +17296,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
 
             if (skipOrbitClick) { skipOrbitClick = false; return; }
+
+            // Указание точек вертикального перехода идёт раньше всего
+            // остального: клик здесь значит «вот эта точка на линии».
+            if (handleVerticalTransitionClick(ev.clientX, ev.clientY)) return;
 
             // Начерченная полилиния перехватывает клик раньше элементов модели:
             // она нарисована поверх (depthTest выключен), и клик по видимой
@@ -16960,6 +18620,73 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 filenameHint || `bim-lva-props-${nElements}.xls`
             );
             trackUsage('props_export_excel', { rows: rows.length - 1, elements: nElements });
+            return true;
+        }
+
+        /**
+         * Все параметры всех полилиний в Excel: сводка по осям и построчно по
+         * вершинам. Координаты — АБСОЛЮТНЫЕ: файл нужен, чтобы отдать трассу
+         * смежнику или свериться с Civil, а не чтобы посмотреть локальные.
+         */
+        function exportPolylinesExcel() {
+            if (!drawnPolylines.length) {
+                notifyError('Полилиний нет.');
+                return false;
+            }
+            const summary = [[
+                'Полилиния', 'Тип', 'Вершин', 'Замкнута',
+                'L 3D, м', 'L 2D, м', 'Площадь, м²', 'Цвет', 'Толщина, px'
+            ]];
+            const verts = [[
+                'Полилиния', 'Вершина', 'X, м', 'Y, м', 'Z, м',
+                'Пикет, м', 'L до след., м', 'Уклон, ‰', 'Радиус, м'
+            ]];
+
+            for (const rec of drawnPolylines) {
+                summary.push([
+                    rec.name,
+                    rec.kind === '2d' ? '2D' : '3D',
+                    rec.pts.length,
+                    rec.closed ? 'да' : 'нет',
+                    Number(rec.length3d.toFixed(3)),
+                    Number(rec.length2d.toFixed(3)),
+                    rec.closed ? Number(polylinePlanArea(rec).toFixed(3)) : '',
+                    '#' + Number(rec.color).toString(16).padStart(6, '0'),
+                    rec.width
+                ]);
+
+                // Пикет вершины считаем тем же способом, что и профиль, —
+                // вдоль отрисованной линии, иначе числа в двух местах разойдутся.
+                let sta = 0;
+                rec.pts.forEach((p, i) => {
+                    const a = worldPointToAbsoluteXYZ(p) || p;
+                    const seg = polylineSegmentStats(rec, i);
+                    verts.push([
+                        rec.name,
+                        i + 1,
+                        Number(a.x.toFixed(3)),
+                        Number(a.y.toFixed(3)),
+                        Number(a.z.toFixed(3)),
+                        Number(sta.toFixed(3)),
+                        seg ? Number(seg.length3d.toFixed(3)) : '',
+                        seg && seg.slopePermille != null ? Number(seg.slopePermille.toFixed(2)) : '',
+                        rec.radii[i] ? Number(rec.radii[i].toFixed(3)) : ''
+                    ]);
+                    const next = polylineNextIndex(rec, i);
+                    if (next >= 0) {
+                        sta += Math.hypot(rec.pts[next].x - p.x, rec.pts[next].y - p.y);
+                    }
+                });
+            }
+
+            downloadWorkbookSheets(
+                [{ name: 'Полилинии', rows: summary }, { name: 'Вершины', rows: verts }],
+                `bim-lva-polylines-${drawnPolylines.length}.xls`
+            );
+            notifyOk(`Выгружено полилиний: ${drawnPolylines.length}, вершин: ${verts.length - 1}.`);
+            trackUsage('polylines_export_excel', {
+                polylines: drawnPolylines.length, vertices: verts.length - 1
+            });
             return true;
         }
 
@@ -21338,6 +23065,11 @@ ${componentXml || '    '}
 
         window.addEventListener('keydown', event => {
             if (event.target.closest('input, textarea, select, .editInput')) return;
+            if (event.key === 'Escape' && vertTransitionPick) {
+                event.preventDefault();
+                cancelVerticalTransitionPick();
+                return;
+            }
             if (event.key === 'Escape' && drawMode) {
                 event.preventDefault();
                 if (drawPoints.length) finishDrawPolyline();
@@ -22744,6 +24476,9 @@ ${componentXml || '    '}
         let stageContextElementRef = null;
         let stageContextPolyline = null;
         let stageContextVertex = -1;
+        // Точка правого клика на линии — нужна, чтобы вставить вершину именно
+        // туда, а не в середину отрезка.
+        let stageContextPolySeg = null;
         
         window.addEventListener('click', () => { 
             treeCtx.classList.remove('show'); 
@@ -22812,6 +24547,7 @@ ${componentXml || '    '}
             const polyHit = pickDrawnPolyline(e.clientX, e.clientY);
             stageContextPolyline = polyHit?.record || null;
             stageContextVertex = polyHit ? nearestInteriorVertex(polyHit.record, polyHit.point) : -1;
+            stageContextPolySeg = polyHit ? nearestPolylineSegment(polyHit.record, polyHit.point) : null;
             $('ctxPolylineGroup').hidden = !stageContextPolyline;
             $('ctxPolylineFillet').classList.toggle('disabled', stageContextVertex < 0);
             $('ctxPolylineTable').classList.toggle('disabled', !drawnPolylines.length);
@@ -22831,6 +24567,56 @@ ${componentXml || '    '}
         $('ctxPolylineFillet').addEventListener('click', () => {
             if (stageContextPolyline) openFilletModal(stageContextPolyline, stageContextVertex);
         });
+        /**
+         * Вершина точно в точке правого клика. Дальше её отметку либо
+         * спрашиваем, либо берём с рельефа — оба пути ведут в одну вставку,
+         * поэтому она вынесена сюда.
+         */
+        function addVertexAtContext(mode) {
+            const rec = stageContextPolyline;
+            const seg = stageContextPolySeg;
+            if (!rec || !seg) return;
+
+            const p = seg.point.clone();
+            if (mode === 'terrain') {
+                // Промах луча вниз — это не ноль сцены: за краем поверхности
+                // отметки просто нет, и подставлять туда число значило бы соврать.
+                const z = sampleTerrainZ(p.x, p.y, -Infinity);
+                if (!Number.isFinite(z)) {
+                    notifyError('Под этой точкой нет поверхности — рельеф не найден. Задайте отметку вручную.');
+                    return;
+                }
+                p.z = z;
+            }
+
+            const at = insertPolylineVertexAt(rec, seg.i, p);
+            if (at < 0) return;
+
+            if (mode === 'terrain') {
+                const abs = worldPointToAbsoluteXYZ(p) || p;
+                notifyOk(`«${rec.name}»: вершина #${at + 1} посажена на рельеф, отметка ${abs.z.toFixed(3)} м.`);
+                trackUsage('polyline_vertex_to_terrain', {});
+                return;
+            }
+
+            // Раскрываем полилинию на правку и сразу отдаём вершину под ввод
+            // отметки — иначе пришлось бы отдельно лезть в панель.
+            polylineEditingId = rec.id;
+            renderPolylinesList();
+            if (rec.kind === '2d') {
+                notify('У 2D-полилинии все точки на одной отметке — вершина добавлена, высоту менять нечем.');
+                return;
+            }
+            startVertexElevationEdit(at);
+            trackUsage('polyline_vertex_insert_at', {});
+        }
+
+        $('ctxPolylineAddVertex').addEventListener('click', () => addVertexAtContext('ask'));
+        $('ctxPolylineAddVertexTerrain').addEventListener('click', () => addVertexAtContext('terrain'));
+        $('ctxPolylineVertTransition').addEventListener('click', () => {
+            if (stageContextPolyline) startVerticalTransitionPick(stageContextPolyline);
+        });
+
         $('ctxPolylineContinue').addEventListener('click', () => {
             if (stageContextPolyline) continuePolyline(stageContextPolyline, false);
         });
@@ -24413,7 +26199,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.11',
-            buildId: '89f7611-preview',
+            buildId: 'b1ae69c-preview',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

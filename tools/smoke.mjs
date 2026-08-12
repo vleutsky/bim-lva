@@ -1549,6 +1549,101 @@ async function checkTourTrain(page) {
  * создавались из ИСХОДНЫХ цветов фрагментов (appearanceByID не читался), а
  * камера вписывалась после каждой пачки, а не только после первой.
  */
+/**
+ * Откосы до рельефа. Проверяем не «что-то построилось», а геометрию: линию
+ * кладём заведомо ВЫШЕ всей модели, значит на каждом сечении должна быть
+ * насыпь, а точка выхода обязана лежать ровно на заданном заложении —
+ * z_выхода = z_бровки − вылет/m. Это выполняется независимо от того, какой
+ * рельеф под фикстурой, поэтому проверка не зависит от формы модели.
+ */
+async function checkSlopes(page) {
+    const M_FILL = 2;
+    // Своя модель: соседние проверки чистят сцену за собой, и брать «что
+    // осталось» нельзя — на этом проверка уже падала с пустой сценой.
+    const fx = path.join(ROOT, 'tools', 'fixtures', 'smoke-slope.ifc');
+    // Шаг сетки равен размеру блока (3 м) — блоки смыкаются в сплошную плиту.
+    // При обычном шаге 6 м между ними зазоры, луч вниз проваливается, и «земли»
+    // под откосом просто нет: проверка падала с «без земли 4».
+    await fs.writeFile(fx, makeGeoIfc({
+        worldX: 448_000, worldY: 6_180_000, worldZ: 50,
+        count: 256, cols: 16, step: 3, seed: 3, name: 'smoke-slope.ifc'
+    }));
+    let res;
+    try {
+        await page.setInputFiles('#localFileInput', fx);
+        await page.waitForFunction(
+            () => (window.BimLvaDebug?.modelBounds || []).some((m) => /smoke-slope\.ifc$/i.test(m.file)),
+            { timeout: 90_000 }
+        );
+        await page.waitForTimeout(500);
+        res = await runSlopeProbe(page, M_FILL);
+    } finally {
+        await fs.rm(fx, { force: true });
+    }
+    return reportSlopes(page, res, M_FILL);
+}
+
+async function runSlopeProbe(page, M_FILL) {
+    return page.evaluate((mFill) => {
+        const D = window.BimLvaDebug;
+        const b = (D.modelBounds || [])[0];
+        if (!b) return { why: 'нет модели в сцене' };
+        const z = b.centerZ + b.sizeZ / 2 + 5;   // выше всего — везде насыпь
+        const half = Math.max(2, b.sizeY * 0.2);
+        const id = D.makePolyline([
+            { x: b.centerX, y: b.centerY - half, z },
+            { x: b.centerX, y: b.centerY + half, z }
+        ], 'Тест откосов');
+        if (id == null) return { why: 'makePolyline вернул null' };
+        return D.slopes(id, { side: 'both', mFill, mCut: 1, maxWidth: 300 }) || { why: 'slopes вернул null' };
+    }, M_FILL);
+}
+
+async function reportSlopes(page, res, M_FILL) {
+    if (!res || res.why) {
+        problems.push(`откосы: ${res?.why || 'проверка не отработала'}`);
+        return null;
+    }
+    if (!res.sections) {
+        problems.push(
+            `откосы: ни одного сечения (без земли ${res.noGround}, не дотянулись ${res.notReached})`
+        );
+    }
+    let worstZ = 0, cutSections = 0;
+    res.runs.forEach((run) => run.forEach((s) => {
+        if (!s.isFill) cutSections++;
+        worstZ = Math.max(worstZ, Math.abs(s.out.z - (s.crown.z - s.width / M_FILL)));
+    }));
+    if (cutSections) {
+        problems.push(`откосы: ${cutSections} сечений посчитаны выемкой, хотя бровка выше модели`);
+    }
+    if (worstZ > 1e-6) {
+        problems.push(`откосы: точка выхода не на заложении 1:${M_FILL}, расхождение ${worstZ.toFixed(6)} м`);
+    }
+    if (res.sections && res.fillVol <= 0) {
+        problems.push('откосы: объём насыпи не посчитан');
+    }
+    if (res.cutVol !== 0) {
+        problems.push(`откосы: выемка ${res.cutVol.toFixed(2)} м³ там, где её быть не может`);
+    }
+    if (res.sections && !res.surfaces) {
+        problems.push('откосы: поверхность в сцену не добавлена');
+    }
+    await page.evaluate(() => {
+        document.getElementById('btnPolylineList')?.click();
+        document.getElementById('polylinesClear')?.click();
+        document.getElementById('polylinesClose')?.click();
+        document.getElementById('clear')?.click();
+    });
+    await page.waitForTimeout(400);
+    return {
+        sections: res.sections, total: res.total,
+        fill: res.fillVol, cut: res.cutVol,
+        maxHeight: res.maxHeight, maxWidth: res.maxWidth,
+        surfaces: res.surfaces, dz: worstZ
+    };
+}
+
 async function checkAddFileKeepsStateForModel(page) {
     const a = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-a.ifc');
     const b = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-b.ifc');
@@ -1715,6 +1810,7 @@ async function main() {
     let dxfBlocks = null;
     let geoFed = null;
     let addKeep = null;
+    let slopes = null;
     // Любая сборка Composer, включая тестовую копию, а не только основной файл.
     if (/^bim-lva-composer-ifc.*\.html$/.test(PAGE)) {
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
@@ -1767,6 +1863,7 @@ async function main() {
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
                     addKeep = await checkAddFileKeepsStateForModel(page);
+                    slopes = await checkSlopes(page);
                     train = await checkTourTrain(page);
                 } finally {
                     await fs.rm(second, { force: true });
@@ -1858,6 +1955,13 @@ async function main() {
     if (geoFed) console.log(`геосводка: ${geoFed.ok ? `взаимное положение сохранено (${geoFed.dist.toFixed(0)} м)` : `СЛОМАНО (${geoFed.dist.toFixed(0)} м вместо 800)`}`);
     if (addKeep) {
         console.log(`догрузка:  цвет сохранён (#${addKeep.color.toString(16)}), камера на месте (${addKeep.moved.toFixed(3)} м)`);
+    }
+    if (slopes) {
+        console.log(
+            `откосы:    сечений ${slopes.sections}/${slopes.total}, насыпь ${slopes.fill.toFixed(1)} м³, ` +
+            `выемка ${slopes.cut.toFixed(1)} м³, макс. высота ${slopes.maxHeight.toFixed(2)} м, ` +
+            `вылет ${slopes.maxWidth.toFixed(2)} м, поверхностей ${slopes.surfaces}`
+        );
     }
     if (draw?.vert) {
         console.log(`верт. переход: +${draw.vert.added} вершины, середина на ${draw.vert.target} м, стояки вертикальны`);
