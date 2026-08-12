@@ -185,8 +185,9 @@
     const revokeLicense = (licenseId, note) =>
         callIssueFunction({ action: 'revoke', licenseId, note });
     /** Учёт лицензии, выданной офлайн через New-LvaLicense.ps1 (не сайтом). */
-    const importLicense = (email, licenseText) =>
-        callIssueFunction({ action: 'import', email, licenseText });
+    /** requestId необязателен: если передан, сервер закроет эту заявку. */
+    const importLicense = (email, licenseText, requestId) =>
+        callIssueFunction({ action: 'import', email, licenseText, requestId });
 
     global.BimLvaLicenses = {
         PRODUCTS,

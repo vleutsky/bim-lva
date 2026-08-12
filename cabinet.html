@@ -767,7 +767,11 @@
                         return;
                     }
                     box.innerHTML = rows.map((r) => `
-                        <div class="lic-admin-req" data-req="${esc(r.id)}">
+                        <div class="lic-admin-req" data-req="${esc(r.id)}"
+                             data-email="${esc(r.email)}"
+                             data-product="${esc(r.product)}"
+                             data-machine="${esc(r.machine_id || '')}"
+                             data-client="${esc(r.org || r.full_name || r.email)}">
                             <div class="lic-head">
                                 <strong>${esc(lic().productTitle(r.product))}</strong>
                                 <span class="lic-status">заявка от ${asDate(r.created_at)}</span>
@@ -782,6 +786,16 @@
                                 <input class="lic-adminnote" type="text" placeholder="Комментарий к решению (необязательно)">
                                 <button type="button" class="btn btn-primary" data-act="issue">Выдать ключ</button>
                                 <button type="button" class="btn btn-outline" data-act="reject">Отклонить</button>
+                            </div>
+                            <div class="row">
+                                <button type="button" class="btn btn-outline" data-act="psCommand"
+                                        title="Собрать команду New-LvaLicense.ps1 с данными этой заявки">
+                                    Сформировать офлайн: команда для PowerShell
+                                </button>
+                                <input type="file" class="lic-req-file" accept=".lic,.json,application/json"
+                                       title="Готовый license.lic, выданный скриптом">
+                                <button type="button" class="btn btn-primary" data-act="importForReq"
+                                        title="Учесть готовый файл и закрыть эту заявку">Учесть файл по заявке</button>
                             </div>
                         </div>`).join('');
                 } catch (err) {
@@ -830,9 +844,61 @@
                 const note = card.querySelector('.lic-adminnote').value;
                 const days = Number(card.querySelector('.lic-days').value);
 
+                // Офлайн-путь: собрать команду для New-LvaLicense.ps1 из данных
+                // заявки. Нужен, пока веб-ключ не заведён, да и вообще: скрипт
+                // подписывает сертификатом «LVA Code Signing», а перепечатывать
+                // Machine ID из 64 знаков руками — прямой путь к опечатке.
+                if (btn.dataset.act === 'psCommand') {
+                    card.querySelector('.lic-ps-block')?.remove();
+                    const machine = card.dataset.machine;
+                    const product = card.dataset.product === '*' ? '"*"' : card.dataset.product;
+                    const parts = [
+                        '.\\Tools\\New-LvaLicense.ps1',
+                        `-ClientName "${card.dataset.client.replace(/"/g, '`"')}"`,
+                        `-Products ${product}`
+                    ];
+                    if (machine) parts.push(`-MachineId "${machine}"`);
+                    if (days > 0) {
+                        const till = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+                        parts.push(`-ExpiresUtc "${till}"`);
+                    }
+                    parts.push('-OutDir "C:\\Licenses"');
+                    const cmd = parts.join(' `\n    ');
+                    const hint = machine
+                        ? 'Выполните в папке репозитория LvaBim, затем выберите готовый файл ниже.'
+                        : 'Machine ID в заявке не указан — лицензия выйдет без привязки к компьютеру.';
+                    card.insertAdjacentHTML('beforeend', `
+                        <div class="lic-ps-block">
+                            <p class="lic-empty">${esc(hint)}</p>
+                            <textarea class="lic-key" rows="5" readonly onclick="this.select()">${esc(cmd)}</textarea>
+                            <div class="row"><button type="button" class="btn btn-outline" data-copy-ps>Скопировать команду</button></div>
+                        </div>`);
+                    card.querySelector('[data-copy-ps]')?.addEventListener('click', async (e) => {
+                        try {
+                            await navigator.clipboard.writeText(cmd);
+                            const was = e.target.textContent;
+                            e.target.textContent = 'Скопировано';
+                            setTimeout(() => { e.target.textContent = was; }, 1500);
+                        } catch {
+                            card.querySelector('.lic-ps-block .lic-key')?.select();
+                        }
+                    });
+                    return;
+                }
+
                 card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
                 try {
-                    if (btn.dataset.act === 'issue') {
+                    if (btn.dataset.act === 'importForReq') {
+                        // Готовый файл от скрипта: учитываем его и закрываем
+                        // заявку, чтобы она не висела в «на рассмотрении».
+                        const file = card.querySelector('.lic-req-file')?.files?.[0];
+                        if (!file) throw new Error('Сначала выберите файл license.lic, выданный скриптом.');
+                        const res = await lic().importLicense(card.dataset.email, await file.text(), id);
+                        alert(res.requestClosed
+                            ? 'Лицензия учтена, заявка закрыта.'
+                            : 'Лицензия учтена.');
+                        card.remove();
+                    } else if (btn.dataset.act === 'issue') {
                         const res = await lic().issueLicense(id, days, note);
                         card.insertAdjacentHTML('beforeend',
                             `<textarea class="lic-key" rows="6" readonly onclick="this.select()">${esc(res.licenseText)}</textarea>`
