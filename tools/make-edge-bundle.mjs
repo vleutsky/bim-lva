@@ -20,13 +20,33 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIR = path.join(ROOT, 'supabase', 'functions', 'license-issue');
 const OUT = path.join(DIR, 'bundled.ts');
 
-const IMPORT_LINE = 'import { importRsaSigningKey, signLicenseFile, isMachineId, parseLicenseFile } from "./license-lic.js";';
+// Строку импорта раньше держали здесь дословно, и генератор падал от любого
+// добавления функции в список — правку приходилось делать в двух местах.
+// Ищем импорт по форме, а состав проверяем отдельно.
+const IMPORT_RE = /^import\s*\{[^}]*\}\s*from\s*["']\.\/license-lic\.js["'];?[ \t]*$/gm;
 
 const index = await fs.readFile(path.join(DIR, 'index.ts'), 'utf8');
 const format = await fs.readFile(path.join(DIR, 'license-lic.js'), 'utf8');
 
-if (index.split(IMPORT_LINE).length - 1 !== 1) {
-    throw new Error('В index.ts не найден ровно один импорт license-lic.js — обновите tools/make-edge-bundle.mjs.');
+const importMatches = index.match(IMPORT_RE) ?? [];
+if (importMatches.length !== 1) {
+    throw new Error(
+        `В index.ts ожидался ровно один импорт ./license-lic.js, найдено ${importMatches.length}.`
+    );
+}
+const IMPORT_LINE = importMatches[0];
+
+// Всё, что функция берёт из модуля, должно в модуле существовать: иначе
+// bundled.ts соберётся, а упадёт уже в Supabase, где отлаживать неудобно.
+const imported = (IMPORT_LINE.match(/\{([^}]*)\}/)?.[1] ?? '')
+    .split(',')
+    .map((s) => s.trim().split(/\s+as\s+/)[0].trim())
+    .filter(Boolean);
+const missing = imported.filter(
+    (name) => !new RegExp(`^export (async )?(function|const) ${name}\\b`, 'm').test(format)
+);
+if (missing.length) {
+    throw new Error(`index.ts импортирует из license-lic.js то, чего там нет: ${missing.join(', ')}`);
 }
 
 // Внутри одного файла экспортировать нечего: убираем `export`, оставляя тела
@@ -55,7 +75,8 @@ await fs.writeFile(OUT, bundled);
 
 // Простая защита от рассинхрона: всё, что функция берёт из модуля, должно
 // оказаться в результате.
-for (const needed of ['function signLicenseFile', 'function importRsaSigningKey', 'function canonicalString']) {
+const needMust = ['function signLicenseFile', 'function importRsaSigningKey', 'function canonicalString'];
+for (const needed of [...needMust, ...imported.map((n) => `function ${n}`)]) {
     if (!bundled.includes(needed)) throw new Error(`В bundled.ts не попало: ${needed}`);
 }
 if (bundled.includes('./license-lic.js')) {
