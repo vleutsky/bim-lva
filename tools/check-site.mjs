@@ -17,7 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PAGES = [
     'index.html', 'portfolio.html', 'cabinet.html',
     'license-admin.html', 'case_inventor.html', 'plugin_ksi.html',
-    'testing.html'
+    'testing.html', 'composer.html'
 ];
 
 /** Явные признаки незаполненного шаблона. */

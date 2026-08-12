@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="BIM.LVA Composer IFC — браузерный инструмент для сводных моделей инфраструктуры: что умеет, чего не умеет и что в работе.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#129513;</text></svg>">
+<title>Composer IFC — что умеет</title>
+
+<link rel="stylesheet" href="./assets/doc.css">
+<style>
+/* ---- Строки «умеет / не умеет / в работе» ---- */
+.state{
+  display:inline-flex;align-items:center;gap:5px;flex:none;
+  font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;
+  padding:2px 7px;border-radius:999px;border:1px solid;
+}
+.state.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 35%,transparent);
+  background:var(--ok-wash);}
+.state.wip{color:var(--warm);border-color:var(--warm-line);background:var(--warm-wash);}
+.state.no{color:var(--ink-faint);border-color:var(--line);background:var(--surface-2);}
+
+/* ---- Короткий факт в две колонки ---- */
+.facts{
+  display:grid;grid-template-columns:1fr;gap:0;
+  border:1px solid var(--line);border-radius:var(--r);
+  overflow:hidden;background:var(--surface);
+}
+.fact{display:grid;grid-template-columns:1fr;gap:3px;padding:12px 16px;}
+.fact + .fact{border-top:1px solid var(--line-soft);}
+@media (min-width:640px){
+  .fact{grid-template-columns:180px minmax(0,1fr);gap:6px 20px;align-items:baseline;}
+}
+.fact b{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:13.5px;color:var(--ink);}
+.fact span{color:var(--ink-soft);font-size:15px;}
+.fact code{background:var(--surface-3);padding:1px 5px;border-radius:4px;color:var(--ink);}
+
+/* ---- Список возможностей ---- */
+.caps{display:flex;flex-direction:column;gap:0;
+  border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--surface);}
+.cap{display:grid;grid-template-columns:1fr;gap:5px;padding:13px 16px;}
+.cap + .cap{border-top:1px solid var(--line-soft);}
+@media (min-width:720px){
+  .cap{grid-template-columns:200px minmax(0,1fr) auto;gap:6px 18px;align-items:baseline;}
+}
+.cap b{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:14px;color:var(--ink);}
+.cap p{color:var(--ink-soft);font-size:15px;}
+.cap code{background:var(--surface-3);padding:1px 5px;border-radius:4px;color:var(--ink);}
+
+.lede{
+  font-size:18px;line-height:1.6;color:var(--ink);max-width:62ch;
+  padding-left:14px;border-left:3px solid var(--steel);
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="shell">
+    <div class="eyebrow">BIM.LVA Composer IFC</div>
+    <h1>Сводная модель в браузере</h1>
+    <p class="dek">
+      Инструмент для инженеров инфраструктуры: собрать сводку из IFC, DWG и
+      данных изысканий, посмотреть, померить, найти пересечения, выдать
+      замечание и забрать результат в DXF или Excel. Без установки, без
+      лицензии на рабочем месте и без выгрузки файлов куда-либо.
+    </p>
+    <div class="meta">
+      <span>Открывается ссылкой в браузере</span>
+      <span>Файлы остаются на компьютере</span>
+      <span>Работает офлайн после первого запуска</span>
+    </div>
+  </div>
+</header>
+
+<div class="shell layout">
+  <nav class="rail" aria-label="Разделы">
+    <div class="rail-title">Содержание</div>
+    <ol id="nav">
+      <li><a href="#s1"><b>01</b><span>Что это и для кого</span></a></li>
+      <li><a href="#s2"><b>02</b><span>Что открывает</span></a></li>
+      <li><a href="#s3"><b>03</b><span>Просмотр и разбор</span></a></li>
+      <li><a href="#s4"><b>04</b><span>Данные и атрибуты</span></a></li>
+      <li><a href="#s5"><b>05</b><span>Измерения</span></a></li>
+      <li><a href="#s6"><b>06</b><span>Проверка и координация</span></a></li>
+      <li><a href="#s7"><b>07</b><span>Геодезия и координаты</span></a></li>
+      <li><a href="#s8"><b>08</b><span>Черчение и выдача</span></a></li>
+      <li><a href="#s9"><b>09</b><span>Чего не умеет</span></a></li>
+      <li><a href="#s10"><b>10</b><span>В работе</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section class="sec" id="s1">
+      <div class="sec-head">
+        <div class="sec-num">01</div>
+        <div>
+          <h2>Что это и для кого</h2>
+        </div>
+      </div>
+      <div class="sec-body">
+        <p class="lede">
+          Composer IFC не заменяет Civil&nbsp;3D или Navisworks. Он закрывает то,
+          ради чего эти программы открывать долго и дорого: быстро посмотреть
+          чужую модель, проверить её, показать проблему и передать замечание
+          дальше — с любого компьютера, включая тот, где ничего не установлено.
+        </p>
+
+        <h3>Кому пригодится</h3>
+        <div class="facts">
+          <div class="fact"><b>ГИП, ведущий</b><span>Посмотреть, что прислали смежники, не занимая лицензию Navisworks и не ставя ничего на ноутбук.</span></div>
+          <div class="fact"><b>Проектировщик сетей</b><span>Сводка сетей и конструкций, пересечения, отметки, уклоны, профиль по оси, выдача трассы в DXF.</span></div>
+          <div class="fact"><b>Генпланист</b><span>Рельеф из LandXML, картограмма земляных работ, посадка модели по координатам, подложка космоснимком.</span></div>
+          <div class="fact"><b>BIM-координатор</b><span>Проверка заполнения атрибутов, массовая правка через Excel, коллизии, замечания в BCF.</span></div>
+          <div class="fact"><b>Экспертиза, заказчик</b><span>Открыть ссылку и увидеть ровно тот вид, разрез и замечание, которые вам показывают.</span></div>
+          <div class="fact"><b>На объекте</b><span>QR-код с якорем вида — модель открывается на телефоне там, где стоите.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s2">
+      <div class="sec-head">
+        <div class="sec-num">02</div>
+        <div>
+          <h2>Что открывает</h2>
+          <p>Несколько файлов сразу — они собираются в одну сводку по общим координатам.</p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="facts">
+          <div class="fact"><b>IFC</b><span>Схемы IFC2X3, IFC4, IFC4X3. Инфраструктурные IFC4X1 и IFC4X2 (Civil&nbsp;3D, OpenRoads) открываются в режиме совместимости.</span></div>
+          <div class="fact"><b>DWG</b><span>R13…2018, с раскрытием блоков — вставки, вложенность, масштаб, поворот.</span></div>
+          <div class="fact"><b>DXF</b><span>ASCII: 3DFACE, MESH, TIN, 3DSOLID, блоки. Единицы читаются из заголовка чертежа.</span></div>
+          <div class="fact"><b>LandXML</b><span>Civil&nbsp;3D: поверхности TIN, горизонтали, точки, трассы, коридоры, сети труб, участки.</span></div>
+          <div class="fact"><b>3D-форматы</b><span>FBX, GLB, OBJ, STL.</span></div>
+          <div class="fact"><b>Растры</b><span>GeoTIFF и ECW с геопривязкой, JPEG с world-файлом — ложатся на рельеф по координатам.</span></div>
+          <div class="fact"><b>Откуда</b><span>С диска, перетаскиванием или прямо с публичной папки Яндекс.Диска.</span></div>
+        </div>
+        <div class="note">
+          <b>Большая модель.</b> Пресет фильтра при загрузке отсекает арматуру,
+          метизы и мебель ещё до разбора — такие элементы не занимают память
+          вовсе. На тяжёлых сводках это решает вопрос, откроется файл или нет.
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s3">
+      <div class="sec-head">
+        <div class="sec-num">03</div>
+        <div>
+          <h2>Просмотр и разбор</h2>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>Навигация</b><p>Вращение и зум к точке под курсором — как в Navisworks. Куб видов: шесть сторон и изометрия, стороны света стоят как на плане.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Проекции</b><p>Перспектива и ортогональная. Для планов и 2D-чертежей нужна вторая — в перспективе мерить нельзя.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Разрезы</b><p>Секущая плоскость по X, Y, Z и коробка сечения с ручками сдвига и растяжения.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Видимость</b><p>Скрыть, изолировать, вернуть всё. Фильтр по IFC-классам с количеством элементов.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Раскраска</b><p>По IFC-классу или по значению параметра из Pset, с легендой и подсчётом.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Сохранённые виды</b><p>Камера, скрытия и разрез запоминаются вместе и возвращаются одним кликом.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Проезд и облёт</b><p>Движение по трассе или свободно на <code>WASD</code>, машиной или локомотивом, с видом вплоть до кабины.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Большие модели</b><p>Быстрый режим, ускоренный пикинг, обновление файла на месте без перезагрузки сцены.</p><span class="state ok">есть</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s4">
+      <div class="sec-head">
+        <div class="sec-num">04</div>
+        <div>
+          <h2>Данные и атрибуты</h2>
+          <p>Не только смотреть: атрибуты правятся и уезжают обратно в IFC.</p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>Свойства</b><p>Имя, класс, ExpressID и все наборы характеристик выбранного элемента.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Правка Pset</b><p>Значения меняются прямо в панели и записываются в модель.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Массовая правка</b><p>Поиск по параметру находит все элементы с нужным атрибутом или значением — дальше правка сразу по всей выборке.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Excel туда-обратно</b><p>Выгрузить характеристики в таблицу, поправить в Excel, залить назад.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Ведомость</b><p>Таблица по выделенному в CSV.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Экспорт IFC</b><p>Скачать изменённые файлы. Отдельно — достроить структуру <code>Project → Site → Building → Storey</code> и объединить все загруженные IFC в один.</p><span class="state ok">есть</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s5">
+      <div class="sec-head">
+        <div class="sec-num">05</div>
+        <div>
+          <h2>Измерения</h2>
+          <p>Точки прилипают к вершинам, серединам и рёбрам — как объектная привязка в CAD.</p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>Расстояние</b><p>Между двумя точками.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Линейка 2D/3D/i</b><p>Сразу наклонная длина, горизонтальное проложение, превышение и уклон в ‰, % и <code>1:n</code>.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Цепочка</b><p>Сумма отрезков подряд.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Перепад и угол</b><p>Разность отметок между точками; угол по трём точкам.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Площадь</b><p>По замкнутому контуру.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Метка XYZ</b><p>Подпись с абсолютными координатами прямо в сцене, перетаскивается, копируется списком.</p><span class="state ok">есть</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s6">
+      <div class="sec-head">
+        <div class="sec-num">06</div>
+        <div>
+          <h2>Проверка и координация</h2>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>Коллизии</b><p>Пересечения по габаритам с настройкой пар классов и допуска. Результат кликом изолируется или превращается в замечание.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>BCF-заметки</b><p>Точка, комментарий и камера. Выгрузка в <code>.bcfzip</code> формата BCF&nbsp;2.1 — открывается в Navisworks, Revit, Solibri.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Сравнение версий</b><p>Два IFC одной модели: что добавлено, что удалено.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>4D-лента</b><p>Скрытие и подкраска по дате или фазе из Pset — проверка календарного плана.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Пакет экспертизы</b><p>Камера, разрез, фильтры, легенда, геопривязка и замечания — в одной ссылке. Открывший видит ровно вашу картинку.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>QR-якорь</b><p>Тот же вид QR-кодом — открыть на телефоне на объекте.</p><span class="state ok">есть</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s7">
+      <div class="sec-head">
+        <div class="sec-num">07</div>
+        <div>
+          <h2>Геодезия и координаты</h2>
+          <p>
+            Самая частая беда сводки — «модель села не туда». Здесь для этого
+            отдельный набор инструментов, а не догадки.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>Абсолютные координаты</b><p>Курсор и выделение показываются в мировых X, Y, Z. Метры и миллиметры в одной сводке не расходятся.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Отчёт CRS</b><p>Мировой габарит каждого файла и то, как он сел: по общему нулю, в свой центр или без привязки. Сверяется с «Свойства поверхности → Статистика» в Civil&nbsp;3D.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Диагностика IFC</b><p>Разбор файла в браузере: схема, экспортёр, единицы, габарит, геопривязка, цепочка размещения. Файл на 200&nbsp;МБ проходит, ничего никуда не загружается.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Посадка по координатам</b><p>Сдвиг и поворот модели, точка вставки числами — поставить IFC, выгруженный «в нуле», на своё место.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Растр-подложка</b><p>GeoTIFF, ECW и JPEG с привязкой; драпировка на рельеф.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Карта онлайн</b><p>OpenStreetMap и космоснимок ESRI, либо свой ключ MapTiler / Mapbox.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Профиль и объёмы</b><p>Продольный профиль по оси с пикетажем и рабочими отметками; картограмма земляных работ по замкнутому контуру.</p><span class="state ok">есть</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s8">
+      <div class="sec-head">
+        <div class="sec-num">08</div>
+        <div>
+          <h2>Черчение и выдача</h2>
+          <p>По модели можно не только мерить, но и строить — и забрать это в CAD.</p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>Полилинии</b><p>2D и 3D по геометрии, с привязкой. Точку можно задать числами: длина, геодезический азимут, превышение.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Правка оси</b><p>Отметки, длины и уклоны отрезков — числами или прямо в сцене. Радиусы сопряжения в углах, замыкание контура.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Подписи на линии</b><p>Длина и уклон посередине отрезка, отметка у вершины — видны при черчении и при вытягивании.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Вертикальный переход</b><p>Участок между двумя указанными точками уходит на другую отметку через вертикальные стояки — в плане переломов нет, отводы подберёт CAD.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Вершина по рельефу</b><p>Точка на оси сажается на поверхность под ней или получает заданную отметку.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Тело по оси</b><p>Сечение прогоняется вдоль линии — получается 3D-тело с подсчётом объёма.</p><span class="state ok">есть</span></div>
+          <div class="cap"><b>Экспорт DXF</b><p>Полилинии и метки в DXF R12 с мировыми координатами и слоями — чертёж открывается в Civil&nbsp;3D на своём месте, а не у нуля.</p><span class="state ok">есть</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s9">
+      <div class="sec-head">
+        <div class="sec-num">09</div>
+        <div>
+          <h2>Чего не умеет</h2>
+          <p>Честнее сказать сразу, чем обнаружить это на объекте.</p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>RVT</b><p>Формат Revit закрыт, открытых реализаций геометрии не существует — прочитать его в браузере нельзя ничем. Файл распознаётся, и просмотрщик объясняет, что нужен экспорт в IFC.</p><span class="state no">нельзя</span></div>
+          <div class="cap"><b>Tekla, Plant 3D</b><p>Напрямую не открываются — через экспорт в IFC или DXF.</p><span class="state no">нельзя</span></div>
+          <div class="cap"><b>GLTF, PLY, DAE, 3DS</b><p>Не поддерживаются. GLTF с внешними <code>.bin</code> — тем более.</p><span class="state no">нельзя</span></div>
+          <div class="cap"><b>Яндекс, Google, 2ГИС</b><p>Не техническое ограничение, а лицензионное: их условия разрешают показывать карту только внутри собственного виджета, а здесь нужна текстура под 3D.</p><span class="state no">нельзя</span></div>
+          <div class="cap"><b>Не расчётный комплекс</b><p>Это просмотр, проверка и разметка. Ни конструктивных расчётов, ни гидравлики здесь нет и не планируется.</p><span class="state no">нельзя</span></div>
+          <div class="cap"><b>Не хранилище</b><p>Модели нигде не сохраняются: закрыли вкладку — сцена пуста. Это осознанно, поэтому файлы и не покидают компьютер.</p><span class="state no">нельзя</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s10">
+      <div class="sec-head">
+        <div class="sec-num">10</div>
+        <div>
+          <h2>В работе</h2>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="caps">
+          <div class="cap"><b>Локальный ИИ</b><p>Отдельная сборка с ассистентом на Ollama: вопросы по сводке, черновики замечаний, изоляция по GlobalId. Модель работает на вашем компьютере, в облако ничего не уходит. Пока экспериментальная и отстаёт от основной по скорости загрузки.</p><span class="state wip">в работе</span></div>
+          <div class="cap"><b>Лицензии через кабинет</b><p>Заявка с идентификатором компьютера и выпуск ключа для плагинов Civil&nbsp;3D, Navisworks и Inventor. Механизм готов, серверная часть дорабатывается — пока ключи выдаются вручную.</p><span class="state wip">в работе</span></div>
+        </div>
+        <div class="note">
+          Список закрытых доработок — 53 пункта — ведётся в репозитории
+          (<code>FEATURES.md</code>). Пожелания принимаются: то, что мешает в
+          работе каждый день, попадает в очередь первым.
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="s11">
+      <div class="sec-head">
+        <div class="sec-num">↩</div>
+        <div>
+          <h2>Как устроено</h2>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="facts">
+          <div class="fact"><b>Установка</b><span>Не нужна. Открывается ссылкой в Chrome, Edge или Firefox, в том числе на телефоне.</span></div>
+          <div class="fact"><b>Данные</b><span>Разбор идёт в браузере. Файлы не загружаются на сервер — ни модели, ни чертежи.</span></div>
+          <div class="fact"><b>Офлайн</b><span>После первого запуска работает без сети: можно взять ноутбук на объект.</span></div>
+          <div class="fact"><b>Стоимость</b><span>Просмотрщик бесплатный. Лицензия нужна только плагинам Civil&nbsp;3D, Navisworks и Inventor — это отдельный продукт.</span></div>
+          <div class="fact"><b>Права</b><span>Смотреть и пользоваться можно; копирование кода и коммерческое использование — по письменному согласию автора.</span></div>
+        </div>
+        <p class="dek" style="margin-top:18px">
+          Разработка — Владимир Леуцкий, инженер инфраструктуры.
+          Инструмент вырос из собственной работы: каждая функция здесь появилась
+          потому, что без неё было неудобно на реальном объекте.
+        </p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="shell">
+    <span>BIM.LVA Composer IFC</span>
+    <span><a href="./bim-lva-composer-ifc.html">Открыть просмотрщик</a> · <a href="./testing.html">Программа испытаний</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+  // Подсветка текущего раздела: активным считаем самый верхний из видимых,
+  // иначе на длинном разделе метка прыгает на следующий, едва он показался краем.
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  var seen = [];
+  var order = links.map(function (a) { return a.getAttribute('href').slice(1); });
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      var at = seen.indexOf(e.target.id);
+      if (e.isIntersecting) { if (at < 0) seen.push(e.target.id); }
+      else if (at >= 0) { seen.splice(at, 1); }
+    });
+    var top = order.filter(function (id) { return seen.indexOf(id) >= 0; })[0];
+    links.forEach(function (a) {
+      a.classList.toggle('on', a.getAttribute('href').slice(1) === top);
+    });
+  }, { rootMargin: '-10% 0px -70% 0px', threshold: 0 });
+  order.forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) obs.observe(el);
+  });
+})();
+</script>
+</body>
+</html>

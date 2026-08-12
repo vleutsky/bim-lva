@@ -1,0 +1,202 @@
+/* Оформление текстовых страниц сайта (testing.html, composer.html).
+   Одно место на обе: раньше стиль лежал внутри страницы, и вторая
+   разъехалась бы с первой после первой же правки токенов. */
+
+/* Шрифты берём из assets/vendor/fonts — они уже лежат в репозитории и
+   отдаются с того же домена, инлайнить их незачем. Syne и Archivo из
+   палитры сайта кириллицу не покрывают, поэтому дисплейную роль здесь
+   несёт IBM Plex Mono — тот же, которым вьювер печатает координаты. */
+/* Пути — от самого doc.css, то есть от assets/. */
+@import url('./vendor/fonts/site.css');
+@import url('./vendor/fonts/composer.css');
+
+/* ---- Токены. Светлая палитра — на голом :root, чтобы она работала и
+       в «системной» теме, где на корне нет ни одной пометки. ---- */
+:root{
+  --ground:#eef2f6; --surface:#ffffff; --surface-2:#f6f9fb; --surface-3:#e6edf3;
+  --ink:#101c28; --ink-soft:#4b5b6b; --ink-faint:#7b8b9b;
+  --line:#cfdae4; --line-soft:#e0e8ef;
+  --steel:#1f6f8b; --steel-deep:#155672; --steel-wash:rgba(31,111,139,.09);
+  --warm:#b34d1a; --warm-wash:rgba(179,77,26,.08); --warm-line:rgba(179,77,26,.28);
+  --ok:#157f5a; --ok-wash:rgba(21,127,90,.1);
+  --shadow:0 1px 2px rgba(16,28,40,.04), 0 8px 24px rgba(16,28,40,.06);
+  --shadow-fig:0 2px 8px rgba(16,28,40,.08), 0 18px 44px rgba(16,28,40,.1);
+  --r:10px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0d151d; --surface:#141f2a; --surface-2:#18242f; --surface-3:#1f2e3b;
+    --ink:#e3ecf4; --ink-soft:#9db0c1; --ink-faint:#71879a;
+    --line:#26374a; --line-soft:#1e2d3c;
+    --steel:#5aa8c6; --steel-deep:#8ac6dd; --steel-wash:rgba(90,168,198,.12);
+    --warm:#e2895a; --warm-wash:rgba(226,137,90,.11); --warm-line:rgba(226,137,90,.3);
+    --ok:#46b98a; --ok-wash:rgba(70,185,138,.12);
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+    --shadow-fig:0 2px 8px rgba(0,0,0,.34), 0 18px 44px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0d151d; --surface:#141f2a; --surface-2:#18242f; --surface-3:#1f2e3b;
+  --ink:#e3ecf4; --ink-soft:#9db0c1; --ink-faint:#71879a;
+  --line:#26374a; --line-soft:#1e2d3c;
+  --steel:#5aa8c6; --steel-deep:#8ac6dd; --steel-wash:rgba(90,168,198,.12);
+  --warm:#e2895a; --warm-wash:rgba(226,137,90,.11); --warm-line:rgba(226,137,90,.3);
+  --ok:#46b98a; --ok-wash:rgba(70,185,138,.12);
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+  --shadow-fig:0 2px 8px rgba(0,0,0,.34), 0 18px 44px rgba(0,0,0,.4);
+}
+
+*,*::before,*::after{box-sizing:border-box;}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:'Source Sans 3',system-ui,sans-serif; font-size:16.5px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:600;line-height:1.2;text-wrap:balance;margin:0;}
+p{margin:0;}
+a{color:var(--steel);text-decoration-color:color-mix(in srgb,var(--steel) 40%,transparent);text-underline-offset:3px;}
+a:hover{color:var(--steel-deep);}
+:focus-visible{outline:2px solid var(--steel);outline-offset:2px;border-radius:3px;}
+code{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:.86em;}
+
+/* ---- Каркас ---- */
+.shell{max-width:1240px;margin:0 auto;padding:0 24px;}
+.layout{display:grid;grid-template-columns:1fr;gap:0;}
+@media (min-width:1060px){
+  .layout{grid-template-columns:232px minmax(0,1fr);gap:56px;align-items:start;}
+}
+
+/* ---- Шапка ---- */
+.masthead{border-bottom:1px solid var(--line);background:var(--surface);}
+.masthead .shell{padding-top:46px;padding-bottom:38px;}
+.eyebrow{
+  font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--steel);
+}
+h1{font-size:clamp(30px,4.4vw,46px);letter-spacing:-.022em;margin:14px 0 0;}
+.dek{margin-top:16px;max-width:64ch;color:var(--ink-soft);font-size:17.5px;}
+.meta{
+  display:flex;flex-wrap:wrap;gap:8px;margin-top:24px;
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+}
+.meta span{
+  padding:5px 11px;border:1px solid var(--line);border-radius:999px;
+  background:var(--surface-2);color:var(--ink-soft);
+}
+
+/* ---- Навигация ---- */
+.rail{display:none;}
+@media (min-width:1060px){
+  .rail{display:block;position:sticky;top:24px;padding:36px 0 40px;}
+}
+.rail-title{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px;
+}
+.rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;}
+.rail a{
+  display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:baseline;
+  padding:6px 9px;border-radius:7px;font-size:14px;line-height:1.35;
+  color:var(--ink-soft);text-decoration:none;border-left:2px solid transparent;
+}
+.rail a:hover{background:var(--surface-2);color:var(--ink);}
+.rail a.on{background:var(--steel-wash);color:var(--ink);border-left-color:var(--steel);}
+.rail a b{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:12px;color:var(--ink-faint);}
+.rail a.on b{color:var(--steel);}
+.progress{
+  margin-top:22px;padding:13px 14px;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--surface);
+}
+.progress .n{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;}
+.progress .lbl{font-size:12.5px;color:var(--ink-soft);margin-top:2px;line-height:1.35;}
+.bar{height:4px;border-radius:99px;background:var(--surface-3);margin-top:10px;overflow:hidden;}
+.bar i{display:block;height:100%;background:var(--ok);width:0;transition:width .25s ease;}
+.reset{
+  margin-top:10px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:none;border:0;
+  padding:0;color:var(--ink-faint);cursor:pointer;text-decoration:underline;
+  text-underline-offset:2px;
+}
+.reset:hover{color:var(--warm);}
+
+/* ---- Содержание ---- */
+main{padding:44px 0 90px;min-width:0;}
+.sec{scroll-margin-top:20px;}
+.sec + .sec{margin-top:56px;padding-top:52px;border-top:1px solid var(--line);}
+.sec-head{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start;}
+.sec-num{
+  font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:13px;color:var(--steel);
+  border:1px solid var(--line);border-radius:7px;padding:4px 9px;background:var(--surface);
+  font-variant-numeric:tabular-nums;
+}
+h2{font-size:clamp(21px,2.5vw,26px);letter-spacing:-.014em;}
+.sec-head p{margin-top:9px;color:var(--ink-soft);max-width:68ch;}
+.sec-body{margin-top:26px;display:flex;flex-direction:column;gap:26px;}
+h3{
+  font-size:13.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);
+  padding-bottom:7px;border-bottom:1px solid var(--line-soft);
+}
+
+/* ---- Рисунок ---- */
+figure{margin:0;}
+figure img{
+  display:block;width:100%;height:auto;border-radius:var(--r);
+  border:1px solid var(--line);box-shadow:var(--shadow-fig);background:var(--surface);
+}
+figcaption{
+  margin-top:11px;font-size:13.5px;color:var(--ink-soft);
+  padding-left:13px;border-left:2px solid var(--line);max-width:74ch;
+}
+figcaption b{color:var(--ink);font-weight:600;}
+@media (min-width:1300px){
+  .wide{width:calc(100% + 90px);}
+}
+
+/* ---- Строка инструмента ---- */
+.tools{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);
+  border-radius:var(--r);overflow:hidden;background:var(--surface);}
+.tool{display:grid;grid-template-columns:1fr;gap:5px;padding:14px 16px;}
+.tool + .tool{border-top:1px solid var(--line-soft);}
+@media (min-width:680px){
+  .tool{grid-template-columns:214px minmax(0,1fr);gap:8px 20px;align-items:baseline;}
+}
+.tool-name{display:flex;flex-wrap:wrap;gap:7px;align-items:baseline;}
+.tool-name b{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:14.5px;color:var(--ink);}
+.tool-desc{color:var(--ink-soft);font-size:15px;}
+.tool-desc code{
+  background:var(--surface-3);padding:1px 5px;border-radius:4px;color:var(--ink);
+}
+.key{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;padding:2px 6px;
+  border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+  background:var(--surface-2);color:var(--ink-soft);white-space:nowrap;
+}
+
+/* ---- Заметка ---- */
+.note{
+  border-left:3px solid var(--steel);background:var(--steel-wash);
+  padding:13px 16px;border-radius:0 var(--r) var(--r) 0;font-size:15px;color:var(--ink-soft);
+}
+.note b{color:var(--ink);font-weight:600;}
+.note code{background:var(--surface);padding:1px 5px;border-radius:4px;}
+
+/* ---- Таблица ---- */
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);}
+table{width:100%;border-collapse:collapse;font-size:14.5px;}
+th,td{text-align:left;padding:10px 15px;border-bottom:1px solid var(--line-soft);}
+th{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-faint);background:var(--surface-2);white-space:nowrap;}
+tr:last-child td{border-bottom:0;}
+td:first-child{font-family:'IBM Plex Mono',monospace;font-size:13px;white-space:nowrap;color:var(--ink);}
+td.fmt{color:var(--ink-soft);}
+
+footer{
+  border-top:1px solid var(--line);background:var(--surface);
+  padding:30px 0 44px;font-size:14px;color:var(--ink-soft);
+}
+footer .shell{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;transition-duration:.001ms !important;}
+  html{scroll-behavior:auto;}
+}
+html{scroll-behavior:smooth;}
