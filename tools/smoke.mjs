@@ -661,6 +661,32 @@ async function checkDrawDxf(page) {
         if (touched !== 1) {
             problems.push(`радиус лёг в ${touched} углов вместо одного: [${filleted.radii.join(', ')}]`);
         }
+        const guides = await page.evaluate(
+            (id) => window.BimLvaDebug.filletGuides(id),
+            three.id
+        );
+        if (!guides?.length) {
+            problems.push('после сопряжения нет пунктирных тангенсов до вершины');
+        } else {
+            if (guides.length !== 1) {
+                problems.push(`тангенсов сопряжения ${guides.length} вместо 1`);
+            }
+            const g = guides[0];
+            const v = three.vertsAbs[1];
+            const dv = Math.hypot(g.vertex.x - v.x, g.vertex.y - v.y, g.vertex.z - v.z);
+            if (dv > 1e-4) {
+                problems.push(`тангенс сопряжения не к той вершине (сдвиг ${dv.toFixed(4)} м)`);
+            }
+            const dIn = Math.hypot(g.tangentIn.x - v.x, g.tangentIn.y - v.y, g.tangentIn.z - v.z);
+            const dOut = Math.hypot(g.tangentOut.x - v.x, g.tangentOut.y - v.y, g.tangentOut.z - v.z);
+            if (dIn < 1e-4 || dOut < 1e-4) {
+                problems.push('тангенс сопряжения выродился в точку');
+            }
+            if (!g.dashed) problems.push('тангенсы сопряжения не пунктирные');
+            if (!(g.width > 0 && g.width < (filleted.width || 2) - 1e-6)) {
+                problems.push(`тангенсы сопряжения толщиной ${g.width} — ждали тоньше линии (${filleted.width})`);
+            }
+        }
     }
 
     // Клик/ПКМ по линии в сцене. Целимся по СПРОЕЦИРОВАННЫМ вершинам, а не по
@@ -1250,7 +1276,10 @@ async function checkSlopeToTerrain(page) {
             ],
             { name: 'Откос-тест-площадка', closed: true }
         );
-        const res = D.buildSlopeOnPolyline(id, { side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const res = D.buildSlopeOnPolyline(id, {
+            side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30,
+            padColor: '#ff00aa'
+        });
         const tin = D.slopeTin(res?.id);
         const xml = D.slopeLandXml(res?.id) || '';
         const dxf = D.dxfPreview();
@@ -1278,6 +1307,13 @@ async function checkSlopeToTerrain(page) {
     } else {
         if (pad.res.tin.padFaces !== 2) {
             problems.push(`откосы: середина площадки ${pad.res.tin.padFaces} треугольников вместо 2 — дыра в TIN`);
+        }
+        const overlay = pad.res.padOverlay;
+        if (!overlay || overlay.depthTest !== false) {
+            problems.push(`откосы: заливка площадки не поверх рельефа (${JSON.stringify(overlay)})`);
+        }
+        if (overlay && overlay.color !== '#ff00aa') {
+            problems.push(`откосы: цвет площадки ${overlay.color} вместо #ff00aa`);
         }
         if (pad.res.tin.capFaces) {
             problems.push(`откосы: у замкнутой площадки не должно быть торцов (${pad.res.tin.capFaces})`);

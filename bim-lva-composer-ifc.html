@@ -3499,7 +3499,9 @@
                 Имя, цвет и толщина правятся прямо в строке. «✎» раскрывает
                 вершины: <b>H</b> — абсолютная отметка, <b>L</b> — длина отрезка
                 до следующей вершины, <b>i‰</b> — его уклон, <b>R</b> — радиус
-                сопряжения в углу. X и Y — перетаскиванием ручек вершин в сцене
+                сопряжения в углу. После вписывания радиуса касательные до
+                вершины остаются пунктиром и потоньше — сама линия идёт дугой.
+                X и Y — перетаскиванием ручек вершин в сцене
                 (появляются у раскрытой полилинии), <b>Ctrl + тянуть</b> — только
                 по высоте. По линии можно кликнуть в сцене — она раскроется здесь.
                 <b>⭘ Замкнуть</b> — сомкнуть контур (нужен для площади и
@@ -3606,8 +3608,9 @@
                 с рельефом: выше земли на бровке — насыпь, ниже — выемка. Линия
                 выхода откоса на землю добавляется отдельной полилинией (правится,
                 уходит в DXF). У замкнутого контура середина заполняется как
-                площадка (иначе в TIN дыра), у разомкнутой — торцы закрываются
-                откосом вдоль оси. На вогнутых углах соседние откосы могут
+                площадка (заливка поверх рельефа, цвет задаётся отдельно),
+                у разомкнутой — торцы закрываются откосом вдоль оси. На вогнутых
+                углах соседние откосы могут
                 налезать друг на друга — это не вычищается. Где рельеф не найден
                 или откос не дотянулся за максимальный вылет — участок пропускается.
                 Готовый TIN уходит в Civil 3D как DXF (3DFACE) или LandXML (Surface).
@@ -3625,7 +3628,8 @@
             <div class="prop small"><div class="k">Выемка, 1 : m</div><input class="editInput" id="slopeMCut" type="number" min="0.1" step="0.1" value="1"></div>
             <div class="prop small"><div class="k">Шаг поиска, м</div><input class="editInput" id="slopeStep" type="number" min="0.05" step="0.05" value="0.5"></div>
             <div class="prop small"><div class="k">Макс. вылет, м</div><input class="editInput" id="slopeMaxReach" type="number" min="0.5" step="0.5" value="30"></div>
-            <div class="prop small"><div class="k">Цвет</div><input type="color" class="polyline-color" id="slopeColor" value="#c9793a"></div>
+            <div class="prop small"><div class="k">Цвет откоса</div><input type="color" class="polyline-color" id="slopeColor" value="#c9793a" title="Насыпь. Выемка остаётся синей"></div>
+            <div class="prop small"><div class="k">Цвет площадки</div><input type="color" class="polyline-color" id="slopePadColor" value="#d4a05a" title="Заливка середины замкнутого контура — видна сверху поверх рельефа"></div>
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
                 <button class="btn" id="slopeExportDxf" title="Площадка и откосы треугольниками 3DFACE, координаты абсолютные, единицы — метры. Civil и nanoCAD открывают R12">⬇ DXF</button>
@@ -4811,7 +4815,8 @@
                         }),
                         length3d: r.length3d, length2d: r.length2d,
                         points: r.pts.length, radii: r.radii.slice(),
-                        closed: !!r.closed, area: polylinePlanArea(r)
+                        closed: !!r.closed, area: polylinePlanArea(r),
+                        color: r.color, width: r.width
                     }));
             },
             /** Задать радиус сопряжения в вершине полилинии (для проверки фаски). */
@@ -4820,6 +4825,25 @@
                 if (!rec) return false;
                 setPolylineVertexRadius(rec, idx, radius);
                 return true;
+            },
+            /**
+             * Тангенсы сопряжения (касательная → вершина → касательная) —
+             * то, что остаётся пунктиром после вписывания радиуса.
+             */
+            filletGuides(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec?.filletGuides?.length) return [];
+                const abs = (p) => {
+                    const a = worldPointToAbsoluteXYZ(p) || p;
+                    return { x: a.x, y: a.y, z: a.z };
+                };
+                return rec.filletGuides.map((g) => ({
+                    vertex: abs(g.vertex),
+                    tangentIn: abs(g.tangentIn),
+                    tangentOut: abs(g.tangentOut),
+                    dashed: !!(rec.filletGuideGroup?.children[0]?.material?.dashed),
+                    width: rec.filletGuideGroup?.children[0]?.material?.linewidth ?? null
+                }));
             },
             /**
              * Вертикальный переход по долям вдоль отрезков — вход для тестов.
@@ -4977,7 +5001,13 @@
                         padFaces: model.padFaces || 0,
                         capFaces: model.capFaces || 0
                     } : null,
-                    contourPolylineId: model.contourPolylineId || null
+                    contourPolylineId: model.contourPolylineId || null,
+                    padColor: model.padColor || null,
+                    padOverlay: model.padMesh ? {
+                        color: '#' + model.padMesh.material.color.getHexString(),
+                        opacity: model.padMesh.material.opacity,
+                        depthTest: !!model.padMesh.material.depthTest
+                    } : null
                 };
             },
             /** Все текущие построения откосов — сводка (без геометрии). */
@@ -7086,6 +7116,31 @@
             return mesh;
         }
 
+        /**
+         * Заливка площадки — как контур полилинии: без depth-test, чтобы с
+         * вида сверху её было видно поверх рельефа. Цвет с материала, не из
+         * вершин — его можно сменить после построения, не пересобирая TIN.
+         */
+        function slopeMakePadMesh(positions, colorHex) {
+            if (!positions.length) return null;
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.computeVertexNormals();
+            const mat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(colorHex || '#d4a05a'),
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.82,
+                depthTest: false,
+                depthWrite: false
+            });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.name = 'Площадка';
+            mesh.renderOrder = 6;
+            slopeGroup.add(mesh);
+            return mesh;
+        }
+
         function slopePushTri(positions, colors, a, b, c, col) {
             positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
             if (colors && col) {
@@ -7140,12 +7195,10 @@
             if (ring.length < 3) return { mesh: null, triangles: [] };
             const faces = triangulateRingXY(ring);
             if (!faces.length) return { mesh: null, triangles: [] };
-            const col = new THREE.Color(color || '#d4a05a');
             const positions = [];
-            const colors = [];
-            faces.forEach(([a, b, c]) => slopePushTri(positions, colors, a, b, c, col));
+            faces.forEach(([a, b, c]) => slopePushTri(positions, null, a, b, c, null));
             return {
-                mesh: slopeMakeMesh(positions, colors, 'Площадка'),
+                mesh: slopeMakePadMesh(positions, color || '#d4a05a'),
                 triangles: faces
             };
         }
@@ -7317,7 +7370,8 @@
             const sides = opts.side === 'both' ? ['left', 'right'] : [opts.side === 'left' ? 'left' : 'right'];
             const results = sides.map((side) => computeSlopeSide(record, side, opts)).filter(Boolean);
             if (!results.length) return null;
-            const pad = buildSlopePadInterior(record, opts.fillColor);
+            const padColor = opts.padColor || '#d4a05a';
+            const pad = buildSlopePadInterior(record, padColor);
             const caps = buildSlopeEndCaps(record, results, opts);
             const contour = buildSlopeOuterContour(record, results, caps.capExits, opts);
             const model = {
@@ -7326,6 +7380,7 @@
                 name: record.name,
                 side: opts.side,
                 mFill: opts.mFill, mCut: opts.mCut, step: opts.step, maxReach: opts.maxReach,
+                padColor,
                 sides: results,
                 padMesh: pad.mesh,
                 capMeshes: caps.meshes,
@@ -7466,9 +7521,7 @@
                 const i = drawnPolylines.findIndex((r) => r.id === id);
                 if (i < 0) return;
                 const rec = drawnPolylines[i];
-                drawGroup.remove(rec.object);
-                rec.object.geometry.dispose();
-                disposeLineMaterial(rec.object.material);
+                disposePolylineObject(rec);
                 drawnPolylines.splice(i, 1);
                 if (polylineEditingId === rec.id) polylineEditingId = null;
             };
@@ -7915,11 +7968,17 @@
             const prevOf = (i) => pts[(i - 1 + n) % n];
             const nextOf = (i) => pts[(i + 1) % n];
             let clamped = false;
+            const guides = [];
             const corner = (i) => {
                 const r = radii[i] || 0;
                 const arc = r > 0 ? computeFilletArc(prevOf(i), pts[i], nextOf(i), r, segments) : null;
                 if (!arc) return [pts[i].clone()];
                 if (arc.clamped) clamped = true;
+                guides.push({
+                    vertex: pts[i].clone(),
+                    tangentIn: arc.tangentIn.clone(),
+                    tangentOut: arc.tangentOut.clone()
+                });
                 return arc.points;
             };
 
@@ -7932,7 +7991,7 @@
                 for (let i = 1; i < n - 1; i++) out.push(...corner(i));
                 out.push(pts[n - 1].clone());
             }
-            return { points: out, clamped };
+            return { points: out, clamped, guides };
         }
 
         /**
@@ -7996,7 +8055,7 @@
 
         /** Перестроить геометрию/длины/абсолютные координаты после правки точек или радиусов. */
         function rebuildPolylineGeometry(record, { notifyClamp = false } = {}) {
-            const { points, clamped } = buildFilletedPoints(
+            const { points, clamped, guides } = buildFilletedPoints(
                 record.pts, record.radii, 20, !!record.closed
             );
             record.renderPts = points;
@@ -8017,10 +8076,58 @@
             }
             record.length3d = length3d;
             record.length2d = length2d;
+            syncFilletGuides(record, guides);
             if (notifyClamp && clamped) {
                 notify(`«${record.name}»: радиус сопряжения уменьшен — не хватает длины отрезка.`);
             }
             markNeedsRender();
+        }
+
+        /**
+         * После вписывания радиуса сама вершина уходит с рабочей линии
+         * (её заменяет дуга), но касательные до неё оставляем: пунктир,
+         * потоньше — как в Civil, чтобы было видно, откуда дуга выросла.
+         */
+        function disposeFilletGuides(record) {
+            const g = record?.filletGuideGroup;
+            if (!g) return;
+            g.children.slice().forEach((line) => {
+                g.remove(line);
+                line.geometry.dispose();
+                disposeLineMaterial(line.material);
+            });
+            drawGroup.remove(g);
+            record.filletGuideGroup = null;
+            record.filletGuides = [];
+        }
+
+        function syncFilletGuides(record, guides) {
+            disposeFilletGuides(record);
+            if (!guides?.length) return;
+            const group = new THREE.Group();
+            group.name = 'FilletGuides';
+            group.userData.filletGuideFor = record.id;
+            const width = Math.max(0.6, (record.width || 1) * 0.4);
+            guides.forEach((g) => {
+                const line = makeLineObject(
+                    [g.tangentIn, g.vertex, g.tangentOut],
+                    record.color, width, true
+                );
+                line.raycast = () => {};
+                line.renderOrder = 997;
+                group.add(line);
+            });
+            drawGroup.add(group);
+            record.filletGuideGroup = group;
+            record.filletGuides = guides;
+        }
+
+        function disposePolylineObject(record) {
+            disposeFilletGuides(record);
+            if (!record?.object) return;
+            drawGroup.remove(record.object);
+            record.object.geometry.dispose();
+            disposeLineMaterial(record.object.material);
         }
 
         function setPolylineStyle(record, { color, width } = {}) {
@@ -8029,6 +8136,14 @@
             record.object.material.color.set(record.color);
             record.object.material.linewidth = record.width;
             record.object.material.needsUpdate = true;
+            if (record.filletGuideGroup) {
+                const gw = Math.max(0.6, record.width * 0.4);
+                record.filletGuideGroup.children.forEach((line) => {
+                    line.material.color.set(record.color);
+                    line.material.linewidth = gw;
+                    line.material.needsUpdate = true;
+                });
+            }
             markNeedsRender();
         }
 
@@ -8090,11 +8205,7 @@
 
         function clearDrawnPolylines() {
             clearSlopeModels();
-            drawnPolylines.forEach(r => {
-                drawGroup.remove(r.object);
-                r.object.geometry.dispose();
-                disposeLineMaterial(r.object.material);
-            });
+            drawnPolylines.forEach(disposePolylineObject);
             drawnPolylines = [];
             drawPoints = [];
             polylineEditingId = null;
@@ -8108,9 +8219,7 @@
             const i = drawnPolylines.indexOf(record);
             if (i < 0) return;
             removeSlopeModelsForPolyline(record.id);
-            drawGroup.remove(record.object);
-            record.object.geometry.dispose();
-            disposeLineMaterial(record.object.material);
+            disposePolylineObject(record);
             drawnPolylines.splice(i, 1);
             if (polylineEditingId === record.id) polylineEditingId = null;
             updateDrawUi();
@@ -10554,7 +10663,8 @@
                 mCut: num('slopeMCut', 1, 0.1),
                 step: num('slopeStep', 0.5, 0.05),
                 maxReach: num('slopeMaxReach', 30, 0.5),
-                fillColor: $('slopeColor')?.value || '#c9793a'
+                fillColor: $('slopeColor')?.value || '#c9793a',
+                padColor: $('slopePadColor')?.value || '#d4a05a'
             };
         }
 
@@ -10591,6 +10701,15 @@
             $('slopeModal').classList.remove('show');
             slopePanel.reset();
         });
+        $('slopePadColor')?.addEventListener('input', () => {
+            const hex = $('slopePadColor').value || '#d4a05a';
+            slopeModels.forEach((sm) => {
+                if (!sm.padMesh?.material?.color) return;
+                sm.padColor = hex;
+                sm.padMesh.material.color.set(hex);
+            });
+            markNeedsRender();
+        });
         // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
 
         let filletTargetId = null;
@@ -10610,7 +10729,8 @@
                 note.textContent =
                     `«${record.name}», вершина #${vertexIdx + 1} ` +
                     `(${a.x.toFixed(2)}, ${a.y.toFixed(2)}, ${a.z.toFixed(2)}). ` +
-                    'Если соседний отрезок короче нужного, радиус уменьшится сам. 0 убирает сопряжение.';
+                    'Если соседний отрезок короче нужного, радиус уменьшится сам. 0 убирает сопряжение. ' +
+                    'Касательные до вершины останутся пунктиром.';
             }
             const input = $('filletRadius');
             if (input) input.value = record.radii[vertexIdx] ? String(record.radii[vertexIdx]) : '5';
@@ -26740,7 +26860,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.12: откосы до рельефа — площадка без дыры, линия выхода замкнута (DXF 70=9), TIN в DXF (3DFACE) и LandXML для Civil 3D.',
+                '2026.08.12: откосы — заливка площадки поверх рельефа (свой цвет), линия выхода замкнута, TIN в DXF/LandXML.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
