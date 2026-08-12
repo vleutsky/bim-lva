@@ -532,7 +532,11 @@
                         <input id="licImportEmail" type="text" spellcheck="false" placeholder="user@example.com">
                     </label>
                     <label class="lic-field">
-                        <span>Содержимое license.lic</span>
+                        <span>Файл license.lic</span>
+                        <input id="licImportFile" type="file" accept=".lic,.json,application/json">
+                    </label>
+                    <label class="lic-field">
+                        <span>…либо содержимое license.lic</span>
                         <textarea id="licImportText" rows="6" spellcheck="false"
                                   placeholder='{"Payload": {...}, "Signature": "..."}'></textarea>
                     </label>
@@ -641,7 +645,11 @@
 
                 const parts = [];
                 for (const l of licenses) {
-                    const dead = l.revoked_at || new Date(l.expires_at) < new Date();
+                    // Пустой срок — бессрочная лицензия: LicenseGate считает
+                    // ExpiresUtc = null действующей всегда, и офлайн-скрипт без
+                    // -ExpiresUtc выдаёт именно такие. Через new Date(null) это
+                    // превращалось в 1970 год и статус «Истекла».
+                    const dead = l.revoked_at || (l.expires_at && new Date(l.expires_at) < new Date());
                     const [label, cls] = l.revoked_at
                         ? ['Отозвана', 'no']
                         : dead ? ['Истекла', 'no'] : ['Действует', 'ok'];
@@ -650,7 +658,7 @@
                             <div class="lic-head">
                                 <strong>${esc(lic().productTitle(l.product))}</strong>
                                 <span class="lic-status ${cls}">${label}</span>
-                                <span class="lic-when">до ${asDate(l.expires_at)}</span>
+                                <span class="lic-when">${l.expires_at ? 'до ' + asDate(l.expires_at) : 'бессрочная'}</span>
                             </div>
                             <textarea class="lic-key" rows="3" readonly onclick="this.select()">${esc(l.license_key)}</textarea>
                             <div class="row" style="margin-top:.4rem">
@@ -792,14 +800,14 @@
                         <table class="lic-table">
                             <tr><th>Продукт</th><th>Кому</th><th>Выдана</th><th>Действует до</th><th></th><th></th></tr>
                             ${rows.map((l) => {
-                                const dead = l.revoked_at || new Date(l.expires_at) < new Date();
+                                const dead = l.revoked_at || (l.expires_at && new Date(l.expires_at) < new Date());
                                 const label = l.revoked_at ? 'Отозвана' : dead ? 'Истекла' : 'Действует';
                                 const cls = l.revoked_at || dead ? 'no' : 'ok';
                                 return `<tr>
                                     <td>${esc(lic().productTitle(l.product))}</td>
                                     <td>${esc(l.email)}${l.org ? '<br><span class="lic-empty">' + esc(l.org) + '</span>' : ''}</td>
                                     <td>${asDate(l.issued_at)}</td>
-                                    <td>${asDate(l.expires_at)}</td>
+                                    <td>${l.expires_at ? asDate(l.expires_at) : 'бессрочная'}</td>
                                     <td><span class="lic-status ${cls}">${label}</span></td>
                                     <td>${l.revoked_at ? '' :
                                         `<button type="button" class="btn btn-outline" data-revoke="${esc(l.id)}">Отозвать</button>`}</td>
@@ -862,6 +870,25 @@
                 }
             });
 
+            // Файлы лежат на диске — открывать их в блокноте и копировать JSON
+            // руками незачем. Текст всё равно показываем в поле: видно, что
+            // взялось именно то, и остаётся возможность поправить.
+            document.getElementById('licImportFile')?.addEventListener('change', async (ev) => {
+                const file = ev.target.files?.[0];
+                const msgBox = document.getElementById('licImportMsg');
+                if (!file) return;
+                try {
+                    document.getElementById('licImportText').value = await file.text();
+                    msgBox.textContent = `Файл прочитан: ${file.name}. Нажмите «Импортировать».`;
+                    msgBox.classList.remove('is-error');
+                    msgBox.hidden = false;
+                } catch (err) {
+                    msgBox.textContent = err.message || String(err);
+                    msgBox.classList.add('is-error');
+                    msgBox.hidden = false;
+                }
+            });
+
             document.getElementById('licImportBtn')?.addEventListener('click', async () => {
                 const btn = document.getElementById('licImportBtn');
                 const msgBox = document.getElementById('licImportMsg');
@@ -879,6 +906,8 @@
                     msgBox.classList.remove('is-error');
                     msgBox.hidden = false;
                     textField.value = '';
+                    const fileField = document.getElementById('licImportFile');
+                    if (fileField) fileField.value = '';
                     await renderAdminIssued();
                 } catch (err) {
                     msgBox.textContent = err.message || String(err);

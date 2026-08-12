@@ -140,6 +140,11 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
   даёт три, и подпись не сходится после разбора JSON в C#. Для этого есть
   `toDotNetRoundTrip()`; на это завязана половина `npm run test-license`.
 - Файл `license.lic` = JSON `{ Payload, Signature }`.
+- **Бессрочная лицензия в UI:** `expires_at = null` нельзя гонять через
+  `new Date(null)` — выйдет 1970 год и статус «Истекла». Офлайн-скрипт без
+  `-ExpiresUtc` выдаёт именно бессрочные, так что после импорта это видно сразу.
+  Оба места в `cabinet.html` (список получателя и таблица админа) прикрыты, за
+  этим следит `npm run test-license-import`.
 
 Ключи:
 
@@ -169,8 +174,12 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
       (`license_admins`, `license_requests`, `licenses`, RLS, `is_license_admin()`)
 - [x] владелец добавлен в `license_admins`
       (`user_id 46427174-fff1-47a5-bfbb-ad1384472ae7`)
-- [ ] миграция `20260806140000_licenses_lic_format.sql` — добавляет `machine_id`,
-      снимает NOT NULL с `expires_at`, ограничивает `product`
+- [x] миграция `20260806140000_licenses_lic_format.sql` применена — `machine_id`,
+      nullable `expires_at`, ограничение `product`
+      (сверено с базой 12.08.2026 запросом из `supabase/migrations/README.md`)
+- [ ] миграция `20260812180000_licenses_user_id_optional.sql` — снимает NOT NULL
+      с `licenses.user_id`, нужна для импорта офлайн-лицензий
+      (на 12.08.2026 `user_id` ещё NOT NULL)
 - [ ] секрет `LICENSE_SIGNING_KEY` заменить: сейчас там **устаревший Ed25519**
 - [ ] развернуть функцию `license-issue`
 
@@ -178,6 +187,14 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
 (генерируется `npm run edge-bundle`, руками не править). Через CLI —
 обычные `index.ts` + `license-lic.js`, они источник правды.
 Подробности — `supabase/functions/license-issue/README.md`.
+
+Миграции применяются в SQL Editor по порядку номеров, повторный запуск
+безопасен. Пошагово, с запросом «что уже применено» и разбором сообщений —
+`supabase/migrations/README.md`. Миграции лицензий прогнаны на настоящем
+PostgreSQL 16 с заглушкой схемы `auth`: без `20260812180000` вставка лицензии
+без `user_id` отклоняется (то есть миграция обязательна), а RLS менять не
+понадобилось — проверено под ролью `authenticated`, что строку с `user_id is
+null` обычный пользователь не видит, а админ видит.
 
 ---
 
