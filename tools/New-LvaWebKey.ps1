@@ -83,7 +83,14 @@ Windows PowerShell 5.1 этого не умеет, а openssl не найден.
         & $openssl.Source pkcs8 -topk8 -nocrypt -in $pem -outform DER -out "$pem.der" 2>$null
         $privB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$pem.der"))
     } finally {
-        foreach ($f in @($pfx, $pem, "$pem.der")) { if (Test-Path $f) { Remove-Item $f -Force } }
+        # Уборка временных файлов — best-effort и не должна ронять весь запуск:
+        # ключ (в $privB64) к этому моменту уже посчитан. На некоторых профилях
+        # (короткие 8.3-имена в пути пользователя и т.п.) Remove-Item падает
+        # даже когда Test-Path перед этим сказал true — не критично, само тело
+        # $env:TEMP всё равно периодически чистит система.
+        foreach ($f in @($pfx, $pem, "$pem.der")) {
+            if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+        }
     }
 }
 

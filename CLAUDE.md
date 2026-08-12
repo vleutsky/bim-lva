@@ -254,6 +254,16 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
   Чинится добавлением BOM (`\xef\xbb\xbf` первыми байтами файла) — дальше и
   PS 5.1, и PS 7 читают его как UTF-8 одинаково. Если появятся другие `.ps1` в
   этом репозитории — сразу с BOM, не постфактум.
+- Тот же скрипт: уборка временных файлов в `finally` (`Remove-Item $pfx/$pem/...`)
+  роняла **весь** запуск на Windows PowerShell 5.1 из-за глобального
+  `$ErrorActionPreference = 'Stop'` — если `Remove-Item` не мог удалить файл
+  (на профиле владельца путь пользователя с точкой в имени даёт короткое
+  8.3-имя, `Test-Path` и `Remove-Item` иногда расходятся на таких путях), это
+  превращалось в завершающую ошибку и обрывало скрипт **после** того, как
+  приватный ключ уже был посчитан, но **до** записи `private-key.b64` на диск —
+  то есть вся работа терялась на последнем шаге. Починка: `Remove-Item ...
+  -ErrorAction SilentlyContinue` — уборка теперь best-effort и не может
+  утопить уже готовый результат.
 - `licenses.js`: `client()` была синхронной, а `auth.getSupabaseClient()`
   (`ensureSupabase` в `auth.js`) — асинхронная (догружает SDK с CDN). `client()`
   тихо возвращала сам `Promise`, и `client().auth` / `.from` / `.functions`
