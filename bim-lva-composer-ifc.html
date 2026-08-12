@@ -1353,7 +1353,7 @@
         #polylinesList, #polylinePointsList { font-size: 11px; }
         .polyline-row {
             display: grid;
-            grid-template-columns: 104px minmax(0, 1fr) auto auto auto auto auto auto auto auto;
+            grid-template-columns: 104px minmax(0, 1fr) repeat(10, auto);
             align-items: center;
             gap: 4px;
             padding: 3px 3px;
@@ -3503,7 +3503,9 @@
                 (появляются у раскрытой полилинии), <b>Ctrl + тянуть</b> — только
                 по высоте. По линии можно кликнуть в сцене — она раскроется здесь.
                 <b>⭘ Замкнуть</b> — сомкнуть контур (нужен для площади и
-                картограммы), <b>〰</b> — продольный профиль по оси.
+                картограммы), <b>〰</b> — продольный профиль по оси,
+                <b>⛰</b> — картограмма земляных работ по замкнутому контуру,
+                <b>⤒</b> — поднять или опустить всю линию.
             </div>
             <div id="polylinesList" style="max-height:190px;overflow:auto;margin-top:6px"></div>
             <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
@@ -7585,6 +7587,58 @@
             return insertPolylineVertexAt(record, on.i, on.point);
         }
 
+        /**
+         * Поднять/опустить всю линию: либо положить её горизонтально на
+         * отметку, либо сдвинуть на Δ, сохранив продольный профиль.
+         *
+         * Знак решает, что имелось в виду: «120» — это отметка, «+2» и «−0.5» —
+         * сдвиг. Так же читается ввод в вертикальном переходе, чтобы не
+         * заводить два разных соглашения в одном инструменте.
+         */
+        function liftPolyline(record, { mode, value }) {
+            const shiftZ = worldOriginSceneVec().z;
+            let moved = 0;
+            record.pts.forEach((p) => {
+                const before = p.z;
+                p.z = mode === 'z'
+                    ? absoluteXYZToWorldPoint(0, 0, value).z
+                    : p.z + value;
+                if (Math.abs(p.z - before) > 1e-9) moved++;
+            });
+            if (!moved) {
+                notify(`«${record.name}»: линия уже на этой отметке.`);
+                return false;
+            }
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+            const z0 = (record.pts[0].z + shiftZ).toFixed(3);
+            notifyOk(mode === 'z'
+                ? `«${record.name}»: линия положена на отметку ${z0} м (вершин ${moved}).`
+                : `«${record.name}»: сдвинута на ${value > 0 ? '+' : ''}${value} м, профиль сохранён.`);
+            trackUsage('polyline_lift', { mode });
+            return true;
+        }
+
+        function liftPolylinePrompt(record) {
+            const cur = worldPointToAbsoluteXYZ(record.pts[0]) || record.pts[0];
+            const answer = prompt(
+                `«${record.name}» — поднять или опустить всю линию.\n` +
+                'Число — абсолютная отметка, линия ляжет горизонтально.\n' +
+                'Со знаком + или − — сдвиг на столько метров, уклоны сохранятся.',
+                cur.z.toFixed(3)
+            );
+            if (answer === null) return;
+            const raw = String(answer).trim().replace(',', '.');
+            const relative = /^[+−-]/.test(raw);
+            const value = Number(raw.replace('−', '-'));
+            if (!Number.isFinite(value)) {
+                notifyError('Не похоже на число — линия не тронута.');
+                return;
+            }
+            liftPolyline(record, { mode: relative ? 'dz' : 'z', value });
+        }
+
         function setPolylineVertexElevation(record, idx, absZ) {
             const z = Number(absZ);
             if (!Number.isFinite(z) || idx < 0 || idx >= record.pts.length) return;
@@ -8184,12 +8238,30 @@
                 plan.textContent = '⬓';
                 plan.title = 'Посмотреть в плане (строго сверху)';
                 plan.addEventListener('click', () => focusPolyline(r, 'plan'));
+                // Картограмма жила только в контекстном меню сцены — её там
+                // никто не находил. Кнопка неактивна на незамкнутой линии:
+                // объём считается внутри контура, и без замыкания его нет.
+                const earth = document.createElement('button');
+                earth.className = 'btn';
+                earth.textContent = '⛰';
+                earth.disabled = !r.closed;
+                earth.title = r.closed
+                    ? 'Картограмма земляных работ по этому контуру'
+                    : 'Картограмма считается по замкнутому контуру — сначала «⭘ Замкнуть»';
+                earth.addEventListener('click', () => openEarthworkModal(r));
+
+                const lift = document.createElement('button');
+                lift.className = 'btn';
+                lift.textContent = '⤒';
+                lift.title = 'Поднять или опустить всю линию: на отметку либо на Δ';
+                lift.addEventListener('click', () => liftPolylinePrompt(r));
+
                 const del = document.createElement('button');
                 del.className = 'btn';
                 del.textContent = '✕';
                 del.title = 'Удалить полилинию';
                 del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
-                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, go, plan, del);
+                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, earth, lift, go, plan, del);
                 frag.appendChild(row);
             });
             body.replaceChildren(frag);
