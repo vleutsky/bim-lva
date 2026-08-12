@@ -1186,7 +1186,7 @@
         .pin-row .btn { padding: 2px 8px; }
         .polyline-row {
             display: grid;
-            grid-template-columns: 120px 1fr auto auto auto auto auto auto;
+            grid-template-columns: 120px 1fr auto auto auto auto auto auto auto;
             align-items: center;
             gap: 6px;
             padding: 5px 4px;
@@ -2716,6 +2716,7 @@
             <button class="ctx-item" id="ctxPolylineContinue" title="Дописать вершины с конца полилинии">✚ Продолжить с конца</button>
             <button class="ctx-item" id="ctxPolylineContinueStart" title="Дописать вершины с начала полилинии">✚ Продолжить с начала</button>
             <button class="ctx-item" id="ctxPolylineClose" title="Замкнуть или разомкнуть контур">⭘ Замкнуть / разомкнуть</button>
+            <button class="ctx-item" id="ctxPolylineProfile" title="Продольный профиль: отметки земли под осью, пикетаж, рабочие отметки">〰 Профиль по этой оси</button>
             <button class="ctx-item" id="ctxPolylineSweep" title="Прогнать сечение вдоль этой полилинии и получить 3D-тело">⬒ Тело по этой оси</button>
             <button class="ctx-item danger" id="ctxPolylineDelete" title="Удалить эту полилинию">🗑 Удалить полилинию</button>
             <div class="ctx-divider"></div>
@@ -3257,6 +3258,31 @@
             <div class="modal-actions">
                 <button class="btn" id="polylinesClear">Удалить все</button>
                 <button class="btn load-btn" id="polylinesClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop floating-panel" id="polyProfileModal">
+        <div class="modal-card" id="polyProfileCard" role="dialog" aria-modal="true" style="width:min(760px,94vw)">
+            <div class="modal-drag-handle" id="polyProfileDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Профиль по оси</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
+            </div>
+            <div class="bulk-note">
+                Отметки снимаются лучом вниз по загруженной геометрии (рельеф,
+                TIN из DXF, IFC). Красная линия — сама полилиния, синяя — земля
+                под ней. Где луч не попал (за краем поверхности, в дыре) —
+                разрыв, такие пикеты помечены отдельно.
+            </div>
+            <div class="prop small"><div class="k">Полилиния</div><select class="editInput" id="polyProfileSelect"></select></div>
+            <div class="prop small"><div class="k">Шаг пикета, м</div><input class="editInput" id="polyProfileStep" type="number" min="0.1" step="0.5" value="5"></div>
+            <div class="bulk-note" id="polyProfileMeta">—</div>
+            <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 220" preserveAspectRatio="none"></svg>
+            <div id="polyProfileTable" style="max-height:180px;overflow:auto;margin-top:8px"></div>
+            <div class="modal-actions">
+                <button class="btn" id="polyProfileCsv" title="Пикет; отметка земли; отметка оси; рабочая отметка">Копировать CSV</button>
+                <button class="btn" id="polyProfileDrape" title="Посадить вершины полилинии на землю по снятым отметкам">⤓ Посадить ось на землю</button>
+                <button class="btn load-btn" id="polyProfileClose">Закрыть</button>
             </div>
         </div>
     </div>
@@ -4452,6 +4478,18 @@
             get drawDraftPoints() {
                 if (typeof drawDraft === 'undefined' || !drawDraft) return 0;
                 return drawDraft.geometry?.attributes?.instanceStart?.count + 1 || 0;
+            },
+            /** Профиль по оси: пикеты с отметками земли и оси. */
+            polylineProfile(id, step) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? samplePolylineProfile(rec, step) : null;
+            },
+            /** Посадить ось на землю. */
+            drapePolyline(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                drapePolylineOnGround(rec);
+                return true;
             },
             /** Вершины полилинии так, как они уйдут в DXF (с bulge у дуг). */
             dxfVertices(id) {
@@ -7023,6 +7061,11 @@
                     polylineEditingId = polylineEditingId === r.id ? null : r.id;
                     renderPolylinesList();
                 });
+                const prof = document.createElement('button');
+                prof.className = 'btn';
+                prof.textContent = '〰';
+                prof.title = 'Продольный профиль по этой оси';
+                prof.addEventListener('click', () => openPolylineProfile(r));
                 const go = document.createElement('button');
                 go.className = 'btn';
                 go.textContent = '→';
@@ -7033,7 +7076,7 @@
                 del.textContent = '✕';
                 del.title = 'Удалить полилинию';
                 del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
-                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, go, del);
+                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, go, del);
                 frag.appendChild(row);
             });
             body.replaceChildren(frag);
@@ -7542,6 +7585,235 @@
             if (!wasOpen) requestAnimationFrame(() => polylinesPanel.park());
             else if (park) polylinesPanel.park();
         }
+
+        /* --- Профиль по оси ----------------------------------------------------
+         * Идём по renderPts (то есть с учётом сопряжений) с заданным шагом,
+         * в каждой точке снимаем отметку земли тем же лучом вниз, что и
+         * драпировка подложки (sampleTerrainZ). Промах луча — это НЕ ноль и не
+         * «низ сцены»: за краем поверхности отметки просто нет, и профиль там
+         * рвётся. Молча подставить туда число значило бы соврать в чертеже.
+         */
+        const POLY_PROFILE_MAX_SAMPLES = 4000;
+
+        function samplePolylineProfile(record, step) {
+            const pts = record.renderPts;
+            if (!pts || pts.length < 2) return null;
+            const stepM = Math.max(0.1, Number(step) || 5);
+
+            // Длины накопленным итогом — по ним переводим пикет в точку
+            const cum = [0];
+            for (let i = 1; i < pts.length; i++) {
+                cum.push(cum[i - 1] + Math.hypot(
+                    pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y
+                ));
+            }
+            const total = cum[cum.length - 1];
+            if (total < 1e-6) return null;
+            const count = Math.min(POLY_PROFILE_MAX_SAMPLES, Math.floor(total / stepM) + 1);
+
+            const at = (s) => {
+                // Бинарный поиск отрезка, в который попал пикет
+                let lo = 0, hi = cum.length - 1;
+                while (lo < hi - 1) {
+                    const mid = (lo + hi) >> 1;
+                    if (cum[mid] <= s) lo = mid; else hi = mid;
+                }
+                const seg = cum[hi] - cum[lo];
+                const t = seg < 1e-9 ? 0 : (s - cum[lo]) / seg;
+                return pts[lo].clone().lerp(pts[hi], t);
+            };
+
+            const ground = getSceneGroundZ();
+            const samples = [];
+            let missed = 0;
+            for (let i = 0; i < count; i++) {
+                const s = Math.min(total, i * stepM);
+                const p = at(s);
+                // sampleTerrainZ отдаёт fallback при промахе — отличаем промах
+                // по нестандартному маркеру, а не по совпадению с fallback.
+                const MISS = Number.NEGATIVE_INFINITY;
+                const z = sampleTerrainZ(p.x, p.y, MISS);
+                const hit = z !== MISS;
+                if (!hit) missed++;
+                const axisAbs = worldPointToAbsoluteXYZ(p) || p;
+                const groundAbs = hit
+                    ? worldPointToAbsoluteXYZ(new THREE.Vector3(p.x, p.y, z))
+                    : null;
+                samples.push({
+                    sta: s,
+                    x: p.x, y: p.y,
+                    axis: axisAbs.z,
+                    ground: groundAbs ? groundAbs.z : null,
+                    work: groundAbs ? axisAbs.z - groundAbs.z : null
+                });
+            }
+            return { samples, total, missed, step: stepM, ground };
+        }
+
+        let polyProfileData = null;
+        let polyProfileRecordId = null;
+
+        function renderPolylineProfile() {
+            const svg = $('polyProfileChart');
+            const meta = $('polyProfileMeta');
+            const table = $('polyProfileTable');
+            if (!svg) return;
+            const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
+            if (!rec) return;
+            const data = samplePolylineProfile(rec, $('polyProfileStep')?.value);
+            polyProfileData = data;
+            if (!data) {
+                svg.innerHTML = '';
+                if (meta) meta.textContent = 'Полилиния слишком короткая для профиля.';
+                if (table) table.innerHTML = '';
+                return;
+            }
+
+            const w = 760, h = 220, pad = 34;
+            const withGround = data.samples.filter((s) => s.ground != null);
+            const zs = [...data.samples.map((s) => s.axis), ...withGround.map((s) => s.ground)];
+            let minZ = Math.min(...zs), maxZ = Math.max(...zs);
+            if (maxZ - minZ < 1e-6) { minZ -= 1; maxZ += 1; }
+            const sx = (w - pad * 2) / data.total;
+            const sy = (h - pad * 2) / (maxZ - minZ);
+            const px = (s) => pad + s * sx;
+            const py = (z) => h - pad - (z - minZ) * sy;
+
+            // Земля рвётся на промахах — рисуем отдельными кусками, а не одной
+            // линией через дыру.
+            const groundPaths = [];
+            let run = [];
+            data.samples.forEach((s) => {
+                if (s.ground == null) {
+                    if (run.length > 1) groundPaths.push(run.join(' '));
+                    run = [];
+                    return;
+                }
+                run.push(`${px(s.sta).toFixed(1)},${py(s.ground).toFixed(1)}`);
+            });
+            if (run.length > 1) groundPaths.push(run.join(' '));
+
+            const axisPath = data.samples
+                .map((s) => `${px(s.sta).toFixed(1)},${py(s.axis).toFixed(1)}`)
+                .join(' ');
+
+            svg.innerHTML = `
+                <rect x="0" y="0" width="${w}" height="${h}" fill="#f7f9fb"/>
+                <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="#c3ccd6"/>
+                <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" stroke="#c3ccd6"/>
+                ${groundPaths.map((p) => `<polyline fill="none" stroke="#2478b5" stroke-width="2" points="${p}"/>`).join('')}
+                <polyline fill="none" stroke="#e8442a" stroke-width="2" points="${axisPath}"/>
+                <text x="${pad}" y="16" font-size="11">отметка, м</text>
+                <text x="${w - pad}" y="${h - 10}" text-anchor="end" font-size="11">пикет, м</text>
+                <text x="4" y="${pad + 4}" font-size="11">${maxZ.toFixed(2)}</text>
+                <text x="4" y="${h - pad}" font-size="11">${minZ.toFixed(2)}</text>
+                <text x="${pad}" y="${h - 10}" font-size="11">0</text>
+                <text x="${w - pad}" y="16" text-anchor="end" font-size="11">L = ${data.total.toFixed(2)} м</text>
+            `;
+
+            if (meta) {
+                meta.textContent =
+                    `«${rec.name}»: длина в плане ${data.total.toFixed(2)} м, пикетов ${data.samples.length}` +
+                    ` (шаг ${data.step} м)` +
+                    (data.missed ? ` · без отметки земли: ${data.missed}` : ' · земля найдена везде');
+            }
+
+            if (table) {
+                const rows = data.samples.map((s) => `
+                    <div class="polyline-point-row">
+                        <b>${s.sta.toFixed(2)}</b>
+                        <span class="pin-xyz">земля ${s.ground == null ? '—' : s.ground.toFixed(3)}</span>
+                        <span class="pin-xyz">ось ${s.axis.toFixed(3)}</span>
+                        <span class="pin-xyz">раб. ${s.work == null ? '—' : (s.work > 0 ? '+' : '') + s.work.toFixed(3)}</span>
+                    </div>`).join('');
+                table.innerHTML = rows;
+            }
+        }
+
+        function openPolylineProfile(record) {
+            if (!record || record.renderPts.length < 2) {
+                notifyError('Для профиля нужна полилиния хотя бы из двух точек.');
+                return;
+            }
+            if (!allMeshes.length) {
+                notifyError('Нет загруженной геометрии — снимать отметки не с чего.');
+                return;
+            }
+            polyProfileRecordId = record.id;
+            const sel = $('polyProfileSelect');
+            if (sel) {
+                sel.innerHTML = drawnPolylines
+                    .map((r) => `<option value="${r.id}"${r.id === record.id ? ' selected' : ''}>${esc(r.name)}</option>`)
+                    .join('');
+            }
+            renderPolylineProfile();
+            const modal = $('polyProfileModal');
+            const wasOpen = modal.classList.contains('show');
+            modal.classList.add('show');
+            if (!wasOpen) requestAnimationFrame(() => polyProfilePanel.park());
+            trackUsage('polyline_profile', { points: record.pts.length });
+        }
+
+        /** Посадить вершины оси на снятые отметки земли. */
+        function drapePolylineOnGround(record) {
+            let moved = 0;
+            let missed = 0;
+            record.pts.forEach((p) => {
+                const MISS = Number.NEGATIVE_INFINITY;
+                const z = sampleTerrainZ(p.x, p.y, MISS);
+                if (z === MISS) { missed++; return; }
+                if (Math.abs(p.z - z) > 1e-6) moved++;
+                p.z = z;
+            });
+            if (!moved && !missed) {
+                notify(`«${record.name}»: ось уже лежит на земле.`);
+                return;
+            }
+            rebuildPolylineGeometry(record);
+            renderPolylinesList();
+            renderPolylineProfile();
+            notify(
+                `«${record.name}»: посажено вершин ${moved}` +
+                (missed ? `, без отметки земли осталось ${missed}` : '')
+            );
+            trackUsage('polyline_drape', { moved, missed });
+        }
+
+        const polyProfilePanel = createFloatingPanel({
+            cardId: 'polyProfileCard', modalId: 'polyProfileModal',
+            handleId: 'polyProfileDrag', defaultWidth: 760
+        });
+
+        $('polyProfileClose')?.addEventListener('click', () => {
+            $('polyProfileModal').classList.remove('show');
+            polyProfilePanel.reset();
+        });
+        $('polyProfileStep')?.addEventListener('change', renderPolylineProfile);
+        $('polyProfileSelect')?.addEventListener('change', () => {
+            polyProfileRecordId = Number($('polyProfileSelect').value);
+            renderPolylineProfile();
+        });
+        $('polyProfileDrape')?.addEventListener('click', () => {
+            const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
+            if (rec) drapePolylineOnGround(rec);
+        });
+        $('polyProfileCsv')?.addEventListener('click', async () => {
+            if (!polyProfileData) return notifyError('Профиль ещё не построен.');
+            const csv = ['пикет;земля;ось;рабочая']
+                .concat(polyProfileData.samples.map((s) => [
+                    s.sta.toFixed(3),
+                    s.ground == null ? '' : s.ground.toFixed(3),
+                    s.axis.toFixed(3),
+                    s.work == null ? '' : s.work.toFixed(3)
+                ].join(';')))
+                .join('\n');
+            try {
+                await navigator.clipboard.writeText(csv);
+                notify(`Скопировано пикетов: ${polyProfileData.samples.length}`);
+            } catch (_) {
+                notifyError('Буфер обмена недоступен.');
+            }
+        });
 
         let filletTargetId = null;
         let filletTargetVertex = -1;
@@ -21927,6 +22199,9 @@ ${componentXml || '    '}
         $('ctxPolylineClose').addEventListener('click', () => {
             if (stageContextPolyline) setPolylineClosed(stageContextPolyline, !stageContextPolyline.closed);
         });
+        $('ctxPolylineProfile').addEventListener('click', () => {
+            if (stageContextPolyline) openPolylineProfile(stageContextPolyline);
+        });
         $('ctxPolylineSweep').addEventListener('click', () => {
             if (!stageContextPolyline) return;
             // Тело строится по «выбранной» полилинии — sweepAxisPoints берёт ту,
@@ -23492,7 +23767,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: 'a842c6d',
+            buildId: '2caa512',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

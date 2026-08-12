@@ -730,6 +730,51 @@ async function checkDrawDxf(page) {
     }
     await page.evaluate((id) => window.BimLvaDebug.setPolylineClosed(id, false), three.id);
 
+    // Профиль по оси. Фикстура — сетка коробок без сплошного основания, поэтому
+    // часть лучей честно промахивается: проверяем и это (разрыв, а не подстановка
+    // числа), и арифметику рабочей отметки.
+    const profile = await page.evaluate((id) => {
+        const p = window.BimLvaDebug.polylineProfile(id, 2);
+        if (!p) return null;
+        return {
+            n: p.samples.length, total: p.total, step: p.step, missed: p.missed,
+            monotone: p.samples.every((s, i, a) => i === 0 || s.sta >= a[i - 1].sta),
+            withGround: p.samples.filter((s) => s.ground != null).length,
+            workOk: p.samples.every((s) => s.ground == null
+                ? s.work == null
+                : Math.abs(s.work - (s.axis - s.ground)) < 1e-9)
+        };
+    }, three.id);
+    if (!profile) {
+        problems.push('профиль по оси не построился');
+    } else {
+        const wantN = Math.floor(profile.total / profile.step) + 1;
+        if (profile.n !== wantN) problems.push(`пикетов ${profile.n} вместо ${wantN}`);
+        if (!profile.monotone) problems.push('пикетаж профиля не возрастает');
+        if (!profile.workOk) problems.push('рабочая отметка не равна «ось минус земля»');
+        if (!profile.withGround) problems.push('профиль не нашёл землю ни в одном пикете');
+    }
+
+    // «Посадить ось на землю»: там, где земля есть, ось обязана лечь ровно на неё
+    if (profile?.withGround) {
+        await page.evaluate((id) => window.BimLvaDebug.drapePolyline(id), three.id);
+        const after = await page.evaluate(
+            (id) => window.BimLvaDebug.polylineProfile(id, 2).samples.filter((s) => s.ground != null),
+            three.id
+        );
+        if (!after.length) problems.push('после посадки на землю профиль потерял отметки');
+        // Пикет 0 — это ровно первая вершина, её посадили: рабочая отметка там
+        // обязана стать нулём. Между вершинами ось идёт прямой, а земля —
+        // ступеньками по коробкам, и совпадать они не обязаны.
+        const atStart = await page.evaluate(
+            (id) => window.BimLvaDebug.polylineProfile(id, 2).samples[0],
+            three.id
+        );
+        if (atStart?.ground != null && Math.abs(atStart.work) > 1e-6) {
+            problems.push(`после посадки рабочая отметка в начале ${atStart.work.toFixed(4)} вместо 0`);
+        }
+    }
+
     // Список полилиний: модалка открывается, переименование и общее удаление работают.
     await page.evaluate(() => document.getElementById('btnPolylineList')?.click());
     const listShown = await page.locator('#polylinesModal.show').count().catch(() => 0);
