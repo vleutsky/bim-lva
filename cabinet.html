@@ -209,6 +209,23 @@
             font-size: 1.15rem; margin: 1.75rem 0 .85rem;
         }
 
+        /* Admin: заявки и лицензии — та же панель, что раньше жила в
+           license-admin.html, теперь прямо в кабинете. */
+        .lic-admin-h3 {
+            font-family: var(--font-display); color: var(--ink);
+            font-size: 1rem; margin: 1.1rem 0 .6rem;
+        }
+        .lic-admin-card, .lic-admin-req {
+            padding: 1rem; border: 1px solid var(--line); border-radius: 14px;
+            background: var(--white); box-shadow: var(--shadow); margin-bottom: .7rem;
+        }
+        .lic-admin-req .row { margin-top: .7rem; align-items: center; }
+        input.lic-days { width: 6.5rem; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+        input.lic-adminnote { flex: 1; min-width: 12rem; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+        table.lic-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+        table.lic-table th, table.lic-table td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
+        table.lic-table th { color: var(--ink-soft); font-weight: 600; font-size: .8rem; }
+
         /* Диагностика IFC */
         .ifcd {
             padding: 1.15rem; border: 1px solid var(--line); border-radius: 14px;
@@ -333,7 +350,7 @@
                     <div class="quick" style="margin-left:auto">
                         <a class="btn btn-outline" href="index.html#apps">Витрина</a>
                         <a class="btn btn-outline hidden" id="cabStats" href="stats.html">Статистика</a>
-                        <a class="btn btn-outline hidden" id="cabLicAdmin" href="license-admin.html">Выпуск лицензий</a>
+                        <a class="btn btn-outline hidden" id="cabLicAdmin" href="#licAdminAnchor">Выпуск лицензий</a>
                         <button type="button" class="btn btn-outline" id="cabLogout">Выйти</button>
                     </div>
                 </div>
@@ -477,18 +494,6 @@
                     <div class="row"><a class="btn btn-outline" href="index.html#apps">К витрине / заявке</a></div>
                 </article>
                 <article class="app">
-                    <div class="app-top"><div class="app-ico"><i class="fa-solid fa-file-excel"></i></div><span class="chip pro">Pro</span></div>
-                    <h3>Matrix Builder</h3>
-                    <p>Слияние матриц ОТР/ПД в эталон.</p>
-                    <div class="row"><a class="btn btn-outline" href="index.html#apps">К витрине / заявке</a></div>
-                </article>
-                <article class="app">
-                    <div class="app-top"><div class="app-ico"><i class="fa-solid fa-bolt"></i></div><span class="chip pro">Pro</span></div>
-                    <h3>Clash Group Automator</h3>
-                    <p>Группировка коллизий Navisworks.</p>
-                    <div class="row"><a class="btn btn-outline" href="index.html#apps">К витрине / заявке</a></div>
-                </article>
-                <article class="app">
                     <div class="app-top"><div class="app-ico"><i class="fa-solid fa-map"></i></div><span class="chip pro">Pro</span></div>
                     <h3>KSI Mapper Ultimate</h3>
                     <p>Коды КСИ и IFC-классы в Civil 3D.</p>
@@ -497,6 +502,20 @@
                         <a class="btn btn-outline" href="index.html#apps">К витрине</a>
                     </div>
                 </article>
+            </div>
+
+            <div id="licAdminSection" class="hidden">
+                <h2 class="section-title" id="licAdminAnchor">Admin · заявки и лицензии</h2>
+                <p class="lic-note" style="margin-top:-.8rem;margin-bottom:.9rem">
+                    Видно только вам — по таблице <code>license_admins</code> в Supabase,
+                    а не по списку email в конфиге.
+                </p>
+
+                <h3 class="lic-admin-h3">Заявки на рассмотрении</h3>
+                <div id="licAdminPending"><p class="lic-empty">Загрузка…</p></div>
+
+                <h3 class="lic-admin-h3">Выданные лицензии</h3>
+                <div class="lic-admin-card"><div id="licAdminIssued"><p class="lic-empty">Загрузка…</p></div></div>
             </div>
         </div>
     </main>
@@ -529,6 +548,8 @@
                 if (!user) {
                     gate.classList.remove('hidden');
                     main.classList.add('hidden');
+                    document.getElementById('cabLicAdmin')?.classList.add('hidden');
+                    document.getElementById('licAdminSection')?.classList.add('hidden');
                     return;
                 }
                 gate.classList.add('hidden');
@@ -540,11 +561,6 @@
                 badge.textContent = user.isAdmin ? 'Admin' : 'Аккаунт';
                 badge.classList.toggle('admin', !!user.isAdmin);
                 document.getElementById('cabStats').classList.toggle('hidden', !user.isAdmin);
-                // Ссылку показываем по настоящему признаку из базы, а не по
-                // списку email в открытом конфиге.
-                window.BimLvaLicenses?.isAdmin?.().then((ok) => {
-                    document.getElementById('cabLicAdmin')?.classList.toggle('hidden', !ok);
-                });
             }
 
             document.querySelector('[data-cab-login]')?.addEventListener('click', () => {
@@ -704,16 +720,153 @@
                 }
             });
 
-            function boot() {
+            // ---- Admin: все заявки и лицензии (та же панель, что была на
+            // license-admin.html — теперь прямо в кабинете) ----
+            async function renderAdminPending() {
+                const box = document.getElementById('licAdminPending');
+                if (!box || !lic()) return;
+                try {
+                    const rows = await lic().listAllRequests('new');
+                    if (!rows.length) {
+                        box.innerHTML = '<p class="lic-empty">Новых заявок нет.</p>';
+                        return;
+                    }
+                    box.innerHTML = rows.map((r) => `
+                        <div class="lic-admin-req" data-req="${esc(r.id)}">
+                            <div class="lic-head">
+                                <strong>${esc(lic().productTitle(r.product))}</strong>
+                                <span class="lic-status">заявка от ${asDate(r.created_at)}</span>
+                            </div>
+                            <p class="lic-empty">${esc(r.full_name || '—')} · ${esc(r.email)}${r.org ? ' · ' + esc(r.org) : ''}</p>
+                            <p class="lic-empty">Компьютер: <code>${esc(r.machine_id || 'не указан — лицензия будет без привязки')}</code></p>
+                            ${r.comment ? `<p class="lic-empty">«${esc(r.comment)}»</p>` : ''}
+                            <div class="row">
+                                <label class="lic-empty">Срок, дней <span title="0 — бессрочная">(0 = бессрочно)</span>
+                                    <input class="lic-days" type="number" min="0" max="3650" value="365">
+                                </label>
+                                <input class="lic-adminnote" type="text" placeholder="Комментарий к решению (необязательно)">
+                                <button type="button" class="btn btn-primary" data-act="issue">Выдать ключ</button>
+                                <button type="button" class="btn btn-outline" data-act="reject">Отклонить</button>
+                            </div>
+                        </div>`).join('');
+                } catch (err) {
+                    box.innerHTML = `<p class="lic-empty">${esc(err.message || err)}</p>`;
+                }
+            }
+
+            async function renderAdminIssued() {
+                const box = document.getElementById('licAdminIssued');
+                if (!box || !lic()) return;
+                try {
+                    const rows = await lic().listAllLicenses();
+                    if (!rows.length) {
+                        box.innerHTML = '<p class="lic-empty">Пока не выдано ни одной.</p>';
+                        return;
+                    }
+                    box.innerHTML = `
+                        <table class="lic-table">
+                            <tr><th>Продукт</th><th>Кому</th><th>Выдана</th><th>Действует до</th><th></th><th></th></tr>
+                            ${rows.map((l) => {
+                                const dead = l.revoked_at || new Date(l.expires_at) < new Date();
+                                const label = l.revoked_at ? 'Отозвана' : dead ? 'Истекла' : 'Действует';
+                                const cls = l.revoked_at || dead ? 'no' : 'ok';
+                                return `<tr>
+                                    <td>${esc(lic().productTitle(l.product))}</td>
+                                    <td>${esc(l.email)}${l.org ? '<br><span class="lic-empty">' + esc(l.org) + '</span>' : ''}</td>
+                                    <td>${asDate(l.issued_at)}</td>
+                                    <td>${asDate(l.expires_at)}</td>
+                                    <td><span class="lic-status ${cls}">${label}</span></td>
+                                    <td>${l.revoked_at ? '' :
+                                        `<button type="button" class="btn btn-outline" data-revoke="${esc(l.id)}">Отозвать</button>`}</td>
+                                </tr>`;
+                            }).join('')}
+                        </table>`;
+                } catch (err) {
+                    box.innerHTML = `<p class="lic-empty">${esc(err.message || err)}</p>`;
+                }
+            }
+
+            document.getElementById('licAdminPending')?.addEventListener('click', async (ev) => {
+                const btn = ev.target.closest('[data-act]');
+                if (!btn) return;
+                const card = btn.closest('[data-req]');
+                const id = card.dataset.req;
+                const actionsRow = btn.closest('.row');
+                const note = card.querySelector('.lic-adminnote').value;
+                const days = Number(card.querySelector('.lic-days').value);
+
+                card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+                try {
+                    if (btn.dataset.act === 'issue') {
+                        const res = await lic().issueLicense(id, days, note);
+                        card.insertAdjacentHTML('beforeend',
+                            `<textarea class="lic-key" rows="6" readonly onclick="this.select()">${esc(res.licenseText)}</textarea>`
+                            + `<div class="row"><button type="button" class="btn btn-primary" data-save>Скачать license.lic</button></div>`);
+                        card.querySelector('[data-save]')?.addEventListener('click', () => {
+                            const blob = new Blob([res.licenseText], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            Object.assign(document.createElement('a'), { href: url, download: 'license.lic' }).click();
+                            URL.revokeObjectURL(url);
+                        });
+                        // Удаляем только исходный ряд «Срок / Комментарий / Выдать / Отклонить»,
+                        // а не все .row — иначе задело бы и только что вставленную кнопку скачивания.
+                        actionsRow.remove();
+                    } else {
+                        await lic().rejectRequest(id, note);
+                        card.remove();
+                    }
+                    await renderAdminIssued();
+                } catch (err) {
+                    alert(err.message || String(err));
+                    card.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                }
+            });
+
+            document.getElementById('licAdminIssued')?.addEventListener('click', async (ev) => {
+                const btn = ev.target.closest('[data-revoke]');
+                if (!btn) return;
+                const note = prompt('Причина отзыва (попадёт в журнал):', '');
+                if (note === null) return;
+                btn.disabled = true;
+                try {
+                    await lic().revokeLicense(btn.dataset.revoke, note);
+                    await renderAdminIssued();
+                } catch (err) {
+                    alert(err.message || String(err));
+                    btn.disabled = false;
+                }
+            });
+
+            async function refreshAdmin() {
+                if (!lic()) return;
+                let ok = false;
+                try { ok = await lic().isAdmin(); } catch { ok = false; }
+                // Показываем по настоящему признаку из базы (license_admins),
+                // а не по списку email в открытом конфиге.
+                document.getElementById('cabLicAdmin')?.classList.toggle('hidden', !ok);
+                document.getElementById('licAdminSection')?.classList.toggle('hidden', !ok);
+                if (ok) await Promise.all([renderAdminPending(), renderAdminIssued()]);
+            }
+
+            async function boot() {
                 const auth = window.BimLvaAuth;
                 if (!auth) return;
                 fillProducts();
-                render(auth.getUser?.());
                 auth.onChange?.((user) => {
                     render(user);
-                    if (user) refreshLicenses();
+                    if (user) { refreshLicenses(); refreshAdmin(); }
                 });
-                if (auth.getUser?.()) refreshLicenses();
+                // getUser() — локальное зеркало сессии; в supabase-режиме оно
+                // достоверно только после init() (сверка с сервером). Рисовать
+                // кабинет по нему до этого нельзя: licenses.js всё равно
+                // спросит настоящую сессию у Supabase и получит «не
+                // авторизован», даже если зеркало утверждает обратное — из-за
+                // этого «Отправить заявку» и «Мои заявки» падали с «Сначала
+                // войдите в аккаунт» у уже вошедшего пользователя.
+                await auth.init?.();
+                const user = auth.getUser?.();
+                render(user);
+                if (user) { refreshLicenses(); refreshAdmin(); }
                 window.BimLvaStats?.trackPage?.('cabinet');
             }
 
