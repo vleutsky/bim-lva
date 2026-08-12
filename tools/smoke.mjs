@@ -391,7 +391,8 @@ async function checkDrawDxf(page) {
     // Четыре точки — два внутренних угла: только так проверяется, что радиус
     // ложится в УКАЗАННЫЙ угол, а не сразу во все.
     await drawOne('3d', [[-0.12, -0.06], [0.0, 0.02], [0.11, -0.04], [0.20, 0.03]]);
-    await drawOne('2d', [[-0.10, 0.10], [0.06, 0.12]]);
+    // Три точки — есть внутренний угол, значит будет что выгрузить дугой
+    await drawOne('2d', [[-0.10, 0.10], [0.06, 0.12], [0.18, 0.04]]);
     await page.evaluate(() => {
         const btn = document.getElementById('btnDraw');
         if (btn.classList.contains('on')) btn.click();
@@ -425,6 +426,44 @@ async function checkDrawDxf(page) {
         }
     }
 
+    // Фильтр привязки: оставляем только «вершина» — середин и рёбер быть не
+    // должно вовсе. Порог у типов разный, поэтому проверяем именно ТИП, а не
+    // факт срабатывания.
+    await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        D.setSnapType('mid', false);
+        D.setSnapType('edge', false);
+    });
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (!b.classList.contains('on')) b.click();
+    });
+    const filtered = [];
+    for (let i = -6; i <= 6; i++) {
+        await page.mouse.move(cx + (i * 0.014) * box.width, cy + (i % 2 ? 0.02 : -0.02) * box.height);
+        await page.waitForTimeout(45);
+        const s = await page.evaluate(() => window.BimLvaDebug.snap);
+        if (s) filtered.push(s.type);
+    }
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (b.classList.contains('on')) b.click();
+    });
+    const leaked = filtered.filter((t) => t !== 'vertex');
+    if (leaked.length) {
+        problems.push(`при фильтре «только вершина» поймались: ${[...new Set(leaked)].join(', ')}`);
+    }
+    // Страховка от «зелёного вхолостую»: если не сработало НИЧЕГО, проверка
+    // ничего и не доказала — тех же граблей уже наступали в гео-тестах.
+    if (!filtered.length) {
+        problems.push('фильтр привязки: за весь проход не поймалось ни одной вершины — проверка вхолостую');
+    }
+    await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        D.setSnapType('mid', true);
+        D.setSnapType('edge', true);
+    });
+
     const drawn = await page.evaluate(() => window.BimLvaDebug.drawn);
     if (drawn.length !== 2) {
         problems.push(`начерчено ${drawn.length} полилиний вместо 2 — клики не попали по геометрии`);
@@ -433,9 +472,41 @@ async function checkDrawDxf(page) {
     const three = drawn.find((d) => d.kind === '3d');
     const flat = drawn.find((d) => d.kind === '2d');
     if (three.abs.length !== 4) problems.push(`в 3D-полилинии ${three.abs.length} точек вместо 4`);
-    if (flat && flat.abs.length === 2) {
-        const dz = Math.abs(flat.abs[0].z - flat.abs[1].z);
+    if (flat && flat.abs.length >= 2) {
+        const dz = Math.max(...flat.abs.map((p) => p.z)) - Math.min(...flat.abs.map((p) => p.z));
         if (dz > 1e-6) problems.push(`2D-полилиния получилась с перепадом ${dz.toFixed(3)} м`);
+    }
+
+    // Дуга сопряжения в DXF: для 2D она должна уйти bulge'ом (код 42), а не
+    // ломаной. Ожидаемое значение считаем сами: bulge = tan(Δ/4), где Δ —
+    // центральный угол дуги, он же π минус угол при вершине.
+    if (flat && flat.points >= 3) {
+        const bulgeProbe = await page.evaluate((id) => {
+            const D = window.BimLvaDebug;
+            D.setPolylineRadius(id, 1, 1.5);
+            const rec = D.drawn.find((d) => d.id === id);
+            const v = rec.vertsAbs;
+            const ax = v[0].x - v[1].x, ay = v[0].y - v[1].y;
+            const bx = v[2].x - v[1].x, by = v[2].y - v[1].y;
+            const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+            const alpha = Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb))));
+            const ccw = ((-ax) * by - (-ay) * bx) > 0;
+            return {
+                out: D.dxfVertices(id),
+                want: Math.tan((Math.PI - alpha) / 4) * (ccw ? 1 : -1)
+            };
+        }, flat.id);
+        if (!bulgeProbe.out?.arcs) {
+            problems.push('дуга 2D-полилинии не ушла в DXF как дуга');
+        } else {
+            const got = bulgeProbe.out.verts.map((v) => v.bulge).find((b) => Math.abs(b) > 1e-9);
+            if (got == null || Math.abs(got - bulgeProbe.want) > 1e-4) {
+                problems.push(`bulge дуги ${got} вместо ${bulgeProbe.want.toFixed(6)}`);
+            }
+        }
+        const dxfBulge = await page.evaluate(() => window.BimLvaDebug.dxfPreview());
+        if (!/\r\n42\r\n/.test(dxfBulge)) problems.push('в DXF нет кода 42 (bulge) — дуга выгрузилась ломаной');
+        await page.evaluate((id) => window.BimLvaDebug.setPolylineRadius(id, 1, 0), flat.id);
     }
 
     const dxf = await page.evaluate(() => window.BimLvaDebug.dxfPreview());

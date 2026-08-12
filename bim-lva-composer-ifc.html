@@ -1211,6 +1211,22 @@
             padding: 4px;
             border-bottom: 1px solid var(--line, #d8dee6);
         }
+        .snap-types {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 10px;
+            padding: 2px 4px 6px;
+        }
+        .snap-types label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--dim);
+            cursor: pointer;
+        }
+        .snap-types input { margin: 0; cursor: pointer; }
+
         .polyline-field-label {
             font-family: 'IBM Plex Mono';
             font-size: 10.5px;
@@ -2522,6 +2538,11 @@
                             </div>
                             <button class="btn" id="btnSweep" disabled title="Выдавить сечение вдоль оси: осью служит выбранная линия чертежа или последняя начерченная полилиния">⬒ Тело по оси</button>
                             <button class="btn on" id="btnSnap" title="Объектная привязка: вершины, середины и рёбра элементов. Работает для черчения и замеров">⊹ Привязка к элементам</button>
+                            <div class="tb-menu-row snap-types" title="К чему привязываться. Вершина важнее середины, середина — ребра">
+                                <label><input type="checkbox" id="snapTypeVertex" checked> вершина</label>
+                                <label><input type="checkbox" id="snapTypeMid" checked> середина</label>
+                                <label><input type="checkbox" id="snapTypeEdge" checked> ребро</label>
+                            </div>
                             <div class="tb-menu-label">Экспорт</div>
                             <button class="btn" id="btnDrawExport" disabled title="Выгрузить начерченное и метки в DXF в мировых координатах">⤓ Экспорт в DXF</button>
                         </div>
@@ -4305,6 +4326,15 @@
             },
             /** Последняя сработавшая привязка (тип и точка) — для проверок. */
             get snap() { return lastSnap ? { ...lastSnap } : null; },
+            /** Какие типы привязки включены. */
+            get snapTypes() { return { ...snapTypes }; },
+            setSnapType(key, on) {
+                const cb = $({ vertex: 'snapTypeVertex', mid: 'snapTypeMid', edge: 'snapTypeEdge' }[key]);
+                if (!cb) return false;
+                cb.checked = !!on;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            },
             /** Текущая проекция: 'persp' или 'ortho'. */
             get projection() { return projectionMode; },
             /** Видимая высота кадра ортокамеры (м) — для проверки зума колесом. */
@@ -4422,6 +4452,11 @@
             get drawDraftPoints() {
                 if (typeof drawDraft === 'undefined' || !drawDraft) return 0;
                 return drawDraft.geometry?.attributes?.instanceStart?.count + 1 || 0;
+            },
+            /** Вершины полилинии так, как они уйдут в DXF (с bulge у дуг). */
+            dxfVertices(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? buildDxfPolylineVertices(rec) : null;
             },
             /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
             dxfPreview() {
@@ -6112,6 +6147,24 @@
          */
         const SNAP_PX = { vertex: 14, mid: 13, edge: 10 };
         let snapEnabled = true;
+        // Какие типы привязки участвуют. «Всё сразу» на плотной модели мешает:
+        // цепляется к грани, когда нужен только конец оси.
+        const SNAP_TYPES_KEY = 'bimlva_snap_types_v1';
+        let snapTypes = { vertex: true, mid: true, edge: true };
+        try {
+            const saved = JSON.parse(localStorage.getItem(SNAP_TYPES_KEY) || 'null');
+            if (saved && typeof saved === 'object') {
+                snapTypes = {
+                    vertex: saved.vertex !== false,
+                    mid: saved.mid !== false,
+                    edge: saved.edge !== false
+                };
+            }
+        } catch (_) {}
+
+        function persistSnapTypes() {
+            try { localStorage.setItem(SNAP_TYPES_KEY, JSON.stringify(snapTypes)); } catch (_) {}
+        }
         let lastSnap = null;
         const _snapA = new THREE.Vector3();
         const _snapB = new THREE.Vector3();
@@ -6190,11 +6243,13 @@
                 if (!best || d < best.d) best = { point: point.clone(), type, d };
             };
 
-            prim.verts.forEach(v => consider(v, 'vertex', SNAP_PX.vertex));
-            if (!best) prim.edges.forEach(([a, b]) => {
+            // Порядок сохраняется: вершина важнее середины, середина — ребра.
+            // Выключенный тип просто пропускается, следующий получает свой шанс.
+            if (snapTypes.vertex) prim.verts.forEach(v => consider(v, 'vertex', SNAP_PX.vertex));
+            if (!best && snapTypes.mid) prim.edges.forEach(([a, b]) => {
                 consider(a.clone().lerp(b, 0.5), 'mid', SNAP_PX.mid);
             });
-            if (!best) prim.edges.forEach(([a, b]) => {
+            if (!best && snapTypes.edge) prim.edges.forEach(([a, b]) => {
                 consider(closestPointOnSegment(a, b, hit.point, new THREE.Vector3()), 'edge', SNAP_PX.edge);
             });
             return best ? { point: best.point, type: best.type } : raw;
@@ -6379,7 +6434,15 @@
             let pts = build(1);
             if (pts[pts.length - 1].distanceTo(tangentOut) > Math.max(1e-3, rEff * 1e-3)) pts = build(-1);
 
-            return { points: pts, radius: rEff, clamped: t < tWant - 1e-9 };
+            return {
+                points: pts, radius: rEff, clamped: t < tWant - 1e-9,
+                // Для выгрузки дуги в DXF: касательные точки и угол дуги.
+                // Направление обхода в плане берём по знаку z-компоненты
+                // векторного произведения «входящий × исходящий»: >0 — против
+                // часовой стрелки, а bulge в DXF положителен именно тогда.
+                tangentIn, tangentOut, sweep,
+                ccw: ((-a.x) * b.y - (-a.y) * b.x) > 0
+            };
         }
 
         /**
@@ -6410,6 +6473,51 @@
                 out.push(pts[n - 1].clone());
             }
             return { points: out, clamped };
+        }
+
+        /**
+         * Вершины для выгрузки в DXF, в АБСОЛЮТНЫХ координатах.
+         *
+         * Для 2D-полилинии сопряжение уходит настоящей дугой: у вершины перед
+         * дугой ставится bulge = tan(Δ/4), где Δ — центральный угол дуги (знак
+         * положителен при обходе против часовой стрелки). Так Civil получает
+         * дугу, а не два десятка отрезков.
+         *
+         * У 3D-полилинии (флаг 8) bulge в R12 не поддерживается — там остаётся
+         * частая ломаная из renderPts, и это честно отражено в возвращаемом
+         * `arcs: false`.
+         */
+        function buildDxfPolylineVertices(record) {
+            const abs = (p) => {
+                const a = worldPointToAbsoluteXYZ(p) || p;
+                return { x: a.x, y: a.y, z: a.z };
+            };
+            if (record.kind !== '2d') {
+                const src = record.closed ? record.renderPts.slice(0, -1) : record.renderPts;
+                return { verts: src.map((p) => ({ ...abs(p), bulge: 0 })), arcs: false };
+            }
+
+            const n = record.pts.length;
+            const prevOf = (i) => record.pts[(i - 1 + n) % n];
+            const nextOf = (i) => record.pts[(i + 1) % n];
+            const out = [];
+            let arcs = false;
+            for (let i = 0; i < n; i++) {
+                if (!polylineVertexIsCorner(record, i) || !(record.radii[i] > 0)) {
+                    out.push({ ...abs(record.pts[i]), bulge: 0 });
+                    continue;
+                }
+                const arc = computeFilletArc(prevOf(i), record.pts[i], nextOf(i), record.radii[i]);
+                if (!arc) {
+                    out.push({ ...abs(record.pts[i]), bulge: 0 });
+                    continue;
+                }
+                arcs = true;
+                const bulge = Math.tan(arc.sweep / 4) * (arc.ccw ? 1 : -1);
+                out.push({ ...abs(arc.tangentIn), bulge });
+                out.push({ ...abs(arc.tangentOut), bulge: 0 });
+            }
+            return { verts: out, arcs };
         }
 
         /**
@@ -7080,9 +7188,10 @@
             polylines.forEach((poly) => {
                 const is3d = poly.kind === '3d';
                 const layer = is3d ? 'LVA_3D' : 'LVA_2D';
-                // У замкнутого контура последняя точка renderPts дублирует первую:
-                // в DXF замыкание задаётся флагом (бит 1), а не повторной вершиной.
-                const verts = poly.closed ? poly.abs.slice(0, -1) : poly.abs;
+                // У замкнутого контура замыкание задаётся флагом (бит 1),
+                // а не повторной вершиной.
+                const { verts } = buildDxfPolylineVertices(poly);
+                if (!verts.length) return;
                 g(0, 'POLYLINE'); g(8, layer); g(66, 1);
                 g(70, (is3d ? 8 : 0) | (poly.closed ? 1 : 0));
                 g(10, 0); g(20, 0); g(30, is3d ? 0 : n(verts[0].z));
@@ -7090,6 +7199,7 @@
                     g(0, 'VERTEX'); g(8, layer);
                     g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
                     if (is3d) g(70, 32);             // вершина 3D-полилинии
+                    else if (p.bulge) g(42, n(p.bulge));
                 });
                 g(0, 'SEQEND'); g(8, layer);
             });
@@ -7374,6 +7484,23 @@
             if (!snapEnabled) hideSnapMarker();
             trackUsage('snap_toggle', { on: snapEnabled });
         });
+
+        [['snapTypeVertex', 'vertex'], ['snapTypeMid', 'mid'], ['snapTypeEdge', 'edge']]
+            .forEach(([id, key]) => {
+                const cb = $(id);
+                if (!cb) return;
+                cb.checked = snapTypes[key];
+                cb.addEventListener('change', () => {
+                    snapTypes[key] = cb.checked;
+                    // Ни одного типа — привязываться не к чему, это та же «выкл»
+                    if (!snapTypes.vertex && !snapTypes.mid && !snapTypes.edge) {
+                        notify('Все типы привязки сняты — точка встанет туда, куда указали.');
+                    }
+                    persistSnapTypes();
+                    hideSnapMarker();
+                    trackUsage('snap_types', { [key]: cb.checked });
+                });
+            });
         $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
@@ -23365,7 +23492,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: '7db9990',
+            buildId: 'a842c6d',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
