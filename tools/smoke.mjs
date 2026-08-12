@@ -324,6 +324,104 @@ async function checkCoordPin(page) {
 }
 
 /**
+ * Вертикальный переход на полилинии — «разрезать и поднять середину», как
+ * LVA_RaisePipeVertical в плагине Civil. Проверяем геометрию, а не меткость
+ * мыши: на вход идут доли вдоль отрезков, наружу — инварианты.
+ *
+ * Главный из них — стояки СТРОГО вертикальны в плане. Если перелом уедет по
+ * X/Y хоть на сантиметр, Civil перестанет сам подбирать отводы на стыках, а
+ * заметить это на глаз в изометрии нельзя.
+ */
+async function checkVerticalTransition(page, cx, cy, box) {
+    // Чертим СВОЮ линию, а не берём чужую: к этому моменту список переживает
+    // пару очисток, а переход добавляет вершины — на общей линии он ломал бы
+    // проверки, которые считают их по снимку, снятому раньше.
+    // Числами, а не мышью: нужна предсказуемая геометрия, а не меткость клика.
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (!b.classList.contains('on')) b.click();
+    });
+    await page.evaluate(() => {
+        const sel = document.getElementById('drawModeSelect');
+        if (sel) { sel.value = '3d'; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+    });
+    let ok0 = null;
+    for (const [dx, dy] of [[0, 0], [0.08, 0.05], [-0.08, -0.05], [0.12, -0.04]]) {
+        await page.mouse.click(cx + dx * box.width, cy + dy * box.height);
+        await page.waitForTimeout(90);
+        ok0 = await page.evaluate(() => window.BimLvaDebug.drawDraftPoints);
+        if (ok0) break;
+    }
+    if (!ok0) {
+        problems.push('вертикальный переход: не удалось поставить первую точку линии');
+        return null;
+    }
+    const id = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        D.drawPointByNumbers(20, 90, 2);
+        D.drawPointByNumbers(20, 0, 2);
+        D.drawPointByNumbers(20, 90, 2);
+        return D.finishDrawnPolyline();
+    });
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (b.classList.contains('on')) b.click();
+    });
+    const before = await page.evaluate((i) => window.BimLvaDebug.drawn.find((d) => d.id === i) || null, id);
+    if (!before || before.points < 3) {
+        problems.push(`вертикальный переход: линия не начертилась (${before ? before.points + ' вершин' : 'нет записи'})`);
+        return null;
+    }
+
+    const A = { i: 0, t: 0.5 };
+    const B = { i: 1, t: 0.5 };
+    const TARGET = 40;                    // абсолютная отметка участка, м
+    const ok = await page.evaluate(([pid, a, b, z]) => window.BimLvaDebug.verticalTransition(
+        pid, a, b, { mode: 'z', value: z }
+    ), [id, A, B, TARGET]);
+    if (!ok) {
+        problems.push('вертикальный переход не выполнился');
+        return null;
+    }
+
+    const after = await page.evaluate((i) => window.BimLvaDebug.drawn.find((d) => d.id === i), id);
+    if (after.points !== before.points + 4) {
+        problems.push(`вертикальный переход: вершин ${after.points}, ожидалось ${before.points + 4} (по два на стояк)`);
+        return null;
+    }
+
+    // Раскладка после вставки: [… A.i, aRise, aTop, …середина…, bTop, bFall, …]
+    // Вставка у B идёт первой, поэтому её пара сдвинута ещё на две позиции.
+    const v = after.vertsAbs;
+    const riserA = [A.i + 1, A.i + 2];
+    const riserB = [B.i + 3, B.i + 4];
+    for (const [a, b] of [riserA, riserB]) {
+        const plan = Math.hypot(v[b].x - v[a].x, v[b].y - v[a].y);
+        if (plan > 0.001) {
+            problems.push(`стояк вертикального перехода уехал в плане на ${plan.toFixed(3)} м — отводы не сядут`);
+        }
+        if (Math.abs(v[b].z - v[a].z) < 0.001) {
+            problems.push('стояк вертикального перехода получился нулевой высоты');
+        }
+    }
+
+    // Всё между верхами стояков лежит на заданной отметке.
+    const mid = v.slice(riserA[1], riserB[0] + 1);
+    const off = Math.max(...mid.map((p) => Math.abs(p.z - TARGET)));
+    if (off > 0.001) {
+        problems.push(`середина перехода отклонилась на ${off.toFixed(3)} м от отметки ${TARGET}`);
+    }
+
+    // За пределами участка ничего не поехало.
+    const tailBefore = before.vertsAbs[before.points - 1];
+    const tailAfter = v[after.points - 1];
+    if (Math.abs(v[0].z - before.vertsAbs[0].z) > 1e-6 || Math.abs(tailAfter.z - tailBefore.z) > 1e-6) {
+        problems.push('вертикальный переход сдвинул отметки за пределами участка');
+    }
+    return { added: after.points - before.points, target: TARGET };
+}
+
+/**
  * Черчение полилиний и выгрузка в DXF. Проверяем содержимое файла: координаты
  * обязаны быть мировыми (иначе чертёж ляжет у нуля, а не на площадке), 2D —
  * с одной отметкой на всю линию, и структура R12 (POLYLINE/VERTEX/SEQEND).
@@ -947,6 +1045,12 @@ async function checkDrawDxf(page) {
     }
     await page.keyboard.press('Escape');
     await page.waitForTimeout(120);
+
+    // Вертикальный переход — В САМОМ КОНЦЕ: он добавляет вершины, и проверки
+    // выше (число вершин в DXF, длина после сопряжения, счёт ручек) считают
+    // их по снимку, сделанному до. Запуск в середине ронял три проверки сразу.
+    const vert = await checkVerticalTransition(page, cx, cy, box);
+
     await page.evaluate(() => {
         const b = document.getElementById('btnDraw');
         if (b.classList.contains('on')) b.click();
@@ -955,7 +1059,7 @@ async function checkDrawDxf(page) {
         document.getElementById('polylinesClose')?.click();
     });
 
-    return { polylines: drawn.length, vertices: vertexCount, x: first.x, snaps: snaps.length };
+    return { polylines: drawn.length, vertices: vertexCount, x: first.x, snaps: snaps.length, vert };
 }
 
 /**
@@ -1669,6 +1773,9 @@ async function main() {
     if (clash) console.log(`коллизии:  пар ${clash.pairs}, за ${clash.ms} мс`);
     if (dxfBlocks) console.log(`блоки DXF: ${dxfBlocks.ok ? `раскрыты верно, габарит ${dxfBlocks.size}` : 'ОШИБКА'}`);
     if (geoFed) console.log(`геосводка: ${geoFed.ok ? `взаимное положение сохранено (${geoFed.dist.toFixed(0)} м)` : `СЛОМАНО (${geoFed.dist.toFixed(0)} м вместо 800)`}`);
+    if (draw?.vert) {
+        console.log(`верт. переход: +${draw.vert.added} вершины, середина на ${draw.vert.target} м, стояки вертикальны`);
+    }
 
     if (external.length) {
         // Не ошибка теста: сеть наружу (Supabase, Яндекс.Диск) тут недоступна.

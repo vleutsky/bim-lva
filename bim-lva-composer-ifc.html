@@ -2826,6 +2826,9 @@
         <div id="ctxPolylineGroup" hidden>
             <button class="ctx-item" id="ctxPolylineProps" title="Открыть полилинию в таблице: вершины, отметки, длины, уклоны">📐 Свойства полилинии</button>
             <button class="ctx-item" id="ctxPolylineFillet" title="Вписать радиус в угол, ближайший к точке правого клика">◜ Вписать кривую в этот угол…</button>
+            <button class="ctx-item" id="ctxPolylineAddVertex" title="Вставить вершину точно в точку правого клика и сразу задать ей отметку">✛ Вершина здесь + отметка…</button>
+            <button class="ctx-item" id="ctxPolylineAddVertexTerrain" title="Вставить вершину в точке правого клика и посадить её на рельеф под ней">⛰ Вершина здесь по рельефу</button>
+            <button class="ctx-item" id="ctxPolylineVertTransition" title="Вертикальный переход: укажите начало и конец, участок между ними уйдёт на другую отметку через вертикальные стояки">⤒ Вертикальный переход…</button>
             <button class="ctx-item" id="ctxPolylineContinue" title="Дописать вершины с конца полилинии">✚ Продолжить с конца</button>
             <button class="ctx-item" id="ctxPolylineContinueStart" title="Дописать вершины с начала полилинии">✚ Продолжить с начала</button>
             <button class="ctx-item" id="ctxPolylineClose" title="Замкнуть или разомкнуть контур">⭘ Замкнуть / разомкнуть</button>
@@ -4586,6 +4589,27 @@
                 setPolylineVertexRadius(rec, idx, radius);
                 return true;
             },
+            /**
+             * Вертикальный переход по долям вдоль отрезков — вход для тестов.
+             * Кликами это не проверить надёжно: попадание в линию зависит от
+             * ракурса, а проверять надо геометрию, а не меткость мыши.
+             * tA/tB — {i, t}: номер отрезка исходных вершин и доля вдоль него.
+             */
+            verticalTransition(id, tA, tB, opts) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                const at = (s) => {
+                    const j = polylineNextIndex(rec, s.i);
+                    if (j < 0) return null;
+                    const a = rec.pts[s.i];
+                    const b = rec.pts[j];
+                    return { i: s.i, j, t: s.t, point: a.clone().lerp(b, s.t) };
+                };
+                const A = at(tA);
+                const B = at(tB);
+                if (!A || !B) return false;
+                return applyVerticalTransition(rec, A, B, opts);
+            },
             /** Сколько ручек вершин сейчас на экране (у раскрытой полилинии). */
             get polylineHandleCount() {
                 return typeof polylineHandles === 'undefined' ? 0 : polylineHandles.length;
@@ -4672,6 +4696,12 @@
                 set('drawInputDz', dz);
                 const p = drawInputNextPoint();
                 return p ? { x: p.x, y: p.y, z: p.z } : null;
+            },
+            /** Завершить черчение (то же, что Esc) — для тестов, которым нужна
+             *  готовая запись, а не черновик. */
+            finishDrawnPolyline() {
+                const rec = finishDrawPolyline();
+                return rec ? rec.id : null;
             },
             /** Картограмма: объёмы выемки/насыпи внутри замкнутого контура. */
             earthwork(id, cell, mode, level) {
@@ -7192,6 +7222,150 @@
             return p.sub(shift);
         }
 
+        /* ------------------------------------------------------------------
+         * Вертикальный переход: «разрезать и поднять середину».
+         *
+         * Та же модель, что у команды LVA_RaisePipeVertical в плагине Civil:
+         * участок между двумя указанными точками уходит на другую отметку, а
+         * на границах встают ВЕРТИКАЛЬНЫЕ стояки — в плане переломов нет,
+         * поэтому отводы потом сядут сами. В точке A появляются две вершины с
+         * одинаковым X/Y (старая отметка и новая), то же в точке B.
+         *
+         * Режим 'z' — середина ложится горизонтально на заданную отметку;
+         * 'dz' — сдвигается на величину, сохраняя собственный уклон.
+         * ------------------------------------------------------------------ */
+        function applyVerticalTransition(record, hitA, hitB, { mode, value }) {
+            if (!record || !hitA || !hitB) return false;
+            // Упорядочиваем по ходу линии: пользователь мог ткнуть в обратную сторону.
+            let a = hitA;
+            let b = hitB;
+            if (b.i < a.i || (b.i === a.i && b.t < a.t)) { const t = a; a = b; b = t; }
+            if (a.i === b.i && Math.abs(a.t - b.t) < 1e-6) {
+                notifyError('Начало и конец перехода совпали — укажите две разные точки.');
+                return false;
+            }
+
+            const shiftZ = worldOriginSceneVec().z;
+            // Вершины между точками A и B — те, что попадают внутрь участка.
+            const midIdx = [];
+            for (let k = a.i + 1; k <= b.i; k++) midIdx.push(k);
+
+            const zOf = (p) => p.z;
+            const targetWorldZ = mode === 'z'
+                ? absoluteXYZToWorldPoint(0, 0, value).z
+                : null;
+
+            // Новые отметки середины считаем ДО вставки — иначе индексы поедут.
+            const newZ = (p) => (mode === 'z' ? targetWorldZ : zOf(p) + value);
+
+            const aRise = a.point.clone();      // низ стояка в точке A
+            const aTop = a.point.clone();
+            aTop.z = newZ(a.point);
+            const bTop = b.point.clone();
+            bTop.z = newZ(b.point);
+            const bFall = b.point.clone();      // возврат на прежнюю отметку
+
+            if (Math.abs(aTop.z - aRise.z) < 1e-6 && Math.abs(bTop.z - bFall.z) < 1e-6) {
+                notifyError('Отметка перехода совпадает с текущей — двигать нечего.');
+                return false;
+            }
+
+            // Сначала правим отметки промежуточных вершин, потом вставляем
+            // стояки: вставка сдвигает индексы, и порядок здесь принципиален.
+            for (const k of midIdx) {
+                if (k >= 0 && k < record.pts.length) record.pts[k].z = newZ(record.pts[k]);
+            }
+
+            // Вставки идут с конца, чтобы индекс A не съехал от вставки в B.
+            record.pts.splice(b.i + 1, 0, bTop, bFall);
+            record.radii.splice(b.i + 1, 0, 0, 0);
+            record.pts.splice(a.i + 1, 0, aRise, aTop);
+            record.radii.splice(a.i + 1, 0, 0, 0);
+
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+
+            const absTop = (aTop.z + shiftZ).toFixed(3);
+            notifyOk(
+                `«${record.name}»: вертикальный переход. Середина на отметке ${absTop} м, ` +
+                `стояков 2, вершин стало ${record.pts.length}.`
+            );
+            trackUsage('polyline_vertical_transition', { mode });
+            return true;
+        }
+
+        /* Режим «укажи начало и конец» для вертикального перехода. */
+        let vertTransitionPick = null;   // {recordId, first}
+
+        function startVerticalTransitionPick(record) {
+            if (record.kind === '2d') {
+                notifyError('У 2D-полилинии все точки на одной отметке — вертикальный переход ей не сделать.');
+                return;
+            }
+            if (record.pts.length < 2) return;
+            vertTransitionPick = { recordId: record.id, first: null };
+            stage.style.cursor = 'crosshair';
+            notify(`«${record.name}»: укажите НАЧАЛО перехода — кликните по линии. Esc — отмена.`);
+        }
+
+        function cancelVerticalTransitionPick(quiet) {
+            if (!vertTransitionPick) return;
+            vertTransitionPick = null;
+            stage.style.cursor = '';
+            if (!quiet) notify('Вертикальный переход отменён.');
+        }
+
+        /**
+         * Клик в режиме перехода. Возвращает true, если клик «съеден» — тогда
+         * обычная обработка (выделение элемента) не запускается.
+         */
+        function handleVerticalTransitionClick(clientX, clientY) {
+            if (!vertTransitionPick) return false;
+            const rec = drawnPolylines.find((r) => r.id === vertTransitionPick.recordId);
+            if (!rec) { cancelVerticalTransitionPick(true); return false; }
+
+            const hit = pickDrawnPolyline(clientX, clientY);
+            if (!hit || hit.record.id !== rec.id) {
+                notify('Мимо линии — кликните по самой полилинии.');
+                return true;
+            }
+            const seg = nearestPolylineSegment(rec, hit.point);
+            if (!seg) return true;
+
+            if (!vertTransitionPick.first) {
+                vertTransitionPick.first = seg;
+                notify('Теперь укажите КОНЕЦ перехода.');
+                return true;
+            }
+
+            const first = vertTransitionPick.first;
+            cancelVerticalTransitionPick(true);
+
+            const shiftZ = worldOriginSceneVec().z;
+            const nowAbs = ((first.point.z + seg.point.z) / 2 + shiftZ).toFixed(3);
+            const answer = prompt(
+                'Отметка участка между указанными точками, м.\n' +
+                'Число — абсолютная отметка (участок ляжет горизонтально).\n' +
+                'Со знаком + или − — сдвиг от текущей (уклон сохранится).',
+                nowAbs
+            );
+            if (answer === null) { notify('Вертикальный переход отменён.'); return true; }
+
+            const raw = String(answer).trim().replace(',', '.');
+            const relative = /^[+−-]/.test(raw);
+            const value = Number(raw.replace('−', '-'));
+            if (!Number.isFinite(value)) {
+                notifyError('Не похоже на число — переход не сделан.');
+                return true;
+            }
+            applyVerticalTransition(rec, first, seg, {
+                mode: relative ? 'dz' : 'z',
+                value
+            });
+            return true;
+        }
+
         function setPolylineVertexElevation(record, idx, absZ) {
             const z = Number(absZ);
             if (!Number.isFinite(z) || idx < 0 || idx >= record.pts.length) return;
@@ -7244,6 +7418,51 @@
         function polylineNextIndex(record, idx) {
             if (idx < record.pts.length - 1) return idx + 1;
             return record.closed ? 0 : -1;
+        }
+
+        /**
+         * Ближайший к точке отрезок ИСХОДНЫХ вершин (pts), а не renderPts.
+         * Пикинг возвращает точку на отрисованной линии, где после сопряжения
+         * лежат ещё и точки дуг — по ним нельзя понять, между какими вершинами
+         * вставлять новую. Поэтому проецируем на отрезки pts заново.
+         *
+         * Возвращает {i, j, t, point}: t — доля вдоль отрезка i→j, point —
+         * проекция на него (уже в осях сцены).
+         */
+        function nearestPolylineSegment(record, point) {
+            let best = null;
+            const last = record.closed ? record.pts.length : record.pts.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = polylineNextIndex(record, i);
+                if (j < 0) continue;
+                const a = record.pts[i];
+                const b = record.pts[j];
+                const ab = b.clone().sub(a);
+                const len2 = ab.lengthSq();
+                const t = len2 < 1e-12
+                    ? 0
+                    : Math.max(0, Math.min(1, point.clone().sub(a).dot(ab) / len2));
+                const proj = a.clone().addScaledVector(ab, t);
+                const d = proj.distanceToSquared(point);
+                if (!best || d < best.d) best = { i, j, t, point: proj, d };
+            }
+            return best;
+        }
+
+        /**
+         * Вставить вершину в точке на отрезке. В отличие от insertPolylineVertex,
+         * которая всегда делит отрезок пополам, эта кладёт вершину туда, куда
+         * ткнули. Радиус сопряжения у новой вершины — 0: гнуть её никто не просил.
+         */
+        function insertPolylineVertexAt(record, segIndex, point) {
+            if (segIndex < 0 || segIndex >= record.pts.length) return -1;
+            const at = segIndex + 1;
+            record.pts.splice(at, 0, point.clone());
+            record.radii.splice(at, 0, 0);
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+            return at;
         }
 
         /** Длина и уклон отрезка idx→следующая (для таблицы). */
@@ -7423,6 +7642,7 @@
         let polylineSegLabels = [];     // {el, i, j}
         let polylineVzLabels = [];      // {el, idx}
         let polylineVzEditing = null;   // idx вершины, которую сейчас правят
+        let polylineAnnotKey = '';      // на каком составе точек собран слой
 
         /** Ниже этой экранной длины подпись отрезка не рисуем — иначе на
          *  частой ломаной они наезжают друг на друга и читать нечего. */
@@ -7434,22 +7654,35 @@
             polylineSegLabels = [];
             polylineVzLabels = [];
             polylineVzEditing = null;
+            polylineAnnotKey = '';
         }
 
-        /** Полилиния, для которой сейчас показываем подписи и ручки. */
-        function annotatedPolyline() {
-            return drawnPolylines.find((r) => r.id === polylineEditingId) || null;
+        /**
+         * Откуда берём точки для подписей. Два источника, и оба нужны:
+         * черновик во время черчения (числа видны сразу, ещё до фиксации
+         * линии) и раскрытая на правку полилиния (числа меняются, пока
+         * тянешь ручку). Правка отметки возможна только во втором случае —
+         * у черновика ещё нет записи, которой принадлежала бы вершина.
+         */
+        function polylineAnnotSource() {
+            if (drawMode && drawPoints.length) {
+                const pts = drawCursorPoint ? [...drawPoints, drawCursorPoint] : drawPoints;
+                return { pts, kind: drawKind(), closed: false, record: null, tag: 'draft' };
+            }
+            const rec = drawnPolylines.find((r) => r.id === polylineEditingId);
+            if (!rec) return null;
+            return { pts: rec.pts, kind: rec.kind, closed: !!rec.closed, record: rec, tag: 'rec' + rec.id };
         }
 
         function rebuildPolylineAnnotations() {
             clearPolylineAnnotations();
-            const rec = annotatedPolyline();
-            if (!rec || !polylineAnnotLayer) { markNeedsRender(); return; }
+            const src = polylineAnnotSource();
+            if (!src || !polylineAnnotLayer) { markNeedsRender(); return; }
+            polylineAnnotKey = `${src.tag}:${src.pts.length}:${src.closed}`;
 
-            const last = rec.closed ? rec.pts.length : rec.pts.length - 1;
+            const last = src.closed ? src.pts.length : src.pts.length - 1;
             for (let i = 0; i < last; i++) {
-                const j = polylineNextIndex(rec, i);
-                if (j < 0) continue;
+                const j = src.closed && i === src.pts.length - 1 ? 0 : i + 1;
                 const el = document.createElement('div');
                 el.className = 'poly-seg-label';
                 polylineAnnotLayer.appendChild(el);
@@ -7458,16 +7691,22 @@
 
             // У 2D-полилинии все отметки равны — столбик одинаковых чисел
             // вдоль линии ничего не сообщает, поэтому там подписей нет.
-            if (rec.kind !== '2d') {
-                rec.pts.forEach((_, idx) => {
+            if (src.kind !== '2d') {
+                src.pts.forEach((_, idx) => {
                     const el = document.createElement('div');
                     el.className = 'poly-vz-label';
-                    el.title = 'Абсолютная отметка вершины. Нажмите, чтобы изменить';
-                    el.addEventListener('pointerdown', (e) => e.stopPropagation());
-                    el.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        startVertexElevationEdit(idx);
-                    });
+                    if (src.record) {
+                        el.title = 'Абсолютная отметка вершины. Нажмите, чтобы изменить';
+                        el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                        el.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            startVertexElevationEdit(idx);
+                        });
+                    } else {
+                        // Черновик: показываем, но править нечего — линии ещё нет.
+                        el.title = 'Абсолютная отметка точки';
+                        el.style.pointerEvents = 'none';
+                    }
                     polylineAnnotLayer.appendChild(el);
                     polylineVzLabels.push({ el, idx });
                 });
@@ -7477,16 +7716,17 @@
 
         /** Подпись отметки → поле ввода прямо в сцене. */
         function startVertexElevationEdit(idx) {
-            const rec = annotatedPolyline();
+            const src = polylineAnnotSource();
+            const rec = src?.record;
             const slot = polylineVzLabels.find((v) => v.idx === idx);
             if (!rec || !slot || polylineVzEditing === idx) return;
             polylineVzEditing = idx;
 
-            const abs = rec.abs?.[0] ? worldPointToAbsoluteXYZ(rec.pts[idx]) : rec.pts[idx];
+            const abs = worldPointToAbsoluteXYZ(rec.pts[idx]) || rec.pts[idx];
             const input = document.createElement('input');
             input.type = 'number';
             input.step = '0.01';
-            input.value = (abs?.z ?? rec.pts[idx].z).toFixed(3);
+            input.value = abs.z.toFixed(3);
             slot.el.classList.add('is-editing');
             slot.el.textContent = '';
             slot.el.appendChild(input);
@@ -7515,13 +7755,20 @@
         }
 
         function updatePolylineAnnotations() {
-            if (!polylineSegLabels.length && !polylineVzLabels.length) return;
-            const rec = annotatedPolyline();
-            if (!rec) { clearPolylineAnnotations(); return; }
+            const src = polylineAnnotSource();
+            if (!src) {
+                if (polylineSegLabels.length || polylineVzLabels.length) clearPolylineAnnotations();
+                return;
+            }
+            // Состав точек меняется на каждом клике при черчении, а звать
+            // пересборку из всех этих мест пришлось бы вручную — дешевле
+            // сверить ключ здесь, в кадре.
+            const key = `${src.tag}:${src.pts.length}:${src.closed}`;
+            if (key !== polylineAnnotKey) { rebuildPolylineAnnotations(); return; }
 
             for (const { el, i, j } of polylineSegLabels) {
-                const a = rec.pts[i];
-                const b = rec.pts[j];
+                const a = src.pts[i];
+                const b = src.pts[j];
                 if (!a || !b) { el.hidden = true; continue; }
                 const sa = projectToPixels(a);
                 const sb = projectToPixels(b);
@@ -7532,7 +7779,7 @@
                 const l2d = Math.hypot(b.x - a.x, b.y - a.y);
                 const dz = b.z - a.z;
                 // На плоской линии уклон всегда 0 — не занимаем им место.
-                el.textContent = rec.kind === '2d' || Math.abs(dz) < 1e-6
+                el.textContent = src.kind === '2d' || Math.abs(dz) < 1e-6
                     ? `${l3d.toFixed(2)} м`
                     : `${l3d.toFixed(2)} м · ${(dz / (l2d || 1e-9) * 1000).toFixed(1)} ‰`;
                 el.style.transform =
@@ -7540,7 +7787,7 @@
             }
 
             for (const { el, idx } of polylineVzLabels) {
-                const p = rec.pts[idx];
+                const p = src.pts[idx];
                 if (!p) { el.hidden = true; continue; }
                 const s = projectToPixels(p);
                 if (s.behind) { el.hidden = true; continue; }
@@ -15819,6 +16066,10 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
             if (skipOrbitClick) { skipOrbitClick = false; return; }
 
+            // Указание точек вертикального перехода идёт раньше всего
+            // остального: клик здесь значит «вот эта точка на линии».
+            if (handleVerticalTransitionClick(ev.clientX, ev.clientY)) return;
+
             // Начерченная полилиния перехватывает клик раньше элементов модели:
             // она нарисована поверх (depthTest выключен), и клик по видимой
             // линии должен выбирать именно её. В режимах черчения/замера/метки
@@ -21516,6 +21767,11 @@ ${componentXml || '    '}
 
         window.addEventListener('keydown', event => {
             if (event.target.closest('input, textarea, select, .editInput')) return;
+            if (event.key === 'Escape' && vertTransitionPick) {
+                event.preventDefault();
+                cancelVerticalTransitionPick();
+                return;
+            }
             if (event.key === 'Escape' && drawMode) {
                 event.preventDefault();
                 if (drawPoints.length) finishDrawPolyline();
@@ -22922,6 +23178,9 @@ ${componentXml || '    '}
         let stageContextElementRef = null;
         let stageContextPolyline = null;
         let stageContextVertex = -1;
+        // Точка правого клика на линии — нужна, чтобы вставить вершину именно
+        // туда, а не в середину отрезка.
+        let stageContextPolySeg = null;
         
         window.addEventListener('click', () => { 
             treeCtx.classList.remove('show'); 
@@ -22990,6 +23249,7 @@ ${componentXml || '    '}
             const polyHit = pickDrawnPolyline(e.clientX, e.clientY);
             stageContextPolyline = polyHit?.record || null;
             stageContextVertex = polyHit ? nearestInteriorVertex(polyHit.record, polyHit.point) : -1;
+            stageContextPolySeg = polyHit ? nearestPolylineSegment(polyHit.record, polyHit.point) : null;
             $('ctxPolylineGroup').hidden = !stageContextPolyline;
             $('ctxPolylineFillet').classList.toggle('disabled', stageContextVertex < 0);
             $('ctxPolylineTable').classList.toggle('disabled', !drawnPolylines.length);
@@ -23009,6 +23269,56 @@ ${componentXml || '    '}
         $('ctxPolylineFillet').addEventListener('click', () => {
             if (stageContextPolyline) openFilletModal(stageContextPolyline, stageContextVertex);
         });
+        /**
+         * Вершина точно в точке правого клика. Дальше её отметку либо
+         * спрашиваем, либо берём с рельефа — оба пути ведут в одну вставку,
+         * поэтому она вынесена сюда.
+         */
+        function addVertexAtContext(mode) {
+            const rec = stageContextPolyline;
+            const seg = stageContextPolySeg;
+            if (!rec || !seg) return;
+
+            const p = seg.point.clone();
+            if (mode === 'terrain') {
+                // Промах луча вниз — это не ноль сцены: за краем поверхности
+                // отметки просто нет, и подставлять туда число значило бы соврать.
+                const z = sampleTerrainZ(p.x, p.y, -Infinity);
+                if (!Number.isFinite(z)) {
+                    notifyError('Под этой точкой нет поверхности — рельеф не найден. Задайте отметку вручную.');
+                    return;
+                }
+                p.z = z;
+            }
+
+            const at = insertPolylineVertexAt(rec, seg.i, p);
+            if (at < 0) return;
+
+            if (mode === 'terrain') {
+                const abs = worldPointToAbsoluteXYZ(p) || p;
+                notifyOk(`«${rec.name}»: вершина #${at + 1} посажена на рельеф, отметка ${abs.z.toFixed(3)} м.`);
+                trackUsage('polyline_vertex_to_terrain', {});
+                return;
+            }
+
+            // Раскрываем полилинию на правку и сразу отдаём вершину под ввод
+            // отметки — иначе пришлось бы отдельно лезть в панель.
+            polylineEditingId = rec.id;
+            renderPolylinesList();
+            if (rec.kind === '2d') {
+                notify('У 2D-полилинии все точки на одной отметке — вершина добавлена, высоту менять нечем.');
+                return;
+            }
+            startVertexElevationEdit(at);
+            trackUsage('polyline_vertex_insert_at', {});
+        }
+
+        $('ctxPolylineAddVertex').addEventListener('click', () => addVertexAtContext('ask'));
+        $('ctxPolylineAddVertexTerrain').addEventListener('click', () => addVertexAtContext('terrain'));
+        $('ctxPolylineVertTransition').addEventListener('click', () => {
+            if (stageContextPolyline) startVerticalTransitionPick(stageContextPolyline);
+        });
+
         $('ctxPolylineContinue').addEventListener('click', () => {
             if (stageContextPolyline) continuePolyline(stageContextPolyline, false);
         });
