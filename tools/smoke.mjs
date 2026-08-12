@@ -597,13 +597,46 @@ async function checkDrawDxf(page) {
         problems.push(`уклон отрезка не применился: ${editProbe.segSlope?.toFixed(2)} вместо 40`);
     }
 
+    // Вставка вершины в середину отрезка: точек становится на одну больше, а
+    // новая лежит ровно посередине между соседями.
+    const insertProbe = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        const before = D.drawn.find((d) => d.id === id);
+        const a = before.vertsAbs[0];
+        const b = before.vertsAbs[1];
+        const at = D.insertPolylineVertex(id, 0);
+        const after = D.drawn.find((d) => d.id === id);
+        return {
+            at, wasPoints: before.points, nowPoints: after.points,
+            got: after.vertsAbs[1],
+            want: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }
+        };
+    }, three.id);
+    if (insertProbe.nowPoints !== insertProbe.wasPoints + 1) {
+        problems.push(`вставка вершины: точек ${insertProbe.nowPoints} вместо ${insertProbe.wasPoints + 1}`);
+    } else {
+        const off = Math.hypot(
+            insertProbe.got.x - insertProbe.want.x,
+            insertProbe.got.y - insertProbe.want.y,
+            insertProbe.got.z - insertProbe.want.z
+        );
+        if (off > 1e-6) problems.push(`вставленная вершина не в середине отрезка (${off.toFixed(4)} м)`);
+    }
+
     // Замыкание контура: площадь считаем сами по вершинам (формула шнурков) и
     // сверяем с тем, что показывает вьювер. Радиусы предварительно снимаем —
     // иначе дуги срежут углы и площадь честно станет меньше.
-    const closeProbe = await page.evaluate((id) => {
+    // Радиусы снимаем ОТДЕЛЬНЫМ шагом и только потом делаем снимок «до»: иначе
+    // сравнение поймало бы ещё и исчезновение точек дуг, а не одно замыкание.
+    await page.evaluate((id) => {
         const D = window.BimLvaDebug;
         const rec = D.drawn.find((d) => d.id === id);
         for (let i = 0; i < rec.points; i++) D.setPolylineRadius(id, i, 0);
+    }, three.id);
+    const dxfBeforeClose = await page.evaluate(() => window.BimLvaDebug.dxfPreview());
+    const openVerts = (dxfBeforeClose.match(/\r\nVERTEX\r\n/g) || []).length;
+    const closeProbe = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
         D.setPolylineClosed(id, true);
         const after = D.drawn.find((d) => d.id === id);
         const p = after.vertsAbs;
@@ -621,7 +654,6 @@ async function checkDrawDxf(page) {
     // В DXF замкнутый контур — флагом, а не повторной вершиной
     const dxfClosed = await page.evaluate(() => window.BimLvaDebug.dxfPreview());
     const closedVerts = (dxfClosed.match(/\r\nVERTEX\r\n/g) || []).length;
-    const openVerts = (dxf.match(/\r\nVERTEX\r\n/g) || []).length;
     if (closedVerts !== openVerts) {
         problems.push(`замыкание изменило число вершин в DXF: ${openVerts} → ${closedVerts}`);
     }

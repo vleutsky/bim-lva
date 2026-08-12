@@ -2692,6 +2692,9 @@
         <div id="ctxPolylineGroup" hidden>
             <button class="ctx-item" id="ctxPolylineProps" title="Открыть полилинию в таблице: вершины, отметки, длины, уклоны">📐 Свойства полилинии</button>
             <button class="ctx-item" id="ctxPolylineFillet" title="Вписать радиус в угол, ближайший к точке правого клика">◜ Вписать кривую в этот угол…</button>
+            <button class="ctx-item" id="ctxPolylineContinue" title="Дописать вершины с конца полилинии">✚ Продолжить с конца</button>
+            <button class="ctx-item" id="ctxPolylineContinueStart" title="Дописать вершины с начала полилинии">✚ Продолжить с начала</button>
+            <button class="ctx-item" id="ctxPolylineClose" title="Замкнуть или разомкнуть контур">⭘ Замкнуть / разомкнуть</button>
             <button class="ctx-item" id="ctxPolylineSweep" title="Прогнать сечение вдоль этой полилинии и получить 3D-тело">⬒ Тело по этой оси</button>
             <button class="ctx-item danger" id="ctxPolylineDelete" title="Удалить эту полилинию">🗑 Удалить полилинию</button>
             <div class="ctx-divider"></div>
@@ -4373,6 +4376,16 @@
             nearestPolylineCorner(id, x, y, z) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 return rec ? nearestInteriorVertex(rec, new THREE.Vector3(x, y, z)) : -1;
+            },
+            /** Вставить вершину в середину отрезка idx→следующая; вернёт её индекс. */
+            insertPolylineVertex(id, idx) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? insertPolylineVertex(rec, idx) : -1;
+            },
+            /** Продолжить полилинию (включает режим черчения). */
+            continuePolyline(id, fromStart) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? continuePolyline(rec, fromStart) : false;
             },
             /** Замкнуть/разомкнуть контур. */
             setPolylineClosed(id, closed) {
@@ -6228,6 +6241,7 @@
         const DRAW_WIDTH = 2;
         let drawDraft = null;
         let drawCursorPoint = null; // куда тянется линия прямо сейчас (резиновая нить)
+        let drawContinuation = null; // дописываем существующую полилинию: что сохранить
 
         function drawKind() {
             return $('drawModeSelect')?.value === '2d' ? '2d' : '3d';
@@ -6454,25 +6468,39 @@
             if (drawPoints.length < 2) {
                 drawPoints = [];
                 drawCursorPoint = null;
+                drawContinuation = null;
                 refreshDrawDraft();
                 return null;
             }
-            const kind = drawKind();
+            const cont = drawContinuation;
+            drawContinuation = null;
+            const kind = cont ? cont.keep.kind : drawKind();
             const pts = drawPoints.slice();
-            const line = makeLineObject(pts, DRAW_COLOR, DRAW_WIDTH);
+            const color = cont ? cont.keep.color : DRAW_COLOR;
+            const width = cont ? cont.keep.width : DRAW_WIDTH;
+            const line = makeLineObject(pts, color, width);
             drawGroup.add(line);
+
+            // Продолжение: старые радиусы сохраняются за своими вершинами,
+            // дописанные получают 0. Если дописывали с начала — порядок был
+            // развёрнут, возвращаем его обратно вместе с радиусами.
+            let radii = pts.map(() => 0);
+            if (cont) {
+                for (let i = 0; i < cont.radii.length && i < radii.length; i++) radii[i] = cont.radii[i];
+                if (cont.reversed) { pts.reverse(); radii.reverse(); }
+            }
 
             const record = {
                 id: ++drawPolylineSeq,
-                name: `Полилиния ${drawPolylineSeq}`,
+                name: cont ? cont.keep.name : `Полилиния ${drawPolylineSeq}`,
                 kind,
                 pts,
-                radii: pts.map(() => 0),
+                radii,
                 renderPts: [],
                 abs: [],
                 object: line,
-                color: DRAW_COLOR,
-                width: DRAW_WIDTH,
+                color,
+                width,
                 closed: false,
                 length3d: 0,
                 length2d: 0
@@ -6573,6 +6601,53 @@
             if (idx < 0 || idx >= record.pts.length) return false;
             if (record.closed) return record.pts.length >= 3;
             return idx > 0 && idx < record.pts.length - 1;
+        }
+
+        /**
+         * Вставить вершину в СЕРЕДИНУ отрезка idx→следующая. Радиус новой
+         * вершины — 0: пользователь ставил точку, а не сопряжение.
+         */
+        function insertPolylineVertex(record, idx) {
+            const j = polylineNextIndex(record, idx);
+            if (idx < 0 || j < 0) return -1;
+            const mid = record.pts[idx].clone().lerp(record.pts[j], 0.5);
+            const at = idx + 1;
+            record.pts.splice(at, 0, mid);
+            record.radii.splice(at, 0, 0);
+            rebuildPolylineGeometry(record);
+            renderPolylinesList();
+            return at;
+        }
+
+        /**
+         * Продолжить полилинию: снова включаем черчение, но уже начатыми
+         * точками. `fromStart` — дописывать с начала (тогда порядок вершин
+         * разворачивается, а в конце вернётся обратно).
+         */
+        function continuePolyline(record, fromStart = false) {
+            if (record.closed) {
+                notifyError(`«${record.name}»: контур замкнут — сначала разомкните его.`);
+                return false;
+            }
+            // Забираем вершины в черновик и убираем саму запись: по «Esc»
+            // finishDrawPolyline соберёт её заново уже с новыми точками.
+            const pts = record.pts.map((p) => p.clone());
+            const radii = record.radii.slice();
+            if (fromStart) { pts.reverse(); radii.reverse(); }
+            const keep = {
+                name: record.name, color: record.color,
+                width: record.width, kind: record.kind
+            };
+            deleteDrawnPolyline(record);
+            drawPoints = pts;
+            drawContinuation = { radii, keep, reversed: fromStart };
+            $('drawModeSelect').value = keep.kind;
+            setDrawMode(true);
+            refreshDrawDraft();
+            renderPolylinesList();
+            notify(`«${keep.name}»: продолжайте кликами, Esc — закончить.`);
+            trackUsage('polyline_continue', { fromStart });
+            return true;
         }
 
         function setPolylineVertexRadius(record, idx, value) {
@@ -6945,6 +7020,19 @@
                         title: 'Радиус сопряжения в этой вершине, м',
                         onChange: (v) => setPolylineVertexRadius(record, i, v)
                     }));
+                }
+                if (seg) {
+                    const ins = document.createElement('button');
+                    ins.className = 'btn';
+                    ins.textContent = '⊕';
+                    ins.title = 'Вставить вершину в середину отрезка до следующей';
+                    ins.addEventListener('click', () => {
+                        const at = insertPolylineVertex(record, i);
+                        if (at >= 0) notify(`«${record.name}»: добавлена вершина #${at + 1}.`);
+                    });
+                    row.append(ins);
+                }
+                if (isCorner) {
                     const delPt = document.createElement('button');
                     delPt.className = 'btn';
                     delPt.textContent = '✕';
@@ -21703,6 +21791,15 @@ ${componentXml || '    '}
         $('ctxPolylineFillet').addEventListener('click', () => {
             if (stageContextPolyline) openFilletModal(stageContextPolyline, stageContextVertex);
         });
+        $('ctxPolylineContinue').addEventListener('click', () => {
+            if (stageContextPolyline) continuePolyline(stageContextPolyline, false);
+        });
+        $('ctxPolylineContinueStart').addEventListener('click', () => {
+            if (stageContextPolyline) continuePolyline(stageContextPolyline, true);
+        });
+        $('ctxPolylineClose').addEventListener('click', () => {
+            if (stageContextPolyline) setPolylineClosed(stageContextPolyline, !stageContextPolyline.closed);
+        });
         $('ctxPolylineSweep').addEventListener('click', () => {
             if (!stageContextPolyline) return;
             // Тело строится по «выбранной» полилинии — sweepAxisPoints берёт ту,
@@ -23268,7 +23365,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: 'aeb3701',
+            buildId: '7db9990',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
