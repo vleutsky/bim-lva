@@ -264,6 +264,11 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
   то есть вся работа терялась на последнем шаге. Починка: `Remove-Item ...
   -ErrorAction SilentlyContinue` — уборка теперь best-effort и не может
   утопить уже готовый результат.
+- Уточнение к грабле выше: `-ErrorAction SilentlyContinue` не спасал — эта
+  конкретная ошибка `Remove-Item` кидается как `PSArgumentException` уже на
+  этапе проверки аргумента, а не как обычная non-terminating ошибка cmdlet'а,
+  и `-ErrorAction` её не гасит. Работает только `try { ... } catch { }` вокруг
+  вызова целиком.
 - `licenses.js`: `client()` была синхронной, а `auth.getSupabaseClient()`
   (`ensureSupabase` в `auth.js`) — асинхронная (догружает SDK с CDN). `client()`
   тихо возвращала сам `Promise`, и `client().auth` / `.from` / `.functions`

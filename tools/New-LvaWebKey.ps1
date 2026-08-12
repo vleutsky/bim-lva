@@ -85,11 +85,12 @@ Windows PowerShell 5.1 этого не умеет, а openssl не найден.
     } finally {
         # Уборка временных файлов — best-effort и не должна ронять весь запуск:
         # ключ (в $privB64) к этому моменту уже посчитан. На некоторых профилях
-        # (короткие 8.3-имена в пути пользователя и т.п.) Remove-Item падает
-        # даже когда Test-Path перед этим сказал true — не критично, само тело
-        # $env:TEMP всё равно периодически чистит система.
+        # (короткие 8.3-имена в пути пользователя и т.п.) Remove-Item иногда
+        # кидает PSArgumentException, а не обычную non-terminating ошибку — её
+        # НЕ гасит -ErrorAction, нужен именно try/catch. Не критично: то, что
+        # не удалили здесь, всё равно рано или поздно подчистит сама система.
         foreach ($f in @($pfx, $pem, "$pem.der")) {
-            if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+            try { if (Test-Path $f) { Remove-Item $f -Force } } catch { }
         }
     }
 }
