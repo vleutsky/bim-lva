@@ -3505,7 +3505,9 @@
                 <b>⭘ Замкнуть</b> — сомкнуть контур (нужен для площади и
                 картограммы), <b>〰</b> — продольный профиль по оси,
                 <b>⛰</b> — картограмма земляных работ по замкнутому контуру,
-                <b>⤒</b> — поднять или опустить всю линию.
+                <b>⤒</b> — поднять или опустить всю линию,
+                <b>△ Откосы</b> — поверхность откоса до рельефа с линией выхода
+                и объёмами насыпи/выемки.
             </div>
             <div id="polylinesList" style="max-height:190px;overflow:auto;margin-top:6px"></div>
             <div id="polylinePointsBox" hidden style="margin-top:12px;border-top:1px solid var(--line, #333);padding-top:10px">
@@ -3589,6 +3591,43 @@
                 <button class="btn" id="earthworkCopy">Копировать отчёт</button>
                 <button class="btn load-btn" id="earthworkRun">Посчитать</button>
                 <button class="btn" id="earthworkClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop floating-panel" id="slopeModal">
+        <div class="modal-card" id="slopeModalCard" role="dialog" aria-modal="true" style="width:min(520px,94vw)">
+            <div class="modal-drag-handle" id="slopeModalDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Откосы до рельефа</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
+            </div>
+            <div class="bulk-note">
+                От каждой точки линии откос идёт по нормали в плане до пересечения
+                с рельефом: выше земли на бровке — насыпь, ниже — выемка. Линия
+                выхода откоса на землю добавляется отдельной полилинией (правится,
+                уходит в DXF). На вогнутых углах соседние откосы могут налезать
+                друг на друга — это не вычищается. Где рельеф не найден или откос
+                не дотянулся за максимальный вылет — участок пропускается.
+            </div>
+            <div class="prop small"><div class="k">Линия (бровка)</div><select class="editInput" id="slopeSelect"></select></div>
+            <div class="prop small">
+                <div class="k">Сторона</div>
+                <select class="editInput" id="slopeSide">
+                    <option value="right">Вправо по ходу линии</option>
+                    <option value="left">Влево по ходу линии</option>
+                    <option value="both">В обе стороны</option>
+                </select>
+            </div>
+            <div class="prop small"><div class="k">Насыпь, 1 : m</div><input class="editInput" id="slopeMFill" type="number" min="0.1" step="0.1" value="1.5"></div>
+            <div class="prop small"><div class="k">Выемка, 1 : m</div><input class="editInput" id="slopeMCut" type="number" min="0.1" step="0.1" value="1"></div>
+            <div class="prop small"><div class="k">Шаг поиска, м</div><input class="editInput" id="slopeStep" type="number" min="0.05" step="0.05" value="0.5"></div>
+            <div class="prop small"><div class="k">Макс. вылет, м</div><input class="editInput" id="slopeMaxReach" type="number" min="0.5" step="0.5" value="30"></div>
+            <div class="prop small"><div class="k">Цвет</div><input type="color" class="polyline-color" id="slopeColor" value="#c9793a"></div>
+            <div class="bulk-note" id="slopeStatus">—</div>
+            <div class="modal-actions">
+                <button class="btn" id="slopeClear">Убрать откосы</button>
+                <button class="btn" id="slopeCancel">Закрыть</button>
+                <button class="btn load-btn" id="slopeApply">Построить</button>
             </div>
         </div>
     </div>
@@ -4895,6 +4934,57 @@
             earthwork(id, cell, mode, level) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 return rec ? computeEarthwork(rec, cell, mode, level) : null;
+            },
+            /**
+             * Полилиния прямо из точек сцены — без черчения кликами. Точный вход
+             * для тестов: клик зависит от ракурса и попадания луча в геометрию, а
+             * тут нужны предсказуемые координаты (например, для откосов —
+             * известная бровка над известным рельефом).
+             * points: [{x,y,z}, ...], opts: {name, color, width, closed, kind}.
+             */
+            createPolylineFromPoints(points, opts) {
+                const rec = addPolylineFromPoints(points, opts || {});
+                return rec ? rec.id : null;
+            },
+            /** Откосы до рельефа по выбранной линии — тот же путь, что кнопка «△ Откосы». */
+            buildSlopeOnPolyline(id, opts) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return null;
+                const full = {
+                    side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30,
+                    ...(opts || {})
+                };
+                const model = buildSlopeToTerrain(rec, full);
+                if (!model) return null;
+                return {
+                    id: model.id,
+                    sides: model.sides.map((s) => ({
+                        side: s.side, fill: s.fill, cut: s.cut,
+                        sections: s.sections,
+                        skippedNoGround: s.skippedNoGround,
+                        skippedNotReached: s.skippedNotReached,
+                        exitPolylineIds: s.exitPolylineIds.slice(),
+                        triangles: s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0
+                    }))
+                };
+            },
+            /** Все текущие построения откосов — сводка (без геометрии). */
+            get slopes() {
+                return (typeof slopeModels !== 'undefined' ? slopeModels : []).map((sm) => ({
+                    id: sm.id, polylineId: sm.polylineId, side: sm.side,
+                    sides: sm.sides.map((s) => ({
+                        side: s.side, fill: s.fill, cut: s.cut,
+                        sections: s.sections,
+                        skippedNoGround: s.skippedNoGround,
+                        skippedNotReached: s.skippedNotReached,
+                        exitPolylineIds: s.exitPolylineIds.slice()
+                    }))
+                }));
+            },
+            /** Убрать все построенные откосы (то же, что «Убрать откосы»). */
+            clearSlopes() {
+                clearSlopeModels();
+                return true;
             },
             /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
             focusPolyline(id, how) {
@@ -6697,6 +6787,329 @@
             markNeedsRender();
         }
 
+        /**
+         * Создать полилинию прямо из точек сцены, без черчения кликами. Это
+         * тот же путь, что финиширует finishDrawPolyline, только вход — явные
+         * точки, а не drawPoints. Нужна и как тестовый вход (числами, а не
+         * мышью), и внутри самих откосов — для линии выхода на рельеф.
+         */
+        function addPolylineFromPoints(points, opts = {}) {
+            if (!points || points.length < 2) return null;
+            const pts = points.map((p) => (p instanceof THREE.Vector3 ? p.clone() : new THREE.Vector3(p.x, p.y, p.z)));
+            const color = opts.color || DRAW_COLOR;
+            const width = opts.width || DRAW_WIDTH;
+            const line = makeLineObject(pts, color, width, !!opts.dashed);
+            drawGroup.add(line);
+            const record = {
+                id: ++drawPolylineSeq,
+                name: opts.name || `Полилиния ${drawPolylineSeq}`,
+                kind: opts.kind || '3d',
+                pts,
+                radii: pts.map(() => 0),
+                renderPts: [],
+                abs: [],
+                object: line,
+                color,
+                width,
+                closed: !!opts.closed && pts.length >= 3,
+                length3d: 0,
+                length2d: 0
+            };
+            line.userData.drawnPolylineId = record.id;
+            drawnPolylines.push(record);
+            rebuildPolylineGeometry(record);
+            updateDrawUi();
+            return record;
+        }
+
+        /* ------------------------------------------------------------------
+         * Откосы до рельефа.
+         *
+         * От каждой вершины renderPts идём наружу по нормали в плане с шагом
+         * (slopeStep), пока отметка откоса (постоянный проектный уклон 1:m от
+         * бровки) не сойдётся с рельефом (sampleTerrainZ). Выше земли на
+         * бровке — насыпь (вниз по 1:mFill), ниже — выемка (вверх по 1:mCut).
+         * Профиль откоса ЛИНЕЕН по построению (постоянный уклон), поэтому саму
+         * поверхность можно тянуть прямой от бровки до найденной точки выхода —
+         * промежуточные шаги нужны только чтобы найти пересечение с (неровным)
+         * рельефом и посчитать площадь между откосом и землёй для объёма
+         * (метод средних площадей, как в «Теле по оси»).
+         *
+         * Честно: на вогнутых углах соседние сечения (нормали, усреднённые по
+         * двум отрезкам) могут разойтись веером и налезть друг на друга — это
+         * не вычищается, как и договорено с владельцем. Там, где рельеф не
+         * нашёлся или откос не дотянулся за maxReach, сечение помечается
+         * невалидным и выпадает из поверхности, линии выхода и объёма — не
+         * подставляем нули, как и везде в этом файле.
+         * ------------------------------------------------------------------ */
+        let slopeModels = [];
+        let slopeSeq = 0;
+        const slopeGroup = new THREE.Group();
+        slopeGroup.name = 'SlopeModels';
+        scene.add(slopeGroup);
+
+        /** Нормаль вправо/влево от направления хода линии, в плане, единичная. */
+        function slopeSideNormal(dir, side) {
+            const right = { x: dir.y, y: -dir.x };
+            return side === 'left' ? { x: -right.x, y: -right.y } : right;
+        }
+
+        /**
+         * Нормаль в каждой вершине рабочего кольца: у внутренних вершин —
+         * среднее нормалей соседних отрезков (параллельный перенос, как у
+         * сечения «Тела по оси»), у концов разомкнутой линии — нормаль своего
+         * единственного отрезка.
+         */
+        function slopeVertexNormals(ring, closed, side) {
+            const n = ring.length;
+            const segDir = (i, j) => {
+                const dx = ring[j].x - ring[i].x, dy = ring[j].y - ring[i].y;
+                const l = Math.hypot(dx, dy);
+                return l > 1e-9 ? { x: dx / l, y: dy / l } : null;
+            };
+            const out = [];
+            for (let i = 0; i < n; i++) {
+                const prevI = i > 0 ? i - 1 : (closed ? n - 1 : -1);
+                const nextI = i < n - 1 ? i + 1 : (closed ? 0 : -1);
+                const dirs = [];
+                if (prevI >= 0) { const d = segDir(prevI, i); if (d) dirs.push(d); }
+                if (nextI >= 0) { const d = segDir(i, nextI); if (d) dirs.push(d); }
+                if (!dirs.length) { out.push(null); continue; }
+                let vx = 0, vy = 0;
+                dirs.forEach((d) => { vx += d.x; vy += d.y; });
+                const l = Math.hypot(vx, vy);
+                const dir = l > 1e-9 ? { x: vx / l, y: vy / l } : dirs[0];
+                out.push(slopeSideNormal(dir, side));
+            }
+            return out;
+        }
+
+        /**
+         * Одно сечение: от бровки (edge, сцена) по нормали до пересечения с
+         * рельефом. Возвращает { valid, mode:'fill'|'cut'|'flat', exit:{x,y,z},
+         * distance, area } либо { valid:false, reason:'no-ground'|'not-reached' }.
+         * area — площадь между откосом и землёй (для объёма), копится только
+         * там, где земля найдена — как в картограмме: иначе объём соврал бы
+         * там, где рельефа под откосом нет.
+         */
+        function computeSlopeCrossSection(edge, normal, mFill, mCut, step, maxReach) {
+            const MISS = Number.NEGATIVE_INFINITY;
+            let mode = null, m = null, area = 0;
+            let prevD = 0, prevDiff = 0, havePrev = false;
+            const diffAt = (d, groundZ) => {
+                const zSlope = mode === 'fill' ? edge.z - d / m : edge.z + d / m;
+                return mode === 'fill' ? zSlope - groundZ : groundZ - zSlope;
+            };
+            const n = Math.max(1, Math.round(maxReach / step));
+            for (let i = 0; i <= n; i++) {
+                const d = i === 0 ? 0 : Math.min(i * step, maxReach);
+                const x = edge.x + normal.x * d;
+                const y = edge.y + normal.y * d;
+                const g = sampleTerrainZ(x, y, MISS);
+                if (g === MISS) {
+                    havePrev = false;
+                    if (d >= maxReach) break;
+                    continue;
+                }
+                if (!mode) {
+                    // Первая найденная земля решает — насыпь это или выемка. В
+                    // самой бровке земли может и не быть (профиль над обрывом
+                    // рельефа) — тогда решаем по первой точке, где она нашлась.
+                    if (Math.abs(edge.z - g) < 1e-6) {
+                        return { valid: true, mode: 'flat', exit: { x: edge.x, y: edge.y, z: edge.z }, distance: d, area: 0 };
+                    }
+                    mode = edge.z > g ? 'fill' : 'cut';
+                    m = Math.max(0.05, mode === 'fill' ? mFill : mCut);
+                }
+                const diff = diffAt(d, g);
+                if (diff <= 0) {
+                    if (!havePrev) {
+                        // Земля впервые нашлась уже ЗА пересечением (перед этим
+                        // шли промахи) — точных данных для интерполяции нет,
+                        // берём эту точку как есть, без выдумывания площади до неё.
+                        return { valid: true, mode, exit: { x, y, z: g }, distance: d, area: 0 };
+                    }
+                    const t = prevDiff === diff ? 0 : prevDiff / (prevDiff - diff);
+                    const dExit = prevD + t * (d - prevD);
+                    area += 0.5 * prevDiff * (dExit - prevD);
+                    const ex = edge.x + normal.x * dExit;
+                    const ey = edge.y + normal.y * dExit;
+                    const ez = sampleTerrainZ(ex, ey, g);
+                    return { valid: true, mode, exit: { x: ex, y: ey, z: ez }, distance: dExit, area };
+                }
+                if (havePrev) area += 0.5 * (prevDiff + diff) * (d - prevD);
+                prevD = d; prevDiff = diff; havePrev = true;
+                if (d >= maxReach) break;
+            }
+            if (!mode) return { valid: false, reason: 'no-ground' };
+            return { valid: false, reason: 'not-reached', mode };
+        }
+
+        /** Разбить сечения на непрерывные валидные группы — для линии выхода. */
+        function slopeValidGroups(sections) {
+            const groups = [];
+            let cur = [];
+            sections.forEach((s) => {
+                if (s.valid) cur.push(s.exit);
+                else if (cur.length) { groups.push(cur); cur = []; }
+            });
+            if (cur.length) groups.push(cur);
+            return groups.filter((g) => g.length >= 2);
+        }
+
+        /** Один откос (одна сторона) по всей линии: поверхность + линия выхода + объёмы. */
+        function computeSlopeSide(record, side, opts) {
+            const closed = !!record.closed;
+            const ring = closed ? record.renderPts.slice(0, -1) : record.renderPts.slice();
+            if (ring.length < 2) return null;
+            const normals = slopeVertexNormals(ring, closed, side);
+            const sections = ring.map((p, i) => {
+                const normal = normals[i];
+                return normal
+                    ? computeSlopeCrossSection(p, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach)
+                    : { valid: false, reason: 'no-ground' };
+            });
+
+            let fill = 0, cut = 0;
+            const positions = [];
+            const colors = [];
+            const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
+            const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
+            const pushTri = (a, b, c, col) => {
+                positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+                for (let k = 0; k < 3; k++) colors.push(col.r, col.g, col.b);
+            };
+            const last = closed ? ring.length : ring.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = (i + 1) % ring.length;
+                const a = sections[i], b = sections[j];
+                if (!a.valid || !b.valid) continue;
+                const dist = Math.hypot(ring[j].x - ring[i].x, ring[j].y - ring[i].y);
+                const vol = 0.5 * (a.area + b.area) * dist;
+                if (a.mode === 'cut' && b.mode === 'cut') cut += vol;
+                else if (a.mode === 'fill' && b.mode === 'fill') fill += vol;
+                else if (a.mode === 'fill' || b.mode === 'fill') fill += vol;
+                else cut += vol;
+                const edgeA = ring[i], edgeB = ring[j];
+                const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
+                const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
+                const col = a.mode === 'cut' ? cutColor : fillColor;
+                pushTri(edgeA, exitA, exitB, col);
+                pushTri(edgeA, exitB, edgeB, col);
+            }
+
+            let mesh = null;
+            if (positions.length) {
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                geom.computeVertexNormals();
+                const mat = new THREE.MeshStandardMaterial({
+                    vertexColors: true, roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide
+                });
+                mesh = new THREE.Mesh(geom, mat);
+                mesh.name = `Откос · ${side === 'left' ? 'влево' : 'вправо'}`;
+                slopeGroup.add(mesh);
+            }
+
+            const skippedNoGround = sections.filter((s) => !s.valid && s.reason === 'no-ground').length;
+            const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
+            const exitLines = slopeValidGroups(sections).map((pts, gi) => addPolylineFromPoints(pts, {
+                name: `${record.name} — откос (${side === 'left' ? 'влево' : 'вправо'})` +
+                    (slopeValidGroups(sections).length > 1 ? ` #${gi + 1}` : ''),
+                color: opts.exitColor || '#2c8f4a',
+                width: 1.5
+            }));
+
+            return {
+                side, mesh, fill, cut,
+                exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
+                sections: sections.length,
+                skippedNoGround, skippedNotReached
+            };
+        }
+
+        /** Построить откосы по всей линии — одна или обе стороны. */
+        function buildSlopeToTerrain(record, opts) {
+            if (!record.renderPts || record.renderPts.length < 2) return null;
+            if (!allMeshes.length) return null;
+            const sides = opts.side === 'both' ? ['left', 'right'] : [opts.side === 'left' ? 'left' : 'right'];
+            const results = sides.map((side) => computeSlopeSide(record, side, opts)).filter(Boolean);
+            if (!results.length) return null;
+            const model = {
+                id: ++slopeSeq,
+                polylineId: record.id,
+                side: opts.side,
+                mFill: opts.mFill, mCut: opts.mCut, step: opts.step, maxReach: opts.maxReach,
+                sides: results
+            };
+            slopeModels.push(model);
+            updateSlopeStatus();
+            markNeedsRender();
+            return model;
+        }
+
+        /**
+         * Разбирает поверхность и линии выхода одного построения. Линии выхода
+         * удаляются напрямую (а не через deleteDrawnPolyline): та сама зовёт
+         * removeSlopeModelsForPolyline на каждое удаление, и звать её отсюда же
+         * означало бы дозвониться до самой себя на ещё не отключённой модели.
+         */
+        function disposeSlopeModel(sm) {
+            sm.sides.forEach((s) => {
+                if (s.mesh) {
+                    slopeGroup.remove(s.mesh);
+                    s.mesh.geometry.dispose();
+                    s.mesh.material.dispose();
+                }
+                s.exitPolylineIds.forEach((id) => {
+                    const i = drawnPolylines.findIndex((r) => r.id === id);
+                    if (i < 0) return;
+                    const rec = drawnPolylines[i];
+                    drawGroup.remove(rec.object);
+                    rec.object.geometry.dispose();
+                    disposeLineMaterial(rec.object.material);
+                    drawnPolylines.splice(i, 1);
+                    if (polylineEditingId === rec.id) polylineEditingId = null;
+                });
+            });
+        }
+
+        /** Убрать откосы, привязанные к этой линии (источник или линия выхода). */
+        function removeSlopeModelsForPolyline(id) {
+            const keep = [];
+            let touched = false;
+            slopeModels.forEach((sm) => {
+                const touches = sm.polylineId === id ||
+                    sm.sides.some((s) => s.exitPolylineIds.includes(id));
+                if (touches) { disposeSlopeModel(sm); touched = true; } else keep.push(sm);
+            });
+            slopeModels = keep;
+            if (touched) { updateDrawUi(); updateSlopeStatus(); markNeedsRender(); }
+        }
+
+        function clearSlopeModels() {
+            if (!slopeModels.length) return;
+            slopeModels.forEach(disposeSlopeModel);
+            slopeModels = [];
+            updateDrawUi();
+            updateSlopeStatus();
+            markNeedsRender();
+        }
+
+        function updateSlopeStatus() {
+            const el = $('slopeStatus');
+            if (!el) return;
+            if (!slopeModels.length) { el.textContent = 'Откосов пока нет.'; return; }
+            let fill = 0, cut = 0, skipped = 0;
+            slopeModels.forEach((sm) => sm.sides.forEach((s) => {
+                fill += s.fill; cut += s.cut; skipped += s.skippedNoGround + s.skippedNotReached;
+            }));
+            el.textContent =
+                `Построек: ${slopeModels.length} · насыпь ${fill.toFixed(2)} м³ · выемка ${cut.toFixed(2)} м³` +
+                (skipped ? ` · пропущено сечений: ${skipped}` : '');
+        }
+
         /* --- Объектная привязка ----------------------------------------------
          * Ищем вершины, середины и точки на рёбрах ТОГО треугольника или
          * отрезка, в который попал луч, и выбираем ближайший кандидат в
@@ -7258,6 +7671,7 @@
         }
 
         function clearDrawnPolylines() {
+            clearSlopeModels();
             drawnPolylines.forEach(r => {
                 drawGroup.remove(r.object);
                 r.object.geometry.dispose();
@@ -7275,6 +7689,7 @@
         function deleteDrawnPolyline(record) {
             const i = drawnPolylines.indexOf(record);
             if (i < 0) return;
+            removeSlopeModelsForPolyline(record.id);
             drawGroup.remove(record.object);
             record.object.geometry.dispose();
             disposeLineMaterial(record.object.material);
@@ -8256,12 +8671,20 @@
                 lift.title = 'Поднять или опустить всю линию: на отметку либо на Δ';
                 lift.addEventListener('click', () => liftPolylinePrompt(r));
 
+                // Подписанная кнопка, а не значок: откосы — не самая очевидная
+                // операция, значок среди прочих затерялся бы.
+                const slope = document.createElement('button');
+                slope.className = 'btn';
+                slope.textContent = '△ Откосы';
+                slope.title = 'Поверхность откоса от этой линии до рельефа, с линией выхода и объёмами';
+                slope.addEventListener('click', () => openSlopeModal(r));
+
                 const del = document.createElement('button');
                 del.className = 'btn';
                 del.textContent = '✕';
                 del.title = 'Удалить полилинию';
                 del.addEventListener('click', () => { deleteDrawnPolyline(r); renderPolylinesList(); });
-                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, earth, lift, go, plan, del);
+                row.append(nameInput, info, closeBtn, colorInput, widthInput, edit, prof, earth, lift, slope, go, plan, del);
                 frag.appendChild(row);
             });
             body.replaceChildren(frag);
@@ -9669,6 +10092,85 @@
             }
         });
         syncEarthworkFields();
+
+        const slopePanel = createFloatingPanel({
+            cardId: 'slopeModalCard', modalId: 'slopeModal',
+            handleId: 'slopeModalDrag', defaultWidth: 520
+        });
+        let slopeRecordId = null;
+
+        function openSlopeModal(record) {
+            const candidates = drawnPolylines.filter((r) => r.pts.length >= 2);
+            if (!candidates.length) {
+                notifyError('Нет линий: сначала начертите полилинию.');
+                return;
+            }
+            if (!allMeshes.length) {
+                notifyError('Нет загруженной геометрии — рельефа под откосом нет.');
+                return;
+            }
+            const target = record && candidates.includes(record) ? record : candidates[candidates.length - 1];
+            slopeRecordId = target.id;
+            const sel = $('slopeSelect');
+            if (sel) {
+                sel.innerHTML = candidates
+                    .map((r) => `<option value="${r.id}"${r.id === target.id ? ' selected' : ''}>${esc(r.name)}</option>`)
+                    .join('');
+            }
+            updateSlopeStatus();
+            const modal = $('slopeModal');
+            const wasOpen = modal.classList.contains('show');
+            modal.classList.add('show');
+            if (!wasOpen) requestAnimationFrame(() => slopePanel.park());
+        }
+
+        function readSlopeOpts() {
+            const num = (id, fallback, min) => {
+                const v = parseFloat($(id)?.value);
+                return Number.isFinite(v) && v >= (min ?? 0) ? v : fallback;
+            };
+            return {
+                side: $('slopeSide')?.value || 'right',
+                mFill: num('slopeMFill', 1.5, 0.1),
+                mCut: num('slopeMCut', 1, 0.1),
+                step: num('slopeStep', 0.5, 0.05),
+                maxReach: num('slopeMaxReach', 30, 0.5),
+                fillColor: $('slopeColor')?.value || '#c9793a'
+            };
+        }
+
+        function runSlopeBuild() {
+            const rec = drawnPolylines.find((r) => r.id === slopeRecordId);
+            if (!rec) return notifyError('Линия не найдена.');
+            const opts = readSlopeOpts();
+            const model = buildSlopeToTerrain(rec, opts);
+            if (!model) {
+                notifyError('Не удалось построить: нет рельефа под линией или у неё меньше двух вершин.');
+                return;
+            }
+            let fill = 0, cut = 0, skipped = 0, sections = 0;
+            model.sides.forEach((s) => {
+                fill += s.fill; cut += s.cut;
+                skipped += s.skippedNoGround + s.skippedNotReached;
+                sections += s.sections;
+            });
+            notifyOk(
+                `«${rec.name}»: откос построен — насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³` +
+                (skipped ? ` (пропущено сечений: ${skipped} из ${sections})` : '')
+            );
+            trackUsage('slope_to_terrain', { side: opts.side, skipped });
+        }
+
+        $('slopeApply')?.addEventListener('click', runSlopeBuild);
+        $('slopeSelect')?.addEventListener('change', () => {
+            slopeRecordId = Number($('slopeSelect').value);
+        });
+        $('slopeClear')?.addEventListener('click', clearSlopeModels);
+        $('slopeCancel')?.addEventListener('click', () => {
+            $('slopeModal').classList.remove('show');
+            slopePanel.reset();
+        });
+        // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
 
         let filletTargetId = null;
         let filletTargetVertex = -1;
@@ -25806,9 +26308,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.08.11',
-            buildId: '89f7611',
-            released: '2026-08-11',
+            version: '2026.08.12',
+            buildId: 'b1ae69c',
+            released: '2026-08-12',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -25817,6 +26319,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.12: откосы до рельефа по полилинии (влево/вправо/в обе) — поверхность в сцене, линия выхода на землю отдельной полилинией, объёмы насыпи и выемки.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',

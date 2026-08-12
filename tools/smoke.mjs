@@ -34,6 +34,7 @@ let viewCube = null;
 let draw = null;
 let dxfEntities = null;
 let sweep = null;
+let slope = null;
 
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
@@ -1106,6 +1107,187 @@ async function checkSweep(page) {
 }
 
 /**
+ * Откосы до рельефа. Линия — числами (createPolylineFromPoints), а не
+ * кликами: нужна точная бровка над известным рельефом, чтобы сверить с
+ * аналитикой, а не «примерно похоже на откос».
+ *
+ * Фикстура — сетка коробок 3×3 с шагом 3 (см. main): бокс с боксом смыкаются
+ * без зазора, и внутри грид получается СПЛОШНАЯ ровная площадка. Её отметку
+ * не подставляем числом — читаем из modelBounds (сцена центрирует модель по
+ * её же габариту, и абсолютная высота площадки зависит от этого центрирования,
+ * а не от отметки в самом IFC-файле). Дальше для прямой бровки над такой
+ * площадкой всё считается аналитически: при уклоне 1:m и превышении бровки
+ * над землёй H экзит-дистанция (по нормали в плане) равна H·m, площадь
+ * сечения между откосом и землёй — прямоугольный треугольник 0.5·H²·m, а
+ * объём при постоянных H и m по всей длине — «площадь сечения × длина».
+ */
+async function checkSlopeToTerrain(page) {
+    const groundZ = await page.evaluate(() => {
+        const b = window.BimLvaDebug.modelBounds;
+        return b.length ? Math.max(...b.map((m) => m.centerZ + m.sizeZ / 2)) : null;
+    });
+    if (groundZ == null) {
+        problems.push('откосы: не удалось снять отметку площадки из modelBounds — проверка пропущена');
+        return null;
+    }
+
+    // Насыпь, одна сторона: превышение H=2.4 м, уклон 1:1.5 → экзит 3.6 м.
+    const H1 = 2.4, M1 = 1.5;
+    const fill = await page.evaluate(([h, m, g]) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [{ x: 20, y: 15, z: g + h }, { x: 24.4, y: 15, z: g + h }],
+            { name: 'Откос-тест-насыпь' }
+        );
+        const res = D.buildSlopeOnPolyline(id, { side: 'right', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const exitId = res?.sides?.[0]?.exitPolylineIds?.[0];
+        const exit = exitId != null ? D.drawn.find((d) => d.id === exitId) : null;
+        return { id, res, exit };
+    }, [H1, M1, groundZ]);
+    if (!fill.res || fill.res.sides.length !== 1) {
+        problems.push('откосы: насыпь по одной стороне не построилась');
+    } else {
+        const s = fill.res.sides[0];
+        const wantArea = 0.5 * H1 * H1 * M1;
+        const wantLen = 4.4;
+        const wantVol = wantArea * wantLen;
+        if (s.side !== 'right') problems.push(`откосы: сторона «${s.side}» вместо «right»`);
+        if (Math.abs(s.fill - wantVol) > 0.02) {
+            problems.push(`откосы: насыпь ${s.fill.toFixed(3)} м³ вместо ${wantVol.toFixed(3)} (площадь×длина)`);
+        }
+        if (Math.abs(s.cut) > 1e-6) problems.push(`откосы: на насыпи набралась выемка ${s.cut.toFixed(3)} м³`);
+        if (s.skippedNoGround || s.skippedNotReached) {
+            problems.push(`откосы: насыпь на сплошной площадке пропустила сечения (${s.skippedNoGround}+${s.skippedNotReached})`);
+        }
+        if (!s.triangles) problems.push('откосы: поверхность насыпи не построилась (нет треугольников)');
+        if (!fill.exit || fill.exit.points !== 2) {
+            problems.push('откосы: линия выхода насыпи не создалась или не в две точки');
+        } else {
+            const wantY = 15 - H1 * M1;
+            const got = fill.exit.vertsAbs;
+            const dOk = Math.abs(got[0].y - wantY) < 0.02 && Math.abs(got[1].y - wantY) < 0.02 &&
+                Math.abs(got[0].z - groundZ) < 0.02 && Math.abs(got[1].z - groundZ) < 0.02;
+            if (!dOk) {
+                problems.push(
+                    `откосы: линия выхода насыпи ${JSON.stringify(got)} — ожидалась Y≈${wantY.toFixed(2)}, Z≈${groundZ.toFixed(2)}`
+                );
+            }
+        }
+    }
+
+    // Выемка, обе стороны: заглубление H=1.2 м, уклон 1:1 → экзит 1.2 м, слева и справа.
+    const H2 = 1.2, M2 = 1;
+    const cut = await page.evaluate(([h, m, g]) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [{ x: 20, y: -15, z: g - h }, { x: 24.4, y: -15, z: g - h }],
+            { name: 'Откос-тест-выемка' }
+        );
+        const res = D.buildSlopeOnPolyline(id, { side: 'both', mFill: 1.5, mCut: m, step: 0.5, maxReach: 30 });
+        return { id, res };
+    }, [H2, M2, groundZ]);
+    if (!cut.res || cut.res.sides.length !== 2) {
+        problems.push('откосы: выемка «в обе стороны» не дала двух поверхностей');
+    } else {
+        const wantArea = 0.5 * H2 * H2 * M2;
+        const wantVolEach = wantArea * 4.4;
+        cut.res.sides.forEach((s) => {
+            if (Math.abs(s.cut - wantVolEach) > 0.02) {
+                problems.push(`откосы: выемка (${s.side}) ${s.cut.toFixed(3)} м³ вместо ${wantVolEach.toFixed(3)}`);
+            }
+            if (Math.abs(s.fill) > 1e-6) problems.push(`откосы: на выемке набралась насыпь ${s.fill.toFixed(3)} м³ (${s.side})`);
+        });
+        const sides = cut.res.sides.map((s) => s.side).sort().join(',');
+        if (sides !== 'left,right') problems.push(`откосы: «в обе стороны» дала стороны ${sides} вместо left,right`);
+    }
+
+    // Максимальный вылет меньше экзит-дистанции — сечения обязаны выпасть из
+    // расчёта (пропущены), а не подставить какой-то объём.
+    const short = await page.evaluate(([h, m, g]) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [{ x: 20, y: 15, z: g + h }, { x: 24.4, y: 15, z: g + h }],
+            { name: 'Откос-тест-недолёт' }
+        );
+        const res = D.buildSlopeOnPolyline(id, { side: 'right', mFill: m, mCut: 1, step: 0.5, maxReach: 1 });
+        return res;
+    }, [H1, M1, groundZ]);
+    if (!short || short.sides.length !== 1) {
+        problems.push('откосы: проверка недолёта не построилась');
+    } else {
+        const s = short.sides[0];
+        if (s.skippedNotReached !== s.sections) {
+            problems.push(`откосы: при малом вылете пропущено ${s.skippedNotReached} сечений из ${s.sections} — ожидались все`);
+        }
+        if (Math.abs(s.fill) > 1e-9 || Math.abs(s.cut) > 1e-9) {
+            problems.push(`откосы: при недолёте объём не нулевой (насыпь ${s.fill}, выемка ${s.cut})`);
+        }
+        if (s.exitPolylineIds.length) problems.push('откосы: при недолёте всё равно создалась линия выхода');
+    }
+
+    // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
+    // проверяем, что кнопка в строке списка находит СВОЮ полилинию, поля
+    // читаются с формы (а не остались значением по умолчанию из прошлого
+    // открытия), и построение через кнопку «Построить» реально появляется в
+    // сцене — то есть весь путь пользователя целиком, не только математику.
+    await page.evaluate(([g, h]) => {
+        window.BimLvaDebug.createPolylineFromPoints(
+            [{ x: -20, y: 15, z: g + h }, { x: -15.6, y: 15, z: g + h }],
+            { name: 'Откос-тест-UI' }
+        );
+    }, [groundZ, H1]);
+    await page.evaluate(() => document.getElementById('btnPolylineList')?.click());
+    const uiOpened = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
+        const row = rows.find((r) => r.querySelector('input.editInput')?.value === 'Откос-тест-UI');
+        const btn = [...(row?.querySelectorAll('button') || [])].find((b) => b.textContent.includes('Откосы'));
+        btn?.click();
+        return {
+            found: !!btn,
+            modalShown: document.getElementById('slopeModal')?.classList.contains('show'),
+            selectHasIt: [...(document.getElementById('slopeSelect')?.options || [])]
+                .some((o) => o.textContent === 'Откос-тест-UI'),
+            mFill: document.getElementById('slopeMFill')?.value,
+            mCut: document.getElementById('slopeMCut')?.value
+        };
+    });
+    if (!uiOpened.found || !uiOpened.modalShown || !uiOpened.selectHasIt) {
+        problems.push(`откосы: кнопка в списке не открыла окно как надо (${JSON.stringify(uiOpened)})`);
+    }
+    if (uiOpened.mFill !== '1.5' || uiOpened.mCut !== '1') {
+        problems.push(`откосы: умолчания в окне 1:m — насыпь «${uiOpened.mFill}», выемка «${uiOpened.mCut}» (ждали 1.5 и 1)`);
+    }
+    await page.evaluate(() => { document.getElementById('slopeSide').value = 'both'; });
+    await page.evaluate(() => document.getElementById('slopeApply')?.click());
+    const afterApply = await page.evaluate(() => ({
+        status: document.getElementById('slopeStatus')?.textContent || '',
+        count: window.BimLvaDebug.slopes.length
+    }));
+    if (!afterApply.count || !/насыпь/i.test(afterApply.status)) {
+        problems.push(`откосы: клик «Построить» в окне не дал результата (статус «${afterApply.status}»)`);
+    }
+    await page.evaluate(() => {
+        document.getElementById('slopeCancel')?.click();
+        document.getElementById('polylinesClose')?.click();
+    });
+
+    // «Убрать откосы» снимает поверхности и линии выхода; сами бровки (все
+    // тестовые линии) убираем через «Удалить все» — к этому моменту в списке
+    // не должно быть ничего чужого, checkDrawDxf чистит за собой сам.
+    await page.evaluate(() => window.BimLvaDebug.clearSlopes());
+    await page.evaluate(() => {
+        document.getElementById('btnPolylineList')?.click();
+        document.getElementById('polylinesClear')?.click();
+        document.getElementById('polylinesClose')?.click();
+    });
+
+    return {
+        fillVolume: fill.res?.sides?.[0]?.fill ?? 0,
+        cutVolume: (cut.res?.sides || []).reduce((s, x) => s + x.cut, 0)
+    };
+}
+
+/**
  * Видовой куб. Проверяем не «кнопка нажалась», а куда встала камера: вид
  * сверху обязан смотреть строго вниз, вид с юга — строго на север, иначе
  * это не стандартный вид, а «примерно похоже».
@@ -1763,6 +1945,7 @@ async function main() {
                     bvhPeak = await page.evaluate(() => window.BimLvaDebug?.bvhCount ?? -1);
                     draw = await checkDrawDxf(page);
                     sweep = await checkSweep(page);
+                    slope = await checkSlopeToTerrain(page);
                     viewCube = await checkViewCube(page);
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
@@ -1833,6 +2016,12 @@ async function main() {
         console.log(
             `тело по оси: объём ${sweep.volume.toFixed(2)} м³, кольцо трубы ` +
             `${sweep.pipeArea.toFixed(4)} м², граней на повороте ${sweep.triangles}`
+        );
+    }
+    if (slope) {
+        console.log(
+            `откосы:    насыпь ${slope.fillVolume.toFixed(2)} м³, выемка ${slope.cutVolume.toFixed(2)} м³ ` +
+            '(сошлись с аналитикой на ровной площадке)'
         );
     }
     if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');
