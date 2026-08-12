@@ -1379,6 +1379,24 @@
             border-color: var(--accent);
             color: var(--accent);
         }
+        #padsList { font-size: 11px; }
+        .pad-row {
+            display: grid;
+            grid-template-columns: 120px minmax(0, 1fr) auto repeat(4, auto);
+            align-items: center;
+            gap: 4px;
+            padding: 3px 3px;
+            border-bottom: 1px solid var(--line, #d8dee6);
+        }
+        #padsList .editInput { font-size: 11px; padding: 2px 5px; }
+        .pad-row .btn {
+            padding: 1px 6px;
+            font-size: 11px;
+            border: 1px solid var(--line, #d8dee6);
+            border-radius: 6px;
+            line-height: 1.5;
+            white-space: nowrap;
+        }
         .polyline-color {
             width: 28px;
             height: 22px;
@@ -2756,6 +2774,7 @@
                             <div class="tb-menu-label">Построения</div>
                             <button class="btn" id="btnDraw" disabled title="Черчение полилинии по модели. Клик — точка, Esc или повторное нажатие кнопки — завершить">✏ Полилиния</button>
                             <button class="btn" id="btnPolylineList" disabled title="Список полилиний: переименование, точки, радиусы сопряжения в углах, приближение, удаление">📐 Полилинии: <span id="polylinesCount" style="margin-left:2px">0</span></button>
+                            <button class="btn" id="btnPadList" disabled title="Таблица площадок: имя, цвет, площадь, объёмы насыпи/выемки, выгрузка DXF/LandXML, удаление">▣ Площадки: <span id="padsCount" style="margin-left:2px">0</span></button>
                             <div class="tb-menu-row" title="2D — все точки на отметке первой (как LWPOLYLINE), 3D — с настоящими отметками">
                                 <select id="drawModeSelect" class="tool-select" disabled>
                                     <option value="3d">3D</option>
@@ -3634,9 +3653,32 @@
             <div class="modal-actions">
                 <button class="btn" id="slopeExportDxf" title="Площадка и откосы треугольниками 3DFACE, координаты абсолютные, единицы — метры. Civil и nanoCAD открывают R12">⬇ DXF</button>
                 <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
+                <button class="btn" id="slopeOpenTable" title="Таблица всех построенных площадок">▣ Таблица</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
                 <button class="btn" id="slopeCancel">Закрыть</button>
                 <button class="btn load-btn" id="slopeApply">Построить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop floating-panel" id="padsModal">
+        <div class="modal-card" id="padsModalCard" role="dialog" aria-modal="true" style="width:min(640px,94vw)">
+            <div class="modal-drag-handle" id="padsModalDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Площадки</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
+            </div>
+            <div class="bulk-note">
+                Каждая строка — одно построение откосов. Имя и цвет площадки
+                правятся в строке (цвет без пересчёта TIN). Площадь — в плане
+                по бровке, объёмы — насыпь и выемка откосов. «⬇ DXF» и
+                «⬇ XML» выгружают эту площадку, «✕» снимает её со сцены,
+                бровку не трогает.
+            </div>
+            <div id="padsList" style="max-height:280px;overflow:auto;margin-top:6px"></div>
+            <div class="modal-actions">
+                <button class="btn" id="padsExcel" title="Сводка по площадкам: имя, площадь, объёмы, уклоны, грани TIN">⬇ Все в Excel</button>
+                <button class="btn" id="padsClear">Убрать все</button>
+                <button class="btn load-btn" id="padsClose">Закрыть</button>
             </div>
         </div>
     </div>
@@ -5003,6 +5045,7 @@
                     } : null,
                     contourPolylineId: model.contourPolylineId || null,
                     padColor: model.padColor || null,
+                    name: model.name,
                     padOverlay: model.padMesh ? {
                         color: '#' + model.padMesh.material.color.getHexString(),
                         opacity: model.padMesh.material.opacity,
@@ -5027,13 +5070,26 @@
                         padFaces: sm.padFaces || 0,
                         capFaces: sm.capFaces || 0
                     } : null,
-                    contourPolylineId: sm.contourPolylineId || null
+                    contourPolylineId: sm.contourPolylineId || null,
+                    name: sm.name,
+                    padColor: sm.padColor || null
                 }));
             },
             /** Убрать все построенные откосы (то же, что «Убрать откосы»). */
             clearSlopes() {
                 clearSlopeModels();
                 return true;
+            },
+            /** Таблица площадок — то же, что окно «▣ Площадки». */
+            get pads() {
+                return (typeof slopeModels !== 'undefined' ? slopeModels : []).map((sm) => {
+                    const s = slopeModelSummary(sm);
+                    return {
+                        id: sm.id, name: sm.name, polylineId: sm.polylineId,
+                        area: s.area, fill: s.fill, cut: s.cut,
+                        padColor: s.padColor, faces: s.faces, side: sm.side
+                    };
+                });
             },
             /**
              * TIN площадки в абсолютных координатах — для сверки экспорта.
@@ -7456,9 +7512,10 @@
             return lines.join('\n');
         }
 
-        function slopeTinFacesToDxfPairs(g, n) {
+        function slopeTinFacesToDxfPairs(g, n, only) {
             const faces = [];
-            slopeModels.forEach((sm) => {
+            const list = only ? [only] : slopeModels;
+            list.forEach((sm) => {
                 (sm.tin?.faces || []).forEach((f) => {
                     const pts = f.map((i) => scenePointToAbs(sm.tin.points[i]));
                     faces.push(pts);
@@ -7484,15 +7541,28 @@
             URL.revokeObjectURL(url);
         }
 
+        function slopeRelatedPolylines(sm) {
+            const ids = new Set([sm.polylineId, sm.contourPolylineId].filter(Boolean));
+            sm.sides.forEach((s) => s.exitPolylineIds.forEach((id) => ids.add(id)));
+            return drawnPolylines.filter((r) => ids.has(r.id));
+        }
+
         function exportSlopeDxf(model) {
             const target = model || slopeModels[slopeModels.length - 1];
             if (!target?.tin?.faces?.length) {
                 notifyError('Сначала постройте откосы — выгружать нечего.');
                 return false;
             }
-            const text = buildDxf(drawnPolylines, coordPins);
-            downloadTextFile(text, `bim-lva-pad-${new Date().toISOString().slice(0, 10)}.dxf`, 'application/dxf');
-            notify(`DXF площадки: ${target.tin.faces.length} треугольников, координаты мировые, метры.`);
+            const text = model
+                ? buildDxf(slopeRelatedPolylines(target), [], target)
+                : buildDxf(drawnPolylines, coordPins);
+            const slug = String(target.name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
+            downloadTextFile(
+                text,
+                `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dxf`,
+                'application/dxf'
+            );
+            notify(`DXF площадки «${target.name}»: ${target.tin.faces.length} треугольников, координаты мировые, метры.`);
             trackUsage('slope_export_dxf', { faces: target.tin.faces.length });
             return true;
         }
@@ -7567,18 +7637,186 @@
 
         function updateSlopeStatus() {
             const el = $('slopeStatus');
-            if (!el) return;
-            if (!slopeModels.length) { el.textContent = 'Откосов пока нет.'; return; }
-            let fill = 0, cut = 0, skipped = 0;
-            slopeModels.forEach((sm) => sm.sides.forEach((s) => {
-                fill += s.fill; cut += s.cut; skipped += s.skippedNoGround + s.skippedNotReached;
-            }));
-            el.textContent =
-                `Построек: ${slopeModels.length} · насыпь ${fill.toFixed(2)} м³ · выемка ${cut.toFixed(2)} м³` +
-                (skipped ? ` · пропущено сечений: ${skipped}` : '') +
-                (slopeModels.some((sm) => sm.tin?.faces?.length)
-                    ? ` · TIN ${slopeModels.reduce((n, sm) => n + (sm.tin?.faces?.length || 0), 0)} граней`
-                    : '');
+            if (el) {
+                if (!slopeModels.length) {
+                    el.textContent = 'Откосов пока нет.';
+                } else {
+                    let fill = 0, cut = 0, skipped = 0;
+                    slopeModels.forEach((sm) => sm.sides.forEach((s) => {
+                        fill += s.fill; cut += s.cut; skipped += s.skippedNoGround + s.skippedNotReached;
+                    }));
+                    el.textContent =
+                        `Построек: ${slopeModels.length} · насыпь ${fill.toFixed(2)} м³ · выемка ${cut.toFixed(2)} м³` +
+                        (skipped ? ` · пропущено сечений: ${skipped}` : '') +
+                        (slopeModels.some((sm) => sm.tin?.faces?.length)
+                            ? ` · TIN ${slopeModels.reduce((n, sm) => n + (sm.tin?.faces?.length || 0), 0)} граней`
+                            : '');
+                }
+            }
+            renderPadsList();
+        }
+
+        function slopeModelSummary(sm) {
+            let fill = sm.capFill || 0, cut = sm.capCut || 0;
+            sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; });
+            const rec = drawnPolylines.find((r) => r.id === sm.polylineId);
+            let area = rec?.closed ? polylinePlanArea(rec) : null;
+            if (!(area > 0) && sm.padMesh) {
+                let s = 0;
+                slopeMeshTriangles(sm.padMesh).forEach(([a, b, c]) => {
+                    s += (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+                });
+                area = Math.abs(s) / 2;
+            }
+            const padColor = sm.padMesh?.material?.color
+                ? '#' + sm.padMesh.material.color.getHexString()
+                : (sm.padColor || '#d4a05a');
+            const sideLabel = sm.side === 'both' ? 'обе' : sm.side === 'left' ? 'влево' : 'вправо';
+            return {
+                fill, cut,
+                area: area || 0,
+                padColor,
+                sideLabel,
+                faces: sm.tin?.faces?.length || 0,
+                mFill: sm.mFill, mCut: sm.mCut
+            };
+        }
+
+        function setSlopePadColor(sm, hex) {
+            if (!sm || !hex) return;
+            sm.padColor = hex;
+            if (sm.padMesh?.material?.color) sm.padMesh.material.color.set(hex);
+            markNeedsRender();
+        }
+
+        function deleteSlopeModel(sm) {
+            if (!sm) return;
+            disposeSlopeModel(sm);
+            slopeModels = slopeModels.filter((m) => m !== sm);
+            updateDrawUi();
+            updateSlopeStatus();
+            markNeedsRender();
+        }
+
+        function focusSlopeModel(sm, how = 'plan') {
+            const pts = sm?.tin?.points;
+            if (pts?.length) {
+                const box = new THREE.Box3().setFromPoints(
+                    pts.map((p) => new THREE.Vector3(p.x, p.y, p.z))
+                );
+                if (!box.isEmpty()) {
+                    box.expandByScalar(Math.max(2, box.getSize(new THREE.Vector3()).length() * 0.15));
+                    if (how === 'plan') frameBox(box, new THREE.Vector3(0, 0, 1));
+                    else {
+                        const dir = camera.position.clone().sub(controls.target);
+                        frameBox(box, dir.lengthSq() > 1e-9 ? dir : null);
+                    }
+                    markNeedsRender();
+                    return;
+                }
+            }
+            const rec = drawnPolylines.find((r) => r.id === sm.polylineId);
+            if (rec) focusPolyline(rec, how);
+        }
+
+        function renderPadsList() {
+            const count = $('padsCount');
+            if (count) count.textContent = String(slopeModels.length);
+            const body = $('padsList');
+            if (!body) return;
+            if (!slopeModels.length) {
+                body.innerHTML = '<div class="empty">Площадок пока нет. В списке полилиний нажмите «△ Откосы» и постройте.</div>';
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            slopeModels.forEach((sm) => {
+                const sum = slopeModelSummary(sm);
+                const row = document.createElement('div');
+                row.className = 'pad-row';
+                row.dataset.padId = String(sm.id);
+
+                const nameInput = document.createElement('input');
+                nameInput.className = 'editInput';
+                nameInput.style.cssText = 'width:100%;font-size:11px';
+                nameInput.value = sm.name;
+                nameInput.title = 'Имя площадки';
+                nameInput.addEventListener('change', () => {
+                    sm.name = (nameInput.value || '').trim() || sm.name;
+                    nameInput.value = sm.name;
+                });
+
+                const info = document.createElement('span');
+                info.className = 'pin-xyz';
+                info.textContent =
+                    `S ${sum.area.toFixed(2)} м² · насыпь ${sum.fill.toFixed(2)} · выемка ${sum.cut.toFixed(2)}` +
+                    ` · ${sum.sideLabel} · TIN ${sum.faces}`;
+
+                const colorInput = document.createElement('input');
+                colorInput.type = 'color';
+                colorInput.className = 'polyline-color';
+                colorInput.value = sum.padColor;
+                colorInput.title = 'Цвет площадки';
+                colorInput.addEventListener('input', () => setSlopePadColor(sm, colorInput.value));
+
+                const plan = document.createElement('button');
+                plan.className = 'btn';
+                plan.textContent = '⬓';
+                plan.title = 'Посмотреть в плане';
+                plan.addEventListener('click', () => focusSlopeModel(sm, 'plan'));
+
+                const dxf = document.createElement('button');
+                dxf.className = 'btn';
+                dxf.textContent = '⬇ DXF';
+                dxf.title = 'Выгрузить эту площадку в DXF';
+                dxf.addEventListener('click', () => exportSlopeDxf(sm));
+
+                const xml = document.createElement('button');
+                xml.className = 'btn';
+                xml.textContent = '⬇ XML';
+                xml.title = 'Выгрузить эту площадку в LandXML';
+                xml.addEventListener('click', () => exportSlopeLandXml(sm));
+
+                const del = document.createElement('button');
+                del.className = 'btn';
+                del.textContent = '✕';
+                del.title = 'Убрать площадку со сцены (бровку не трогает)';
+                del.addEventListener('click', () => deleteSlopeModel(sm));
+
+                row.append(nameInput, info, colorInput, plan, dxf, xml, del);
+                frag.appendChild(row);
+            });
+            body.replaceChildren(frag);
+        }
+
+        function exportPadsExcel() {
+            if (!slopeModels.length) {
+                notifyError('Площадок нет.');
+                return false;
+            }
+            const rows = [[
+                'Площадка', 'Сторона', 'Насыпь 1:m', 'Выемка 1:m',
+                'Площадь, м²', 'Насыпь, м³', 'Выемка, м³', 'Грани TIN', 'Цвет'
+            ]];
+            slopeModels.forEach((sm) => {
+                const s = slopeModelSummary(sm);
+                rows.push([
+                    sm.name,
+                    s.sideLabel,
+                    s.mFill, s.mCut,
+                    Number(s.area.toFixed(3)),
+                    Number(s.fill.toFixed(3)),
+                    Number(s.cut.toFixed(3)),
+                    s.faces,
+                    s.padColor
+                ]);
+            });
+            downloadWorkbookSheets(
+                [{ name: 'Площадки', rows }],
+                `bim-lva-pads-${slopeModels.length}.xls`
+            );
+            notifyOk(`Выгружено площадок: ${slopeModels.length}.`);
+            trackUsage('pads_export_excel', { pads: slopeModels.length });
+            return true;
         }
 
         /* --- Объектная привязка ----------------------------------------------
@@ -9339,6 +9577,7 @@
             const btn = $('btnDrawExport');
             if (btn) btn.disabled = !drawnPolylines.length && !coordPins.length && !sweptSolids.length;
             renderPolylinesList();
+            renderPadsList();
         }
 
         /**
@@ -9347,7 +9586,7 @@
          * а LWPOLYLINE из R13+ там уже не откроется.
          * Координаты — абсолютные, иначе файл ляжет у нуля, а не на площадке.
          */
-        function buildDxf(polylines, pins) {
+        function buildDxf(polylines, pins, onlySlope) {
             const out = [];
             const g = (code, value) => { out.push(String(code)); out.push(String(value)); };
             const n = (v) => (Math.round(v * 1e6) / 1e6).toFixed(6);
@@ -9404,7 +9643,7 @@
                     g(13, n(last.x)); g(23, n(last.y)); g(33, n(last.z));
                 }
             });
-            slopeTinFacesToDxfPairs(g, n);
+            slopeTinFacesToDxfPairs(g, n, onlySlope);
             pins.forEach((pin) => {
                 g(0, 'POINT'); g(8, 'LVA_POINTS');
                 g(10, n(pin.abs.x)); g(20, n(pin.abs.y)); g(30, n(pin.abs.z));
@@ -10688,6 +10927,7 @@
                 (skipped ? ` (пропущено сечений: ${skipped} из ${sections})` : '')
             );
             trackUsage('slope_to_terrain', { side: opts.side, skipped });
+            openPadsPanel();
         }
 
         $('slopeApply')?.addEventListener('click', runSlopeBuild);
@@ -10703,14 +10943,43 @@
         });
         $('slopePadColor')?.addEventListener('input', () => {
             const hex = $('slopePadColor').value || '#d4a05a';
-            slopeModels.forEach((sm) => {
-                if (!sm.padMesh?.material?.color) return;
-                sm.padColor = hex;
-                sm.padMesh.material.color.set(hex);
-            });
-            markNeedsRender();
+            slopeModels.forEach((sm) => setSlopePadColor(sm, hex));
+            renderPadsList();
         });
+        $('slopeOpenTable')?.addEventListener('click', () => openPadsPanel());
         // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
+
+        const padsPanel = createFloatingPanel({
+            cardId: 'padsModalCard', modalId: 'padsModal',
+            handleId: 'padsModalDrag', defaultWidth: 640
+        });
+
+        function openPadsPanel() {
+            renderPadsList();
+            const modal = $('padsModal');
+            if (!modal) return;
+            const wasOpen = modal.classList.contains('show');
+            modal.classList.add('show');
+            if (!wasOpen) requestAnimationFrame(() => padsPanel.park());
+        }
+
+        $('btnPadList')?.addEventListener('click', () => openPadsPanel());
+        $('padsClose')?.addEventListener('click', () => {
+            $('padsModal').classList.remove('show');
+            padsPanel.reset();
+        });
+        $('padsClear')?.addEventListener('click', () => {
+            if (!slopeModels.length) return;
+            clearSlopeModels();
+        });
+        $('padsExcel')?.addEventListener('click', () => {
+            try {
+                exportPadsExcel();
+            } catch (err) {
+                console.error(err);
+                notifyError('Не удалось выгрузить Excel: ' + (err?.message || err));
+            }
+        });
 
         let filletTargetId = null;
         let filletTargetVertex = -1;
@@ -11876,7 +12145,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -23193,7 +23462,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -23937,7 +24206,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -26860,7 +27129,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.12: откосы — заливка площадки поверх рельефа (свой цвет), линия выхода замкнута, TIN в DXF/LandXML.',
+                '2026.08.12: откосы — таблица площадок, заливка поверх рельефа (свой цвет), линия выхода замкнута, TIN в DXF/LandXML.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',

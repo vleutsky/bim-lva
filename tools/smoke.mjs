@@ -1358,6 +1358,49 @@ async function checkSlopeToTerrain(page) {
         }
     }
 
+    // Таблица площадок — как список полилиний: строка с именем, цветом, площадью
+    // и объёмами. Переименование пишется в модель, не в бровку.
+    const padsUi = await page.evaluate(() => {
+        document.getElementById('btnPadList')?.click();
+        const rows = [...document.querySelectorAll('#padsList .pad-row')];
+        const row = rows.find((r) => r.querySelector('input.editInput')?.value === 'Откос-тест-площадка');
+        const rec = (window.BimLvaDebug.pads || []).find((p) => p.name === 'Откос-тест-площадка');
+        if (row) {
+            const nameInput = row.querySelector('input.editInput');
+            nameInput.value = 'Площадка-переименована';
+            nameInput.dispatchEvent(new Event('change'));
+        }
+        const after = (window.BimLvaDebug.pads || []).find((p) => p.id === rec?.id);
+        return {
+            shown: document.getElementById('padsModal')?.classList.contains('show'),
+            count: Number(document.getElementById('padsCount')?.textContent),
+            found: !!row,
+            color: (row?.querySelector('input[type=color]')?.value || '').toLowerCase(),
+            info: row?.querySelector('.pin-xyz')?.textContent || '',
+            area: rec?.area,
+            renamed: after?.name || null
+        };
+    });
+    if (!padsUi.shown || !padsUi.found) {
+        problems.push(`площадки: таблица не открылась или нет строки (${JSON.stringify(padsUi)})`);
+    } else {
+        if (padsUi.color !== '#ff00aa') {
+            problems.push(`площадки: цвет в таблице ${padsUi.color} вместо #ff00aa`);
+        }
+        if (!(padsUi.area > 15.9 && padsUi.area < 16.1)) {
+            problems.push(`площадки: площадь ${padsUi.area} вместо 16 м² (квадрат 4×4)`);
+        }
+        if (!/насыпь/.test(padsUi.info) || !/TIN/.test(padsUi.info)) {
+            problems.push(`площадки: в строке нет объёмов (${padsUi.info})`);
+        }
+        if (padsUi.renamed !== 'Площадка-переименована') {
+            problems.push(`площадки: переименование не записалось (${padsUi.renamed})`);
+        }
+        if (!(padsUi.count >= 1)) {
+            problems.push(`площадки: счётчик ${padsUi.count}`);
+        }
+    }
+
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
     // проверяем, что кнопка в строке списка находит СВОЮ полилинию, поля
     // читаются с формы (а не остались значением по умолчанию из прошлого
