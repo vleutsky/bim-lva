@@ -4646,9 +4646,56 @@
             get projection() { return projectionMode; },
             /** Видимая высота кадра ортокамеры (м) — для проверки зума колесом. */
             get orthoFrustumHeight() { return orthoCamera.top - orthoCamera.bottom; },
+            /** Где стоит камера. Цель орбиты для проверки «вид не сбросился» не
+             *  годится: сцена до-центрируется, и цель остаётся у нуля в обоих
+             *  случаях — а вот позиция при вписывании уезжает. */
+            get cameraPos() {
+                return { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+            },
             /** Куда нацелена орбита и где центр выделения — для проверки видов. */
             get cameraTarget() {
                 return { x: controls.target.x, y: controls.target.y, z: controls.target.z };
+            },
+            /**
+             * Что реально на материале элемента: назначенный цвет, цвет меша и
+             * свечение выделения. Нужен, чтобы проверять покраску числами —
+             * по картинке «подсвечен или нет» на скриншоте не различить.
+             */
+            meshAppearance(modelID, expressID) {
+                const mod = loadedModels.get(modelID);
+                if (!mod) return null;
+                const stored = mod.appearanceByID?.get(expressID) || null;
+                const meshes = mod.meshesByID?.get(expressID) || [];
+                const mat = meshes[0] && (Array.isArray(meshes[0].material)
+                    ? meshes[0].material[0] : meshes[0].material);
+                return {
+                    batched: !!mod.batched,
+                    storedColor: stored?.color ?? null,
+                    meshColor: mat?.color ? mat.color.getHex() : null,
+                    emissive: mat?.emissive ? mat.emissive.getHex() : null,
+                    emissiveIntensity: mat?.emissiveIntensity ?? null,
+                    meshes: meshes.length
+                };
+            },
+            /** Первый элемент с геометрией — точка входа для проверок покраски. */
+            firstElementRef() {
+                for (const [modelID, mod] of loadedModels) {
+                    const it = mod.meshesByID?.keys?.().next?.();
+                    if (it && !it.done) return { modelID, expressID: it.value };
+                }
+                return null;
+            },
+            /** Покрасить элемент тем же путём, что и кнопка «Применить оформление». */
+            paintElement(modelID, expressID, hex) {
+                return applyAppearanceToSelection(
+                    { color: hex, preset: 'custom', materialName: '', roughness: 0.55,
+                      metalness: 0.05, opacity: 1, repeatU: 1, repeatV: 1, texture: null },
+                    [{ modelID, expressID }]
+                );
+            },
+            /** Текущее выделение как список ссылок. */
+            get selectionRefs() {
+                return selectedItems.map((i) => ({ modelID: i.modelID, expressID: i.expressID }));
             },
             get selectionCentre() {
                 if (!selectedItems.length) return null;
@@ -9002,6 +9049,15 @@
         function renderProfileTable(rec, rows) {
             const table = $('polyProfileTable');
             if (!table) return;
+            // Пока в таблице что-то набирают, не пересобираем её: профиль
+            // перерисовывается из десятка мест (перетаскивание вершины, правка
+            // геометрии, пересчёт списка полилиний), и каждая такая перерисовка
+            // подменяла бы поле ввода новым — набранное пропадало бы на месте.
+            // График при этом обновляется как обычно.
+            if (table.contains(document.activeElement) &&
+                document.activeElement?.matches('input, select, textarea')) {
+                return;
+            }
             const num = (v, digits = 3) => (v == null ? '—' : v.toFixed(digits));
             table.innerHTML = `
                 <table class="profile-grid">
@@ -9266,6 +9322,10 @@
                 renderPolylineProfile();
                 return;
             }
+            // Клик по полю ввода — это начало правки, а не выбор строки:
+            // перерисовка подменила бы поле новым, и введённое пропадало бы,
+            // не успев дойти до change. Ровно на это и жаловались.
+            if (ev.target.closest('input, select, textarea')) return;
             const row = ev.target.closest('tr[data-idx]');
             if (row) {
                 polyProfileActiveVertex = Number(row.dataset.idx);
@@ -10448,6 +10508,10 @@
         async function loadFilesSequentially(files) {
             $('hint').style.display = 'none';
             if (loadedModels.size === 0) treeBox.innerHTML = '';
+            // Пустая ли была сцена ДО этой пачки. Камеру вписываем только на
+            // первой загрузке: если модели уже есть, пользователь уже смотрит
+            // куда ему надо, и уводить его оттуда добавлением файла нельзя.
+            const sceneWasEmpty = loadedModels.size === 0;
 
             const ifcCount = files.filter(f => /\.ifc$/i.test(f.name)).length;
             if (ifcCount >= 3 && !perfMode) {
@@ -10571,16 +10635,21 @@
                     globalGroup.updateWorldMatrix(true, true);
                     externalGroup.updateWorldMatrix(true, true);
                     geoRasterGroup.updateWorldMatrix(true, true);
-                    clearViewHashFromUrl();
-                    fitView();
-                    restoreSharedViewFromHash({ skipCamera: true });
-                    requestAnimationFrame(() => {
+                    if (sceneWasEmpty) {
+                        clearViewHashFromUrl();
                         fitView();
-                        markNeedsRender();
-                    });
+                        restoreSharedViewFromHash({ skipCamera: true });
+                        requestAnimationFrame(() => {
+                            fitView();
+                            markNeedsRender();
+                        });
+                    }
                     markNeedsRender();
                 };
                 requestAnimationFrame(() => requestAnimationFrame(frameCamera));
+                if (!sceneWasEmpty) {
+                    notify('Файлы добавлены. Вид не менялся — «⤢ Вписать в кадр», чтобы увидеть всё.');
+                }
             } else {
                 restoreSharedViewFromHash();
             }
@@ -11028,6 +11097,18 @@ uniform vec3 uBatchSelColor;
                 if (!modData.meshesByID.has(frag.expressID)) modData.meshesByID.set(frag.expressID, []);
                 modData.meshesByID.get(frag.expressID).push(mesh);
             });
+
+            // Меши только что созданы заново из исходных цветов фрагментов —
+            // возвращаем на них назначенное пользователем оформление. Без этого
+            // любая пересборка (а она случается при добавлении следующего файла:
+            // сцена до-центрируется и двигает вершины) стирала заданный цвет и
+            // материал. У батчей это уже учтено внутри buildIfcBatches.
+            if (modData.appearanceByID?.size) {
+                modData.appearanceByID.forEach((appearance, expressID) => {
+                    const meshes = modData.meshesByID.get(expressID);
+                    if (meshes) meshes.forEach((m) => applyAppearanceToMesh(m, appearance));
+                });
+            }
             markNeedsRender();
         }
 
@@ -15967,9 +16048,20 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (!mesh.isMesh) return;
 
             ensureMeshStandardMaterial(mesh);
+            delete mesh.userData._highlightBase;
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
             mats.forEach(mat => {
                 if (!mat) return;
+                // Свечение выделения гасим здесь же. Раньше его снимал только
+                // restoreMeshOriginalAppearance (путь «оформления нет»), а этот
+                // путь — нет: элемент с назначенным цветом оставался подсвеченным
+                // навсегда, потому что снятие выделения идёт ровно сюда.
+                // Кто выделен сейчас — решит reapplyAppearanceForItem, оно
+                // вернёт подсветку тем, кто её должен иметь.
+                if (mat.emissive) {
+                    mat.emissive.setHex(0x000000);
+                    mat.emissiveIntensity = 0;
+                }
                 if (appearance.color != null) mat.color.setHex(appearance.color);
                 if (appearance.roughness != null) mat.roughness = appearance.roughness;
                 if (appearance.metalness != null) mat.metalness = appearance.metalness;
@@ -16180,6 +16272,16 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 mod.appearanceByID.set(item.expressID, entry);
                 reapplyAppearanceForItem(item.modelID, item.expressID);
             });
+            // applyAppearanceToMesh гасит свечение, а элементы всё ещё выделены —
+            // возвращаем подсветку, чтобы картинка не расходилась с состоянием.
+            // У батчей подсветка своя (шейдер), её обновляет сам reapply.
+            if (selectedItems.length) {
+                selectedItems.forEach((i) => {
+                    const m = loadedModels.get(i.modelID);
+                    if (!m || m.batched) return;
+                    m.meshesByID.get(i.expressID)?.forEach((mesh) => setEmissive(mesh, highlightColor));
+                });
+            }
             return items.length;
         }
 
@@ -16214,13 +16316,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (count) {
                 appearanceDraftTexture = null;
                 appearanceDraftTextureName = '';
-                notifyOk(`Оформление применено к ${count} элементам.`);
-                const first = selectedItems[0];
-                if (first) {
-                    const mod0 = loadedModels.get(first.modelID);
-                    if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
-                    else showProps(first.modelID, first.expressID, selectedItems.length);
-                }
+                // Снимаем выделение: подсветка выделенного смешивается с
+                // назначенным цветом, и результат правки не разглядеть, пока
+                // элемент выбран.
+                selectMultiple([]);
+                notifyOk(`Оформление применено к ${count} элементам. Выделение снято, чтобы был виден цвет.`);
             }
         }
 

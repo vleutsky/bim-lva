@@ -1540,6 +1540,87 @@ async function checkTourTrain(page) {
     return box;
 }
 
+/**
+ * Догрузка файла в непустую сцену не должна ни сбрасывать камеру, ни стирать
+ * назначенный цвет.
+ *
+ * Оба симптома владелец нашёл руками, и оба шли от одного места: добавление
+ * файла до-центрирует сцену, та двигает вершины и пересобирает меши. Меши
+ * создавались из ИСХОДНЫХ цветов фрагментов (appearanceByID не читался), а
+ * камера вписывалась после каждой пачки, а не только после первой.
+ */
+async function checkAddFileKeepsStateForModel(page) {
+    const a = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-a.ifc');
+    const b = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-b.ifc');
+    const base = { worldX: 431_000, worldY: 6_171_000, worldZ: 40, count: 40, cols: 8 };
+    await fs.writeFile(a, makeGeoIfc({ ...base, seed: 11, name: 'smoke-add-a.ifc' }));
+    await fs.writeFile(b, makeGeoIfc({ ...base, worldX: base.worldX + 300, seed: 77, name: 'smoke-add-b.ifc' }));
+    const PAINT = 0xff00aa;
+    try {
+        await page.setInputFiles('#localFileInput', a);
+        await page.waitForFunction(
+            () => (window.BimLvaDebug?.modelBounds || []).some((m) => /smoke-add-a\.ifc$/i.test(m.file)),
+            { timeout: 90_000 }
+        );
+        await page.waitForTimeout(500);
+
+        // Красим первый попавшийся элемент через ту же функцию, что и кнопка
+        // «Применить оформление» — проверяем рабочий путь, а не обходной.
+        const ref = await page.evaluate((hex) => {
+            const D = window.BimLvaDebug;
+            const first = D.firstElementRef?.();
+            if (!first) return null;
+            D.paintElement(first.modelID, first.expressID, hex);
+            return first;
+        }, PAINT);
+        if (!ref) {
+            problems.push('догрузка: не нашли элемент, который можно покрасить');
+            return null;
+        }
+        const painted = await page.evaluate(
+            (r) => window.BimLvaDebug.meshAppearance(r.modelID, r.expressID), ref
+        );
+        if (painted.meshColor !== PAINT) {
+            problems.push(`покраска не дошла до материала: ${painted.meshColor?.toString(16)} вместо ff00aa`);
+            return null;
+        }
+
+        const camBefore = await page.evaluate(() => window.BimLvaDebug.cameraPos);
+        await page.setInputFiles('#localFileInput', b);
+        await page.waitForFunction(
+            () => (window.BimLvaDebug?.modelBounds || []).some((m) => /smoke-add-b\.ifc$/i.test(m.file)),
+            { timeout: 90_000 }
+        );
+        await page.waitForTimeout(1200);
+
+        const after = await page.evaluate(
+            (r) => window.BimLvaDebug.meshAppearance(r.modelID, r.expressID), ref
+        );
+        const camAfter = await page.evaluate(() => window.BimLvaDebug.cameraPos);
+        const moved = Math.hypot(
+            camAfter.x - camBefore.x, camAfter.y - camBefore.y, camAfter.z - camBefore.z
+        );
+        if (after.meshColor !== PAINT) {
+            problems.push(
+                `после догрузки цвет слетел: ${after.meshColor?.toString(16)} вместо ff00aa`
+            );
+        }
+        if (moved > 0.01) {
+            problems.push(`догрузка сдвинула камеру на ${moved.toFixed(2)} м — вид сбрасывать не надо`);
+        }
+        // Свечение выделения не должно остаться на покрашенном элементе.
+        if (after.emissive) {
+            problems.push(`на покрашенном элементе осталась подсветка (emissive ${after.emissive.toString(16)})`);
+        }
+        return { moved, color: after.meshColor };
+    } finally {
+        await page.evaluate(() => document.getElementById('clear')?.click());
+        await page.waitForTimeout(400);
+        await fs.rm(a, { force: true });
+        await fs.rm(b, { force: true });
+    }
+}
+
 async function checkGeoFederation(page) {
     const a = path.join(ROOT, 'tools', 'fixtures', 'smoke-geo-a.ifc');
     const b = path.join(ROOT, 'tools', 'fixtures', 'smoke-geo-b.ifc');
@@ -1633,6 +1714,7 @@ async function main() {
     let clash = null;
     let dxfBlocks = null;
     let geoFed = null;
+    let addKeep = null;
     // Любая сборка Composer, включая тестовую копию, а не только основной файл.
     if (/^bim-lva-composer-ifc.*\.html$/.test(PAGE)) {
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
@@ -1684,6 +1766,7 @@ async function main() {
                     viewCube = await checkViewCube(page);
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
+                    addKeep = await checkAddFileKeepsStateForModel(page);
                     train = await checkTourTrain(page);
                 } finally {
                     await fs.rm(second, { force: true });
@@ -1773,6 +1856,9 @@ async function main() {
     if (clash) console.log(`коллизии:  пар ${clash.pairs}, за ${clash.ms} мс`);
     if (dxfBlocks) console.log(`блоки DXF: ${dxfBlocks.ok ? `раскрыты верно, габарит ${dxfBlocks.size}` : 'ОШИБКА'}`);
     if (geoFed) console.log(`геосводка: ${geoFed.ok ? `взаимное положение сохранено (${geoFed.dist.toFixed(0)} м)` : `СЛОМАНО (${geoFed.dist.toFixed(0)} м вместо 800)`}`);
+    if (addKeep) {
+        console.log(`догрузка:  цвет сохранён (#${addKeep.color.toString(16)}), камера на месте (${addKeep.moved.toFixed(3)} м)`);
+    }
     if (draw?.vert) {
         console.log(`верт. переход: +${draw.vert.added} вершины, середина на ${draw.vert.target} м, стояки вертикальны`);
     }
