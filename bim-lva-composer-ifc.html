@@ -793,6 +793,82 @@
             font-size: 10px;
             fill: var(--txt-dim);
         }
+
+        /* Профиль: панель масштаба и компактная таблица вершин.
+           Таблица показывает ВЕРШИНЫ, а не пикеты с шагом: промежуточные
+           точки на прямой между вершинами ничего не сообщают, а список
+           раздувают. */
+        #polyProfileChart { height: 260px; }
+        .profile-scale { display: flex; gap: 6px; align-items: center; }
+        .profile-scale select { flex: 1; min-width: 0; }
+        .profile-scale .btn { padding: 3px 8px; white-space: nowrap; }
+
+        .profile-table {
+            max-height: 200px;
+            overflow: auto;
+            margin-top: 8px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+        }
+        table.profile-grid {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 10.5px;
+            font-variant-numeric: tabular-nums;
+        }
+        table.profile-grid th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: var(--panel, #eef2f6);
+            color: var(--txt-dim);
+            font-weight: 600;
+            text-align: right;
+            padding: 3px 6px;
+            border-bottom: 1px solid var(--line);
+            white-space: nowrap;
+        }
+        table.profile-grid th:first-child,
+        table.profile-grid td:first-child { text-align: left; }
+        table.profile-grid td {
+            text-align: right;
+            padding: 1px 6px;
+            border-bottom: 1px solid var(--line-soft, rgba(140, 150, 165, .18));
+            white-space: nowrap;
+        }
+        table.profile-grid tr:last-child td { border-bottom: 0; }
+        table.profile-grid tr.is-active td { background: rgba(232, 68, 42, .1); }
+        table.profile-grid tr:hover td { background: rgba(36, 120, 181, .07); }
+        /* Поля правки узкие и без рамки: таблица должна читаться как таблица,
+           а не как форма из двадцати инпутов. */
+        table.profile-grid input {
+            width: 68px;
+            font: inherit;
+            text-align: right;
+            padding: 1px 3px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            color: var(--txt);
+        }
+        table.profile-grid input:hover { border-color: var(--line); }
+        table.profile-grid input:focus {
+            border-color: var(--accent, #e8442a);
+            background: var(--panel, #fff);
+            outline: none;
+        }
+        table.profile-grid button.prow-del {
+            border: 0;
+            background: none;
+            color: var(--txt-dim);
+            cursor: pointer;
+            padding: 0 4px;
+            font-size: 12px;
+            line-height: 1;
+        }
+        table.profile-grid button.prow-del:hover { color: #d43c59; }
+        .profile-empty { padding: 8px; color: var(--txt-dim); font-size: 11px; }
         .timeline-4d-row {
             display: flex;
             align-items: center;
@@ -3403,18 +3479,35 @@
                 <span class="modal-drag-hint">⠿ перетащить</span>
             </div>
             <div class="bulk-note">
-                Отметки снимаются лучом вниз по загруженной геометрии (рельеф,
-                TIN из DXF, IFC). Красная линия — сама полилиния, синяя — земля
-                под ней. Где луч не попал (за краем поверхности, в дыре) —
-                разрыв, такие пикеты помечены отдельно.
+                Отметки земли снимаются лучом вниз по загруженной геометрии
+                (рельеф, TIN из DXF, IFC). Красная линия — ось, синяя — земля.
+                Где луч не попал — разрыв, это честно, а не ноль.
+                <b>Кружки — вершины оси:</b> тяните вверх-вниз, чтобы менять
+                отметку. Колесо — зум, перетаскивание фона — сдвиг,
+                двойной клик по оси — новая вершина.
             </div>
             <div class="prop small"><div class="k">Полилиния</div><select class="editInput" id="polyProfileSelect"></select></div>
-            <div class="prop small"><div class="k">Шаг пикета, м</div><input class="editInput" id="polyProfileStep" type="number" min="0.1" step="0.5" value="5"></div>
+            <div class="prop small">
+                <div class="k">Верт. масштаб</div>
+                <div class="profile-scale">
+                    <select class="editInput" id="polyProfileExag" title="Во сколько раз вертикаль растянута относительно плана. На профилях это норма: иначе уклоны не разглядеть">
+                        <option value="auto" selected>авто (вписать)</option>
+                        <option value="1">1 : 1</option>
+                        <option value="2">2 : 1</option>
+                        <option value="5">5 : 1</option>
+                        <option value="10">10 : 1</option>
+                        <option value="20">20 : 1</option>
+                        <option value="50">50 : 1</option>
+                    </select>
+                    <button class="btn" id="polyProfileFit" title="Вписать весь профиль в окно">⤢ Вписать</button>
+                </div>
+            </div>
             <div class="bulk-note" id="polyProfileMeta">—</div>
-            <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 220" preserveAspectRatio="none"></svg>
-            <div id="polyProfileTable" style="max-height:180px;overflow:auto;margin-top:8px"></div>
+            <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 260"
+                 preserveAspectRatio="none" style="touch-action:none;cursor:grab"></svg>
+            <div id="polyProfileTable" class="profile-table"></div>
             <div class="modal-actions">
-                <button class="btn" id="polyProfileCsv" title="Пикет; отметка земли; отметка оси; рабочая отметка">Копировать CSV</button>
+                <button class="btn" id="polyProfileCsv" title="Вершина; пикет; отметка земли; отметка оси; рабочая отметка; уклон">Копировать CSV</button>
                 <button class="btn" id="polyProfileDrape" title="Посадить вершины полилинии на землю по снятым отметкам">⤓ Посадить ось на землю</button>
                 <button class="btn load-btn" id="polyProfileClose">Закрыть</button>
             </div>
@@ -7366,6 +7459,39 @@
             return true;
         }
 
+        /**
+         * Вершина на заданном пикете — для двойного клика по профилю.
+         *
+         * Пикет отмеряется вдоль ОТРИСОВАННОЙ линии (renderPts, с дугами) —
+         * тем же способом, что и подписи пикетажа на профиле. Найденная точка
+         * потом ложится на ближайший отрезок исходных вершин: вставлять надо
+         * между pts, а не между точками дуги.
+         */
+        function insertPolylineVertexAtStation(record, sta) {
+            const rp = record.renderPts;
+            if (!rp || rp.length < 2) return -1;
+            const cum = [0];
+            for (let i = 1; i < rp.length; i++) {
+                cum.push(cum[i - 1] + Math.hypot(rp[i].x - rp[i - 1].x, rp[i].y - rp[i - 1].y));
+            }
+            const total = cum[cum.length - 1];
+            const s = Math.max(0, Math.min(total, Number(sta)));
+            if (!(total > 1e-6)) return -1;
+
+            let hi = 1;
+            while (hi < cum.length - 1 && cum[hi] < s) hi++;
+            const lo = hi - 1;
+            const seg = cum[hi] - cum[lo];
+            const t = seg < 1e-9 ? 0 : (s - cum[lo]) / seg;
+            const point = rp[lo].clone().lerp(rp[hi], t);
+
+            const on = nearestPolylineSegment(record, point);
+            if (!on) return -1;
+            // Отметку берём с самого отрезка: вставка не должна менять профиль,
+            // она только добавляет точку, за которую можно взяться.
+            return insertPolylineVertexAt(record, on.i, on.point);
+        }
+
         function setPolylineVertexElevation(record, idx, absZ) {
             const z = Number(absZ);
             if (!Number.isFinite(z) || idx < 0 || idx >= record.pts.length) return;
@@ -8604,6 +8730,71 @@
         let polyProfileRecordId = null;
 
         /**
+         * Вершины оси в терминах профиля: пикет, отметка оси и земли под ней,
+         * рабочая отметка, уклон к следующей вершине.
+         *
+         * Считается по record.pts (реальным вершинам), а НЕ по renderPts: в
+         * renderPts после сопряжения лежат ещё и точки дуг, и номера строк
+         * разъехались бы с вершинами — на этом уже попадались в таблице
+         * полилинии. Пикет при этом меряется вдоль отрисованной линии
+         * (с дугами), иначе он не сойдётся с длиной, которую показывает панель.
+         */
+        function polylineProfileVertices(record) {
+            const pts = record.pts;
+            if (!pts || pts.length < 2) return null;
+
+            // Пикет вершины = длина в плане по renderPts до ближайшей к ней
+            // точки. Для линии без сопряжений это ровно сумма отрезков.
+            const rp = record.renderPts;
+            const cum = [0];
+            for (let i = 1; i < rp.length; i++) {
+                cum.push(cum[i - 1] + Math.hypot(rp[i].x - rp[i - 1].x, rp[i].y - rp[i - 1].y));
+            }
+            const staOf = (p) => {
+                let best = 0;
+                let bestD = Infinity;
+                for (let i = 0; i < rp.length; i++) {
+                    const d = (rp[i].x - p.x) ** 2 + (rp[i].y - p.y) ** 2;
+                    if (d < bestD) { bestD = d; best = i; }
+                }
+                return cum[best];
+            };
+
+            const MISS = Number.NEGATIVE_INFINITY;
+            const rows = pts.map((p, i) => {
+                const gz = sampleTerrainZ(p.x, p.y, MISS);
+                const axisAbs = worldPointToAbsoluteXYZ(p) || p;
+                const groundAbs = gz === MISS
+                    ? null
+                    : (worldPointToAbsoluteXYZ(new THREE.Vector3(p.x, p.y, gz)) || { z: gz });
+                return {
+                    idx: i,
+                    sta: staOf(p),
+                    x: p.x, y: p.y,
+                    axis: axisAbs.z,
+                    ground: groundAbs ? groundAbs.z : null,
+                    work: groundAbs ? axisAbs.z - groundAbs.z : null,
+                    slope: null
+                };
+            });
+
+            // Уклон к следующей вершине — по плановому проложению, как принято
+            // на профиле (не по наклонной длине).
+            for (let i = 0; i < rows.length - 1; i++) {
+                const a = pts[i];
+                const b = pts[i + 1];
+                const run = Math.hypot(b.x - a.x, b.y - a.y);
+                rows[i].slope = run < 1e-6 ? null : (rows[i + 1].axis - rows[i].axis) / run * 1000;
+            }
+            return rows;
+        }
+
+        /* Окно просмотра профиля: какой участок пикетажа виден и с каким
+         * вертикальным растяжением. exag = null — вписать всё. */
+        let polyProfileView = { from: 0, to: 0, exag: null, zCentre: null };
+        let polyProfileActiveVertex = -1;
+
+        /**
          * Пересчёт профиля после правки геометрии. Зовётся из renderPolylinesList,
          * то есть отовсюду, где полилиния изменилась «насовсем» (конец
          * перетаскивания, правка в таблице, вставка/удаление вершины,
@@ -8622,6 +8813,75 @@
             renderPolylineProfile();
         }
 
+        /* Геометрия кадра профиля — одна на отрисовку и на попадание мышью. */
+        /* Размеры кадра берём с самого элемента и держим viewBox равным им:
+         * при растянутом viewBox (preserveAspectRatio="none") единица по X и
+         * по Y — разной длины, и заявленный вертикальный масштаб врал бы. */
+        let PROFILE_W = 760;
+        let PROFILE_H = 260;
+        const PROFILE_PAD = { l: 46, r: 14, t: 16, b: 30 };
+
+        function syncProfileViewBox() {
+            const svg = $('polyProfileChart');
+            if (!svg) return;
+            const box = svg.getBoundingClientRect();
+            PROFILE_W = Math.max(320, Math.round(box.width) || 760);
+            PROFILE_H = Math.max(180, Math.round(box.height) || 260);
+            svg.setAttribute('viewBox', `0 0 ${PROFILE_W} ${PROFILE_H}`);
+        }
+
+        /**
+         * Пересчёт «пикет ↔ пиксель» и «отметка ↔ пиксель» для текущего окна.
+         *
+         * Вертикальный масштаб задаётся ОТНОСИТЕЛЬНО горизонтального: на
+         * профилях так и принято (гор. 1:1000 / верт. 1:100 — это 10:1).
+         * При exag = null окно подбирается по данным.
+         */
+        function profileFrame(rows, groundSamples) {
+            const iw = PROFILE_W - PROFILE_PAD.l - PROFILE_PAD.r;
+            const ih = PROFILE_H - PROFILE_PAD.t - PROFILE_PAD.b;
+            const from = polyProfileView.from;
+            const to = polyProfileView.to;
+            const span = Math.max(1e-6, to - from);
+            const mPerPxX = span / iw;
+
+            const inWindow = (s) => s.sta >= from - span && s.sta <= to + span;
+            const zs = [
+                ...rows.filter(inWindow).map((r) => r.axis),
+                ...groundSamples.filter((s) => s.ground != null && inWindow(s)).map((s) => s.ground)
+            ];
+            let zMin = zs.length ? Math.min(...zs) : 0;
+            let zMax = zs.length ? Math.max(...zs) : 1;
+            if (zMax - zMin < 1e-6) { zMin -= 0.5; zMax += 0.5; }
+
+            let mPerPxY;
+            if (polyProfileView.exag == null) {
+                mPerPxY = (zMax - zMin) * 1.12 / ih;      // вписать с полями
+            } else {
+                mPerPxY = mPerPxX / polyProfileView.exag;
+            }
+            const centre = polyProfileView.zCentre != null
+                ? polyProfileView.zCentre
+                : (zMin + zMax) / 2;
+            const zTop = centre + (ih / 2) * mPerPxY;
+
+            return {
+                iw, ih, from, to, mPerPxX, mPerPxY, zTop, zMin, zMax,
+                exag: mPerPxX / mPerPxY,
+                px: (sta) => PROFILE_PAD.l + (sta - from) / mPerPxX,
+                py: (z) => PROFILE_PAD.t + (zTop - z) / mPerPxY,
+                staAt: (px) => from + (px - PROFILE_PAD.l) * mPerPxX,
+                zAt: (py) => zTop - (py - PROFILE_PAD.t) * mPerPxY
+            };
+        }
+
+        /** Круглый шаг сетки, близкий к желаемому: 1·2·5 на порядок. */
+        function niceStep(raw) {
+            const p = Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, raw))));
+            const n = raw / p;
+            return (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * p;
+        }
+
         function renderPolylineProfile() {
             const svg = $('polyProfileChart');
             const meta = $('polyProfileMeta');
@@ -8629,74 +8889,143 @@
             if (!svg) return;
             const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
             if (!rec) return;
-            const data = samplePolylineProfile(rec, $('polyProfileStep')?.value);
-            polyProfileData = data;
-            if (!data) {
+
+            // Земля рисуется по частому опросу — иначе линия срежет все складки
+            // рельефа между вершинами. Шаг подбирается сам от длины: наружу его
+            // не выносим, пользователю он ничего не решает.
+            // Длину в плане уже посчитал rebuildPolylineGeometry — второй раз
+            // стрелять лучами только ради неё незачем.
+            const total = rec.length2d || 0;
+            const step = total > 0 ? Math.max(0.25, total / 400) : 1;
+            const data = samplePolylineProfile(rec, step);
+            const rows = polylineProfileVertices(rec);
+            polyProfileData = data && rows ? { ...data, vertices: rows } : null;
+
+            if (!data || !rows) {
                 svg.innerHTML = '';
                 if (meta) meta.textContent = 'Полилиния слишком короткая для профиля.';
-                if (table) table.innerHTML = '';
+                if (table) table.innerHTML = '<div class="profile-empty">Нет данных.</div>';
                 return;
             }
 
-            const w = 760, h = 220, pad = 34;
-            const withGround = data.samples.filter((s) => s.ground != null);
-            const zs = [...data.samples.map((s) => s.axis), ...withGround.map((s) => s.ground)];
-            let minZ = Math.min(...zs), maxZ = Math.max(...zs);
-            if (maxZ - minZ < 1e-6) { minZ -= 1; maxZ += 1; }
-            const sx = (w - pad * 2) / data.total;
-            const sy = (h - pad * 2) / (maxZ - minZ);
-            const px = (s) => pad + s * sx;
-            const py = (z) => h - pad - (z - minZ) * sy;
+            if (!(polyProfileView.to > polyProfileView.from)) {
+                polyProfileView.from = 0;
+                polyProfileView.to = data.total;
+            }
 
-            // Земля рвётся на промахах — рисуем отдельными кусками, а не одной
-            // линией через дыру.
+            const f = profileFrame(rows, data.samples);
+            const clipL = PROFILE_PAD.l;
+            const clipR = PROFILE_W - PROFILE_PAD.r;
+
+            // Земля рвётся на промахах луча — рисуем кусками, а не одной линией
+            // через дыру. Точки вне окна отбрасываем здесь же.
             const groundPaths = [];
             let run = [];
             data.samples.forEach((s) => {
-                if (s.ground == null) {
+                const x = f.px(s.sta);
+                if (s.ground == null || x < clipL - 20 || x > clipR + 20) {
                     if (run.length > 1) groundPaths.push(run.join(' '));
                     run = [];
                     return;
                 }
-                run.push(`${px(s.sta).toFixed(1)},${py(s.ground).toFixed(1)}`);
+                run.push(`${x.toFixed(1)},${f.py(s.ground).toFixed(1)}`);
             });
             if (run.length > 1) groundPaths.push(run.join(' '));
 
-            const axisPath = data.samples
-                .map((s) => `${px(s.sta).toFixed(1)},${py(s.axis).toFixed(1)}`)
+            const axisPath = rows
+                .map((r) => `${f.px(r.sta).toFixed(1)},${f.py(r.axis).toFixed(1)}`)
                 .join(' ');
 
+            // Сетка: горизонтали по отметкам, вертикали по пикетажу.
+            const zStep = niceStep((f.ih * f.mPerPxY) / 5);
+            const zStart = Math.ceil(f.zAt(PROFILE_H - PROFILE_PAD.b) / zStep) * zStep;
+            const grid = [];
+            for (let z = zStart; ; z += zStep) {
+                const y = f.py(z);
+                if (y < PROFILE_PAD.t) break;
+                grid.push(
+                    `<line x1="${clipL}" y1="${y.toFixed(1)}" x2="${clipR}" y2="${y.toFixed(1)}" stroke="#dde4ec"/>` +
+                    `<text x="${clipL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end">${z.toFixed(2)}</text>`
+                );
+            }
+            const sStep = niceStep((f.to - f.from) / 6);
+            const sStart = Math.ceil(f.from / sStep) * sStep;
+            for (let s = sStart; s <= f.to; s += sStep) {
+                const x = f.px(s);
+                grid.push(
+                    `<line x1="${x.toFixed(1)}" y1="${PROFILE_PAD.t}" x2="${x.toFixed(1)}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#e8edf3"/>` +
+                    `<text x="${x.toFixed(1)}" y="${PROFILE_H - PROFILE_PAD.b + 13}" text-anchor="middle">${s.toFixed(0)}</text>`
+                );
+            }
+
+            // Кружки вершин — то, за что тянут. Точки вне окна не рисуем.
+            const knots = rows.map((r) => {
+                const x = f.px(r.sta);
+                if (x < clipL - 8 || x > clipR + 8) return '';
+                const y = f.py(r.axis);
+                const on = r.idx === polyProfileActiveVertex;
+                return `<circle class="pknot" data-idx="${r.idx}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" ` +
+                    `r="${on ? 6 : 4.5}" fill="${on ? '#ffd9d0' : '#fff'}" stroke="#e8442a" stroke-width="2" ` +
+                    `style="cursor:ns-resize"><title>Вершина ${r.idx + 1}: ${r.axis.toFixed(3)} м. ` +
+                    `Тяните — менять отметку, Alt+клик — удалить</title></circle>`;
+            }).join('');
+
             svg.innerHTML = `
-                <rect x="0" y="0" width="${w}" height="${h}" fill="#f7f9fb"/>
-                <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="#c3ccd6"/>
-                <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" stroke="#c3ccd6"/>
-                ${groundPaths.map((p) => `<polyline fill="none" stroke="#2478b5" stroke-width="2" points="${p}"/>`).join('')}
-                <polyline fill="none" stroke="#e8442a" stroke-width="2" points="${axisPath}"/>
-                <text x="${pad}" y="16" font-size="11">отметка, м</text>
-                <text x="${w - pad}" y="${h - 10}" text-anchor="end" font-size="11">пикет, м</text>
-                <text x="4" y="${pad + 4}" font-size="11">${maxZ.toFixed(2)}</text>
-                <text x="4" y="${h - pad}" font-size="11">${minZ.toFixed(2)}</text>
-                <text x="${pad}" y="${h - 10}" font-size="11">0</text>
-                <text x="${w - pad}" y="16" text-anchor="end" font-size="11">L = ${data.total.toFixed(2)} м</text>
+                <rect x="0" y="0" width="${PROFILE_W}" height="${PROFILE_H}" fill="#f7f9fb"/>
+                <clipPath id="polyProfileClip">
+                    <rect x="${clipL}" y="${PROFILE_PAD.t}" width="${clipR - clipL}" height="${f.ih}"/>
+                </clipPath>
+                ${grid.join('')}
+                <g clip-path="url(#polyProfileClip)">
+                    ${groundPaths.map((p) => `<polyline fill="none" stroke="#2478b5" stroke-width="2" points="${p}"/>`).join('')}
+                    <polyline id="polyProfileAxisLine" fill="none" stroke="#e8442a" stroke-width="2" points="${axisPath}"/>
+                    ${knots}
+                </g>
+                <line x1="${clipL}" y1="${PROFILE_H - PROFILE_PAD.b}" x2="${clipR}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#c3ccd6"/>
+                <line x1="${clipL}" y1="${PROFILE_PAD.t}" x2="${clipL}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#c3ccd6"/>
+                <text x="${clipL + 4}" y="11">отм., м</text>
+                <text x="${clipR}" y="${PROFILE_H - 4}" text-anchor="end">пикет, м</text>
             `;
 
             if (meta) {
+                const shown = `${f.from.toFixed(0)}…${f.to.toFixed(0)} м`;
                 meta.textContent =
-                    `«${rec.name}»: длина в плане ${data.total.toFixed(2)} м, пикетов ${data.samples.length}` +
-                    ` (шаг ${data.step} м)` +
-                    (data.missed ? ` · без отметки земли: ${data.missed}` : ' · земля найдена везде');
+                    `«${rec.name}»: длина ${data.total.toFixed(2)} м, вершин ${rows.length}` +
+                    ` · верт. масштаб ${f.exag.toFixed(1)}:1 · видно ${shown}` +
+                    (data.missed ? ` · без отметки земли: ${data.missed} промеров` : '');
             }
 
-            if (table) {
-                const rows = data.samples.map((s) => `
-                    <div class="polyline-point-row">
-                        <b>${s.sta.toFixed(2)}</b>
-                        <span class="pin-xyz">земля ${s.ground == null ? '—' : s.ground.toFixed(3)}</span>
-                        <span class="pin-xyz">ось ${s.axis.toFixed(3)}</span>
-                        <span class="pin-xyz">раб. ${s.work == null ? '—' : (s.work > 0 ? '+' : '') + s.work.toFixed(3)}</span>
-                    </div>`).join('');
-                table.innerHTML = rows;
-            }
+            renderProfileTable(rec, rows);
+        }
+
+        /** Компактная таблица вершин с правкой отметки и уклона на месте. */
+        function renderProfileTable(rec, rows) {
+            const table = $('polyProfileTable');
+            if (!table) return;
+            const num = (v, digits = 3) => (v == null ? '—' : v.toFixed(digits));
+            table.innerHTML = `
+                <table class="profile-grid">
+                    <thead><tr>
+                        <th>№</th><th>пикет</th><th>земля</th><th>ось</th>
+                        <th>раб.</th><th>i&#8240;</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                        ${rows.map((r) => `
+                            <tr data-idx="${r.idx}"${r.idx === polyProfileActiveVertex ? ' class="is-active"' : ''}>
+                                <td>${r.idx + 1}</td>
+                                <td>${r.sta.toFixed(2)}</td>
+                                <td>${num(r.ground)}</td>
+                                <td><input type="number" step="0.01" data-edit="axis" value="${r.axis.toFixed(3)}"
+                                     title="Отметка оси в этой вершине, м"></td>
+                                <td>${r.work == null ? '—' : (r.work > 0 ? '+' : '') + r.work.toFixed(3)}</td>
+                                <td>${r.slope == null ? '—' :
+                                    `<input type="number" step="1" data-edit="slope" value="${r.slope.toFixed(2)}"
+                                      title="Уклон до следующей вершины, ‰ — меняет её отметку">`}</td>
+                                <td><button type="button" class="prow-del" data-del="${r.idx}"
+                                     title="Удалить вершину">✕</button></td>
+                            </tr>`).join('')}
+                    </tbody>
+                </table>`;
         }
 
         function openPolylineProfile(record) {
@@ -8709,6 +9038,12 @@
                 return;
             }
             polyProfileRecordId = record.id;
+            // Окно просмотра сбрасываем на всю длину: иначе после прошлой оси
+            // новая открылась бы с чужим зумом и выглядела бы пустой.
+            polyProfileView.from = 0;
+            polyProfileView.to = Math.max(1e-6, record.length2d || 1);
+            polyProfileView.zCentre = null;
+            polyProfileActiveVertex = -1;
             const sel = $('polyProfileSelect');
             if (sel) {
                 sel.innerHTML = drawnPolylines
@@ -8756,10 +9091,200 @@
             $('polyProfileModal').classList.remove('show');
             polyProfilePanel.reset();
         });
-        $('polyProfileStep')?.addEventListener('change', renderPolylineProfile);
+        /* --- Зум, сдвиг и правка прямо на профиле ------------------------- */
+
+        function profileRecord() {
+            return drawnPolylines.find((r) => r.id === polyProfileRecordId) || null;
+        }
+
+        /** Пиксель события → координаты внутри viewBox (SVG растянут по ширине). */
+        function profilePointerXY(ev) {
+            const svg = $('polyProfileChart');
+            const box = svg.getBoundingClientRect();
+            return {
+                x: (ev.clientX - box.left) / box.width * PROFILE_W,
+                y: (ev.clientY - box.top) / box.height * PROFILE_H
+            };
+        }
+
+        function profileCurrentFrame() {
+            const rec = profileRecord();
+            if (!rec || !polyProfileData) return null;
+            return profileFrame(polyProfileData.vertices, polyProfileData.samples);
+        }
+
+        /** Вписать весь профиль обратно. */
+        function profileFitAll() {
+            const rec = profileRecord();
+            if (!rec) return;
+            polyProfileView.from = 0;
+            polyProfileView.to = Math.max(1e-6, rec.length2d || 1);
+            polyProfileView.zCentre = null;
+            renderPolylineProfile();
+        }
+
+        $('polyProfileChart')?.addEventListener('wheel', (ev) => {
+            if (!polyProfileData) return;
+            ev.preventDefault();
+            const f = profileCurrentFrame();
+            if (!f) return;
+            const p = profilePointerXY(ev);
+            const k = ev.deltaY > 0 ? 1.18 : 1 / 1.18;
+
+            if (ev.shiftKey) {
+                // Shift — вертикальный масштаб: растянуть/сжать отметки.
+                const cur = polyProfileView.exag == null ? f.exag : polyProfileView.exag;
+                const next = Math.min(500, Math.max(0.2, cur / k));
+                polyProfileView.exag = next;
+                polyProfileView.zCentre = f.zAt(p.y);
+                const sel = $('polyProfileExag');
+                if (sel) sel.value = 'auto';
+            } else {
+                // Обычное колесо — пикетаж, с сохранением точки под курсором.
+                const anchor = f.staAt(p.x);
+                const from = anchor - (anchor - f.from) * k;
+                const to = anchor + (f.to - anchor) * k;
+                if (to - from < 0.5) return;               // дальше некуда
+                polyProfileView.from = from;
+                polyProfileView.to = to;
+                if (polyProfileView.zCentre == null) polyProfileView.zCentre = (f.zMin + f.zMax) / 2;
+            }
+            renderPolylineProfile();
+        }, { passive: false });
+
+        // Перетаскивание: за кружок — отметка вершины, за фон — сдвиг окна.
+        $('polyProfileChart')?.addEventListener('pointerdown', (ev) => {
+            if (ev.button !== 0 || !polyProfileData) return;
+            const svg = $('polyProfileChart');
+            const rec = profileRecord();
+            const f = profileCurrentFrame();
+            if (!rec || !f) return;
+            const knot = ev.target.closest?.('.pknot');
+
+            // Alt + клик по кружку — удалить вершину.
+            if (knot && ev.altKey) {
+                ev.preventDefault();
+                removePolylineVertex(rec, Number(knot.dataset.idx));
+                polyProfileActiveVertex = -1;
+                renderPolylineProfile();
+                return;
+            }
+
+            ev.preventDefault();
+            try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+
+            if (knot) {
+                const idx = Number(knot.dataset.idx);
+                polyProfileActiveVertex = idx;
+                const startY = ev.clientY;
+                const startZ = rec.pts[idx].z;
+                // viewBox равен размеру элемента, поэтому метры-на-пиксель
+                // кадра — это сразу метры на пиксель экрана.
+                const mPerPx = f.mPerPxY;
+                const move = (e) => {
+                    if (rec.kind === '2d') return;
+                    rec.pts[idx].z = startZ + (startY - e.clientY) * mPerPx;
+                    rebuildPolylineGeometry(rec);
+                    renderPolylineProfile();
+                };
+                const up = () => {
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                    renderPolylinePointsEditor(rec);
+                    renderPolylinesList();
+                    trackUsage('profile_vertex_drag', {});
+                };
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+                if (rec.kind === '2d') {
+                    notify('У 2D-полилинии все точки на одной отметке — профиль ей не поправить.');
+                }
+                return;
+            }
+
+            // Фон — сдвиг окна по пикетажу и по высоте.
+            svg.style.cursor = 'grabbing';
+            const start = profilePointerXY(ev);
+            const from0 = f.from;
+            const to0 = f.to;
+            const z0 = polyProfileView.zCentre == null ? (f.zMin + f.zMax) / 2 : polyProfileView.zCentre;
+            const move = (e) => {
+                const p = profilePointerXY(e);
+                const ds = (p.x - start.x) * f.mPerPxX;
+                polyProfileView.from = from0 - ds;
+                polyProfileView.to = to0 - ds;
+                polyProfileView.zCentre = z0 + (p.y - start.y) * f.mPerPxY;
+                renderPolylineProfile();
+            };
+            const up = () => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+                svg.style.cursor = 'grab';
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+        });
+
+        // Двойной клик по полю — новая вершина на этом пикете.
+        $('polyProfileChart')?.addEventListener('dblclick', (ev) => {
+            const rec = profileRecord();
+            const f = profileCurrentFrame();
+            if (!rec || !f || ev.target.closest?.('.pknot')) return;
+            ev.preventDefault();
+            const sta = f.staAt(profilePointerXY(ev).x);
+            const at = insertPolylineVertexAtStation(rec, sta);
+            if (at < 0) {
+                notifyError('Здесь вершину не вставить — точка вне линии.');
+                return;
+            }
+            polyProfileActiveVertex = at;
+            renderPolylineProfile();
+            notify(`Вершина ${at + 1} добавлена на пикете ${sta.toFixed(2)} м.`);
+            trackUsage('profile_vertex_insert', {});
+        });
+
+        // Таблица: правка отметки и уклона, удаление вершины, подсветка.
+        $('polyProfileTable')?.addEventListener('change', (ev) => {
+            const input = ev.target.closest('input[data-edit]');
+            if (!input) return;
+            const rec = profileRecord();
+            const idx = Number(input.closest('tr').dataset.idx);
+            const v = Number(input.value);
+            if (!rec || !Number.isFinite(v)) return;
+            if (input.dataset.edit === 'axis') setPolylineVertexElevation(rec, idx, v);
+            else setPolylineSegmentSlope(rec, idx, v);
+            polyProfileActiveVertex = idx;
+            renderPolylineProfile();
+        });
+        $('polyProfileTable')?.addEventListener('click', (ev) => {
+            const rec = profileRecord();
+            if (!rec) return;
+            const del = ev.target.closest('button[data-del]');
+            if (del) {
+                removePolylineVertex(rec, Number(del.dataset.del));
+                polyProfileActiveVertex = -1;
+                renderPolylineProfile();
+                return;
+            }
+            const row = ev.target.closest('tr[data-idx]');
+            if (row) {
+                polyProfileActiveVertex = Number(row.dataset.idx);
+                renderPolylineProfile();
+            }
+        });
+
+        $('polyProfileExag')?.addEventListener('change', (ev) => {
+            const v = ev.target.value;
+            polyProfileView.exag = v === 'auto' ? null : Number(v);
+            if (v === 'auto') polyProfileView.zCentre = null;
+            renderPolylineProfile();
+        });
+        $('polyProfileFit')?.addEventListener('click', profileFitAll);
+
         $('polyProfileSelect')?.addEventListener('change', () => {
             polyProfileRecordId = Number($('polyProfileSelect').value);
-            renderPolylineProfile();
+            polyProfileActiveVertex = -1;
+            profileFitAll();
         });
         $('polyProfileDrape')?.addEventListener('click', () => {
             const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
@@ -8767,17 +9292,20 @@
         });
         $('polyProfileCsv')?.addEventListener('click', async () => {
             if (!polyProfileData) return notifyError('Профиль ещё не построен.');
-            const csv = ['пикет;земля;ось;рабочая']
-                .concat(polyProfileData.samples.map((s) => [
-                    s.sta.toFixed(3),
-                    s.ground == null ? '' : s.ground.toFixed(3),
-                    s.axis.toFixed(3),
-                    s.work == null ? '' : s.work.toFixed(3)
+            const rows = polyProfileData.vertices || [];
+            const csv = ['вершина;пикет;земля;ось;рабочая;уклон,‰']
+                .concat(rows.map((r) => [
+                    r.idx + 1,
+                    r.sta.toFixed(3),
+                    r.ground == null ? '' : r.ground.toFixed(3),
+                    r.axis.toFixed(3),
+                    r.work == null ? '' : r.work.toFixed(3),
+                    r.slope == null ? '' : r.slope.toFixed(2)
                 ].join(';')))
                 .join('\n');
             try {
                 await navigator.clipboard.writeText(csv);
-                notify(`Скопировано пикетов: ${polyProfileData.samples.length}`);
+                notify(`Скопировано вершин: ${rows.length}`);
             } catch (_) {
                 notifyError('Буфер обмена недоступен.');
             }
