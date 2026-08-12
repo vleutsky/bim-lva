@@ -1501,11 +1501,15 @@ async function checkSlopeToTerrain(page) {
         const both = D.buildSlopeOnPolyline(self, { side: 'both', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
         const left = both?.sides?.find((s) => s.side === 'left');
         const right = both?.sides?.find((s) => s.side === 'right');
+        const sideReasons = (s) => (s?.exits || []).map((e) => e.reason || e.mode);
+        const sideD = (s) => (s?.exits || []).filter((e) => e.d != null).map((e) => e.d);
         return {
             padHits: padHits.map((e) => ({ d: e.d, x: e.x, z: e.z })),
             west: west.map((e) => ({ d: e.d, x: e.x, z: e.z })),
-            inward: (left?.exits || []).map((e) => e.reason || e.mode),
-            outwardD: (right?.exits || []).filter((e) => e.d != null).map((e) => e.d)
+            left: sideReasons(left),
+            right: sideReasons(right),
+            leftD: sideD(left),
+            rightD: sideD(right)
         };
     }, groundZ);
     const padHitOk = interact.padHits.length >= 2 &&
@@ -1519,11 +1523,13 @@ async function checkSlopeToTerrain(page) {
     if (!slopeHitOk) {
         problems.push(`откосы: выход на чужой откос ${JSON.stringify(interact.west)} — ждали d≈2, x≈10, z≈g+1.667`);
     }
-    if (!interact.inward.length || interact.inward.some((r) => r !== 'own-pad')) {
-        problems.push(`откосы: внутрь своей площадки откос не должен идти (${JSON.stringify(interact.inward)})`);
+    const inward = [interact.left, interact.right].find((r) => r.length && r.every((x) => x === 'own-pad'));
+    const outwardD = [interact.leftD, interact.rightD].find((d) => d.length && d.every((x) => Math.abs(x - 3) < 0.08));
+    if (!inward) {
+        problems.push(`откосы: внутрь своей площадки откос не должен идти (лево ${JSON.stringify(interact.left)}, право ${JSON.stringify(interact.right)})`);
     }
-    if (!interact.outwardD.length || interact.outwardD.some((d) => Math.abs(d - 3) > 0.08)) {
-        problems.push(`откосы: наружу от своей площадки d ${JSON.stringify(interact.outwardD)} вместо ≈3`);
+    if (!outwardD) {
+        problems.push(`откосы: наружу от своей площадки d лево ${JSON.stringify(interact.leftD)} право ${JSON.stringify(interact.rightD)} вместо ≈3`);
     }
 
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:

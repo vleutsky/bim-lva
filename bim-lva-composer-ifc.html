@@ -7129,6 +7129,20 @@
             return null;
         }
 
+        /** Строго внутри кольца в плане (even-odd). Граница не считается. */
+        function pointInRingXY(ring, x, y) {
+            if (!ring || ring.length < 3) return false;
+            let inside = false;
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                const yi = ring[i].y, yj = ring[j].y;
+                const xi = ring[i].x, xj = ring[j].x;
+                if ((yi > y) === (yj > y)) continue;
+                const xHit = (xj - xi) * (y - yi) / (yj - yi) + xi;
+                if (x < xHit) inside = !inside;
+            }
+            return inside;
+        }
+
         function collectSlopeDesignTargets() {
             slopeGroup.updateMatrixWorld(true);
             const targets = [];
@@ -7476,13 +7490,13 @@
             const normals = slopeVertexNormals(ring, closed, side);
             // 1 мм вдоль нормали: если сразу попадаем внутрь своего контура —
             // это внутренняя сторона площадки, откос туда не идёт.
-            const look = 0.001;
+            const look = 0.05;
             const sections = ring.map((p, i) => {
                 const normal = normals[i];
                 if (!normal) return { valid: false, reason: 'no-ground' };
-                if (ownPadTris && sampleTrianglesZ(
-                    ownPadTris, p.x + normal.x * look, p.y + normal.y * look
-                ) != null) {
+                if (ownPadTris && pointInRingXY(
+                    ring, p.x + normal.x * look, p.y + normal.y * look
+                )) {
                     return { valid: false, reason: 'own-pad' };
                 }
                 return computeSlopeCrossSection(
