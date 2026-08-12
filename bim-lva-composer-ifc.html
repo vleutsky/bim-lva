@@ -1211,6 +1211,43 @@
             padding: 4px;
             border-bottom: 1px solid var(--line, #d8dee6);
         }
+        #drawInput {
+            position: absolute;
+            left: 50%;
+            bottom: 18px;
+            transform: translateX(-50%);
+            z-index: 18;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px 10px;
+            max-width: min(760px, calc(100% - 24px));
+            padding: 8px 12px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--panel);
+            box-shadow: 0 10px 30px rgba(10, 20, 32, .28);
+            font-size: 12px;
+        }
+        #drawInput[hidden] { display: none; }
+        #drawInput .di-title {
+            font-family: 'IBM Plex Mono';
+            font-weight: 600;
+            color: var(--accent);
+        }
+        #drawInput label { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
+        #drawInput input {
+            width: 84px;
+            padding: 4px 6px;
+            font-size: 12px;
+            font-family: 'IBM Plex Mono';
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: var(--panel-2, #fff);
+            color: var(--txt);
+        }
+        #drawInput .di-hint { flex-basis: 100%; font-size: 11px; color: var(--dim); }
+
         .snap-types {
             display: flex;
             flex-wrap: wrap;
@@ -2617,6 +2654,14 @@
 
     <main class="stage" id="stage">
         <div id="snapMarker" hidden aria-hidden="true"></div>
+        <div id="drawInput" hidden>
+            <span class="di-title">Следующая точка</span>
+            <label>L, м <input type="number" id="drawInputLen" step="0.1" min="0" placeholder="длина"></label>
+            <label>азимут° <input type="number" id="drawInputAz" step="1" placeholder="от севера"></label>
+            <label>ΔH, м <input type="number" id="drawInputDz" step="0.1" placeholder="0"></label>
+            <button class="btn" id="drawInputApply" title="Поставить точку (Enter)">Поставить</button>
+            <span class="di-hint">Азимут — по часовой от севера. Пусто — продолжить прежним направлением.</span>
+        </div>
         <div id="viewCube" aria-label="Стандартные виды">
             <button class="vc-btn vc-top" data-view="top" title="Вид сверху (план)">Верх</button>
             <button class="vc-btn" data-view="left" title="Вид слева, с запада">З</button>
@@ -2717,6 +2762,7 @@
             <button class="ctx-item" id="ctxPolylineContinueStart" title="Дописать вершины с начала полилинии">✚ Продолжить с начала</button>
             <button class="ctx-item" id="ctxPolylineClose" title="Замкнуть или разомкнуть контур">⭘ Замкнуть / разомкнуть</button>
             <button class="ctx-item" id="ctxPolylineProfile" title="Продольный профиль: отметки земли под осью, пикетаж, рабочие отметки">〰 Профиль по этой оси</button>
+            <button class="ctx-item" id="ctxPolylineEarthwork" title="Объёмы выемки и насыпи внутри замкнутого контура">⛰ Картограмма по контуру</button>
             <button class="ctx-item" id="ctxPolylineSweep" title="Прогнать сечение вдоль этой полилинии и получить 3D-тело">⬒ Тело по этой оси</button>
             <button class="ctx-item danger" id="ctxPolylineDelete" title="Удалить эту полилинию">🗑 Удалить полилинию</button>
             <div class="ctx-divider"></div>
@@ -3283,6 +3329,37 @@
                 <button class="btn" id="polyProfileCsv" title="Пикет; отметка земли; отметка оси; рабочая отметка">Копировать CSV</button>
                 <button class="btn" id="polyProfileDrape" title="Посадить вершины полилинии на землю по снятым отметкам">⤓ Посадить ось на землю</button>
                 <button class="btn load-btn" id="polyProfileClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop floating-panel" id="earthworkModal">
+        <div class="modal-card" id="earthworkCard" role="dialog" aria-modal="true" style="width:min(560px,94vw)">
+            <div class="modal-drag-handle" id="earthworkDrag" title="Перетащите окно, чтобы видеть модель">
+                <h3>Картограмма земляных работ</h3>
+                <span class="modal-drag-hint">⠿ перетащить</span>
+            </div>
+            <div class="bulk-note">
+                Метод квадратов: сетка по габариту замкнутого контура, в каждой
+                ячейке внутри контура отметка земли снимается лучом вниз.
+                Точность зависит от шага — он и число ячеек показаны в отчёте.
+                Ячейки, где земли под контуром нет, в объём не идут и считаются
+                отдельно.
+            </div>
+            <div class="prop small"><div class="k">Контур</div><select class="editInput" id="earthworkSelect"></select></div>
+            <div class="prop small"><div class="k">Проект</div>
+                <select class="editInput" id="earthworkMode">
+                    <option value="level">Горизонтальная отметка</option>
+                    <option value="axis">По отметкам самого контура</option>
+                </select>
+            </div>
+            <div class="prop small" id="earthworkLevelRow"><div class="k">Отметка, м</div><input class="editInput" id="earthworkLevel" type="number" step="0.1" value="0"></div>
+            <div class="prop small"><div class="k">Шаг сетки, м</div><input class="editInput" id="earthworkCell" type="number" min="0.1" step="0.5" value="1"></div>
+            <div class="bulk-note" id="earthworkResult">Нажмите «Посчитать».</div>
+            <div class="modal-actions">
+                <button class="btn" id="earthworkCopy">Копировать отчёт</button>
+                <button class="btn load-btn" id="earthworkRun">Посчитать</button>
+                <button class="btn" id="earthworkClose">Закрыть</button>
             </div>
         </div>
     </div>
@@ -4478,6 +4555,20 @@
             get drawDraftPoints() {
                 if (typeof drawDraft === 'undefined' || !drawDraft) return 0;
                 return drawDraft.geometry?.attributes?.instanceStart?.count + 1 || 0;
+            },
+            /** Поставить следующую точку числами (длина/азимут/превышение). */
+            drawPointByNumbers(len, azimuth, dz) {
+                const set = (id, v) => { const el = $(id); if (el) el.value = v == null ? '' : String(v); };
+                set('drawInputLen', len);
+                set('drawInputAz', azimuth);
+                set('drawInputDz', dz);
+                const p = drawInputNextPoint();
+                return p ? { x: p.x, y: p.y, z: p.z } : null;
+            },
+            /** Картограмма: объёмы выемки/насыпи внутри замкнутого контура. */
+            earthwork(id, cell, mode, level) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? computeEarthwork(rec, cell, mode, level) : null;
             },
             /** Профиль по оси: пикеты с отметками земли и оси. */
             polylineProfile(id, step) {
@@ -6418,6 +6509,76 @@
             drawPoints.push(p);
             drawCursorPoint = null;
             refreshDrawDraft();
+            updateDrawInputPanel();
+        }
+
+        /* --- Ввод точки числами -------------------------------------------------
+         * Оси сцены Z-up: X — восток, Y — север. Азимут в геодезии считается ПО
+         * часовой стрелке ОТ СЕВЕРА, поэтому dx = L·sin(A), dy = L·cos(A) —
+         * не наоборот. Пустой азимут означает «тем же направлением», что удобно
+         * при наборе прямого участка длинами.
+         */
+        function drawInputNextPoint() {
+            if (!drawPoints.length) {
+                notifyError('Сначала поставьте первую точку кликом — от неё считается длина.');
+                return null;
+            }
+            const last = drawPoints[drawPoints.length - 1];
+            const lenRaw = $('drawInputLen').value;
+            const azRaw = $('drawInputAz').value;
+            const dzRaw = $('drawInputDz').value;
+            const len = Number(lenRaw);
+            if (!lenRaw.trim() || !Number.isFinite(len) || len <= 0) {
+                notifyError('Укажите длину больше нуля.');
+                return null;
+            }
+
+            let dirX, dirY;
+            if (azRaw.trim() && Number.isFinite(Number(azRaw))) {
+                const a = THREE.MathUtils.degToRad(Number(azRaw));
+                dirX = Math.sin(a);
+                dirY = Math.cos(a);
+            } else if (drawPoints.length >= 2) {
+                const prev = drawPoints[drawPoints.length - 2];
+                const dx = last.x - prev.x;
+                const dy = last.y - prev.y;
+                const l = Math.hypot(dx, dy);
+                if (l < 1e-9) {
+                    notifyError('Прежнее направление не определено — задайте азимут.');
+                    return null;
+                }
+                dirX = dx / l;
+                dirY = dy / l;
+            } else {
+                notifyError('Для первой длины нужен азимут.');
+                return null;
+            }
+
+            const dz = dzRaw.trim() && Number.isFinite(Number(dzRaw)) ? Number(dzRaw) : 0;
+            const p = new THREE.Vector3(
+                last.x + dirX * len,
+                last.y + dirY * len,
+                last.z + (drawKind() === '2d' ? 0 : dz)
+            );
+            addDrawPoint(p);
+            $('drawInputLen').value = '';
+            $('drawInputAz').value = '';
+            $('drawInputDz').value = '';
+            $('drawInputLen').focus();
+            trackUsage('draw_numeric_point');
+            return p;
+        }
+
+        function updateDrawInputPanel() {
+            const el = $('drawInput');
+            if (!el) return;
+            el.hidden = !drawMode;
+            const hint = el.querySelector('.di-hint');
+            if (hint) {
+                hint.textContent = drawPoints.length
+                    ? 'Азимут — по часовой от севера. Пусто — продолжить прежним направлением. Enter — поставить.'
+                    : 'Поставьте первую точку кликом по модели — дальше можно набирать числами.';
+            }
         }
 
         let drawPolylineSeq = 0;
@@ -7308,6 +7469,7 @@
                 drawCursorPoint = null;
                 refreshDrawDraft();
             }
+            updateDrawInputPanel();
         }
 
         /* --- Метки координат -------------------------------------------------
@@ -7544,6 +7706,15 @@
                     trackUsage('snap_types', { [key]: cb.checked });
                 });
             });
+        $('drawInputApply')?.addEventListener('click', drawInputNextPoint);
+        ['drawInputLen', 'drawInputAz', 'drawInputDz'].forEach((id) => {
+            $(id)?.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                e.stopPropagation();
+                drawInputNextPoint();
+            });
+        });
         $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
@@ -7648,6 +7819,105 @@
                 });
             }
             return { samples, total, missed, step: stepM, ground };
+        }
+
+        /* --- Картограмма земляных работ ----------------------------------------
+         * Регулярная сетка по габариту замкнутого контура. В каждой ячейке,
+         * центр которой лежит ВНУТРИ контура, снимаем отметку земли лучом вниз
+         * и сравниваем с проектной. Объём — сумма (Δh × площадь ячейки).
+         *
+         * Это метод квадратов, а не точное интегрирование по TIN: у него есть
+         * своя погрешность, которая падает с уменьшением шага. Поэтому в отчёт
+         * выводится и шаг, и число ячеек — чтобы результат можно было оценить,
+         * а не принять на веру.
+         */
+        const EARTHWORK_MAX_CELLS = 250_000;
+
+        /** Точка внутри контура: чётность пересечений луча вправо. */
+        function pointInPolygonXY(px, py, pts) {
+            let inside = false;
+            for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+                const xi = pts[i].x, yi = pts[i].y;
+                const xj = pts[j].x, yj = pts[j].y;
+                if ((yi > py) !== (yj > py) &&
+                    px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+                    inside = !inside;
+                }
+            }
+            return inside;
+        }
+
+        /**
+         * @param {object} record замкнутая полилиния
+         * @param {number} cell шаг сетки, м
+         * @param {'level'|'axis'} mode от чего считать: заданная отметка или сама ось
+         * @param {number} level проектная отметка (абсолютная) для mode='level'
+         */
+        function computeEarthwork(record, cell, mode, level) {
+            if (!record.closed) return null;
+            const ring = record.renderPts.slice(0, -1);   // без дубля замыкания
+            if (ring.length < 3) return null;
+            const step = Math.max(0.1, Number(cell) || 1);
+
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            ring.forEach((p) => {
+                minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+            });
+            const nx = Math.ceil((maxX - minX) / step);
+            const ny = Math.ceil((maxY - minY) / step);
+            if (nx * ny > EARTHWORK_MAX_CELLS) {
+                return { tooFine: true, cells: nx * ny, limit: EARTHWORK_MAX_CELLS };
+            }
+
+            // Проектная отметка в осях СЦЕНЫ: level задаётся абсолютной
+            const levelScene = mode === 'level' ? absoluteXYZToWorldPoint(0, 0, Number(level)).z : null;
+            const area = step * step;
+            let cut = 0, fill = 0, inside = 0, noGround = 0;
+            let minWork = Infinity, maxWork = -Infinity;
+
+            // Проектную отметку оси в точке берём линейной интерполяцией по
+            // контуру — для mode='axis' контур и есть проект.
+            const designAt = (x, y) => {
+                if (mode === 'level') return levelScene;
+                // ближайшая точка контура по плану, её Z
+                let best = null, bestD = Infinity;
+                for (let i = 0; i < ring.length; i++) {
+                    const d = (ring[i].x - x) ** 2 + (ring[i].y - y) ** 2;
+                    if (d < bestD) { bestD = d; best = ring[i]; }
+                }
+                return best ? best.z : 0;
+            };
+
+            const MISS = Number.NEGATIVE_INFINITY;
+            for (let j = 0; j < ny; j++) {
+                const y = minY + (j + 0.5) * step;
+                for (let i = 0; i < nx; i++) {
+                    const x = minX + (i + 0.5) * step;
+                    if (!pointInPolygonXY(x, y, ring)) continue;
+                    inside++;
+                    const gz = sampleTerrainZ(x, y, MISS);
+                    if (gz === MISS) { noGround++; continue; }
+                    const dz = designAt(x, y) - gz;   // + насыпь, − выемка
+                    if (dz > 0) fill += dz * area; else cut += -dz * area;
+                    minWork = Math.min(minWork, dz);
+                    maxWork = Math.max(maxWork, dz);
+                }
+            }
+            const measured = inside - noGround;
+            return {
+                cut, fill, balance: fill - cut,
+                cells: inside,          // всего ячеек внутри контура
+                measured,               // из них с найденной землёй — только они дали объём
+                noGround, step,
+                // Площадь считаем по ИЗМЕРЕННЫМ ячейкам: только она соответствует
+                // посчитанному объёму. Иначе «объём / площадь» врал бы там, где
+                // часть контура повисла над пустотой.
+                area: measured * area,
+                planArea: polylinePlanArea(record),
+                minWork: Number.isFinite(minWork) ? minWork : null,
+                maxWork: Number.isFinite(maxWork) ? maxWork : null
+            };
         }
 
         let polyProfileData = null;
@@ -7814,6 +8084,102 @@
                 notifyError('Буфер обмена недоступен.');
             }
         });
+
+        const earthworkPanel = createFloatingPanel({
+            cardId: 'earthworkCard', modalId: 'earthworkModal',
+            handleId: 'earthworkDrag', defaultWidth: 560
+        });
+        let earthworkRecordId = null;
+        let earthworkReport = '';
+
+        function openEarthworkModal(record) {
+            const closed = drawnPolylines.filter((r) => r.closed);
+            if (!closed.length) {
+                notifyError('Нужен замкнутый контур: замкните полилинию кнопкой ⭘.');
+                return;
+            }
+            if (!allMeshes.length) {
+                notifyError('Нет загруженной геометрии — снимать отметки не с чего.');
+                return;
+            }
+            const target = record?.closed ? record : closed[0];
+            earthworkRecordId = target.id;
+            const sel = $('earthworkSelect');
+            if (sel) {
+                sel.innerHTML = closed
+                    .map((r) => `<option value="${r.id}"${r.id === target.id ? ' selected' : ''}>${esc(r.name)}</option>`)
+                    .join('');
+            }
+            $('earthworkResult').textContent = 'Нажмите «Посчитать».';
+            earthworkReport = '';
+            const modal = $('earthworkModal');
+            const wasOpen = modal.classList.contains('show');
+            modal.classList.add('show');
+            if (!wasOpen) requestAnimationFrame(() => earthworkPanel.park());
+        }
+
+        function syncEarthworkFields() {
+            const row = $('earthworkLevelRow');
+            if (row) row.hidden = $('earthworkMode')?.value !== 'level';
+        }
+
+        function runEarthwork() {
+            const rec = drawnPolylines.find((r) => r.id === earthworkRecordId);
+            if (!rec) return notifyError('Контур не найден.');
+            const mode = $('earthworkMode').value;
+            const res = computeEarthwork(rec, $('earthworkCell').value, mode, $('earthworkLevel').value);
+            const out = $('earthworkResult');
+            if (!res) { out.textContent = 'Контур не замкнут или в нём меньше трёх вершин.'; return; }
+            if (res.tooFine) {
+                out.textContent =
+                    `Слишком мелкий шаг: ${res.cells.toLocaleString('ru-RU')} ячеек при пределе ` +
+                    `${res.limit.toLocaleString('ru-RU')}. Увеличьте шаг сетки.`;
+                return;
+            }
+            earthworkReport =
+                `Картограмма — «${rec.name}»\n` +
+                `Проект: ${mode === 'level' ? `горизонт ${Number($('earthworkLevel').value).toFixed(3)} м` : 'отметки контура'}\n` +
+                `Шаг сетки: ${res.step} м, ячеек внутри контура: ${res.cells}` +
+                ` (с отметкой земли: ${res.measured})\n` +
+                `Площадь контура (план): ${res.planArea.toFixed(2)} м²\n` +
+                `Площадь, по которой посчитан объём: ${res.area.toFixed(2)} м²\n` +
+                `Выемка: ${res.cut.toFixed(2)} м³\n` +
+                `Насыпь: ${res.fill.toFixed(2)} м³\n` +
+                `Баланс (насыпь−выемка): ${res.balance.toFixed(2)} м³\n` +
+                (res.minWork != null
+                    ? `Рабочие отметки: от ${res.minWork.toFixed(3)} до ${res.maxWork.toFixed(3)} м\n` : '') +
+                (res.noGround ? `Ячеек без отметки земли (в объём не вошли): ${res.noGround}\n` : '');
+            out.textContent = earthworkReport;
+            // Расхождение площадей — мера погрешности метода квадратов
+            const diff = Math.abs(res.area - res.planArea) / (res.planArea || 1);
+            if (diff > 0.05) {
+                notify(
+                    `Сетка покрыла ${(res.area / res.planArea * 100).toFixed(0)} % площади контура — ` +
+                    'уменьшите шаг, если нужна точность.'
+                );
+            }
+            trackUsage('earthwork', { mode, cells: res.cells });
+        }
+
+        $('earthworkMode')?.addEventListener('change', syncEarthworkFields);
+        $('earthworkRun')?.addEventListener('click', runEarthwork);
+        $('earthworkSelect')?.addEventListener('change', () => {
+            earthworkRecordId = Number($('earthworkSelect').value);
+        });
+        $('earthworkClose')?.addEventListener('click', () => {
+            $('earthworkModal').classList.remove('show');
+            earthworkPanel.reset();
+        });
+        $('earthworkCopy')?.addEventListener('click', async () => {
+            if (!earthworkReport) return notifyError('Сначала посчитайте.');
+            try {
+                await navigator.clipboard.writeText(earthworkReport);
+                notify('Отчёт по картограмме скопирован.');
+            } catch (_) {
+                notifyError('Буфер обмена недоступен.');
+            }
+        });
+        syncEarthworkFields();
 
         let filletTargetId = null;
         let filletTargetVertex = -1;
@@ -22202,6 +22568,9 @@ ${componentXml || '    '}
         $('ctxPolylineProfile').addEventListener('click', () => {
             if (stageContextPolyline) openPolylineProfile(stageContextPolyline);
         });
+        $('ctxPolylineEarthwork').addEventListener('click', () => {
+            if (stageContextPolyline) openEarthworkModal(stageContextPolyline);
+        });
         $('ctxPolylineSweep').addEventListener('click', () => {
             if (!stageContextPolyline) return;
             // Тело строится по «выбранной» полилинии — sweepAxisPoints берёт ту,
@@ -23767,7 +24136,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.11',
-            buildId: '2caa512',
+            buildId: 'cc47e8d',
             released: '2026-08-11',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

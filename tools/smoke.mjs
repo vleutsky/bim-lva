@@ -775,6 +775,36 @@ async function checkDrawDxf(page) {
         }
     }
 
+    // Картограмма. Точного ответа для сетки коробок нет, зато есть точный
+    // ИНВАРИАНТ: поднимаем проектную отметку на Δ — баланс обязан вырасти
+    // ровно на «измеренная площадь × Δ», потому что у каждой ячейки рабочая
+    // отметка выросла на Δ. Это проверяет и объём, и площадь разом.
+    const earth = await page.evaluate((id) => {
+        const D = window.BimLvaDebug;
+        D.setPolylineClosed(id, true);
+        const a = D.earthwork(id, 1, 'level', 0);
+        const b = D.earthwork(id, 1, 'level', 10);
+        D.setPolylineClosed(id, false);
+        return { a, b };
+    }, three.id);
+    if (!earth.a || earth.a.tooFine) {
+        problems.push('картограмма не посчиталась');
+    } else if (!earth.a.measured) {
+        problems.push('картограмма: внутри контура не нашлось ни одной ячейки с землёй');
+    } else {
+        const got = earth.b.balance - earth.a.balance;
+        const want = earth.a.area * 10;
+        if (Math.abs(got - want) > 1e-6) {
+            problems.push(`картограмма: подъём отметки на 10 м дал ${got.toFixed(3)} м³ вместо ${want.toFixed(3)}`);
+        }
+        if (Math.abs(earth.a.balance - (earth.a.fill - earth.a.cut)) > 1e-9) {
+            problems.push('картограмма: баланс не равен «насыпь минус выемка»');
+        }
+        if (earth.a.measured + earth.a.noGround !== earth.a.cells) {
+            problems.push('картограмма: ячейки с землёй и без неё не дают общее число');
+        }
+    }
+
     // Список полилиний: модалка открывается, переименование и общее удаление работают.
     await page.evaluate(() => document.getElementById('btnPolylineList')?.click());
     const listShown = await page.locator('#polylinesModal.show').count().catch(() => 0);
@@ -793,6 +823,51 @@ async function checkDrawDxf(page) {
     const afterClear = await page.evaluate(() => window.BimLvaDebug.drawn.length);
     if (afterClear !== 0) problems.push(`«Удалить все» оставило ${afterClear} полилиний`);
     await page.evaluate(() => document.getElementById('polylinesClose')?.click());
+
+    // Ввод точки числами. Оси сцены: X — восток, Y — север, азимут в геодезии
+    // отсчитывается ПО часовой от севера. Значит 90° — чистый восток, 0° —
+    // чистый север; на этом и ловится перепутанный синус с косинусом.
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (!b.classList.contains('on')) b.click();
+    });
+    let numericStart = null;
+    for (const [dx, dy] of [[0, 0], [0.08, 0.05], [-0.08, -0.05]]) {
+        await page.mouse.click(cx + dx * box.width, cy + dy * box.height);
+        await page.waitForTimeout(90);
+        numericStart = await page.evaluate(() => window.BimLvaDebug.drawDraftPoints);
+        if (numericStart) break;
+    }
+    const numeric = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        // Три шага подряд: по разностям видно направление, координаты первой
+        // (кликнутой) точки для этого знать не нужно.
+        const a = D.drawPointByNumbers(10, 90, 0);
+        const b = D.drawPointByNumbers(10, 90, 0);
+        const c = D.drawPointByNumbers(10, 0, 0);
+        return { a, b, c };
+    });
+    if (!numeric.a || !numeric.b || !numeric.c) {
+        problems.push('ввод точки числами не сработал');
+    } else {
+        const east = { x: numeric.b.x - numeric.a.x, y: numeric.b.y - numeric.a.y };
+        const north = { x: numeric.c.x - numeric.b.x, y: numeric.c.y - numeric.b.y };
+        if (Math.abs(east.x - 10) > 1e-6 || Math.abs(east.y) > 1e-6) {
+            problems.push(`азимут 90° дал сдвиг (${east.x.toFixed(3)}, ${east.y.toFixed(3)}) вместо (10, 0)`);
+        }
+        if (Math.abs(north.x) > 1e-6 || Math.abs(north.y - 10) > 1e-6) {
+            problems.push(`азимут 0° дал сдвиг (${north.x.toFixed(3)}, ${north.y.toFixed(3)}) вместо (0, 10)`);
+        }
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(120);
+    await page.evaluate(() => {
+        const b = document.getElementById('btnDraw');
+        if (b.classList.contains('on')) b.click();
+        document.getElementById('btnPolylineList')?.click();
+        document.getElementById('polylinesClear')?.click();
+        document.getElementById('polylinesClose')?.click();
+    });
 
     return { polylines: drawn.length, vertices: vertexCount, x: first.x, snaps: snaps.length };
 }
