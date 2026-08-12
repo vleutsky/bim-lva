@@ -195,6 +195,13 @@ dotnet build LVA.Civil.BIM\LVA.Civil.BIM.csproj -c Release
 обычные `index.ts` + `license-lic.js`, они источник правды.
 Подробности — `supabase/functions/license-issue/README.md`.
 
+Миграции применяются в SQL Editor по порядку номеров, повторный запуск
+безопасен (`if not exists` / `drop … if exists`). Пошагово, с запросами «что
+уже применено» и разбором сообщений — `supabase/migrations/README.md`. Обе
+миграции лицензий прогнаны на настоящем PostgreSQL 16 с заглушкой схемы `auth`;
+проверено в том числе, что **без** `20260812180000` вставка лицензии без
+`user_id` отклоняется, то есть миграция обязательна для импорта.
+
 ---
 
 ## 6. Состав ленты Civil 3D (посчитано по исходникам)
