@@ -1177,6 +1177,57 @@
             cursor: ns-resize;
         }
 
+        /* Подписи прямо на линии: длина и уклон посередине отрезка, отметка у
+           вершины. Слой отдельный от #labels-container — тот целиком чистится
+           clearMeasureAll(), и подписи полилинии уносило бы вместе с замерами. */
+        #polyline-annot {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 16;
+            overflow: hidden;
+        }
+        .poly-seg-label,
+        .poly-vz-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            white-space: nowrap;
+            padding: 2px 6px;
+            border-radius: 4px;
+            box-shadow: 0 1px 4px rgba(10, 20, 32, .35);
+            /* Небольшой зазор от самой черты: подпись, посаженная ровно на
+               линию, закрывает её собой. */
+            transform: translate(-50%, calc(-100% - 6px));
+        }
+        .poly-seg-label {
+            background: rgba(255, 255, 255, .94);
+            border: 1px solid #1f8f5f;
+            color: #10321f;
+        }
+        .poly-vz-label {
+            background: rgba(31, 111, 139, .94);
+            border: 1px solid #16556c;
+            color: #fff;
+            pointer-events: auto;
+            cursor: text;
+            transform: translate(-50%, 8px);
+        }
+        .poly-vz-label:hover { background: rgba(23, 88, 111, .97); }
+        .poly-vz-label.is-editing { padding: 0; border-color: #f06424; }
+        .poly-vz-label input {
+            width: 84px;
+            font: inherit;
+            padding: 2px 5px;
+            border: 0;
+            border-radius: 3px;
+            background: #fff;
+            color: #10202c;
+        }
+
         .pin-row {
             display: grid;
             grid-template-columns: 40px 1fr auto auto auto;
@@ -2707,7 +2758,7 @@
         </div>
         <div id="labels-container"></div>
         <svg id="coord-pin-leaders"></svg>
-        <div id="coord-pins-container"></div> <div id="polyline-handles"></div> <div id="boxSelectRect"></div>
+        <div id="coord-pins-container"></div> <div id="polyline-annot"></div> <div id="polyline-handles"></div> <div id="boxSelectRect"></div>
         <div id="tourHud" class="tour-hud" hidden>
             <span id="tourHudText">Проезд…</span>
             <select id="tourHudCamView" class="editInput" title="Вид камеры" style="max-width:160px;padding:4px 8px;font-size:12px">
@@ -6998,6 +7049,7 @@
             drawPoints = [];
             polylineEditingId = null;
             clearPolylineHandles();
+            clearPolylineAnnotations();
             refreshDrawDraft();
             updateDrawUi();
         }
@@ -7359,6 +7411,148 @@
             });
         }
 
+        /* ------------------------------------------------------------------
+         * Подписи прямо на линии: длина и уклон посередине отрезка, отметка
+         * у вершины. Раньше эти числа жили только в таблице вершин, и при
+         * вытягивании ручкой приходилось смотреть в панель, а не на модель.
+         *
+         * Слой пересобирается при смене состава вершин, а позиционируется
+         * каждый кадр — тем же циклом, что двигает ручки.
+         * ------------------------------------------------------------------ */
+        const polylineAnnotLayer = document.getElementById('polyline-annot');
+        let polylineSegLabels = [];     // {el, i, j}
+        let polylineVzLabels = [];      // {el, idx}
+        let polylineVzEditing = null;   // idx вершины, которую сейчас правят
+
+        /** Ниже этой экранной длины подпись отрезка не рисуем — иначе на
+         *  частой ломаной они наезжают друг на друга и читать нечего. */
+        const SEG_LABEL_MIN_PX = 46;
+
+        function clearPolylineAnnotations() {
+            polylineSegLabels.forEach((s) => s.el.remove());
+            polylineVzLabels.forEach((v) => v.el.remove());
+            polylineSegLabels = [];
+            polylineVzLabels = [];
+            polylineVzEditing = null;
+        }
+
+        /** Полилиния, для которой сейчас показываем подписи и ручки. */
+        function annotatedPolyline() {
+            return drawnPolylines.find((r) => r.id === polylineEditingId) || null;
+        }
+
+        function rebuildPolylineAnnotations() {
+            clearPolylineAnnotations();
+            const rec = annotatedPolyline();
+            if (!rec || !polylineAnnotLayer) { markNeedsRender(); return; }
+
+            const last = rec.closed ? rec.pts.length : rec.pts.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = polylineNextIndex(rec, i);
+                if (j < 0) continue;
+                const el = document.createElement('div');
+                el.className = 'poly-seg-label';
+                polylineAnnotLayer.appendChild(el);
+                polylineSegLabels.push({ el, i, j });
+            }
+
+            // У 2D-полилинии все отметки равны — столбик одинаковых чисел
+            // вдоль линии ничего не сообщает, поэтому там подписей нет.
+            if (rec.kind !== '2d') {
+                rec.pts.forEach((_, idx) => {
+                    const el = document.createElement('div');
+                    el.className = 'poly-vz-label';
+                    el.title = 'Абсолютная отметка вершины. Нажмите, чтобы изменить';
+                    el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                    el.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        startVertexElevationEdit(idx);
+                    });
+                    polylineAnnotLayer.appendChild(el);
+                    polylineVzLabels.push({ el, idx });
+                });
+            }
+            updatePolylineAnnotations();
+        }
+
+        /** Подпись отметки → поле ввода прямо в сцене. */
+        function startVertexElevationEdit(idx) {
+            const rec = annotatedPolyline();
+            const slot = polylineVzLabels.find((v) => v.idx === idx);
+            if (!rec || !slot || polylineVzEditing === idx) return;
+            polylineVzEditing = idx;
+
+            const abs = rec.abs?.[0] ? worldPointToAbsoluteXYZ(rec.pts[idx]) : rec.pts[idx];
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = '0.01';
+            input.value = (abs?.z ?? rec.pts[idx].z).toFixed(3);
+            slot.el.classList.add('is-editing');
+            slot.el.textContent = '';
+            slot.el.appendChild(input);
+            input.focus();
+            input.select();
+
+            let closed = false;
+            const finish = (apply) => {
+                if (closed) return;
+                closed = true;
+                const v = Number(input.value);
+                polylineVzEditing = null;
+                slot.el.classList.remove('is-editing');
+                if (apply && Number.isFinite(v)) {
+                    setPolylineVertexElevation(rec, idx, v);
+                    trackUsage('polyline_vertex_z_inline', {});
+                }
+                updatePolylineAnnotations();
+            };
+            input.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', () => finish(true));
+        }
+
+        function updatePolylineAnnotations() {
+            if (!polylineSegLabels.length && !polylineVzLabels.length) return;
+            const rec = annotatedPolyline();
+            if (!rec) { clearPolylineAnnotations(); return; }
+
+            for (const { el, i, j } of polylineSegLabels) {
+                const a = rec.pts[i];
+                const b = rec.pts[j];
+                if (!a || !b) { el.hidden = true; continue; }
+                const sa = projectToPixels(a);
+                const sb = projectToPixels(b);
+                if (sa.behind || sb.behind) { el.hidden = true; continue; }
+                if (Math.hypot(sb.x - sa.x, sb.y - sa.y) < SEG_LABEL_MIN_PX) { el.hidden = true; continue; }
+                el.hidden = false;
+                const l3d = a.distanceTo(b);
+                const l2d = Math.hypot(b.x - a.x, b.y - a.y);
+                const dz = b.z - a.z;
+                // На плоской линии уклон всегда 0 — не занимаем им место.
+                el.textContent = rec.kind === '2d' || Math.abs(dz) < 1e-6
+                    ? `${l3d.toFixed(2)} м`
+                    : `${l3d.toFixed(2)} м · ${(dz / (l2d || 1e-9) * 1000).toFixed(1)} ‰`;
+                el.style.transform =
+                    `translate(-50%, calc(-100% - 6px)) translate(${(sa.x + sb.x) / 2}px, ${(sa.y + sb.y) / 2}px)`;
+            }
+
+            for (const { el, idx } of polylineVzLabels) {
+                const p = rec.pts[idx];
+                if (!p) { el.hidden = true; continue; }
+                const s = projectToPixels(p);
+                if (s.behind) { el.hidden = true; continue; }
+                el.hidden = false;
+                if (polylineVzEditing !== idx) {
+                    const abs = worldPointToAbsoluteXYZ(p) || p;
+                    el.textContent = abs.z.toFixed(3);
+                }
+                el.style.transform = `translate(-50%, 8px) translate(${s.x}px, ${s.y}px)`;
+            }
+        }
+
         function renderPolylinesList() {
             const body = $('polylinesList');
             const count = $('polylinesCount');
@@ -7454,6 +7648,7 @@
                 : null;
             renderPolylinePointsEditor(rec || null);
             rebuildPolylineHandles();
+            rebuildPolylineAnnotations();
             refreshPolylineProfileIfOpen();
             rebuildLiveSweeps();
             fillSweepAxisSelect();
@@ -8487,6 +8682,7 @@
             // Ручки принадлежат раскрытой полилинии — закрыли панель, убрали их
             polylineEditingId = null;
             clearPolylineHandles();
+            clearPolylineAnnotations();
             markNeedsRender();
         });
         // backdrop прозрачный и pointer-events:none — клик по сцене окно не закрывает
@@ -8749,6 +8945,7 @@
             // Ручки вершин — в том же кадре, что и подписи: иначе отстают от
             // модели при вращении камеры.
             updatePolylineHandles();
+            updatePolylineAnnotations();
 
             frames++; 
             acc += now - last; 

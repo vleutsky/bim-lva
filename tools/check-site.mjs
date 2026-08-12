@@ -16,7 +16,8 @@ import { startStaticServer } from './static-server.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PAGES = [
     'index.html', 'portfolio.html', 'cabinet.html',
-    'license-admin.html', 'case_inventor.html', 'plugin_ksi.html'
+    'license-admin.html', 'case_inventor.html', 'plugin_ksi.html',
+    'testing.html'
 ];
 
 /** Явные признаки незаполненного шаблона. */

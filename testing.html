@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Программа испытаний BIM.LVA Composer IFC: обзор инструментов просмотрщика со снимками экрана и чек-листом проверки.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#128208;</text></svg>">
+<title>Полевые испытания Composer IFC</title>
+
+<style>
+/* Шрифты берём из assets/vendor/fonts — они уже лежат в репозитории и
+   отдаются с того же домена, инлайнить их незачем. Syne и Archivo из
+   палитры сайта кириллицу не покрывают, поэтому дисплейную роль здесь
+   несёт IBM Plex Mono — тот же, которым вьювер печатает координаты. */
+@import url('./assets/vendor/fonts/site.css');
+@import url('./assets/vendor/fonts/composer.css');
+
+/* ---- Токены. Светлая палитра — на голом :root, чтобы она работала и
+       в «системной» теме, где на корне нет ни одной пометки. ---- */
+:root{
+  --ground:#eef2f6; --surface:#ffffff; --surface-2:#f6f9fb; --surface-3:#e6edf3;
+  --ink:#101c28; --ink-soft:#4b5b6b; --ink-faint:#7b8b9b;
+  --line:#cfdae4; --line-soft:#e0e8ef;
+  --steel:#1f6f8b; --steel-deep:#155672; --steel-wash:rgba(31,111,139,.09);
+  --warm:#b34d1a; --warm-wash:rgba(179,77,26,.08); --warm-line:rgba(179,77,26,.28);
+  --ok:#157f5a; --ok-wash:rgba(21,127,90,.1);
+  --shadow:0 1px 2px rgba(16,28,40,.04), 0 8px 24px rgba(16,28,40,.06);
+  --shadow-fig:0 2px 8px rgba(16,28,40,.08), 0 18px 44px rgba(16,28,40,.1);
+  --r:10px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0d151d; --surface:#141f2a; --surface-2:#18242f; --surface-3:#1f2e3b;
+    --ink:#e3ecf4; --ink-soft:#9db0c1; --ink-faint:#71879a;
+    --line:#26374a; --line-soft:#1e2d3c;
+    --steel:#5aa8c6; --steel-deep:#8ac6dd; --steel-wash:rgba(90,168,198,.12);
+    --warm:#e2895a; --warm-wash:rgba(226,137,90,.11); --warm-line:rgba(226,137,90,.3);
+    --ok:#46b98a; --ok-wash:rgba(70,185,138,.12);
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+    --shadow-fig:0 2px 8px rgba(0,0,0,.34), 0 18px 44px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0d151d; --surface:#141f2a; --surface-2:#18242f; --surface-3:#1f2e3b;
+  --ink:#e3ecf4; --ink-soft:#9db0c1; --ink-faint:#71879a;
+  --line:#26374a; --line-soft:#1e2d3c;
+  --steel:#5aa8c6; --steel-deep:#8ac6dd; --steel-wash:rgba(90,168,198,.12);
+  --warm:#e2895a; --warm-wash:rgba(226,137,90,.11); --warm-line:rgba(226,137,90,.3);
+  --ok:#46b98a; --ok-wash:rgba(70,185,138,.12);
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+  --shadow-fig:0 2px 8px rgba(0,0,0,.34), 0 18px 44px rgba(0,0,0,.4);
+}
+
+*,*::before,*::after{box-sizing:border-box;}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:'Source Sans 3',system-ui,sans-serif; font-size:16.5px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:600;line-height:1.2;text-wrap:balance;margin:0;}
+p{margin:0;}
+a{color:var(--steel);text-decoration-color:color-mix(in srgb,var(--steel) 40%,transparent);text-underline-offset:3px;}
+a:hover{color:var(--steel-deep);}
+:focus-visible{outline:2px solid var(--steel);outline-offset:2px;border-radius:3px;}
+code{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:.86em;}
+
+/* ---- Каркас ---- */
+.shell{max-width:1240px;margin:0 auto;padding:0 24px;}
+.layout{display:grid;grid-template-columns:1fr;gap:0;}
+@media (min-width:1060px){
+  .layout{grid-template-columns:232px minmax(0,1fr);gap:56px;align-items:start;}
+}
+
+/* ---- Шапка ---- */
+.masthead{border-bottom:1px solid var(--line);background:var(--surface);}
+.masthead .shell{padding-top:46px;padding-bottom:38px;}
+.eyebrow{
+  font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--steel);
+}
+h1{font-size:clamp(30px,4.4vw,46px);letter-spacing:-.022em;margin:14px 0 0;}
+.dek{margin-top:16px;max-width:64ch;color:var(--ink-soft);font-size:17.5px;}
+.meta{
+  display:flex;flex-wrap:wrap;gap:8px;margin-top:24px;
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+}
+.meta span{
+  padding:5px 11px;border:1px solid var(--line);border-radius:999px;
+  background:var(--surface-2);color:var(--ink-soft);
+}
+
+/* ---- Навигация ---- */
+.rail{display:none;}
+@media (min-width:1060px){
+  .rail{display:block;position:sticky;top:24px;padding:36px 0 40px;}
+}
+.rail-title{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px;
+}
+.rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;}
+.rail a{
+  display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:baseline;
+  padding:6px 9px;border-radius:7px;font-size:14px;line-height:1.35;
+  color:var(--ink-soft);text-decoration:none;border-left:2px solid transparent;
+}
+.rail a:hover{background:var(--surface-2);color:var(--ink);}
+.rail a.on{background:var(--steel-wash);color:var(--ink);border-left-color:var(--steel);}
+.rail a b{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:12px;color:var(--ink-faint);}
+.rail a.on b{color:var(--steel);}
+.progress{
+  margin-top:22px;padding:13px 14px;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--surface);
+}
+.progress .n{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;}
+.progress .lbl{font-size:12.5px;color:var(--ink-soft);margin-top:2px;line-height:1.35;}
+.bar{height:4px;border-radius:99px;background:var(--surface-3);margin-top:10px;overflow:hidden;}
+.bar i{display:block;height:100%;background:var(--ok);width:0;transition:width .25s ease;}
+.reset{
+  margin-top:10px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:none;border:0;
+  padding:0;color:var(--ink-faint);cursor:pointer;text-decoration:underline;
+  text-underline-offset:2px;
+}
+.reset:hover{color:var(--warm);}
+
+/* ---- Содержание ---- */
+main{padding:44px 0 90px;min-width:0;}
+.sec{scroll-margin-top:20px;}
+.sec + .sec{margin-top:56px;padding-top:52px;border-top:1px solid var(--line);}
+.sec-head{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start;}
+.sec-num{
+  font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:13px;color:var(--steel);
+  border:1px solid var(--line);border-radius:7px;padding:4px 9px;background:var(--surface);
+  font-variant-numeric:tabular-nums;
+}
+h2{font-size:clamp(21px,2.5vw,26px);letter-spacing:-.014em;}
+.sec-head p{margin-top:9px;color:var(--ink-soft);max-width:68ch;}
+.sec-body{margin-top:26px;display:flex;flex-direction:column;gap:26px;}
+h3{
+  font-size:13.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);
+  padding-bottom:7px;border-bottom:1px solid var(--line-soft);
+}
+
+/* ---- Рисунок ---- */
+figure{margin:0;}
+figure img{
+  display:block;width:100%;height:auto;border-radius:var(--r);
+  border:1px solid var(--line);box-shadow:var(--shadow-fig);background:var(--surface);
+}
+figcaption{
+  margin-top:11px;font-size:13.5px;color:var(--ink-soft);
+  padding-left:13px;border-left:2px solid var(--line);max-width:74ch;
+}
+figcaption b{color:var(--ink);font-weight:600;}
+@media (min-width:1300px){
+  .wide{width:calc(100% + 90px);}
+}
+
+/* ---- Строка инструмента ---- */
+.tools{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);
+  border-radius:var(--r);overflow:hidden;background:var(--surface);}
+.tool{display:grid;grid-template-columns:1fr;gap:5px;padding:14px 16px;}
+.tool + .tool{border-top:1px solid var(--line-soft);}
+@media (min-width:680px){
+  .tool{grid-template-columns:214px minmax(0,1fr);gap:8px 20px;align-items:baseline;}
+}
+.tool-name{display:flex;flex-wrap:wrap;gap:7px;align-items:baseline;}
+.tool-name b{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:14.5px;color:var(--ink);}
+.tool-desc{color:var(--ink-soft);font-size:15px;}
+.tool-desc code{
+  background:var(--surface-3);padding:1px 5px;border-radius:4px;color:var(--ink);
+}
+.key{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;padding:2px 6px;
+  border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+  background:var(--surface-2);color:var(--ink-soft);white-space:nowrap;
+}
+
+/* ---- Что проверить ---- */
+.checks{
+  border:1px solid var(--warm-line);border-radius:var(--r);
+  background:var(--warm-wash);padding:16px 18px;
+}
+.checks-h{
+  font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--warm);margin-bottom:11px;
+}
+.checks ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px;}
+.checks li{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;
+  font-size:15px;line-height:1.5;}
+.checks label{display:contents;cursor:pointer;}
+.checks input{
+  appearance:none;width:17px;height:17px;margin:3px 0 0;flex:none;cursor:pointer;
+  border:1.5px solid var(--warm-line);border-radius:4px;background:var(--surface);
+  display:grid;place-content:center;transition:background .12s,border-color .12s;
+}
+.checks input::after{
+  content:"";width:9px;height:5px;border:2px solid var(--surface);border-top:0;
+  border-right:0;transform:rotate(-45deg) scale(0);transition:transform .12s;
+}
+.checks input:checked{background:var(--ok);border-color:var(--ok);}
+.checks input:checked::after{transform:rotate(-45deg) scale(1);}
+.checks input:checked + span{color:var(--ink-faint);text-decoration:line-through;
+  text-decoration-color:var(--ink-faint);}
+.checks span{color:var(--ink);}
+.checks code{background:var(--surface);padding:1px 5px;border-radius:4px;}
+
+/* ---- Заметка ---- */
+.note{
+  border-left:3px solid var(--steel);background:var(--steel-wash);
+  padding:13px 16px;border-radius:0 var(--r) var(--r) 0;font-size:15px;color:var(--ink-soft);
+}
+.note b{color:var(--ink);font-weight:600;}
+.note code{background:var(--surface);padding:1px 5px;border-radius:4px;}
+
+/* ---- Таблица ---- */
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);}
+table{width:100%;border-collapse:collapse;font-size:14.5px;}
+th,td{text-align:left;padding:10px 15px;border-bottom:1px solid var(--line-soft);}
+th{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-faint);background:var(--surface-2);white-space:nowrap;}
+tr:last-child td{border-bottom:0;}
+td:first-child{font-family:'IBM Plex Mono',monospace;font-size:13px;white-space:nowrap;color:var(--ink);}
+td.fmt{color:var(--ink-soft);}
+
+/* ---- Плашка форматов ---- */
+.fmts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px;}
+.fmt-card{
+  border:1px solid var(--line);border-radius:8px;padding:11px 13px;background:var(--surface);
+}
+.fmt-card b{font-family:'IBM Plex Mono',monospace;font-size:13.5px;font-weight:600;display:block;}
+.fmt-card span{font-size:13px;color:var(--ink-soft);line-height:1.4;display:block;margin-top:3px;}
+.fmt-card.no{background:var(--surface-2);border-style:dashed;}
+.fmt-card.no b{color:var(--ink-faint);}
+
+footer{
+  border-top:1px solid var(--line);background:var(--surface);
+  padding:30px 0 44px;font-size:14px;color:var(--ink-soft);
+}
+footer .shell{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;transition-duration:.001ms !important;}
+  html{scroll-behavior:auto;}
+}
+html{scroll-behavior:smooth;}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="shell">
+    <div class="eyebrow">BIM.LVA Composer IFC · программа испытаний</div>
+    <h1>Полевые испытания Composer&nbsp;IFC</h1>
+    <p class="dek">
+      Что умеет просмотрщик и что именно стоит проверить на своих файлах.
+      Каждый раздел — группа инструментов, снимок экрана и список того,
+      что должно сработать. Отмечайте пункты по ходу: отметки сохраняются
+      в браузере.
+    </p>
+    <div class="meta">
+      <span>Открывается в браузере, без установки</span>
+      <span>Файлы не уходят с компьютера</span>
+      <span>Снимки сделаны на демо-модели</span>
+    </div>
+  </div>
+</header>
+
+<div class="shell layout">
+  <nav class="rail" aria-label="Разделы">
+    <div class="rail-title">Порядок проверки</div>
+    <ol id="nav">
+      <li><a href="#s1"><b>01</b><span>Открыть модель</span></a></li>
+      <li><a href="#s2"><b>02</b><span>Навигация и виды</span></a></li>
+      <li><a href="#s3"><b>03</b><span>Выделение и свойства</span></a></li>
+      <li><a href="#s4"><b>04</b><span>Замеры и разрезы</span></a></li>
+      <li><a href="#s5"><b>05</b><span>Видимость</span></a></li>
+      <li><a href="#s6"><b>06</b><span>Анализ модели</span></a></li>
+      <li><a href="#s7"><b>07</b><span>Черчение 2D/3D</span></a></li>
+      <li><a href="#s8"><b>08</b><span>Выгрузка и источники</span></a></li>
+      <li><a href="#s9"><b>09</b><span>Если что-то не так</span></a></li>
+    </ol>
+    <div class="progress">
+      <div class="n"><span id="done">0</span> / <span id="total">0</span></div>
+      <div class="lbl">пунктов проверено</div>
+      <div class="bar"><i id="barFill"></i></div>
+      <button type="button" class="reset" id="reset">сбросить отметки</button>
+    </div>
+  </nav>
+
+  <main>
+
+    <!-- 01 -->
+    <section class="sec" id="s1">
+      <div class="sec-head">
+        <div class="sec-num">01</div>
+        <div>
+          <h2>Открыть модель</h2>
+          <p>
+            Кнопка <b>«Локально»</b> справа вверху или перетаскивание файла прямо
+            в окно. Можно выбрать сразу несколько файлов — они соберутся в одну
+            сводку. Ничего никуда не загружается: разбор идёт в браузере.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <figure class="wide">
+          <img src="./img/testing/01-start.jpg" alt="Стартовый экран просмотрщика со списком поддерживаемых форматов">
+          <figcaption>Пока модели нет, на экране перечислены форматы. <b>Это же место — зона перетаскивания:</b> файл можно бросить прямо сюда.</figcaption>
+        </figure>
+
+        <h3>Что открывается</h3>
+        <div class="fmts">
+          <div class="fmt-card"><b>IFC</b><span>IFC2X3, IFC4, IFC4X3</span></div>
+          <div class="fmt-card"><b>DWG</b><span>R13…2018, с блоками</span></div>
+          <div class="fmt-card"><b>DXF</b><span>ASCII: 3DFACE, MESH, TIN, 3DSOLID</span></div>
+          <div class="fmt-card"><b>LandXML</b><span>Civil 3D: поверхности, коридоры, трассы, сети</span></div>
+          <div class="fmt-card"><b>FBX · GLB<br>OBJ · STL</b><span>обычная 3D-геометрия</span></div>
+          <div class="fmt-card no"><b>RVT</b><span>невозможно в браузере — нужен экспорт в IFC</span></div>
+          <div class="fmt-card no"><b>Tekla · Plant 3D</b><span>через экспорт в IFC или DXF</span></div>
+          <div class="fmt-card no"><b>GLTF · PLY · DAE · 3DS</b><span>не поддерживаются</span></div>
+        </div>
+
+        <div class="note">
+          <b>Большая модель тормозит?</b> В меню <code>⋯</code> есть
+          «Фильтр при загрузке IFC»: пресет отсекает арматуру, метизы и мебель
+          ещё до загрузки, и памяти уходит заметно меньше. Пресет действует на
+          <b>следующие</b> открываемые файлы, а не на уже загруженные.
+        </div>
+
+        <figure class="wide">
+          <img src="./img/testing/02-loaded.jpg" alt="Загруженная демо-модель: двухэтажное здание в изометрии, слева дерево структуры">
+          <figcaption>Модель загружена. Слева — дерево <b>Проект → Площадка → Здание → Этаж → класс</b>, справа счётчики файлов и элементов.</figcaption>
+        </figure>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Свой рабочий IFC открывается, дерево совпадает с тем, что в Navisworks или Civil 3D.</span></label></li>
+            <li><label><input type="checkbox"><span>Несколько файлов, выбранных разом, собираются в одну сводку и стоят друг относительно друга правильно.</span></label></li>
+            <li><label><input type="checkbox"><span>Самый тяжёлый файл, который у вас есть, — открывается ли вообще и за сколько.</span></label></li>
+            <li><label><input type="checkbox"><span>DWG или DXF с блоками: вставки раскрылись, чертёж не пустой.</span></label></li>
+            <li><label><input type="checkbox"><span>Файл <code>.rvt</code> — должно появиться внятное объяснение, а не молчание или ошибка.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 -->
+    <section class="sec" id="s2">
+      <div class="sec-head">
+        <div class="sec-num">02</div>
+        <div>
+          <h2>Навигация и виды</h2>
+          <p>
+            Вращение — левой кнопкой, зум — колесом, причём по умолчанию
+            <b>к точке под курсором</b>, как в Navisworks и BIMvision.
+            Куб видов в правом верхнем углу даёт шесть стандартных направлений
+            и переключает проекцию.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <figure class="wide">
+          <img src="./img/testing/09-top-ortho.jpg" alt="Вид сверху в ортогональной проекции — план здания">
+          <figcaption>Вид сверху в <b>ортогональной</b> проекции — так модель читается как план. Кнопка «Персп» на кубе переключает между перспективой и параллельной проекцией.</figcaption>
+        </figure>
+
+        <div class="note">
+          Для планов и разрезов нужна именно <b>ортогональная</b> проекция:
+          в перспективе параллельные стены сходятся, и по такому виду нельзя
+          ни мерить, ни сверять.
+        </div>
+
+        <h3>Меню «Вид»</h3>
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Зум к курсору</b></div>
+            <div class="tool-desc">Приближение к точке под мышью, а не к центру орбиты. Выключается, если привычнее иначе.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>На выделении</b></div>
+            <div class="tool-desc">Фиксирует центр вращения на выбранных элементах — орбита крутится вокруг них, а не вокруг всей сводки.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Вписать в кадр</b><span class="key">F</span></div>
+            <div class="tool-desc">Вписывает все модели в окно. Клавиша <code>F</code> при выделении наводится на выделенное.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Сохранённые виды</b></div>
+            <div class="tool-desc">Запоминает камеру, скрытия и разрез — чтобы вернуться к нужному ракурсу одним кликом.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Пакет экспертизы</b></div>
+            <div class="tool-desc">Ссылка, в которую упакованы камера, геопривязка, разрез, заметки BCF, фильтры и легенда. Открывший увидит ровно вашу картинку.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>QR / якорь</b></div>
+            <div class="tool-desc">Тот же вид, но QR-кодом — навести телефон и открыть на объекте.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Проезд / облёт</b></div>
+            <div class="tool-desc">Проезд по маршруту или свободное движение на <code>WASD</code>, с выбором вида камеры вплоть до кабины.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Быстрый режим</b></div>
+            <div class="tool-desc">Снижает нагрузку на видеокарту. Имеет смысл включать на больших IFC.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Ближнее отсечение</b></div>
+            <div class="tool-desc">Если при сильном приближении геометрию «съедает» — выключите «Авто» и поставьте <code>0.01–0.05</code>.</div>
+          </div>
+        </div>
+
+        <figure class="wide">
+          <img src="./img/testing/04-menu-view.jpg" alt="Открытое меню «Вид» со списком настроек камеры и сцены">
+          <figcaption>Меню <b>«Вид»</b>: камера, сохранённые виды, шаринг и настройка ближнего отсечения.</figcaption>
+        </figure>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Вращение и зум ведут себя привычно после Navisworks — не «дёргает», не улетает.</span></label></li>
+            <li><label><input type="checkbox"><span>Вид сверху в ортогональной проекции годится, чтобы читать план.</span></label></li>
+            <li><label><input type="checkbox"><span>При сильном приближении геометрия не обрезается — а если обрезается, помогает ли ручное ближнее отсечение.</span></label></li>
+            <li><label><input type="checkbox"><span>На большой модели «Быстрый режим» действительно ускоряет вращение.</span></label></li>
+            <li><label><input type="checkbox"><span>Ссылка из «Пакета экспертизы», открытая в другом браузере, показывает тот же вид.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 -->
+    <section class="sec" id="s3">
+      <div class="sec-head">
+        <div class="sec-num">03</div>
+        <div>
+          <h2>Выделение и свойства</h2>
+          <p>
+            Клик по элементу — в сцене или в дереве. Панель справа показывает
+            имя, класс, ExpressID и все наборы характеристик, причём значения
+            можно <b>править прямо в ней</b> и сохранять обратно в IFC.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <figure class="wide">
+          <img src="./img/testing/03-selection-props.jpg" alt="Выделенный элемент, панель свойств с набором характеристик Pset">
+          <figcaption>Выделена плита перекрытия: справа — вкладки <b>Свойства / Материал / Правка</b> и набор <code>Pset_LVA_Демо</code> с параметрами, доступными для редактирования.</figcaption>
+        </figure>
+
+        <h3>Способы выбрать</h3>
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Клик по модели</b></div>
+            <div class="tool-desc">Один элемент. Повторный клик по пустому месту или <code>C</code> — снять выделение.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Рамка</b></div>
+            <div class="tool-desc">Протянуть мышью прямоугольник — выберется всё, что в него попало.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Дерево структуры</b></div>
+            <div class="tool-desc">Клик по ветке выбирает всю группу: этаж, класс, файл целиком. Кнопка <b>ВСЕ</b> — всё сразу.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Поиск</b></div>
+            <div class="tool-desc">Часть имени или IFC-класса, затем <code>Enter</code>.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Поиск по параметру</b></div>
+            <div class="tool-desc">Находит все элементы, у которых есть указанный параметр или Pset — и, если нужно, с конкретным значением. Отсюда начинается массовая правка.</div>
+          </div>
+        </div>
+
+        <h3>Что можно сделать с выделенным</h3>
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Править параметры</b></div>
+            <div class="tool-desc">Значения Pset меняются в панели, «Сохранить все параметры» пишет их в модель. Дальше — «Экспорт IFC» в меню IFC.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Excel ⬇ / ⬆</b></div>
+            <div class="tool-desc">Выгрузить характеристики в таблицу, поправить в Excel и залить обратно. Без выделения выгружаются все элементы с геометрией.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Ведомость CSV</b></div>
+            <div class="tool-desc">Меню «Анализ» → таблица по выделенному.</div>
+          </div>
+        </div>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Клик попадает в тот элемент, в который целились, — особенно на плотной модели.</span></label></li>
+            <li><label><input type="checkbox"><span>Свойства совпадают с тем, что показывает Navisworks для того же элемента.</span></label></li>
+            <li><label><input type="checkbox"><span>Правка параметра сохраняется, экспортированный IFC открывается в вашей программе и правка на месте.</span></label></li>
+            <li><label><input type="checkbox"><span>Круг через Excel: выгрузить, поправить, залить обратно — ничего не потерялось.</span></label></li>
+            <li><label><input type="checkbox"><span>«Поиск по параметру» находит то, что вы ищете по своему классификатору.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 -->
+    <section class="sec" id="s4">
+      <div class="sec-head">
+        <div class="sec-num">04</div>
+        <div>
+          <h2>Замеры и разрезы</h2>
+          <p>
+            Рядом с кнопкой <b>«Замер»</b> — выпадающий список режимов.
+            Точки прилипают к геометрии: вершины, середины и рёбра
+            (переключается в меню «Создать 2Д/3Д» → «Привязка к элементам»).
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <figure class="wide">
+          <img src="./img/testing/16-measure.jpg" alt="Замер между двумя точками: наклонное расстояние, горизонтальное, превышение и уклон">
+          <figcaption>Режим <b>2D/3D/i</b> — линейка проектировщика: наклонная длина, горизонтальное проложение, превышение и уклон сразу в промилле, процентах и в виде <code>1:n</code>.</figcaption>
+        </figure>
+
+        <h3>Режимы замера</h3>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Режим</th><th>Что меряет</th></tr></thead>
+            <tbody>
+              <tr><td>м</td><td class="fmt">Расстояние между двумя точками</td></tr>
+              <tr><td>2D/3D/i</td><td class="fmt">Наклонное и горизонтальное расстояние, превышение, уклон</td></tr>
+              <tr><td>∑</td><td class="fmt">Цепочка: сумма отрезков подряд</td></tr>
+              <tr><td>ΔZ</td><td class="fmt">Перепад отметок</td></tr>
+              <tr><td>∠</td><td class="fmt">Угол по трём точкам</td></tr>
+              <tr><td>м²</td><td class="fmt">Площадь по контуру</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <figure class="wide">
+          <img src="./img/testing/13-clip-z.jpg" alt="Горизонтальный разрез: верх здания срезан, видны сечения стен и колонн">
+          <figcaption>Секущая плоскость по <b>Z</b>. Синяя стрелка — ручка: тянешь её, плоскость едет. Оси <code>X</code> и <code>Y</code> дают вертикальные разрезы.</figcaption>
+        </figure>
+
+        <figure class="wide">
+          <img src="./img/testing/14-clip-box.jpg" alt="Коробка сечения: показан только фрагмент модели внутри параллелепипеда">
+          <figcaption>Режим <b>BOX</b> — коробка сечения: остаётся только то, что внутри. Кнопка <code>↔</code> рядом переключает ручки между сдвигом и растяжением коробки.</figcaption>
+        </figure>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Замер сходится с заведомо известным размером — пролётом, толщиной стены, отметкой.</span></label></li>
+            <li><label><input type="checkbox"><span>Привязка ловит нужную точку: конец оси, угол, середину грани.</span></label></li>
+            <li><label><input type="checkbox"><span>Уклон в режиме 2D/3D/i совпадает с проектным.</span></label></li>
+            <li><label><input type="checkbox"><span>Разрез по Z ведёт себя предсказуемо и позволяет заглянуть на нужный этаж.</span></label></li>
+            <li><label><input type="checkbox"><span>Коробка сечения растягивается и двигается без рывков на вашей модели.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 -->
+    <section class="sec" id="s5">
+      <div class="sec-head">
+        <div class="sec-num">05</div>
+        <div>
+          <h2>Видимость</h2>
+          <p>
+            Четыре кнопки в шапке и фильтр по классам закрывают почти все
+            ситуации «убрать лишнее с экрана».
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Скрыть</b><span class="key">Ctrl+H</span></div>
+            <div class="tool-desc">Прячет выделенное.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Изолировать</b><span class="key">I</span></div>
+            <div class="tool-desc">Наоборот: прячет всё, кроме выделенного.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Показать</b><span class="key">Shift+I</span></div>
+            <div class="tool-desc">Сбрасывает и скрытие, и изоляцию.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Очистить</b><span class="key">C</span></div>
+            <div class="tool-desc">Снимает выделение, ничего не пряча.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Фильтр классов</b></div>
+            <div class="tool-desc">Галочки по IFC-классам с количеством элементов. Работает только для IFC — внешние CAD-форматы классов не несут.</div>
+          </div>
+        </div>
+
+        <figure class="wide">
+          <img src="./img/testing/15-isolate.jpg" alt="Изолированный элемент: в сцене осталась одна плита перекрытия">
+          <figcaption>Изоляция одного элемента. Свойства при этом остаются на виду — удобно разбираться, что за объект попался.</figcaption>
+        </figure>
+
+        <figure class="wide">
+          <img src="./img/testing/12-class-filter.jpg" alt="Диалог фильтра по IFC-классам со списком классов и количеством элементов">
+          <figcaption>Фильтр классов: сразу видно <b>состав модели</b> — сколько колонн, стен, балок, труб. Иногда этот список сам по себе полезнее фильтрации.</figcaption>
+        </figure>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Изоляция и возврат работают без «потерянных» элементов, которые не вернулись.</span></label></li>
+            <li><label><input type="checkbox"><span>Список классов в фильтре совпадает с фактическим составом вашей модели.</span></label></li>
+            <li><label><input type="checkbox"><span>Горячие клавиши срабатывают в русской раскладке тоже.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 06 -->
+    <section class="sec" id="s6">
+      <div class="sec-head">
+        <div class="sec-num">06</div>
+        <div>
+          <h2>Анализ модели</h2>
+          <p>
+            Меню <b>«Анализ»</b> — самая содержательная часть: раскраска,
+            коллизии, замечания, сравнение версий, координаты.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <figure class="wide">
+          <img src="./img/testing/11-colorby-applied.jpg" alt="Модель, раскрашенная по IFC-классам, с легендой и количеством элементов">
+          <figcaption>Раскраска <b>по IFC-классу</b>. В легенде справа внизу — цвет и количество по каждому классу. Второй режим красит по значению параметра из Pset: например, по марке или по системе.</figcaption>
+        </figure>
+
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Цвет по классу / Pset</b></div>
+            <div class="tool-desc">Раскраска с легендой. Быстрый способ увидеть, где параметр не заполнен: такие элементы выпадают из легенды.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Коллизии 2.0</b><span class="key">Shift+C</span></div>
+            <div class="tool-desc">Пересечения по габаритам: задаются пары классов и допуск, результат кликом изолируется или превращается в замечание BCF.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>BCF-заметки</b><span class="key">B</span></div>
+            <div class="tool-desc">Точка + комментарий + камера. Выгружаются в <code>.bcfzip</code> формата BCF 2.1 — открываются в Navisworks, Revit, Solibri.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Сравнение IFC</b></div>
+            <div class="tool-desc">Две версии одной модели: что добавлено, что удалено.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>4D-лента</b></div>
+            <div class="tool-desc">Скрытие и подкраска по дате или фазе из Pset — простая проверка календарного плана.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Ведомость CSV</b></div>
+            <div class="tool-desc">Таблица по выделенному, сразу в CSV.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>CRS / смещение</b></div>
+            <div class="tool-desc">Мировой габарит каждого файла и привязка. Сюда идти, если модель «села не туда».</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Сдвиг / поворот</b></div>
+            <div class="tool-desc">Ручное довыравнивание одной модели в сводке, когда файл приехал без координат.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Профиль трассы</b></div>
+            <div class="tool-desc">Для LandXML: план и продольный профиль с пикетажем и отметками.</div>
+          </div>
+        </div>
+
+        <figure class="wide">
+          <img src="./img/testing/05-menu-analyze.jpg" alt="Открытое меню «Анализ» со списком инструментов">
+          <figcaption>Меню <b>«Анализ»</b> целиком.</figcaption>
+        </figure>
+
+        <div class="note">
+          <b>Если модель встала не на место</b> — сначала «Анализ → CRS»:
+          там виден мировой габарит каждого файла <i>до</i> вычитания нуля сцены.
+          Сверьте его с Civil 3D («Свойства поверхности → Статистика»).
+          Расхождение почти всегда приезжает из самого файла, а не из просмотрщика.
+          Разбор одного файла подробнее — «Диагностика IFC» в личном кабинете.
+        </div>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Коллизии на заведомо пересекающихся моделях находятся, и число похоже на правду.</span></label></li>
+            <li><label><input type="checkbox"><span>Проверка коллизий на реальной сводке укладывается в разумное время.</span></label></li>
+            <li><label><input type="checkbox"><span>Выгруженный <code>.bcfzip</code> открывается в вашей программе, точка и камера на месте.</span></label></li>
+            <li><label><input type="checkbox"><span>Абсолютные координаты в строке состояния совпадают с Civil 3D.</span></label></li>
+            <li><label><input type="checkbox"><span>Раскраска по Pset показывает незаполненные параметры там, где вы их ждёте.</span></label></li>
+            <li><label><input type="checkbox"><span>Сравнение двух версий модели даёт осмысленный список изменений.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 07 -->
+    <section class="sec" id="s7">
+      <div class="sec-head">
+        <div class="sec-num">07</div>
+        <div>
+          <h2>Черчение 2D/3D</h2>
+          <p>
+            Просмотрщик умеет не только смотреть: по модели можно ставить метки
+            координат, чертить полилинии и выдавливать по ним тела — а потом
+            выгрузить всё в DXF в мировых координатах.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <figure class="wide">
+          <img src="./img/testing/06-menu-create.jpg" alt="Открытое меню «Создать 2Д/3Д» с метками, построениями и привязкой">
+          <figcaption>Меню <b>«Создать 2Д/3Д»</b>: метки, полилинии, тело по оси и настройка объектной привязки.</figcaption>
+        </figure>
+
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Метка XYZ</b></div>
+            <div class="tool-desc">Клик по модели ставит подпись с абсолютными X, Y, Z в метрах. Точку потом можно перетащить.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Полилиния</b></div>
+            <div class="tool-desc">Клик — вершина, <code>Esc</code> — закончить. Режим <code>3D</code> берёт настоящие отметки, <code>2D</code> кладёт все точки на отметку первой.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Ввод числами</b></div>
+            <div class="tool-desc">Вместо клика — длина, азимут и превышение. Азимут геодезический: по часовой от севера.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Список полилиний</b></div>
+            <div class="tool-desc">Переименование, таблица вершин, радиусы сопряжения в углах, удаление.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Тело по оси</b></div>
+            <div class="tool-desc">Выдавливает сечение вдоль начерченной оси. Объём считается как площадь × длина: на прямой оси точно, на поворотах приблизительно — так и подписано в уведомлении.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Привязка к элементам</b></div>
+            <div class="tool-desc">Вершина, середина, ребро — галочками. Работает и для черчения, и для замеров.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Экспорт в DXF</b></div>
+            <div class="tool-desc">Полилинии и метки в DXF формата R12 — открывается и старыми Civil 3D, и nanoCAD. Координаты абсолютные, чертёж ляжет на площадку.</div>
+          </div>
+        </div>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Метка XYZ показывает те же координаты, что Civil 3D в этой точке.</span></label></li>
+            <li><label><input type="checkbox"><span>Выгруженный DXF открывается в вашем CAD и ложится ровно на площадку, а не у нуля.</span></label></li>
+            <li><label><input type="checkbox"><span>Полилиния, начерченная числами (длина + азимут), идёт туда, куда должна.</span></label></li>
+            <li><label><input type="checkbox"><span>Радиусы сопряжения в углах считаются и отрисовываются верно.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 08 -->
+    <section class="sec" id="s8">
+      <div class="sec-head">
+        <div class="sec-num">08</div>
+        <div>
+          <h2>Выгрузка и другие источники</h2>
+          <p>
+            Меню <b>IFC</b> отвечает за файл на выходе, меню <code>⋯</code> —
+            за всё остальное: облако, растры, карта-подложка.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Экспорт IFC</b></div>
+            <div class="tool-desc">Скачивает изменённые файлы — со всеми правками параметров.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Структура IFC</b></div>
+            <div class="tool-desc">Достраивает Project → Site → Building → Storey и переносит элементы туда. Лечит файлы, приехавшие «плоскими».</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Объединить IFC</b></div>
+            <div class="tool-desc">Собирает все загруженные IFC в один файл под общим проектом, ExpressID пересчитываются без коллизий. Внешние 3D/CAD-форматы в объединение не входят.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Яндекс.Диск</b></div>
+            <div class="tool-desc">Открыть модели прямо с публичной папки или файла — без скачивания вручную.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Растр ECW / GeoTIFF</b></div>
+            <div class="tool-desc">Подложка с геопривязкой, натягивается на 3D-рельеф по координатам.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Карта-подложка</b></div>
+            <div class="tool-desc">Онлайн-карта или космоснимок под моделью.</div>
+          </div>
+        </div>
+
+        <figure class="wide">
+          <img src="./img/testing/08-menu-more.jpg" alt="Открытое меню «⋯» с источниками загрузки и пресетом фильтра">
+          <figcaption>Меню <code>⋯</code>: источники, фильтр классов при загрузке и очистка сцены.</figcaption>
+        </figure>
+
+        <div class="checks">
+          <div class="checks-h">Что проверить</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Экспортированный IFC открывается в Navisworks или Civil 3D без жалоб.</span></label></li>
+            <li><label><input type="checkbox"><span>Объединённая сводка сохраняет взаимное положение моделей.</span></label></li>
+            <li><label><input type="checkbox"><span>Загрузка с Яндекс.Диска работает на вашей публичной папке.</span></label></li>
+            <li><label><input type="checkbox"><span>Растр с геопривязкой ложится на своё место относительно модели.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 09 -->
+    <section class="sec" id="s9">
+      <div class="sec-head">
+        <div class="sec-num">09</div>
+        <div>
+          <h2>Если что-то не так</h2>
+          <p>
+            Замечание тем полезнее, чем меньше его придётся уточнять.
+            Три вещи, которые стоит приложить.
+          </p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="tools">
+          <div class="tool">
+            <div class="tool-name"><b>Версия сборки</b></div>
+            <div class="tool-desc">Кнопка <code>ℹ</code> в шапке. Одна строка — но без неё непонятно, воспроизводить ли ошибку вообще.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Журнал уведомлений</b></div>
+            <div class="tool-desc">Кнопка <code>🔔</code>: все сообщения сессии, включая те, что уже закрылись сами. Часто там лежит настоящая причина.</div>
+          </div>
+          <div class="tool">
+            <div class="tool-name"><b>Ссылка на вид</b></div>
+            <div class="tool-desc">«Вид → Пакет экспертизы»: камера, разрез, фильтры и заметки в одной ссылке. Показать проблему точнее, чем описать словами.</div>
+          </div>
+        </div>
+
+        <div class="note">
+          Что писать: <b>какой файл</b>, <b>что делали по шагам</b>,
+          <b>что ожидали</b> и <b>что получилось</b>, плюс версия сборки.
+          «Не работает» без файла воспроизвести нельзя — а с файлом почти всегда можно.
+        </div>
+
+        <div class="checks">
+          <div class="checks-h">Напоследок</div>
+          <ul>
+            <li><label><input type="checkbox"><span>Прошли все разделы выше на своих файлах, а не только на демо.</span></label></li>
+            <li><label><input type="checkbox"><span>Замечания собраны с версией сборки и ссылкой на вид.</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Горячие клавиши -->
+    <section class="sec" id="s10">
+      <div class="sec-head">
+        <div class="sec-num">↩</div>
+        <div>
+          <h2>Горячие клавиши</h2>
+          <p>Работают и в латинской, и в русской раскладке.</p>
+        </div>
+      </div>
+      <div class="sec-body">
+        <div class="tw">
+          <table>
+            <thead><tr><th>Клавиша</th><th>Действие</th></tr></thead>
+            <tbody>
+              <tr><td>F</td><td class="fmt">Приблизить к выделенному</td></tr>
+              <tr><td>C</td><td class="fmt">Снять выделение</td></tr>
+              <tr><td>I</td><td class="fmt">Изолировать выделенное</td></tr>
+              <tr><td>Shift + I</td><td class="fmt">Показать всё</td></tr>
+              <tr><td>Ctrl + H</td><td class="fmt">Скрыть выделенное</td></tr>
+              <tr><td>M</td><td class="fmt">Замер</td></tr>
+              <tr><td>B</td><td class="fmt">BCF-заметки</td></tr>
+              <tr><td>Shift + C</td><td class="fmt">Коллизии</td></tr>
+              <tr><td>Delete</td><td class="fmt">Удалить выделенное</td></tr>
+              <tr><td>Esc</td><td class="fmt">Завершить черчение полилинии</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="shell">
+    <span>BIM.LVA Composer IFC — программа испытаний</span>
+    <span>Снимки экрана сделаны на синтетической демо-модели</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+  var KEY = 'bimlva-test-checklist-v1';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('.checks input[type=checkbox]'));
+  var doneEl = document.getElementById('done');
+  var totalEl = document.getElementById('total');
+  var fill = document.getElementById('barFill');
+
+  boxes.forEach(function (b, i) { b.dataset.idx = String(i); });
+  totalEl.textContent = String(boxes.length);
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return;
+      var saved = JSON.parse(raw);
+      if (!Array.isArray(saved)) return;
+      // Сверяем длину: если список пунктов изменился, старые отметки
+      // относятся уже не к тем строкам — честнее начать заново.
+      if (saved.length !== boxes.length) return;
+      boxes.forEach(function (b, i) { b.checked = !!saved[i]; });
+    } catch (e) { /* приватный режим или переполнение — просто без сохранения */ }
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(boxes.map(function (b) { return b.checked; })));
+    } catch (e) { /* см. выше */ }
+  }
+
+  function paint() {
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    doneEl.textContent = String(n);
+    fill.style.width = boxes.length ? (n / boxes.length * 100) + '%' : '0';
+  }
+
+  boxes.forEach(function (b) {
+    b.addEventListener('change', function () { save(); paint(); });
+  });
+
+  document.getElementById('reset').addEventListener('click', function () {
+    boxes.forEach(function (b) { b.checked = false; });
+    save(); paint();
+  });
+
+  load(); paint();
+
+  // Подсветка текущего раздела в боковой навигации.
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+  var seen = [];
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      var id = e.target.id;
+      var at = seen.indexOf(id);
+      if (e.isIntersecting) { if (at < 0) seen.push(id); }
+      else if (at >= 0) { seen.splice(at, 1); }
+    });
+    // Активным считаем самый верхний из видимых — иначе при длинном
+    // разделе подсветка прыгает на следующий, едва он показался краем.
+    var order = links.map(function (a) { return a.getAttribute('href').slice(1); });
+    var top = order.filter(function (id) { return seen.indexOf(id) >= 0; })[0];
+    links.forEach(function (a) {
+      a.classList.toggle('on', a.getAttribute('href').slice(1) === top);
+    });
+  }, { rootMargin: '-10% 0px -70% 0px', threshold: 0 });
+  Object.keys(byId).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) obs.observe(el);
+  });
+})();
+</script>
+
+</body>
+</html>
