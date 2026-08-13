@@ -1432,6 +1432,24 @@ async function checkSlopeToTerrain(page) {
                 if (!pts.length) return null;
                 return Math.min(...pts.map((p) => p.y));
             };
+            const pos = D.kdoLayerPositions(applied?.id || id) || [];
+            const meshRatios = [];
+            for (let i = 0; i < pos.length; i += 9) {
+                const tri = [
+                    { x: pos[i], y: pos[i + 1], z: pos[i + 2] },
+                    { x: pos[i + 3], y: pos[i + 4], z: pos[i + 5] },
+                    { x: pos[i + 6], y: pos[i + 7], z: pos[i + 8] }
+                ];
+                for (let a = 0; a < 3; a++) {
+                    const p = tri[a], q = tri[(a + 1) % 3];
+                    // Южная грань: образующая вдоль −Y, тот же X, разный Z.
+                    if (Math.abs(p.x - q.x) > 0.08) continue;
+                    if (Math.abs(p.z - q.z) < 0.04) continue;
+                    if (p.y > 15.2 || q.y > 15.2) continue;
+                    if (p.x < 20.5 || p.x > 23.5) continue;
+                    meshRatios.push(Math.abs(p.y - q.y) / Math.abs(p.z - q.z));
+                }
+            }
             return {
                 count: applied?.count,
                 totalH: applied?.totalH,
@@ -1444,6 +1462,11 @@ async function checkSlopeToTerrain(page) {
                 south0: southY(D.kdoRing(applied?.id || id, 0)),
                 south10: southY(D.kdoRing(applied?.id || id, 0.10)),
                 south30: southY(D.kdoRing(applied?.id || id, 0.30)),
+                ratio: D.kdoSlopeRatio(applied?.id || id, 0, 0.10),
+                meshRatio: meshRatios.length
+                    ? meshRatios.reduce((a, b) => a + b, 0) / meshRatios.length
+                    : null,
+                meshN: meshRatios.length,
                 dxfKdo: /LVA_KDO/.test(dxf),
                 dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length
             };
@@ -1466,6 +1489,14 @@ async function checkSlopeToTerrain(page) {
         }
         if (Math.abs((kdo.south30 ?? 0) - 14.55) > 0.04) {
             problems.push(`откосы: КДО на 0.30 м y=${kdo.south30} вместо 14.55`);
+        }
+        if (!(Math.abs((kdo.ratio ?? 0) - 1.5) < 0.04)) {
+            problems.push(`откосы: заложение КДО ${kdo.ratio} вместо 1.5 (как откос 1:1.5)`);
+        }
+        if (!(kdo.meshN > 0) || !(Math.abs((kdo.meshRatio ?? 0) - 1.5) < 0.08)) {
+            problems.push(
+                `откосы: лофт КДО заложение ${kdo.meshRatio} по ${kdo.meshN} рёбрам юга — ждали 1.5`
+            );
         }
         if (!(kdo.faces0 > 0)) {
             problems.push(`откосы: слой КДО без граней (${kdo.faces0})`);

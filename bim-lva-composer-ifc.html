@@ -5401,6 +5401,41 @@
                 if (!padRing) return null;
                 return kdoOuterRingAtDepth(sm, padRing, Math.max(0, Number(depth) || 0));
             },
+            /**
+             * Заложение бока КДО (run/drop) по станциям откоса.
+             * У 1:1.5 это 1.5 — та же формула, что `z = brow.z − d / m`.
+             */
+            kdoSlopeRatio(id, d0, d1) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                if (!sm) return null;
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                    .find((r) => r.id === sm.polylineId);
+                const padRing = rec?.closed && rec.renderPts?.length >= 4
+                    ? rec.renderPts.slice(0, -1)
+                    : null;
+                if (!padRing) return null;
+                const top = kdoOuterRingAtDepth(sm, padRing, d0 == null ? 0 : Number(d0) || 0);
+                const bot = kdoOuterRingAtDepth(sm, padRing, d1 == null ? 0.1 : Number(d1));
+                const n = Math.min(top.length, bot.length);
+                const rs = [];
+                for (let i = 0; i < n; i++) {
+                    const dz = Math.abs(top[i].z - bot[i].z);
+                    const run = Math.hypot(top[i].x - bot[i].x, top[i].y - bot[i].y);
+                    if (dz > 1e-6 && run > 1e-8) rs.push(run / dz);
+                }
+                if (!rs.length) return null;
+                return rs.reduce((a, b) => a + b, 0) / rs.length;
+            },
+            /** Вершины первого слоя КДО — проверка, что лофт не перекручен. */
+            kdoLayerPositions(id) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                const arr = sm?.kdoMeshes?.[0]?.geometry?.attributes?.position?.array;
+                return arr ? Array.from(arr) : null;
+            },
             /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
             focusPolyline(id, how) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -7938,14 +7973,46 @@
             return h / 3 * (a + b + Math.sqrt(a * b));
         }
 
+        function kdoTriDegenerate(a, b, c) {
+            const abx = b.x - a.x, aby = b.y - a.y, abz = (b.z - a.z);
+            const acx = c.x - a.x, acy = c.y - a.y, acz = (c.z - a.z);
+            const cx = aby * acz - abz * acy;
+            const cy = abz * acx - abx * acz;
+            const cz = abx * acy - aby * acx;
+            return (cx * cx + cy * cy + cz * cz) < 1e-16;
+        }
+
         function kdoLoftRings(positions, top, bot) {
             const n = Math.min(top.length, bot.length);
             if (n < 2) return;
             for (let i = 0; i < n; i++) {
                 const j = (i + 1) % n;
-                slopePushTri(positions, null, top[i], top[j], bot[j], null);
-                slopePushTri(positions, null, top[i], bot[j], bot[i], null);
+                // На глубине 0 веер угла схлопывается в одну точку — первый
+                // треугольник нулевой, второй и есть тот же веер, что у откоса.
+                if (!kdoTriDegenerate(top[i], top[j], bot[j])) {
+                    slopePushTri(positions, null, top[i], top[j], bot[j], null);
+                }
+                if (!kdoTriDegenerate(top[i], bot[j], bot[i])) {
+                    slopePushTri(positions, null, top[i], bot[j], bot[i], null);
+                }
             }
+        }
+
+        /** Сжать подряд идущие совпадения — только для крышек, не для лофта. */
+        function kdoDedupeRingXY(ring) {
+            if (!ring || ring.length < 3) return ring || [];
+            const pts = [];
+            for (let i = 0; i < ring.length; i++) {
+                const p = ring[i];
+                const prev = pts[pts.length - 1];
+                if (prev && Math.hypot(p.x - prev.x, p.y - prev.y) < 1e-5) continue;
+                pts.push(p);
+            }
+            if (pts.length >= 2) {
+                const a = pts[0], b = pts[pts.length - 1];
+                if (Math.hypot(a.x - b.x, a.y - b.y) < 1e-5) pts.pop();
+            }
+            return pts.length >= 3 ? pts : ring.slice();
         }
 
         /**
@@ -8031,24 +8098,31 @@
         }
 
         /**
-         * Точка на луче бровка→выход на глубине depth (вертикально вниз).
-         * Тот же луч, которым натянута поверхность откоса — иначе на углах
-         * параллельный offset даёт другую плоскость, чем веер сечений.
+         * Точка слоя КДО на глубине depth: та же формула, что у откоса
+         * (`z = brow.z − d / m` ⇒ `d = m · depth` вдоль нормали сечения).
+         * Хорда бровка→выход даёт другое заложение, если выход не на плоскости 1:m
+         * (соседняя площадка, выборка земли). Выемка уходит вверх — вниз от
+         * бровки это уже не та плоскость, станцию не раздуваем.
          */
-        function kdoPointOnSlope(brow, sec, depth) {
+        function kdoPointOnSlope(brow, sec, mFill, depth) {
             if (!brow) return null;
             const z = brow.z - depth;
-            if (!sec?.valid || sec.mode !== 'fill' || !sec.exit) {
+            if (depth <= 1e-12) return { x: brow.x, y: brow.y, z: brow.z };
+            const n = sec?.n;
+            if (!n || sec.mode === 'cut' || sec.reason === 'own-pad') {
                 return { x: brow.x, y: brow.y, z };
             }
-            const ex = sec.exit;
-            const drop = brow.z - ex.z;
-            if (!(drop > 1e-9)) return { x: brow.x, y: brow.y, z };
-            const t = Math.max(0, Math.min(1, depth / drop));
+            const len = Math.hypot(n.x, n.y);
+            if (!(len > 1e-9)) return { x: brow.x, y: brow.y, z };
+            const m = Math.max(0.05, Number(mFill) || 1.5);
+            let d = m * depth;
+            if (sec.valid && Number.isFinite(sec.distance) && sec.distance >= 0) {
+                d = Math.min(d, sec.distance);
+            }
             return {
-                x: brow.x + t * (ex.x - brow.x),
-                y: brow.y + t * (ex.y - brow.y),
-                z: brow.z + t * (ex.z - brow.z)
+                x: brow.x + n.x / len * d,
+                y: brow.y + n.y / len * d,
+                z
             };
         }
 
@@ -8056,22 +8130,18 @@
             const side = kdoFillSide(sm);
             const brows = side?.brows;
             const sections = side?.sections;
+            const mFill = Number(sm?.mFill) || 1.5;
+            // Станции 1:1 с откосом, без сжатия совпадений: на глубине 0 веер
+            // угла — одна точка, ниже — дуга. Лофт тогда совпадает с веером откоса.
             if (brows?.length >= 3 && sections?.length === brows.length) {
                 const pts = [];
                 for (let i = 0; i < brows.length; i++) {
-                    const p = kdoPointOnSlope(brows[i], sections[i], depth);
-                    if (!p) continue;
-                    const prev = pts[pts.length - 1];
-                    if (prev && Math.hypot(p.x - prev.x, p.y - prev.y) < 1e-5) continue;
-                    pts.push(p);
-                }
-                if (pts.length >= 2) {
-                    const a = pts[0], b = pts[pts.length - 1];
-                    if (Math.hypot(a.x - b.x, a.y - b.y) < 1e-5) pts.pop();
+                    const p = kdoPointOnSlope(brows[i], sections[i], mFill, depth);
+                    if (p) pts.push(p);
                 }
                 if (pts.length >= 3) return pts;
             }
-            const flare = kdoFlareAt(sm?.mFill, depth);
+            const flare = kdoFlareAt(mFill, depth);
             return offsetRingXY(padRing, flare).map((p) => kdoShiftPt(p, depth));
         }
 
@@ -8090,12 +8160,14 @@
             sm.kdoMeshes = [];
             layers.forEach((layer) => {
                 const h = Math.max(0, Number(layer.thickness) || 0);
-                const topXY = kdoOuterRingAtDepth(sm, padRing, zOff);
-                const botXY = kdoOuterRingAtDepth(sm, padRing, zOff + h);
+                const topLoft = kdoOuterRingAtDepth(sm, padRing, zOff);
+                const botLoft = kdoOuterRingAtDepth(sm, padRing, zOff + h);
+                const topCap = kdoDedupeRingXY(topLoft);
+                const botCap = kdoDedupeRingXY(botLoft);
                 const flareTop = kdoFlareAt(mFill, zOff);
                 const flareBot = kdoFlareAt(mFill, zOff + h);
-                const aTop = Math.max(0, ringPlanArea(topXY) - holeArea);
-                const aBot = Math.max(0, ringPlanArea(botXY) - holeArea);
+                const aTop = Math.max(0, ringPlanArea(topCap) - holeArea);
+                const aBot = Math.max(0, ringPlanArea(botCap) - holeArea);
                 layer.volume = kdoPrismVolume(aTop, aBot, h);
                 layer.zTop = zOff;
                 layer.zBot = zOff + h;
@@ -8105,10 +8177,10 @@
                     layer.faces = 0;
                     return;
                 }
-                const topTris = triangulatePolygonXY(topXY, holes);
-                const botTris = triangulatePolygonXY(botXY, holes);
+                const topTris = triangulatePolygonXY(topCap, holes);
+                const botTris = triangulatePolygonXY(botCap, holes);
                 const mesh = makeKdoLayerMesh(
-                    topTris, botTris, topXY, botXY, holes,
+                    topTris, botTris, topLoft, botLoft, holes,
                     zOff, zOff + h, layer.color,
                     `КДО · ${layer.name}`
                 );
@@ -8521,7 +8593,10 @@
                     return;
                 }
                 if (ownPadTris && slopeLooksInward(ring, brow, normal, look)) {
-                    stations.push({ ...st, section: { valid: false, reason: 'own-pad' } });
+                    stations.push({
+                        ...st,
+                        section: { valid: false, reason: 'own-pad', n: { x: normal.x, y: normal.y } }
+                    });
                     return;
                 }
                 let sec = computeSlopeCrossSection(
@@ -8548,6 +8623,10 @@
                     }
                 }
                 if (st.kind === 'fan' && !sec.valid) return;
+                // Нормаль сечения — та же, по которой шагает откос (d / m).
+                // КДО берёт её, а не хорду до точки выхода: иначе заложение
+                // 1:m плывёт, когда выход сел на соседнюю площадку или рельеф.
+                if (normal) sec.n = { x: normal.x, y: normal.y };
                 stations.push({ ...st, section: sec });
             });
 
@@ -29533,7 +29612,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: 'kdo-m',
+            buildId: 'kdo-r',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -29543,7 +29622,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: КДО внутри площадки — бока по тем же лучам, что откос (и на углах); вырез островка; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
+                '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос (d = m·Δz по нормали сечения); вырез островка; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
                 '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
@@ -29610,7 +29689,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=90').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=91').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
