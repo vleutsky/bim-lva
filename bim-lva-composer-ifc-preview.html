@@ -2830,7 +2830,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 126d192</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 77bb720</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -3841,14 +3841,15 @@
                 <summary>Как снимается сечение</summary>
                 <div class="bulk-note">
                     Ось — выбранная полилиния, пикетаж по плану (с дугами).
-                    В каждом пикете сечение идёт по нормали в плане: смещение
-                    положительное <b>вправо по ходу оси</b>. На переломе —
-                    одна секущая по биссектрисе угла (кромки сходятся уголком,
-                    а не двумя наложенными перпендикулярами). Земля снимается
-                    лучом вниз, как на продольном профиле. Промах — разрыв,
-                    не ноль. Красная черта на чертеже — отметка оси.
-                    Ось — пунктир, кромки ширины — сплошные белые (цвет, слой
-                    и толщину оси и кромок можно сменить).
+                    «Построить» протягивает <b>шаблон поперечника</b> вдоль оси —
+                    полотно дороги в сцене, а не тонкие засечки земли. Шаблон
+                    живой, как в Subassembly Composer: <b>точки</b> (смещение /
+                    ΔZ от оси), <b>связи</b> и <b>формы</b> (замкнутый контур,
+                    заливка). Тяните кружки; двойной клик — точка (на связи —
+                    разрезает её); Shift+клик двух точек — связь; Alt+клик —
+                    удалить точку или связь. Земля на чертеже — справка, её
+                    не правим. <b>〰 Профиль</b> — продольный профиль этой оси
+                    (отметки, уклон, вершины), те же правила, что у полилинии.
                 </div>
             </details>
             <div class="modal-fields">
@@ -3881,9 +3882,10 @@
             </div>
             <div class="bulk-note" id="roadXsMeta">—</div>
             <svg class="align-profile-svg" id="roadXsChart" viewBox="0 0 560 240"
-                 preserveAspectRatio="none"></svg>
+                 preserveAspectRatio="none" style="cursor:crosshair"></svg>
             <div id="roadXsTable" class="profile-table"></div>
             <div class="modal-actions">
+                <button class="btn" id="roadXsProfile" title="Продольный профиль этой оси: отметки, уклон, вершины — как у полилинии">〰 Профиль</button>
                 <button class="btn" id="roadXsCsv" title="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
                 <button class="btn" id="roadXsDxf" title="Поперечники 3D-полилиниями на слое LVA_XS, координаты абсолютные">⬇ DXF</button>
                 <button class="btn" id="roadXsClear">Убрать</button>
@@ -5533,6 +5535,8 @@
                     widthR: model.widthR,
                     step: model.step,
                     lines: model.lines.length,
+                    corridorTris: model.corridorTris || 0,
+                    template: snapshotRoadTemplate(model.template),
                     first: model.stations[0] && {
                         sta: model.stations[0].sta,
                         x: model.stations[0].x,
@@ -5568,8 +5572,42 @@
             get roadXs() {
                 return roadXsModels.map((m) => ({
                     id: m.id, polylineId: m.polylineId, stations: m.stations.length,
-                    hits: m.hits, missed: m.missed, total: m.total
+                    hits: m.hits, missed: m.missed, total: m.total,
+                    corridorTris: m.corridorTris || 0,
+                    templatePoints: m.template?.points?.length || 0,
+                    templateLinks: m.template?.links?.length || 0,
+                    templateShapes: m.template?.shapes?.length || 0
                 }));
+            },
+            roadXsTemplate() {
+                return snapshotRoadTemplate(currentRoadXsModel()?.template);
+            },
+            setRoadXsPoint(pointId, patch) {
+                const model = currentRoadXsModel();
+                const pt = model?.template?.points.find((p) => p.id === pointId);
+                if (!pt) return null;
+                if (patch && Number.isFinite(Number(patch.off))) pt.off = Number(patch.off);
+                if (patch && Number.isFinite(Number(patch.dz))) pt.dz = Number(patch.dz);
+                if (patch?.code) pt.code = String(patch.code).slice(0, 12);
+                roadXsActive.pointId = pointId;
+                applyRoadTemplateChange(model, { relink: false });
+                return snapshotRoadTemplate(model.template);
+            },
+            addRoadXsPoint(off, dz) {
+                const model = currentRoadXsModel();
+                if (!model?.template) return null;
+                const pt = addTemplatePoint(model.template, Number(off) || 0, Number(dz) || 0);
+                roadXsActive.pointId = pt.id;
+                applyRoadTemplateChange(model, { relink: false });
+                return snapshotRoadTemplate(model.template);
+            },
+            openRoadProfile(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                    .find((r) => r.id === id)
+                    || drawnPolylines.find((r) => r.id === currentRoadXsModel()?.polylineId);
+                if (!rec) return false;
+                openPolylineProfile(rec);
+                return true;
             },
             /**
              * Слои КДО площадки. id построения или 0/null — последнее.
@@ -12329,7 +12367,10 @@
                     live: $('roadXsLive') ? !!$('roadXsLive').checked : true
                 });
                 if (model) {
-                    notify(`Поперечники: ${model.stations.length} сечений по «${finishedRoad.name}».`);
+                    notify(
+                        `Полотно по «${finishedRoad.name}»: ${model.stations.length} сечений, ` +
+                        `${model.corridorTris || 0} граней.`
+                    );
                 }
             }
         }
@@ -13438,9 +13479,221 @@
         const ROAD_XS_MAX_SAMPLES = 201;
         const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 14, t: 18, b: 28 };
         const ROAD_XS_MITER_CAP = 8;
+        const ROAD_DECK_COLOR = '#8a7344';
+        const ROAD_PAVE_THICK = 0.20;
+
+        function defaultRoadTemplate(widthL, widthR) {
+            const L = Math.max(0.5, Number(widthL) || 15);
+            const R = Math.max(0.5, Number(widthR) || 15);
+            const t = ROAD_PAVE_THICK;
+            return {
+                seq: 5,
+                shapeSeq: 1,
+                points: [
+                    { id: 1, code: 'L', off: -L, dz: 0 },
+                    { id: 2, code: 'CL', off: 0, dz: 0 },
+                    { id: 3, code: 'R', off: R, dz: 0 },
+                    { id: 4, code: 'RB', off: R, dz: -t },
+                    { id: 5, code: 'LB', off: -L, dz: -t }
+                ],
+                links: [
+                    { a: 1, b: 2, code: 'LT' },
+                    { a: 2, b: 3, code: 'RT' },
+                    { a: 3, b: 4, code: 'RS' },
+                    { a: 4, b: 5, code: 'BOT' },
+                    { a: 5, b: 1, code: 'LS' }
+                ],
+                shapes: [
+                    { id: 1, code: 'PVMT', pts: [1, 2, 3, 4, 5] }
+                ]
+            };
+        }
+
+        function isDefaultRoadTemplate(tpl, widthL, widthR) {
+            if (!tpl?.points?.length) return false;
+            const L = Math.max(0.5, Number(widthL) || 15);
+            const R = Math.max(0.5, Number(widthR) || 15);
+            const by = Object.fromEntries(tpl.points.map((p) => [p.code, p]));
+            const near = (p, off, dz) => p && Math.abs(p.off - off) < 1e-6 && Math.abs(p.dz - dz) < 1e-9;
+            if (tpl.points.length === 3 && tpl.points.map((p) => p.code).join(',') === 'L,CL,R') {
+                return near(by.L, -L, 0) && near(by.CL, 0, 0) && near(by.R, R, 0);
+            }
+            if (tpl.points.length !== 5 || (tpl.links?.length || 0) !== 5) return false;
+            const t = ROAD_PAVE_THICK;
+            return near(by.L, -L, 0) && near(by.CL, 0, 0) && near(by.R, R, 0)
+                && near(by.RB, R, -t) && near(by.LB, -L, -t);
+        }
+
+        function templateWidths(tpl) {
+            const offs = (tpl?.points || []).map((p) => p.off);
+            if (!offs.length) return { widthL: 15, widthR: 15 };
+            return {
+                widthL: Math.max(0.5, -Math.min(0, ...offs)),
+                widthR: Math.max(0.5, Math.max(0, ...offs))
+            };
+        }
+
+        function templatePoint(tpl, id) {
+            return (tpl?.points || []).find((p) => p.id === id) || null;
+        }
+
+        function templateHasLink(tpl, a, b) {
+            return (tpl?.links || []).some((l) =>
+                (l.a === a && l.b === b) || (l.a === b && l.b === a));
+        }
+
+        function toggleTemplateLink(tpl, a, b) {
+            if (!tpl || a === b) return;
+            const i = (tpl.links || []).findIndex((l) =>
+                (l.a === a && l.b === b) || (l.a === b && l.b === a));
+            if (i >= 0) tpl.links.splice(i, 1);
+            else {
+                tpl.links = tpl.links || [];
+                tpl.links.push({ a, b, code: 'L' + (tpl.links.length + 1) });
+            }
+        }
+
+        function insertIdBetweenShapePts(shape, a, b, id) {
+            const pts = shape.pts || [];
+            for (let i = 0; i < pts.length; i++) {
+                const j = (i + 1) % pts.length;
+                if ((pts[i] === a && pts[j] === b) || (pts[i] === b && pts[j] === a)) {
+                    pts.splice(j, 0, id);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function distPointToLink2(pt, a, b) {
+            const dx = b.off - a.off, dy = b.dz - a.dz;
+            const len2 = dx * dx + dy * dy;
+            if (len2 < 1e-12) return (pt.off - a.off) ** 2 + (pt.dz - a.dz) ** 2;
+            let t = ((pt.off - a.off) * dx + (pt.dz - a.dz) * dy) / len2;
+            t = Math.max(0, Math.min(1, t));
+            const ox = a.off + dx * t - pt.off, oy = a.dz + dy * t - pt.dz;
+            return ox * ox + oy * oy;
+        }
+
+        function addTemplatePoint(tpl, off, dz) {
+            tpl.seq = (tpl.seq || tpl.points.length) + 1;
+            const id = tpl.seq;
+            const pt = { id, code: 'P' + id, off, dz };
+            tpl.points.push(pt);
+            let best = null, bestD = Infinity;
+            (tpl.links || []).forEach((ln) => {
+                const a = templatePoint(tpl, ln.a), b = templatePoint(tpl, ln.b);
+                if (!a || !b) return;
+                const d = distPointToLink2(pt, a, b);
+                if (d < bestD) { bestD = d; best = ln; }
+            });
+            const splitTol = 1.2;
+            if (best && bestD <= splitTol * splitTol) {
+                tpl.links = tpl.links.filter((l) => l !== best);
+                tpl.links.push({ a: best.a, b: id, code: (best.code || 'L') + 'a' });
+                tpl.links.push({ a: id, b: best.b, code: (best.code || 'L') + 'b' });
+                (tpl.shapes || []).forEach((sh) => insertIdBetweenShapePts(sh, best.a, best.b, id));
+            }
+            return pt;
+        }
+
+        function removeTemplatePoint(tpl, id) {
+            const neighbors = [];
+            (tpl.links || []).forEach((ln) => {
+                if (ln.a === id) neighbors.push(ln.b);
+                else if (ln.b === id) neighbors.push(ln.a);
+            });
+            tpl.links = (tpl.links || []).filter((ln) => ln.a !== id && ln.b !== id);
+            if (neighbors.length === 2 && !templateHasLink(tpl, neighbors[0], neighbors[1])) {
+                tpl.links.push({ a: neighbors[0], b: neighbors[1], code: 'L' + (tpl.links.length + 1) });
+            }
+            tpl.points = tpl.points.filter((p) => p.id !== id);
+            (tpl.shapes || []).forEach((sh) => { sh.pts = (sh.pts || []).filter((pid) => pid !== id); });
+            tpl.shapes = (tpl.shapes || []).filter((sh) => (sh.pts || []).length >= 3);
+        }
+
+        function findTemplateCycle(tpl) {
+            const adj = new Map();
+            (tpl.points || []).forEach((p) => adj.set(p.id, []));
+            (tpl.links || []).forEach((ln) => {
+                if (!adj.has(ln.a) || !adj.has(ln.b)) return;
+                adj.get(ln.a).push(ln.b);
+                adj.get(ln.b).push(ln.a);
+            });
+            const start = [...adj.keys()].find((id) => (adj.get(id) || []).length >= 2);
+            if (start == null) {
+                const ids = (tpl.points || []).map((p) => p.id);
+                return ids.length >= 3 ? ids : null;
+            }
+            const path = [];
+            const onPath = new Set();
+            let found = null;
+            const dfs = (u, parent) => {
+                if (found) return;
+                path.push(u);
+                onPath.add(u);
+                for (const v of adj.get(u) || []) {
+                    if (v === parent) continue;
+                    if (onPath.has(v)) {
+                        const i = path.indexOf(v);
+                        if (i >= 0 && path.length - i >= 3) found = path.slice(i);
+                        continue;
+                    }
+                    dfs(v, u);
+                }
+                path.pop();
+                onPath.delete(u);
+            };
+            dfs(start, -1);
+            if (found) return found;
+            const ids = (tpl.points || []).map((p) => p.id);
+            return ids.length >= 3 ? ids : null;
+        }
+
+        function addTemplateShape(tpl) {
+            const cycle = findTemplateCycle(tpl);
+            if (!cycle || cycle.length < 3) return null;
+            const key = (pts) => [...pts].sort((a, b) => a - b).join(',');
+            tpl.shapes = tpl.shapes || [];
+            if (tpl.shapes.some((sh) => key(sh.pts) === key(cycle))) return null;
+            tpl.shapeSeq = (tpl.shapeSeq || tpl.shapes.length) + 1;
+            const sh = { id: tpl.shapeSeq, code: 'S' + tpl.shapeSeq, pts: cycle };
+            tpl.shapes.push(sh);
+            return sh;
+        }
+
+        function relinkTemplateByOffset(tpl) {
+            if (tpl.shapes?.length) return;
+            const pts = [...(tpl.points || [])].sort((a, b) => a.off - b.off);
+            tpl.points = pts;
+            tpl.links = [];
+            for (let i = 0; i < pts.length - 1; i++) {
+                tpl.links.push({ a: pts[i].id, b: pts[i + 1].id, code: `L${i + 1}` });
+            }
+        }
+
+        function placeTemplateAtStation(st, pt) {
+            const scale = Math.max(1, st.miterScale || 1);
+            const off = pt.off * scale;
+            return new THREE.Vector3(
+                st.x + st.rx * off,
+                st.y + st.ry * off,
+                st.z + (Number(pt.dz) || 0)
+            );
+        }
+
+        function snapshotRoadTemplate(tpl) {
+            if (!tpl) return null;
+            return {
+                points: (tpl.points || []).map((p) => ({ id: p.id, code: p.code, off: p.off, dz: p.dz })),
+                links: (tpl.links || []).map((l) => ({ a: l.a, b: l.b, code: l.code })),
+                shapes: (tpl.shapes || []).map((s) => ({ id: s.id, code: s.code, pts: [...(s.pts || [])] }))
+            };
+        }
         let roadXsSeq = 0;
-        let roadXsActive = { modelId: null, index: 0 };
+        let roadXsActive = { modelId: null, index: 0, pointId: null };
         let roadXsRebuildTimer = 0;
+        let roadXsChartFrame = null;
 
         function planTangentXY(ax, ay, bx, by) {
             const dx = bx - ax, dy = by - ay;
@@ -13743,6 +13996,11 @@
         }
 
         function disposeRoadXsModel(model) {
+            disposeRoadXsLines(model);
+            disposeRoadCorridor(model);
+        }
+
+        function disposeRoadXsLines(model) {
             if (!model) return;
             (model.lines || []).forEach((line) => {
                 roadXsGroup.remove(line);
@@ -13758,6 +14016,112 @@
             });
             model.edgeLeft = null;
             model.edgeRight = null;
+        }
+
+        function disposeRoadCorridor(model) {
+            if (!model?.corridor) return;
+            roadXsGroup.remove(model.corridor);
+            model.corridor.geometry.dispose();
+            model.corridor.material.dispose();
+            model.corridor = null;
+            model.corridorTris = 0;
+        }
+
+        /**
+         * Полотно: каждая связь шаблона тянется вдоль станций, формы дают
+         * торцы. Это то, чего ждали от «Построить» — тело дороги по оси,
+         * а не тонкие засечки земли на рельефе.
+         */
+        function buildRoadCorridor(model) {
+            disposeRoadCorridor(model);
+            const tpl = model?.template;
+            const stations = model?.stations;
+            if (!tpl?.links?.length || !stations || stations.length < 2) return null;
+            const placed = stations.map((st) => {
+                const map = new Map();
+                tpl.points.forEach((pt) => map.set(pt.id, placeTemplateAtStation(st, pt)));
+                return map;
+            });
+            const positions = [];
+            const push = (a, b, c) => {
+                positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+            };
+            tpl.links.forEach((link) => {
+                for (let i = 0; i < placed.length - 1; i++) {
+                    const a0 = placed[i].get(link.a);
+                    const b0 = placed[i].get(link.b);
+                    const a1 = placed[i + 1].get(link.a);
+                    const b1 = placed[i + 1].get(link.b);
+                    if (!a0 || !b0 || !a1 || !b1) continue;
+                    const A = new THREE.Vector3(a0.x, a0.y, a0.z);
+                    const B = new THREE.Vector3(b0.x, b0.y, b0.z);
+                    const C = new THREE.Vector3(a1.x, a1.y, a1.z);
+                    const D = new THREE.Vector3(b1.x, b1.y, b1.z);
+                    push(A, B, D);
+                    push(A, D, C);
+                }
+            });
+            (tpl.shapes || []).forEach((sh) => {
+                const ids = sh.pts || [];
+                if (ids.length < 3) return;
+                const cap = (map, reverse) => {
+                    const ring = ids.map((id) => map.get(id)).filter(Boolean);
+                    if (ring.length < 3) return;
+                    const origin = new THREE.Vector3(ring[0].x, ring[0].y, ring[0].z);
+                    for (let i = 1; i < ring.length - 1; i++) {
+                        const b = new THREE.Vector3(ring[i].x, ring[i].y, ring[i].z);
+                        const c = new THREE.Vector3(ring[i + 1].x, ring[i + 1].y, ring[i + 1].z);
+                        if (reverse) push(origin, c, b);
+                        else push(origin, b, c);
+                    }
+                };
+                cap(placed[0], false);
+                cap(placed[placed.length - 1], true);
+            });
+            if (positions.length < 9) return null;
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.computeVertexNormals();
+            geom.computeBoundingBox();
+            geom.computeBoundingSphere();
+            const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+                color: new THREE.Color(ROAD_DECK_COLOR),
+                roughness: 0.82,
+                metalness: 0.04,
+                emissive: new THREE.Color('#2a2210'),
+                emissiveIntensity: 0.22,
+                side: THREE.DoubleSide,
+                polygonOffset: true,
+                polygonOffsetFactor: -2,
+                polygonOffsetUnits: -2
+            }));
+            mesh.name = 'RoadCorridor';
+            mesh.renderOrder = 3;
+            mesh.userData.roadCorridor = model.id;
+            mesh.userData.isOverlay = true;
+            mesh.raycast = () => {};
+            roadXsGroup.add(mesh);
+            model.corridor = mesh;
+            model.corridorTris = positions.length / 9;
+            return mesh;
+        }
+
+        function applyRoadTemplateChange(model, { relink = false, preview = false } = {}) {
+            if (!model?.template) return;
+            if (relink) relinkTemplateByOffset(model.template);
+            const tw = templateWidths(model.template);
+            model.widthL = Math.max(model.widthL || 0.5, tw.widthL);
+            model.widthR = Math.max(model.widthR || 0.5, tw.widthR);
+            if (!preview) {
+                const rec = drawnPolylines.find((r) => r.id === model.polylineId);
+                if (rec) refreshRoadAxisEdges(rec);
+            }
+            buildRoadCorridor(model);
+            if (!preview) {
+                renderRoadXsView();
+                updateRoadXsStatus();
+            }
+            markNeedsRender();
         }
 
         function clearRoadXsModels(polylineId) {
@@ -13787,7 +14151,7 @@
         }
 
         function buildRoadXsLines(model) {
-            disposeRoadXsModel(model);
+            disposeRoadXsLines(model);
             const color = model.color || '#2a7de1';
             model.stations.forEach((st, index) => {
                 let run = [];
@@ -13844,6 +14208,8 @@
             const sampled = sampleRoadCrossSections(record, opts);
             if (!sampled) return null;
             let model = roadXsModels.find((m) => m.polylineId === record.id);
+            const prevW = { widthL: model?.widthL, widthR: model?.widthR };
+            const keptTpl = model?.template;
             if (!model) {
                 model = { id: ++roadXsSeq, polylineId: record.id, lines: [] };
                 roadXsModels.push(model);
@@ -13854,7 +14220,18 @@
                 live: opts.live !== false,
                 ...sampled
             });
+            if (!keptTpl) {
+                model.template = defaultRoadTemplate(model.widthL, model.widthR);
+            } else if (isDefaultRoadTemplate(keptTpl, prevW.widthL, prevW.widthR)) {
+                model.template = defaultRoadTemplate(model.widthL, model.widthR);
+            } else {
+                model.template = keptTpl;
+                const tw = templateWidths(model.template);
+                model.widthL = Math.max(model.widthL, tw.widthL);
+                model.widthR = Math.max(model.widthR, tw.widthR);
+            }
             buildRoadXsLines(model);
+            buildRoadCorridor(model);
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
@@ -13891,7 +14268,13 @@
             const model = roadXsModels.find((m) => m.id === modelId) || currentRoadXsModel();
             if (!model) return;
             const i = Math.max(0, Math.min(model.stations.length - 1, Number(index) || 0));
-            roadXsActive = { modelId: model.id, index: i };
+            roadXsActive = {
+                modelId: model.id,
+                index: i,
+                pointId: roadXsActive.pointId,
+                linkKey: roadXsActive.linkKey,
+                shapeId: roadXsActive.shapeId
+            };
             roadXsModels.forEach(styleRoadXsLines);
             renderRoadXsView();
             markNeedsRender();
@@ -13904,8 +14287,8 @@
             if (!model) { el.textContent = 'Поперечников нет — нажмите «Построить».'; return; }
             el.textContent =
                 `Сечений ${model.stations.length} на ${model.total.toFixed(1)} м оси · ` +
-                `точек ${model.hits}` +
-                (model.missed ? `, промахов ${model.missed}` : '');
+                `полотно ${model.corridorTris || 0} гран.` +
+                (model.missed ? ` · промахов земли ${model.missed}` : '');
         }
 
         function renderRoadXsView() {
@@ -13944,11 +14327,16 @@
             const zGround = hits.map((s) => s.abs.z);
             let zMin = zAxis, zMax = zAxis;
             zGround.forEach((z) => { zMin = Math.min(zMin, z); zMax = Math.max(zMax, z); });
+            const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
+            tpl.points.forEach((p) => {
+                zMin = Math.min(zMin, zAxis + p.dz);
+                zMax = Math.max(zMax, zAxis + p.dz);
+            });
             const relief = zMax - zMin;
             const spanZ = Math.max(3, relief * 1.6, 0.12 * (model.widthL + model.widthR));
             const z0 = (zMin + zMax) / 2;
-            const offMin = Math.min(-model.widthL, ...(st.samples.map((s) => s.off)));
-            const offMax = Math.max(model.widthR, ...(st.samples.map((s) => s.off)));
+            const offMin = Math.min(-model.widthL, ...(st.samples.map((s) => s.off)), ...tpl.points.map((p) => p.off));
+            const offMax = Math.max(model.widthR, ...(st.samples.map((s) => s.off)), ...tpl.points.map((p) => p.off));
             const px = (off) => pad.l + ((off - offMin) / Math.max(1e-6, offMax - offMin)) * (pad.w - pad.l - pad.r);
             const py = (z) => pad.h / 2 - ((z - z0) / spanZ) * (pad.h - pad.t - pad.b);
             const clipL = pad.l, clipR = pad.w - pad.r;
@@ -13997,6 +14385,40 @@
             const leftTick = px(-model.widthL * (st.miterScale || 1));
             const rightTick = px(model.widthR * (st.miterScale || 1));
             const roadY0 = axisY - 5, roadY1 = axisY + 5;
+            const ptById = new Map(tpl.points.map((p) => [p.id, p]));
+            const xyOf = (p) => ({ x: px(p.off), y: py(zAxis + p.dz) });
+            const shapeDraw = (tpl.shapes || []).map((sh) => {
+                const ring = (sh.pts || []).map((id) => ptById.get(id)).filter(Boolean);
+                if (ring.length < 3) return '';
+                const d = ring.map((p, i) => {
+                    const q = xyOf(p);
+                    return `${i ? 'L' : 'M'} ${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
+                }).join(' ') + ' Z';
+                const on = sh.id === roadXsActive.shapeId;
+                return `<path class="xs-shape" data-sid="${sh.id}" d="${d}"
+                    fill="${on ? '#d4b07a' : '#c4a574'}" fill-opacity="${on ? 0.72 : 0.5}"
+                    stroke="none"/>`;
+            }).join('');
+            const linkDraw = tpl.links.map((ln) => {
+                const a = ptById.get(ln.a), b = ptById.get(ln.b);
+                if (!a || !b) return '';
+                const pa = xyOf(a), pb = xyOf(b);
+                const key = `${ln.a}-${ln.b}`;
+                const on = roadXsActive.linkKey === key || roadXsActive.linkKey === `${ln.b}-${ln.a}`;
+                return `<line class="xs-link" data-a="${ln.a}" data-b="${ln.b}"
+                    x1="${pa.x.toFixed(1)}" y1="${pa.y.toFixed(1)}"
+                    x2="${pb.x.toFixed(1)}" y2="${pb.y.toFixed(1)}"
+                    stroke="${on ? '#c45a12' : '#8a7344'}" stroke-width="${on ? 4.2 : 3.2}"/>`;
+            }).join('');
+            const knotDraw = tpl.points.map((p) => {
+                const q = xyOf(p);
+                const on = p.id === roadXsActive.pointId;
+                return `<g class="xs-pt" data-id="${p.id}" style="cursor:grab">
+                    <circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="${on ? 7 : 5.5}"
+                        fill="${on ? '#c45a12' : '#8a7344'}" stroke="#fff" stroke-width="1.4"/>
+                    <text x="${(q.x + 8).toFixed(1)}" y="${(q.y - 8).toFixed(1)}" fill="#6a5420">${esc(p.code)}</text>
+                </g>`;
+            }).join('');
             svg.setAttribute('viewBox', `0 0 ${pad.w} ${pad.h}`);
             svg.innerHTML = `
                 <rect x="0" y="0" width="${pad.w}" height="${pad.h}" fill="#f7f9fb"/>
@@ -14010,16 +14432,20 @@
                       stroke="#e8442a" stroke-width="1.8" stroke-dasharray="6 3"/>
                 <line x1="${axisTick.toFixed(1)}" y1="${pad.t}" x2="${axisTick.toFixed(1)}" y2="${pad.h - pad.b}"
                       stroke="#e8442a" stroke-width="1.2"/>
-                <line x1="${leftTick.toFixed(1)}" y1="${pad.t}" x2="${leftTick.toFixed(1)}" y2="${pad.h - pad.b}"
-                      stroke="#888" stroke-width="1" stroke-dasharray="3 3"/>
-                <line x1="${rightTick.toFixed(1)}" y1="${pad.t}" x2="${rightTick.toFixed(1)}" y2="${pad.h - pad.b}"
-                      stroke="#888" stroke-width="1" stroke-dasharray="3 3"/>
                 ${groundPaths.map((d) => `<polyline fill="none" stroke="#1d6fb0" stroke-width="2.4" points="${d}"/>`).join('')}
+                ${shapeDraw}
+                ${linkDraw}
+                ${knotDraw}
                 <text x="${clipL + 4}" y="14">отм., м</text>
                 <text x="${clipR}" y="${pad.h - 8}" text-anchor="end">смещ., м</text>
-                <text x="${(leftTick + 4).toFixed(1)}" y="${(axisY - 8).toFixed(1)}" fill="#7a5a20">кромка</text>
                 <text x="${clipL + 8}" y="${(axisY - 8).toFixed(1)}" fill="#e8442a">ось</text>
+                <text x="${leftTick.toFixed(1)}" y="${(axisY + 18).toFixed(1)}" text-anchor="middle" fill="#8a7344">кромка</text>
+                <text x="${rightTick.toFixed(1)}" y="${(axisY + 18).toFixed(1)}" text-anchor="middle" fill="#8a7344">кромка</text>
             `;
+            roadXsChartFrame = {
+                pad, offMin, offMax, spanZ, z0, zAxis,
+                w: pad.w, h: pad.h
+            };
             const hitN = hits.length;
             const work0 = st.samples.find((s) => Math.abs(s.off) < 1e-9);
             if (meta) {
@@ -14029,25 +14455,53 @@
                     (work0?.hit
                         ? ` · земля ${work0.abs.z.toFixed(3)} · рабочая ${work0.work.toFixed(3)}`
                         : ' · под осью земли нет') +
-                    ` · точек ${hitN}/${st.samples.length}` +
+                    (model.corridorTris ? ` · полотно ${model.corridorTris} гран.` : ' · полотна нет — «Построить»') +
                     (st.atVertex ? ' · на угле — биссектриса' : '') +
-                    (flat ? ' · рельеф плоский, масштаб окна ±' + (spanZ / 2).toFixed(1) + ' м' : '');
+                    (flat ? ' · рельеф плоский, масштаб ±' + (spanZ / 2).toFixed(1) + ' м' : '');
             }
             if (table) {
+                const codeOf = (id) => templatePoint(tpl, id)?.code || id;
                 table.innerHTML = `
                     <table class="profile-grid">
-                        <thead><tr><th>смещ.</th><th>X</th><th>Y</th><th>земля</th><th>рабочая</th></tr></thead>
+                        <thead><tr><th>код</th><th>смещ.</th><th>ΔZ</th><th></th></tr></thead>
                         <tbody>
-                            ${st.samples.map((s) => `
-                                <tr${Math.abs(s.off) < 1e-9 ? ' class="is-active"' : ''}>
-                                    <td>${s.off.toFixed(2)}</td>
-                                    <td>${s.abs.x.toFixed(3)}</td>
-                                    <td>${s.abs.y.toFixed(3)}</td>
-                                    <td>${s.hit ? s.abs.z.toFixed(3) : '—'}</td>
-                                    <td>${s.work == null ? '—' : s.work.toFixed(3)}</td>
+                            ${tpl.points.map((p) => `
+                                <tr data-ptid="${p.id}"${p.id === roadXsActive.pointId ? ' class="is-active"' : ''}>
+                                    <td><input class="editInput" data-edit="code" value="${esc(p.code)}" style="width:52px"></td>
+                                    <td><input class="editInput" type="number" step="0.1" data-edit="off" value="${p.off.toFixed(3)}" style="width:70px"></td>
+                                    <td><input class="editInput" type="number" step="0.01" data-edit="dz" value="${p.dz.toFixed(3)}" style="width:70px"></td>
+                                    <td><button type="button" class="btn" data-del="${p.id}" title="Удалить точку">✕</button></td>
                                 </tr>`).join('')}
                         </tbody>
-                    </table>`;
+                    </table>
+                    <div class="bulk-note" style="margin:6px 0 2px">Связи</div>
+                    <table class="profile-grid">
+                        <thead><tr><th>код</th><th>от</th><th>к</th><th></th></tr></thead>
+                        <tbody>
+                            ${(tpl.links || []).map((ln) => `
+                                <tr data-link="${ln.a}-${ln.b}">
+                                    <td>${esc(ln.code || '')}</td>
+                                    <td>${esc(codeOf(ln.a))}</td>
+                                    <td>${esc(codeOf(ln.b))}</td>
+                                    <td><button type="button" class="btn" data-unlink="${ln.a}-${ln.b}" title="Удалить связь">✕</button></td>
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                    <div class="bulk-note" style="margin:6px 0 2px">Формы
+                        <button type="button" class="btn" id="roadXsAddShape" title="Замкнутый контур по связям">＋ форма</button>
+                    </div>
+                    <table class="profile-grid">
+                        <thead><tr><th>код</th><th>точки</th><th></th></tr></thead>
+                        <tbody>
+                            ${(tpl.shapes || []).map((sh) => `
+                                <tr data-sid="${sh.id}"${sh.id === roadXsActive.shapeId ? ' class="is-active"' : ''}>
+                                    <td><input class="editInput" data-shape-code="${sh.id}" value="${esc(sh.code)}" style="width:64px"></td>
+                                    <td>${esc((sh.pts || []).map(codeOf).join('–'))}</td>
+                                    <td><button type="button" class="btn" data-unshape="${sh.id}" title="Удалить форму">✕</button></td>
+                                </tr>`).join('') || '<tr><td colspan="3">Нет форм — «＋ форма»</td></tr>'}
+                        </tbody>
+                    </table>
+                    <div class="bulk-note" style="margin:4px 0 0">Тяните точки. Двойной клик — добавить (на связи разрезает её). Shift+клик двух точек — связь. Alt+клик — удалить точку или связь. Земля — синяя справка, шаблон — коричневый.</div>`;
             }
         }
 
@@ -14083,7 +14537,8 @@
                     entityOpen('POLYLINE', layer);
                     ge(66, 1); ge(10, 0); ge(20, 0); ge(30, 0); ge(70, 8);
                     pts.forEach((p) => {
-                        const abs = worldPointToAbsoluteXYZ(p) || p;
+                        const src = p?.clone ? p : new THREE.Vector3(p.x, p.y, p.z);
+                        const abs = worldPointToAbsoluteXYZ(src) || src;
                         entityOpen('VERTEX', layer);
                         ge(10, n(abs.x)); ge(20, n(abs.y)); ge(30, n(abs.z));
                         ge(70, 32);
@@ -14093,6 +14548,13 @@
                 };
                 writeEdge(rec?.edgeLeftPts || model.edgeLeftPts);
                 writeEdge(rec?.edgeRightPts || model.edgeRightPts);
+                const tpl = model.template;
+                if (opts.edges !== false && tpl?.points?.length && model.stations?.length >= 2) {
+                    tpl.points.forEach((pt) => {
+                        const pts = model.stations.map((st) => placeTemplateAtStation(st, pt));
+                        writeEdge(pts);
+                    });
+                }
             });
             return count;
         }
@@ -14238,7 +14700,10 @@
                 live: !!$('roadXsLive')?.checked
             });
             if (!model) notifyError('Не удалось построить поперечники.');
-            else notify(`Поперечники: ${model.stations.length} сечений по «${rec.name}».`);
+            else notify(
+                `Полотно по «${rec.name}»: ${model.stations.length} сечений, ` +
+                `${model.corridorTris || 0} граней шаблона.`
+            );
         });
         $('roadXsClear')?.addEventListener('click', () => {
             const id = Number($('roadXsSelect')?.value);
@@ -14256,6 +14721,213 @@
             }
         });
         $('roadXsDxf')?.addEventListener('click', exportRoadXsDxf);
+        $('roadXsProfile')?.addEventListener('click', () => {
+            const id = Number($('roadXsSelect')?.value);
+            const rec = drawnPolylines.find((r) => r.id === id) ||
+                drawnPolylines.find((r) => r.id === currentRoadXsModel()?.polylineId);
+            if (!rec) return notifyError('Выберите ось.');
+            openPolylineProfile(rec);
+        });
+
+        function roadXsClientToOffZ(ev) {
+            const f = roadXsChartFrame;
+            const svg = $('roadXsChart');
+            if (!f || !svg) return null;
+            const box = svg.getBoundingClientRect();
+            const x = (ev.clientX - box.left) / Math.max(1, box.width) * f.w;
+            const y = (ev.clientY - box.top) / Math.max(1, box.height) * f.h;
+            const spanOff = Math.max(1e-6, f.offMax - f.offMin);
+            const off = f.offMin + (x - f.pad.l) / Math.max(1e-6, f.w - f.pad.l - f.pad.r) * spanOff;
+            const z = f.z0 - (y - f.h / 2) / Math.max(1e-6, f.h - f.pad.t - f.pad.b) * f.spanZ;
+            return { off, z, dz: z - f.zAxis };
+        }
+
+        $('roadXsChart')?.addEventListener('pointerdown', (ev) => {
+            if (ev.button !== 0) return;
+            const model = currentRoadXsModel();
+            const tpl = model?.template;
+            if (!tpl) return;
+            const knot = ev.target.closest?.('.xs-pt');
+            const linkEl = ev.target.closest?.('.xs-link');
+            const shapeEl = ev.target.closest?.('.xs-shape');
+            if (knot && ev.altKey) {
+                ev.preventDefault();
+                const id = Number(knot.dataset.id);
+                if (tpl.points.length <= 2) {
+                    notifyError('В шаблоне должно остаться хотя бы две точки.');
+                    return;
+                }
+                removeTemplatePoint(tpl, id);
+                roadXsActive.pointId = null;
+                applyRoadTemplateChange(model, { relink: false });
+                return;
+            }
+            if (linkEl && ev.altKey) {
+                ev.preventDefault();
+                const a = Number(linkEl.dataset.a), b = Number(linkEl.dataset.b);
+                toggleTemplateLink(tpl, a, b);
+                roadXsActive.linkKey = null;
+                applyRoadTemplateChange(model, { relink: false });
+                return;
+            }
+            if (knot && ev.shiftKey) {
+                ev.preventDefault();
+                const id = Number(knot.dataset.id);
+                if (roadXsActive.pointId && roadXsActive.pointId !== id) {
+                    toggleTemplateLink(tpl, roadXsActive.pointId, id);
+                    applyRoadTemplateChange(model, { relink: false });
+                    trackUsage('road_xs_link_toggle', {});
+                } else {
+                    roadXsActive.pointId = id;
+                    renderRoadXsView();
+                }
+                return;
+            }
+            if (!knot) {
+                if (linkEl) {
+                    roadXsActive.linkKey = `${linkEl.dataset.a}-${linkEl.dataset.b}`;
+                    roadXsActive.shapeId = null;
+                    renderRoadXsView();
+                } else if (shapeEl) {
+                    roadXsActive.shapeId = Number(shapeEl.dataset.sid);
+                    roadXsActive.linkKey = null;
+                    renderRoadXsView();
+                }
+                return;
+            }
+            ev.preventDefault();
+            const id = Number(knot.dataset.id);
+            const pt = tpl.points.find((p) => p.id === id);
+            if (!pt) return;
+            roadXsActive.pointId = id;
+            const svg = $('roadXsChart');
+            try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+            const move = (e) => {
+                const at = roadXsClientToOffZ(e);
+                if (!at) return;
+                pt.off = at.off;
+                pt.dz = at.dz;
+                applyRoadTemplateChange(model, { relink: false, preview: true });
+                const g = svg.querySelector(`.xs-pt[data-id="${id}"] circle`);
+                const t = svg.querySelector(`.xs-pt[data-id="${id}"] text`);
+                const f = roadXsChartFrame;
+                if (g && f) {
+                    const x = f.pad.l + ((pt.off - f.offMin) / Math.max(1e-6, f.offMax - f.offMin)) * (f.w - f.pad.l - f.pad.r);
+                    const y = f.h / 2 - ((f.zAxis + pt.dz - f.z0) / f.spanZ) * (f.h - f.pad.t - f.pad.b);
+                    g.setAttribute('cx', x.toFixed(1));
+                    g.setAttribute('cy', y.toFixed(1));
+                    if (t) {
+                        t.setAttribute('x', (x + 8).toFixed(1));
+                        t.setAttribute('y', (y - 8).toFixed(1));
+                    }
+                }
+            };
+            const up = () => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+                applyRoadTemplateChange(model, { relink: false });
+                trackUsage('road_xs_point_drag', {});
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+        });
+
+        $('roadXsChart')?.addEventListener('dblclick', (ev) => {
+            if (ev.target.closest?.('.xs-pt')) return;
+            const model = currentRoadXsModel();
+            if (!model?.template) return;
+            const at = roadXsClientToOffZ(ev);
+            if (!at) return;
+            ev.preventDefault();
+            const pt = addTemplatePoint(model.template, at.off, at.dz);
+            roadXsActive.pointId = pt.id;
+            applyRoadTemplateChange(model, { relink: false });
+            notify(`Точка ${pt.code}: смещение ${at.off.toFixed(2)} м, ΔZ ${at.dz.toFixed(3)} м.`);
+            trackUsage('road_xs_point_add', {});
+        });
+
+        $('roadXsTable')?.addEventListener('change', (ev) => {
+            const input = ev.target.closest('input[data-edit]');
+            if (!input) return;
+            const model = currentRoadXsModel();
+            const id = Number(input.closest('tr')?.dataset.ptid);
+            const pt = model?.template?.points.find((p) => p.id === id);
+            if (!pt) return;
+            if (input.dataset.edit === 'code') {
+                pt.code = (input.value || pt.code).trim().slice(0, 12) || pt.code;
+            } else if (input.dataset.edit === 'off') {
+                const v = Number(input.value);
+                if (Number.isFinite(v)) pt.off = v;
+            } else if (input.dataset.edit === 'dz') {
+                const v = Number(input.value);
+                if (Number.isFinite(v)) pt.dz = v;
+            }
+            roadXsActive.pointId = id;
+            applyRoadTemplateChange(model, { relink: false });
+        });
+        $('roadXsTable')?.addEventListener('change', (ev) => {
+            const shapeCode = ev.target.closest('input[data-shape-code]');
+            if (!shapeCode) return;
+            const model = currentRoadXsModel();
+            const sh = model?.template?.shapes?.find((s) => s.id === Number(shapeCode.dataset.shapeCode));
+            if (!sh) return;
+            sh.code = (shapeCode.value || sh.code).trim().slice(0, 12) || sh.code;
+            roadXsActive.shapeId = sh.id;
+            renderRoadXsView();
+        });
+        $('roadXsTable')?.addEventListener('click', (ev) => {
+            const model = currentRoadXsModel();
+            if (!model?.template) return;
+            if (ev.target.closest('#roadXsAddShape')) {
+                const sh = addTemplateShape(model.template);
+                if (!sh) notifyError('Нет замкнутого контура по связям — или такая форма уже есть.');
+                else {
+                    roadXsActive.shapeId = sh.id;
+                    applyRoadTemplateChange(model, { relink: false });
+                    notify(`Форма ${sh.code}.`);
+                }
+                return;
+            }
+            const del = ev.target.closest('button[data-del]');
+            if (del) {
+                const id = Number(del.dataset.del);
+                if (model.template.points.length <= 2) {
+                    notifyError('В шаблоне должно остаться хотя бы две точки.');
+                    return;
+                }
+                removeTemplatePoint(model.template, id);
+                roadXsActive.pointId = null;
+                applyRoadTemplateChange(model, { relink: false });
+                return;
+            }
+            const unlink = ev.target.closest('button[data-unlink]');
+            if (unlink) {
+                const [a, b] = unlink.dataset.unlink.split('-').map(Number);
+                toggleTemplateLink(model.template, a, b);
+                applyRoadTemplateChange(model, { relink: false });
+                return;
+            }
+            const unshape = ev.target.closest('button[data-unshape]');
+            if (unshape) {
+                const sid = Number(unshape.dataset.unshape);
+                model.template.shapes = (model.template.shapes || []).filter((s) => s.id !== sid);
+                roadXsActive.shapeId = null;
+                applyRoadTemplateChange(model, { relink: false });
+                return;
+            }
+            if (ev.target.closest('input, select, textarea')) return;
+            const row = ev.target.closest('tr[data-ptid]');
+            if (row) {
+                roadXsActive.pointId = Number(row.dataset.ptid);
+                renderRoadXsView();
+                return;
+            }
+            const shRow = ev.target.closest('tr[data-sid]');
+            if (shRow) {
+                roadXsActive.shapeId = Number(shRow.dataset.sid);
+                renderRoadXsView();
+            }
+        });
         $('roadXsSlider')?.addEventListener('input', () => {
             setRoadXsActive(roadXsActive.modelId, Number($('roadXsSlider').value));
         });
@@ -31517,7 +32189,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: '126d192-preview',
+            buildId: '77bb720-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -31527,6 +32199,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.13: «Построить» протягивает шаблон поперечника вдоль оси (полотно); шаблон живой — точки, связи, формы; продольный профиль оси — кнопка 〰.',
                 '2026.08.13: ось трассы — пунктир, кромки ширины сплошные; цвет, слой DXF и толщину оси и кромок можно сменить.',
                 '2026.08.13: поперечники на угле — одна секущая по биссектрисе (уголок кромок), не два перпендикуляра; чертёж сечения с полосой дороги даже на плоском рельефе; кромки ширины строятся вместе с осью.',
                 '2026.08.13: ось трассы — кнопка в «Создать 2Д/3Д» и в «Анализ»; после Esc открываются поперечники.',
