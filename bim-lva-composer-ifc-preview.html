@@ -1411,12 +1411,22 @@
         .pad-kdo summary::-webkit-details-marker { display: none; }
         .pad-kdo-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 54px 16px 20px;
+            grid-template-columns: minmax(0, 1fr) 48px 48px 16px 20px;
             gap: 4px;
             align-items: center;
             margin-top: 3px;
         }
         .pad-kdo-tools { display: flex; gap: 4px; margin-top: 4px; align-items: center; }
+        .pad-kdo-hint { margin: 4px 0 2px; font-size: 10px; opacity: .75; line-height: 1.35; }
+        .pad-holes { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--line, #d8dee6); }
+        .pad-holes-list { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+        .pad-hole-chip {
+            display: inline-flex; align-items: center; gap: 3px;
+            background: color-mix(in srgb, var(--txt) 6%, transparent);
+            border-radius: 4px; padding: 0 4px; font-size: 10.5px;
+        }
+        .pad-holes-add { display: flex; gap: 4px; align-items: center; }
+        .pad-holes-add select { flex: 1; min-width: 0; font-size: 10.5px; height: 20px; }
         .polyline-row.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
         .polyline-row .pin-xyz, .pad-row .pin-xyz {
             font-size: 10px;
@@ -2787,7 +2797,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b50c92d</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b8a1c63</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -5279,7 +5289,9 @@
                         id: sm.id, name: sm.name, polylineId: sm.polylineId,
                         area: s.area, fill: s.fill, cut: s.cut,
                         padColor: s.padColor, faces: s.faces, side: sm.side,
-                        kdo: padKdoSummary(sm)
+                        kdo: padKdoSummary(sm),
+                        holes: (sm.holePolylineIds || []).slice(),
+                        meanExit: slopeMeanExit(sm)
                     };
                 });
             },
@@ -5325,7 +5337,9 @@
                     || slopeModels[slopeModels.length - 1];
                 return sm ? padKdoSummary(sm) : null;
             },
-            /** Задать слои КДО (сверху вниз). Толщина в метрах, вертикальная. */
+            /** Задать слои КДО (сверху вниз). Толщина в метрах, вертикальная.
+             *  offset — уширение ступенью относительно слоя выше. Restake
+             *  меняет id построения — его возвращаем. */
             setPadKdo(id, layers) {
                 const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
                     .find((m) => id == null || id === 0 || m.id === id)
@@ -5337,6 +5351,22 @@
                     .find((m) => id == null || id === 0 || m.id === id)
                     || slopeModels[slopeModels.length - 1];
                 return sm ? applyKdoTemplate(sm, templateId) : null;
+            },
+            /** Вырезы в площадке: id замкнутых полилиний внутри контура. */
+            setPadHoles(id, holeIds) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                if (!sm) return null;
+                const next = applyPadHoles(sm, holeIds);
+                return next ? padKdoDebug(next) : null;
+            },
+            /** Отметка TIN площадки в плане, или null если дыра / мимо. */
+            padHitAt(id, x, y) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                return sm ? sampleTrianglesZ(sm.padTriangles, x, y) : null;
             },
             /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
             focusPolyline(id, how) {
@@ -7215,17 +7245,17 @@
                 id: 'cap3',
                 label: 'капитальная III',
                 layers: [
-                    { name: 'Покрытие', thickness: 0.10, color: '#2c2c2c' },
-                    { name: 'Основание', thickness: 0.20, color: '#8a8680' },
-                    { name: 'Доп. слой', thickness: 0.30, color: '#c4b896' }
+                    { name: 'Покрытие', thickness: 0.10, color: '#2c2c2c', offset: 0 },
+                    { name: 'Основание', thickness: 0.20, color: '#8a8680', offset: 0.5 },
+                    { name: 'Доп. слой', thickness: 0.30, color: '#c4b896', offset: 0.5 }
                 ]
             },
             {
                 id: 'trans',
                 label: 'переходная',
                 layers: [
-                    { name: 'Покрытие', thickness: 0.08, color: '#3a3a3a' },
-                    { name: 'Основание', thickness: 0.18, color: '#9a958c' }
+                    { name: 'Покрытие', thickness: 0.08, color: '#3a3a3a', offset: 0 },
+                    { name: 'Основание', thickness: 0.18, color: '#9a958c', offset: 0.5 }
                 ]
             }
         ];
@@ -7610,6 +7640,122 @@
             return faces;
         }
 
+        function signedAreaXY(ring) {
+            let s = 0;
+            const n = ring.length;
+            for (let i = 0; i < n; i++) {
+                const j = (i + 1) % n;
+                s += ring[i].x * ring[j].y - ring[j].x * ring[i].y;
+            }
+            return s / 2;
+        }
+
+        function ringPlanArea(ring) {
+            return Math.abs(signedAreaXY(ring));
+        }
+
+        function orientRingXY(ring, ccw) {
+            const pts = (ring || []).map((p) => ({ x: p.x, y: p.y, z: p.z }));
+            if (pts.length < 3) return pts;
+            const isCcw = signedAreaXY(pts) > 0;
+            if (isCcw !== ccw) pts.reverse();
+            return pts;
+        }
+
+        function segmentsCross(a, b, c, d) {
+            const cr = (ax, ay, bx, by) => ax * by - ay * bx;
+            const e1x = b.x - a.x, e1y = b.y - a.y;
+            const e2x = d.x - c.x, e2y = d.y - c.y;
+            const den = cr(e1x, e1y, e2x, e2y);
+            if (Math.abs(den) < 1e-18) return false;
+            const t = cr(c.x - a.x, c.y - a.y, e2x, e2y) / den;
+            const u = cr(c.x - a.x, c.y - a.y, e1x, e1y) / den;
+            return t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9;
+        }
+
+        function segmentClearOfRings(a, b, rings) {
+            for (let r = 0; r < rings.length; r++) {
+                const ring = rings[r];
+                for (let i = 0; i < ring.length; i++) {
+                    if (segmentsCross(a, b, ring[i], ring[(i + 1) % ring.length])) return false;
+                }
+            }
+            return true;
+        }
+
+        /** Вшить отверстие в наружное кольцо мостом — дальше обычный ear clipping. */
+        function stitchHoleIntoOuter(outer, hole) {
+            let hi = 0;
+            for (let i = 1; i < hole.length; i++) {
+                if (hole[i].x > hole[hi].x || (hole[i].x === hole[hi].x && hole[i].y < hole[hi].y)) hi = i;
+            }
+            const H = hole[hi];
+            let best = -1, bestScore = Infinity;
+            for (let i = 0; i < outer.length; i++) {
+                const P = outer[i];
+                if (!segmentClearOfRings(H, P, [outer, hole])) continue;
+                const dx = P.x - H.x, dy = P.y - H.y;
+                const score = (dx < -1e-6 ? 1e12 : 0) + dx * dx + dy * dy;
+                if (score < bestScore) { bestScore = score; best = i; }
+            }
+            if (best < 0) return null;
+            const walk = [];
+            for (let k = 0; k <= hole.length; k++) walk.push(hole[(hi + k) % hole.length]);
+            return outer.slice(0, best + 1).concat(walk, [outer[best]], outer.slice(best + 1));
+        }
+
+        function triangulatePolygonXY(outer, holes) {
+            if (!outer || outer.length < 3) return [];
+            let ring = orientRingXY(outer, true);
+            const hs = (holes || [])
+                .filter((h) => h && h.length >= 3)
+                .map((h) => orientRingXY(h, false))
+                .sort((a, b) => Math.max(...b.map((p) => p.x)) - Math.max(...a.map((p) => p.x)));
+            for (let i = 0; i < hs.length; i++) {
+                const next = stitchHoleIntoOuter(ring, hs[i]);
+                if (next) ring = next;
+            }
+            return triangulateRingXY(ring);
+        }
+
+        /**
+         * Смещение замкнутого контура в плане. dist > 0 — наружу.
+         * Z вершины копируется: ступень лежит на отметке бровки, не на интерполяции.
+         */
+        function offsetRingXY(ring, dist) {
+            const n = ring?.length || 0;
+            if (n < 3) return [];
+            if (!(Math.abs(dist) > 1e-12)) {
+                return ring.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+            }
+            const sign = signedAreaXY(ring) > 0 ? 1 : -1;
+            const out = [];
+            for (let i = 0; i < n; i++) {
+                const P = ring[(i + n - 1) % n], Q = ring[i], R = ring[(i + 1) % n];
+                const e0x = Q.x - P.x, e0y = Q.y - P.y;
+                const e1x = R.x - Q.x, e1y = R.y - Q.y;
+                const l0 = Math.hypot(e0x, e0y), l1 = Math.hypot(e1x, e1y);
+                if (l0 < 1e-12 || l1 < 1e-12) {
+                    out.push({ x: Q.x, y: Q.y, z: Q.z });
+                    continue;
+                }
+                const n0x = sign * e0y / l0, n0y = -sign * e0x / l0;
+                const n1x = sign * e1y / l1, n1y = -sign * e1x / l1;
+                const Ax = Q.x + dist * n0x, Ay = Q.y + dist * n0y;
+                const Bx = Q.x + dist * n1x, By = Q.y + dist * n1y;
+                const den = e0x * e1y - e0y * e1x;
+                if (Math.abs(den) < 1e-12) {
+                    const nx = n0x + n1x, ny = n0y + n1y;
+                    const nl = Math.hypot(nx, ny) || 1;
+                    out.push({ x: Q.x + dist * nx / nl, y: Q.y + dist * ny / nl, z: Q.z });
+                    continue;
+                }
+                const t = ((Bx - Ax) * e1y - (By - Ay) * e1x) / den;
+                out.push({ x: Ax + t * e0x, y: Ay + t * e0y, z: Q.z });
+            }
+            return out;
+        }
+
         function slopeMakeMesh(positions, colors, name, overlay) {
             if (!positions.length) return null;
             const geom = new THREE.BufferGeometry();
@@ -7725,11 +7871,11 @@
          * Середина замкнутого контура — сама площадка. Без этого TIN откосов
          * это только борта, а в середине дыра до исходного рельефа.
          */
-        function buildSlopePadInterior(record, color) {
+        function buildSlopePadInterior(record, color, holeRings) {
             if (!record.closed) return { mesh: null, triangles: [] };
             const ring = record.renderPts.slice(0, -1);
             if (ring.length < 3) return { mesh: null, triangles: [] };
-            const faces = triangulateRingXY(ring);
+            const faces = triangulatePolygonXY(ring, holeRings);
             if (!faces.length) return { mesh: null, triangles: [] };
             const positions = [];
             faces.forEach(([a, b, c]) => slopePushTri(positions, null, a, b, c, null));
@@ -7803,8 +7949,40 @@
                 id: l.id != null ? l.id : ++kdoLayerSeq,
                 name: String(l.name || 'Слой'),
                 thickness: Math.max(0, Number(l.thickness) || 0),
+                offset: Math.max(0, Number(l.offset) || 0),
                 color: l.color || '#888888'
             }));
+        }
+
+        function kdoTotalThickness(layers) {
+            return (layers || []).reduce((s, l) => s + Math.max(0, Number(l.thickness) || 0), 0);
+        }
+
+        function kdoCumulativeOffsets(layers) {
+            let acc = 0;
+            return (layers || []).map((l) => {
+                acc += Math.max(0, Number(l.offset) || 0);
+                return acc;
+            });
+        }
+
+        function padHoleRings(sm) {
+            return (sm?.holePolylineIds || []).map((id) => {
+                const rec = drawnPolylines.find((r) => r.id === id);
+                if (!rec?.closed || !rec.renderPts || rec.renderPts.length < 4) return null;
+                const ring = rec.renderPts.slice(0, -1);
+                return ring.length >= 3 ? ring : null;
+            }).filter(Boolean);
+        }
+
+        function padFormationBrow(ring, layers) {
+            if (!ring || ring.length < 3) return ring;
+            const offs = kdoCumulativeOffsets(layers);
+            const off = offs.length ? offs[offs.length - 1] : 0;
+            const h = kdoTotalThickness(layers);
+            const form = offsetRingXY(ring, off);
+            if (!(h > 1e-12)) return form;
+            return form.map((p) => ({ x: p.x, y: p.y, z: p.z - h }));
         }
 
         function disposePadKdo(sm) {
@@ -7818,21 +7996,30 @@
 
         function rebuildPadKdo(sm) {
             disposePadKdo(sm);
-            const tris = sm?.padTriangles;
+            const rec = drawnPolylines.find((r) => r.id === sm?.polylineId);
+            const padRing = rec?.closed && rec.renderPts?.length >= 4
+                ? rec.renderPts.slice(0, -1)
+                : null;
             const layers = sm?.kdoLayers || [];
-            if (!tris?.length || !layers.length) return;
-            const area = slopeModelSummary(sm).area;
+            if (!padRing || padRing.length < 3 || !layers.length) return;
+            const holes = padHoleRings(sm);
+            const holeArea = holes.reduce((s, h) => s + ringPlanArea(h), 0);
+            const offs = kdoCumulativeOffsets(layers);
             let zOff = 0;
             sm.kdoMeshes = [];
-            layers.forEach((layer) => {
+            layers.forEach((layer, i) => {
                 const h = Math.max(0, Number(layer.thickness) || 0);
+                const outer = offsetRingXY(padRing, offs[i] || 0);
+                const area = Math.max(0, ringPlanArea(outer) - holeArea);
                 layer.volume = area * h;
                 layer.zTop = zOff;
                 layer.zBot = zOff + h;
+                layer.offsetOut = offs[i] || 0;
                 if (h <= 0) {
                     layer.faces = 0;
                     return;
                 }
+                const tris = triangulatePolygonXY(outer, holes);
                 const mesh = makeKdoLayerMesh(
                     tris, zOff, zOff + h, layer.color,
                     `КДО · ${layer.name}`
@@ -7851,16 +8038,138 @@
             if (!sm) return null;
             sm.kdoLayers = cloneKdoLayers(layers);
             sm.kdoTemplate = '';
-            rebuildPadKdo(sm);
-            return padKdoSummary(sm);
+            const next = restakePad(sm);
+            return padKdoDebug(next || sm);
         }
 
         function applyKdoTemplate(sm, templateId) {
             const tpl = KDO_TEMPLATES.find((t) => t.id === templateId) || KDO_TEMPLATES[0];
             sm.kdoTemplate = tpl.id;
             sm.kdoLayers = cloneKdoLayers(tpl.layers.map((l) => ({ ...l, id: ++kdoLayerSeq })));
-            rebuildPadKdo(sm);
-            return padKdoSummary(sm);
+            const next = restakePad(sm);
+            return padKdoDebug(next || sm);
+        }
+
+        /**
+         * Пересобрать откосы с учётом низа КДО и ступени: бровка откоса —
+         * наружный контур нижнего слоя на его нижней отметке.
+         */
+        function restakePad(sm) {
+            const rec = drawnPolylines.find((r) => r.id === sm?.polylineId);
+            if (!rec) {
+                rebuildPadKdo(sm);
+                return sm;
+            }
+            const oldId = sm.id;
+            const wasOpen = padsKdoOpen.has(oldId);
+            const next = buildSlopeToTerrain(rec, {
+                side: sm.side,
+                mFill: sm.mFill,
+                mCut: sm.mCut,
+                step: sm.step,
+                maxReach: sm.maxReach,
+                padColor: sm.padColor,
+                fillColor: sm.fillColor
+            }) || sm;
+            if (wasOpen && next) {
+                padsKdoOpen.delete(oldId);
+                padsKdoOpen.add(next.id);
+            }
+            return next;
+        }
+
+        function slopeMeanExit(sm) {
+            const ds = [];
+            (sm?.sides || []).forEach((s) => {
+                (s.sections || []).forEach((sec) => {
+                    if (sec.valid && Number.isFinite(sec.distance)) ds.push(sec.distance);
+                });
+            });
+            if (!ds.length) return null;
+            return ds.reduce((a, b) => a + b, 0) / ds.length;
+        }
+
+        function padKdoDebug(sm) {
+            const sum = padKdoSummary(sm);
+            return {
+                ...sum,
+                id: sm?.id ?? null,
+                area: sm ? slopeModelSummary(sm).area : 0,
+                meanExit: slopeMeanExit(sm),
+                holes: (sm?.holePolylineIds || []).slice()
+            };
+        }
+
+        function resolveDrawnId(id) {
+            const rec = drawnPolylines.find((r) => r.id === id || String(r.id) === String(id));
+            return rec ? rec.id : null;
+        }
+
+        function candidateHolePolylines(sm) {
+            const rec = drawnPolylines.find((r) => r.id === sm?.polylineId);
+            const outer = rec?.closed && rec.renderPts?.length >= 4
+                ? rec.renderPts.slice(0, -1)
+                : null;
+            if (!outer || outer.length < 3) return [];
+            const used = new Set(sm.holePolylineIds || []);
+            const derived = slopeDerivedPolylineIds();
+            const out = [];
+            drawnPolylines.forEach((r) => {
+                if (!r.closed || r.id === sm.polylineId) return;
+                if (used.has(r.id) || derived.has(r.id)) return;
+                if (!r.renderPts || r.renderPts.length < 4) return;
+                const hole = r.renderPts.slice(0, -1);
+                if (hole.length < 3) return;
+                let cx = 0, cy = 0;
+                hole.forEach((p) => { cx += p.x; cy += p.y; });
+                cx /= hole.length;
+                cy /= hole.length;
+                if (!pointInRingXY(outer, cx, cy)) return;
+                if (ringPlanArea(hole) >= ringPlanArea(outer) * 0.99) return;
+                out.push({ id: r.id, name: r.name || String(r.id) });
+            });
+            return out;
+        }
+
+        function addPadHole(sm, holeId) {
+            if (!sm?.padTriangles?.length) return null;
+            const nid = resolveDrawnId(holeId);
+            const rec = drawnPolylines.find((r) => r.id === nid);
+            if (!rec?.closed || !rec.renderPts || rec.renderPts.length < 4) {
+                notifyError('Для выреза нужна замкнутая полилиния.');
+                return null;
+            }
+            if (nid === sm.polylineId) {
+                notifyError('Вырезом не может быть сама бровка площадки.');
+                return null;
+            }
+            const outer = drawnPolylines.find((r) => r.id === sm.polylineId)?.renderPts?.slice(0, -1);
+            const hole = rec.renderPts.slice(0, -1);
+            if (!outer || hole.length < 3) return null;
+            let cx = 0, cy = 0;
+            hole.forEach((p) => { cx += p.x; cy += p.y; });
+            cx /= hole.length;
+            cy /= hole.length;
+            if (!pointInRingXY(outer, cx, cy)) {
+                notifyError('Контур выреза должен лежать внутри площадки.');
+                return null;
+            }
+            const ids = (sm.holePolylineIds || []).slice();
+            if (ids.includes(nid)) return restakePad(sm);
+            ids.push(nid);
+            sm.holePolylineIds = ids;
+            return restakePad(sm);
+        }
+
+        function applyPadHoles(sm, holeIds) {
+            if (!sm) return null;
+            const ids = [];
+            (holeIds || []).forEach((id) => {
+                const nid = resolveDrawnId(id);
+                if (nid != null && nid !== sm.polylineId && !ids.includes(nid)) ids.push(nid);
+            });
+            sm.holePolylineIds = ids;
+            return restakePad(sm);
         }
 
         function padKdoSummary(sm) {
@@ -7868,6 +8177,7 @@
                 id: l.id,
                 name: l.name,
                 thickness: l.thickness,
+                offset: l.offset || 0,
                 color: l.color,
                 volume: l.volume || 0,
                 faces: l.faces || 0,
@@ -7953,8 +8263,11 @@
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
                     .find((r) => r.id === sm.polylineId);
                 if (!rec?.closed || !rec.renderPts || rec.renderPts.length < 4) return;
-                const ring = rec.renderPts.slice(0, -1);
-                if (ring.length < 3) return;
+                const base = rec.renderPts.slice(0, -1);
+                if (base.length < 3) return;
+                const offs = kdoCumulativeOffsets(sm.kdoLayers);
+                const off = offs.length ? offs[offs.length - 1] : 0;
+                const ring = off > 1e-12 ? offsetRingXY(base, off) : base;
                 out.push({ ring, tris: sm.padTriangles });
             });
             return out;
@@ -8103,9 +8416,11 @@
         }
 
         /** Один откос (одна сторона) по всей линии: поверхность + линия выхода + объёмы. */
-        function computeSlopeSide(record, side, opts, sampleZ, ownPadTris) {
+        function computeSlopeSide(record, side, opts, sampleZ, ownPadTris, browRing) {
             const closed = !!record.closed;
-            const ring = closed ? record.renderPts.slice(0, -1) : record.renderPts.slice();
+            const ring = (browRing && browRing.length >= 2)
+                ? browRing
+                : (closed ? record.renderPts.slice(0, -1) : record.renderPts.slice());
             if (ring.length < 2) return null;
             const pads = collectOtherPadRings(record.id);
             const look = 0.05;
@@ -8302,24 +8617,39 @@
             const prev = slopeModels.find((sm) => sm.polylineId === record.id);
             const keepKdo = cloneKdoLayers(prev?.kdoLayers);
             const keepTpl = prev?.kdoTemplate || '';
+            const keepName = prev?.name;
+            const keepHoles = (prev?.holePolylineIds || []).filter((id) => {
+                const r = drawnPolylines.find((x) => x.id === id);
+                return !!(r?.closed && r.renderPts && r.renderPts.length >= 4);
+            });
+            const keepFill = prev?.fillColor;
             removeSlopeModelsForPolyline(record.id);
             const ownRing = record.closed ? record.renderPts.slice(0, -1) : null;
-            const ownPadTris = ownRing && ownRing.length >= 3 ? triangulateRingXY(ownRing) : null;
+            const holeRings = keepHoles.map((id) => {
+                const r = drawnPolylines.find((x) => x.id === id);
+                return r.renderPts.slice(0, -1);
+            }).filter((h) => h.length >= 3);
+            const ownPadTris = ownRing && ownRing.length >= 3
+                ? triangulatePolygonXY(ownRing, holeRings)
+                : null;
             const sampleZ = makeSlopeGroundSampler(ownPadTris);
             const sides = opts.side === 'both' ? ['left', 'right'] : [opts.side === 'left' ? 'left' : 'right'];
-            const results = sides.map((side) => computeSlopeSide(record, side, opts, sampleZ, ownPadTris)).filter(Boolean);
+            const formRing = ownRing ? padFormationBrow(ownRing, keepKdo) : null;
+            const results = sides.map((side) => computeSlopeSide(record, side, opts, sampleZ, ownPadTris, formRing)).filter(Boolean);
             if (!results.length) return null;
             const padColor = opts.padColor || '#d4a05a';
-            const pad = buildSlopePadInterior(record, padColor);
+            const pad = buildSlopePadInterior(record, padColor, holeRings);
             const caps = buildSlopeEndCaps(record, results, opts, sampleZ);
             const contour = buildSlopeOuterContour(record, results, caps.capExits, opts);
             const model = {
                 id: ++slopeSeq,
                 polylineId: record.id,
-                name: record.name,
+                name: keepName || record.name,
                 side: opts.side,
                 mFill: opts.mFill, mCut: opts.mCut, step: opts.step, maxReach: opts.maxReach,
                 padColor,
+                fillColor: opts.fillColor || keepFill,
+                holePolylineIds: keepHoles.slice(),
                 sides: results,
                 padMesh: pad.mesh,
                 padTriangles: pad.triangles,
@@ -8572,14 +8902,23 @@
         /** Убрать откосы, привязанные к этой линии (источник или линия выхода). */
         function removeSlopeModelsForPolyline(id) {
             const keep = [];
+            const restake = [];
             let touched = false;
             slopeModels.forEach((sm) => {
+                if ((sm.holePolylineIds || []).includes(id) && sm.polylineId !== id) {
+                    sm.holePolylineIds = sm.holePolylineIds.filter((x) => x !== id);
+                    restake.push(sm);
+                    keep.push(sm);
+                    touched = true;
+                    return;
+                }
                 const touches = sm.polylineId === id ||
                     sm.contourPolylineId === id ||
                     sm.sides.some((s) => s.exitPolylineIds.includes(id));
                 if (touches) { disposeSlopeModel(sm); touched = true; } else keep.push(sm);
             });
             slopeModels = keep;
+            restake.forEach((sm) => restakePad(sm));
             if (touched) { updateDrawUi(); updateSlopeStatus(); markNeedsRender(); }
         }
 
@@ -8618,6 +8957,10 @@
             sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; });
             const rec = drawnPolylines.find((r) => r.id === sm.polylineId);
             let area = rec?.closed ? polylinePlanArea(rec) : null;
+            (sm.holePolylineIds || []).forEach((id) => {
+                const h = drawnPolylines.find((r) => r.id === id);
+                if (h?.closed) area = Math.max(0, (area || 0) - (polylinePlanArea(h) || 0));
+            });
             if (!(area > 0) && sm.padMesh) {
                 let s = 0;
                 slopeMeshTriangles(sm.padMesh).forEach(([a, b, c]) => {
@@ -8704,9 +9047,14 @@
             tpl.value = sm.kdoTemplate || '';
             tpl.addEventListener('change', () => {
                 applyKdoTemplate(sm, tpl.value);
-                renderPadsList();
+                renderPadsList(true);
             });
             box.appendChild(tpl);
+
+            const hint = document.createElement('p');
+            hint.className = 'pad-kdo-hint';
+            hint.textContent = 'Толщина — вниз от верха. «Ступень» — уширение слоя относительно вышележащего. Откос идёт от низа одежды. Вырез — замкнутая полилиния внутри площадки (островок под здание).';
+            box.appendChild(hint);
 
             (sm.kdoLayers || []).forEach((layer, idx) => {
                 const row = document.createElement('div');
@@ -8731,13 +9079,22 @@
                     layer.thickness = Math.max(0, Number(thick.value) || 0);
                     thick.value = String(layer.thickness);
                     sm.kdoTemplate = '';
-                    rebuildPadKdo(sm);
-                    sum.textContent = (() => {
-                        const k = padKdoSummary(sm);
-                        return k.count
-                            ? `КДО · ${k.count} сл. · ${k.totalH.toFixed(2)} м · ${k.totalV.toFixed(2)} м³`
-                            : 'КДО · нет слоёв';
-                    })();
+                    restakePad(sm);
+                    renderPadsList(true);
+                });
+                const off = document.createElement('input');
+                off.className = 'editInput';
+                off.type = 'number';
+                off.min = '0';
+                off.step = '0.1';
+                off.value = String(layer.offset || 0);
+                off.title = 'Уширение ступенью относительно слоя выше, м';
+                off.addEventListener('change', () => {
+                    layer.offset = Math.max(0, Number(off.value) || 0);
+                    off.value = String(layer.offset);
+                    sm.kdoTemplate = '';
+                    restakePad(sm);
+                    renderPadsList(true);
                 });
                 const color = document.createElement('input');
                 color.type = 'color';
@@ -8760,10 +9117,10 @@
                 del.addEventListener('click', () => {
                     sm.kdoLayers = (sm.kdoLayers || []).filter((l) => l !== layer);
                     sm.kdoTemplate = '';
-                    rebuildPadKdo(sm);
-                    renderPadsList();
+                    restakePad(sm);
+                    renderPadsList(true);
                 });
-                row.append(name, thick, color, del);
+                row.append(name, thick, off, color, del);
                 box.appendChild(row);
             });
 
@@ -8779,24 +9136,83 @@
                     id: ++kdoLayerSeq,
                     name: `Слой ${sm.kdoLayers.length + 1}`,
                     thickness: 0.10,
+                    offset: 0,
                     color: '#888888'
                 });
                 sm.kdoTemplate = '';
-                rebuildPadKdo(sm);
-                padsKdoOpen.add(sm.id);
-                renderPadsList();
+                const next = restakePad(sm);
+                if (next) padsKdoOpen.add(next.id);
+                renderPadsList(true);
             });
             tools.appendChild(add);
             box.appendChild(tools);
+
+            const holes = document.createElement('div');
+            holes.className = 'pad-holes';
+            const list = document.createElement('div');
+            list.className = 'pad-holes-list';
+            const holeIds = sm.holePolylineIds || [];
+            if (!holeIds.length) {
+                const empty = document.createElement('span');
+                empty.className = 'pad-kdo-hint';
+                empty.textContent = 'Вырезов нет';
+                list.appendChild(empty);
+            }
+            holeIds.forEach((hid) => {
+                const rec = drawnPolylines.find((r) => r.id === hid);
+                const chip = document.createElement('span');
+                chip.className = 'pad-hole-chip';
+                chip.textContent = rec?.name || String(hid);
+                const x = document.createElement('button');
+                x.className = 'btn';
+                x.textContent = '✕';
+                x.title = 'Убрать вырез';
+                x.addEventListener('click', () => {
+                    applyPadHoles(sm, (sm.holePolylineIds || []).filter((id) => id !== hid));
+                    renderPadsList(true);
+                });
+                chip.appendChild(x);
+                list.appendChild(chip);
+            });
+            holes.appendChild(list);
+            const addRow = document.createElement('div');
+            addRow.className = 'pad-holes-add';
+            const pick = document.createElement('select');
+            pick.className = 'editInput';
+            const cands = candidateHolePolylines(sm);
+            const ph = document.createElement('option');
+            ph.value = '';
+            ph.textContent = cands.length ? 'полилиния-вырез…' : 'нет контуров внутри';
+            pick.appendChild(ph);
+            cands.forEach((c) => {
+                const o = document.createElement('option');
+                o.value = String(c.id);
+                o.textContent = c.name;
+                pick.appendChild(o);
+            });
+            if (!cands.length) pick.disabled = true;
+            const addHole = document.createElement('button');
+            addHole.className = 'btn';
+            addHole.textContent = '+ вырез';
+            addHole.disabled = !cands.length;
+            addHole.title = 'Вырезать островок по замкнутой полилинии внутри площадки';
+            addHole.addEventListener('click', () => {
+                if (!pick.value) return;
+                addPadHole(sm, pick.value);
+                renderPadsList(true);
+            });
+            addRow.append(pick, addHole);
+            holes.appendChild(addRow);
+            box.appendChild(holes);
             return box;
         }
 
-        function renderPadsList() {
+        function renderPadsList(force) {
             const count = $('padsCount');
             if (count) count.textContent = String(slopeModels.length);
             const body = $('padsList');
             if (!body) return;
-            if (body.contains(document.activeElement) && document.activeElement.closest('.pad-kdo')) return;
+            if (!force && body.contains(document.activeElement) && document.activeElement.closest('.pad-kdo')) return;
             if (!slopeModels.length) {
                 body.innerHTML = '<div class="empty">Площадок пока нет. В списке полилиний нажмите «△ Откосы» и постройте.</div>';
                 return;
@@ -8881,7 +9297,7 @@
                 'КДО, м', 'КДО, м³'
             ]];
             const kdoRows = [[
-                'Площадка', 'Слой', 'Толщина, м', 'Объём, м³', 'Цвет'
+                'Площадка', 'Слой', 'Толщина, м', 'Ступень, м', 'Объём, м³', 'Цвет'
             ]];
             slopeModels.forEach((sm) => {
                 const s = slopeModelSummary(sm);
@@ -8902,6 +9318,7 @@
                     kdoRows.push([
                         sm.name, l.name,
                         Number(l.thickness.toFixed(3)),
+                        Number((l.offset || 0).toFixed(3)),
                         Number(l.volume.toFixed(3)),
                         l.color
                     ]);
@@ -28454,7 +28871,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: 'b50c92d-preview',
+            buildId: 'b8a1c63-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -28464,7 +28881,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: слои КДО под площадкой; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть; откос верхней площадки обходит углы нижней.',
+                '2026.08.13: КДО — ступень уширения нижних слоёв, откос от низа одежды, вырез островка в площадке; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',

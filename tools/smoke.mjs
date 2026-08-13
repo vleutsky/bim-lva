@@ -1422,20 +1422,27 @@ async function checkSlopeToTerrain(page) {
         }
         const kdo = await page.evaluate((id) => {
             const D = window.BimLvaDebug;
+            // Restake меняет id построения — DXF и дальнейшие шаги только по новому.
             const applied = D.setPadKdo(id, [
                 { name: 'Покрытие', thickness: 0.10, color: '#111111' },
                 { name: 'Основание', thickness: 0.20, color: '#888888' }
             ]);
-            const dxf = D.slopeDxfPreview(id) || '';
+            const dxf = D.slopeDxfPreview(applied?.id) || '';
+            const stepped = D.setPadKdo(applied?.id, [
+                { name: 'Покрытие', thickness: 0.10, offset: 0, color: '#111111' },
+                { name: 'Основание', thickness: 0.20, offset: 0.5, color: '#888888' }
+            ]);
             return {
                 count: applied?.count,
                 totalH: applied?.totalH,
-                totalV: applied?.totalV,
                 v0: applied?.layers?.[0]?.volume,
                 v1: applied?.layers?.[1]?.volume,
                 faces0: applied?.layers?.[0]?.faces,
+                meanExit: applied?.meanExit,
                 dxfKdo: /LVA_KDO/.test(dxf),
-                dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length
+                dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length,
+                stepV0: stepped?.layers?.[0]?.volume,
+                stepV1: stepped?.layers?.[1]?.volume
             };
         }, pad.res.id);
         // Квадрат 4×4: объём = 16 × толщина. Слои — тела, не плёнка.
@@ -1450,6 +1457,14 @@ async function checkSlopeToTerrain(page) {
         }
         if (!kdo.dxfKdo || kdo.dxfPolyface !== 3) {
             problems.push(`откосы: DXF КДО слой ${kdo.dxfKdo}, сетей ${kdo.dxfPolyface} (ждали 1 TIN + 2 слоя)`);
+        }
+        // Откос от низа одежды (0.30 м), не от бровки верха: H=1.7, 1:1.5 → d=2.55, не 3.0.
+        if (!(Math.abs((kdo.meanExit || 0) - 2.55) < 0.2)) {
+            problems.push(`откосы: КДО откос от низа d=${kdo.meanExit} вместо ≈2.55 (от верха было бы 3.0)`);
+        }
+        // Ступень 0.5 м у второго слоя: 5×5×0.20 = 5.0 м³, верх без уширения 1.6.
+        if (Math.abs((kdo.stepV0 || 0) - 1.6) > 1e-6 || Math.abs((kdo.stepV1 || 0) - 5.0) > 1e-6) {
+            problems.push(`откосы: КДО ступень объёмы ${kdo.stepV0} / ${kdo.stepV1} м³ вместо 1.6 / 5.0`);
         }
     }
 
@@ -1493,6 +1508,42 @@ async function checkSlopeToTerrain(page) {
         }
         if (!(padsUi.count >= 1)) {
             problems.push(`площадки: счётчик ${padsUi.count}`);
+        }
+    }
+
+    // Вырез островка 2×2 в квадрате 4×4: площадь 12; в дыре TIN нет.
+    const island = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const pad = (D.pads || []).find((p) => p.name === 'Площадка-переименована')
+            || (D.pads || [])[0];
+        if (!pad) return { ok: false };
+        const holeId = D.createPolylineFromPoints(
+            [
+                { x: 21, y: 16, z: g + 2 }, { x: 23, y: 16, z: g + 2 },
+                { x: 23, y: 18, z: g + 2 }, { x: 21, y: 18, z: g + 2 }
+            ],
+            { name: 'Откос-тест-остров', closed: true }
+        );
+        const holed = D.setPadHoles(pad.id, [holeId]);
+        return {
+            ok: true,
+            area: holed?.area,
+            holes: holed?.holes?.length,
+            hitHole: D.padHitAt(holed?.id, 22, 17),
+            hitPad: D.padHitAt(holed?.id, 20.5, 15.5)
+        };
+    }, groundZ);
+    if (!island.ok) {
+        problems.push('откосы: вырез островка — площадка не найдена');
+    } else {
+        if (!(Math.abs((island.area || 0) - 12) < 1e-6) || island.holes !== 1) {
+            problems.push(`откосы: вырез островка площадь ${island.area} / дыр ${island.holes} вместо 12 м² / 1`);
+        }
+        if (island.hitHole != null) {
+            problems.push(`откосы: TIN площадки закрыл вырез (z=${island.hitHole} в центре островка)`);
+        }
+        if (island.hitPad == null) {
+            problems.push('откосы: после выреза TIN не попал в тело площадки рядом с дырой');
         }
     }
 
