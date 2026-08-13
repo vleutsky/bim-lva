@@ -478,13 +478,29 @@
                 if (!p) locStatus = 'point-not-found';
                 else location = p;
             }
+            // Поворот на уровне разбираем так же придирчиво, как и точку:
+            // «$ в файле» и «ссылка не нашлась» — это РАЗНЫЕ вещи, и обе раньше
+            // молча превращались в «поворота нет». Из-за этого отчёт по цепочке
+            // не мог объяснить неверную ориентацию в принципе: углы в него не
+            // попадали вовсе, хотя базис тут же и считался.
+            const axis = ax && ax.axis != null ? idx.dirs.get(ax.axis) : null;
+            const refDirection = ax && ax.refDir != null ? idx.dirs.get(ax.refDir) : null;
+            let axisStatus = 'ok';
+            if (!ax || ax.axis == null) axisStatus = 'default';
+            else if (!axis) axisStatus = 'not-found';
+            let refStatus = 'ok';
+            if (!ax || ax.refDir == null) refStatus = 'default';
+            else if (!refDirection) refStatus = 'not-found';
+
             levels.push({
                 id: cur,
                 relTo: lp.relTo,
                 location,
                 locStatus,
-                axis: ax && ax.axis != null ? idx.dirs.get(ax.axis) : null,
-                refDirection: ax && ax.refDir != null ? idx.dirs.get(ax.refDir) : null,
+                axis,
+                refDirection,
+                axisStatus,
+                refStatus,
                 hasAxis: !!ax
             });
             cur = lp.relTo;
@@ -500,15 +516,46 @@
                 origin[1] + basis.x[1] * lvl.location[0] + basis.y[1] * lvl.location[1] + basis.z[1] * lvl.location[2],
                 origin[2] + basis.x[2] * lvl.location[0] + basis.y[2] * lvl.location[1] + basis.z[2] * lvl.location[2]
             ];
+            const localBasis = lvl.missing ? null : buildBasis(lvl.axis, lvl.refDirection);
             trace.push({
                 id: lvl.id, local: lvl.location, world: worldLoc,
-                missing: lvl.missing, hasAxis: lvl.hasAxis, locStatus: lvl.locStatus
+                missing: lvl.missing, hasAxis: lvl.hasAxis, locStatus: lvl.locStatus,
+                axis: lvl.axis, refDirection: lvl.refDirection,
+                axisStatus: lvl.axisStatus, refStatus: lvl.refStatus,
+                localBasis
             });
             if (lvl.missing) break;
-            basis = composeBasis(basis, buildBasis(lvl.axis, lvl.refDirection));
+            basis = composeBasis(basis, localBasis);
             origin = worldLoc;
         }
-        return { trace, worldOrigin: origin, levels: levels.length };
+        return { trace, worldOrigin: origin, worldBasis: basis, levels: levels.length };
+    }
+
+    /** Поворот базиса вокруг вертикали: куда смотрит его ось X. */
+    const basisHeadingDeg = (b) => Math.atan2(b.x[1], b.x[0]) * 180 / Math.PI;
+    /** Отклонение оси Z базиса от мировой вертикали. 0° — нормально, 180° — модель вверх ногами. */
+    const basisTiltDeg = (b) => Math.acos(Math.max(-1, Math.min(1, b.z[2]))) * 180 / Math.PI;
+
+    /**
+     * Короткая приписка о повороте уровня. Молчать, когда поворота нет, нельзя:
+     * ровно из-за молчания «ориентация не та» невозможно было разобрать по
+     * отчёту. Поэтому 0° печатается тоже — но одним словом.
+     */
+    function levelRotationNote(t) {
+        if (!t.localBasis) return '';
+        const bits = [];
+        if (t.axisStatus === 'not-found') bits.push('Axis: ссылка НЕ НАШЛАСЬ');
+        if (t.refStatus === 'not-found') bits.push('RefDirection: ссылка НЕ НАШЛАСЬ');
+        const head = basisHeadingDeg(t.localBasis);
+        const tilt = basisTiltDeg(t.localBasis);
+        if (Math.abs(head) < 0.0005 && tilt < 0.0005 && !bits.length) {
+            return t.refStatus === 'default' && t.axisStatus === 'default'
+                ? ' · поворот не задан ($)'
+                : ' · поворот 0°';
+        }
+        bits.unshift(`поворот ${head.toFixed(3)}°`);
+        if (tilt >= 0.0005) bits.push(`ось Z отклонена на ${tilt.toFixed(3)}°`);
+        return ' · ' + bits.join(', ');
     }
 
     function formatChainTrace(label, startId, idx, k) {
@@ -517,7 +564,7 @@
             L.push('  ObjectPlacement = $ (нет размещения — сущность в абсолютном нуле).');
             return L;
         }
-        const { trace, worldOrigin, levels } = resolveChain(startId, idx);
+        const { trace, worldOrigin, worldBasis, levels } = resolveChain(startId, idx);
         L.push(`  Уровней в цепочке: ${levels}`);
         trace.forEach((t, i) => {
             const tag = i === 0 ? 'корень' : `шаг ${i}`;
@@ -528,9 +575,25 @@
             const loc = t.local.map((v) => (v * k).toFixed(3)).join(', ');
             const wld = t.world.map((v) => (v * k).toFixed(3)).join(', ');
             const note = LOC_STATUS_NOTE[t.locStatus] || '';
-            L.push(`  #${t.id} (${tag}): локально (${loc}) м → накоплено (${wld}) м${note}`);
+            L.push(`  #${t.id} (${tag}): локально (${loc}) м → накоплено (${wld}) м${note}${levelRotationNote(t)}`);
         });
         L.push(`  Итог — мировая точка: ${worldOrigin.map((v) => (v * k).toFixed(3)).join(' / ')} м`);
+
+        // Итоговая ориентация. Без неё отчёт отвечал только на вопрос «где», а
+        // «как повёрнуто» оставлял без ответа — хотя базис считался всю дорогу.
+        const head = basisHeadingDeg(worldBasis);
+        const tilt = basisTiltDeg(worldBasis);
+        L.push(
+            `  Итог — поворот вокруг Z: ${head.toFixed(3)}° ` +
+            `(ось X смотрит в ${worldBasis.x.map((v) => v.toFixed(5)).join(', ')})`
+        );
+        if (tilt >= 0.0005) {
+            L.push(
+                `  ⚠ Ось Z цепочки отклонена от вертикали на ${tilt.toFixed(3)}° ` +
+                `(${worldBasis.z.map((v) => v.toFixed(5)).join(', ')})` +
+                (tilt > 150 ? ' — модель фактически перевёрнута.' : ' — модель наклонена.')
+            );
+        }
         return L;
     }
 
