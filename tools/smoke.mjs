@@ -1319,8 +1319,8 @@ async function checkSlopeToTerrain(page) {
 
     // Площадка: замкнутый квадрат 4×4 м. Середина обязана заполниться
     // (2 треугольника), иначе в TIN дыра до исходного рельефа. LandXML —
-    // northing easting elev, DXF — 3DFACE на слое LVA_SLOPE; оба в абсолютных
-    // метрах, как ждёт Civil 3D.
+    // northing easting elev; DXF площадки — одна POLYFACE MESH (70=64) на
+    // слое LVA_SLOPE, без 3D-полилиний по рёбрам. Оба в абсолютных метрах.
     await page.evaluate(() => window.BimLvaDebug.clearSlopes());
     const pad = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
@@ -1338,7 +1338,7 @@ async function checkSlopeToTerrain(page) {
         });
         const tin = D.slopeTin(res?.id);
         const xml = D.slopeLandXml(res?.id) || '';
-        const dxf = D.dxfPreview();
+        const dxf = D.slopeDxfPreview(res?.id) || '';
         const p1 = xml.match(/<P id="1">([^<]+)<\/P>/);
         const xyz = p1 ? p1[1].trim().split(/\s+/).map(Number) : null;
         const exitId = res?.sides?.[0]?.exitPolylineIds?.[0];
@@ -1349,8 +1349,12 @@ async function checkSlopeToTerrain(page) {
             xmlPnts: (xml.match(/<P id="/g) || []).length,
             xmlHasSurface: /<Surface /i.test(xml) && /surfType="TIN"/i.test(xml),
             dxfFaces: (dxf.match(/\r\n3DFACE\r\n/g) || []).length,
+            dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length,
+            dxfMeshVerts: (dxf.match(/\r\n70\r\n192\r\n/g) || []).length,
+            dxfMeshFaces: (dxf.match(/\r\n70\r\n128\r\n/g) || []).length,
+            dxfLineVerts: (dxf.match(/\r\n70\r\n32\r\n/g) || []).length,
+            dxfPolylines: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
             dxfSlopeLayer: /LVA_SLOPE/.test(dxf),
-            dxfClosed3d: (dxf.match(/\r\n70\r\n9\r\n/g) || []).length,
             p1: xyz,
             tin0: tin?.points?.[0] || null,
             exitClosed: !!exit?.closed,
@@ -1397,20 +1401,24 @@ async function checkSlopeToTerrain(page) {
         } else {
             problems.push('откосы: в LandXML нет точки id=1');
         }
-        if (!pad.dxfSlopeLayer || pad.dxfFaces < pad.res.tin.faces) {
-            problems.push(`откосы: DXF площадки — 3DFACE ${pad.dxfFaces}, слой LVA_SLOPE ${pad.dxfSlopeLayer}`);
+        if (!pad.dxfSlopeLayer || pad.dxfPolyface !== 1 || pad.dxfMeshFaces !== pad.res.tin.faces
+            || pad.dxfMeshVerts !== pad.res.tin.points || pad.dxfPolylines !== 1 || pad.dxfLineVerts
+            || pad.dxfFaces) {
+            problems.push(
+                `откосы: DXF площадки — сеть ${pad.dxfPolyface} (70=64), граней ${pad.dxfMeshFaces}/` +
+                `${pad.res.tin.faces}, вершин ${pad.dxfMeshVerts}/${pad.res.tin.points}, ` +
+                `POLYLINE ${pad.dxfPolylines}, рёбер-линий ${pad.dxfLineVerts}, 3DFACE ${pad.dxfFaces}, ` +
+                `слой LVA_SLOPE ${pad.dxfSlopeLayer}`
+            );
         }
         if (!pad.exitClosed) {
-            problems.push('откосы: линия выхода площадки не замкнута — в DXF Civil откроет её разомкнутой');
+            problems.push('откосы: линия выхода площадки не замкнута — контур на сцене должен быть кольцом');
         }
         if (pad.exitClosed && pad.exitDxfVerts !== pad.exitPoints) {
             problems.push(
-                `откосы: в DXF у линии выхода ${pad.exitDxfVerts} вершин при ${pad.exitPoints} в контуре — ` +
+                `откосы: кодировка линии выхода ${pad.exitDxfVerts} вершин при ${pad.exitPoints} в контуре — ` +
                 `замыкание должно быть флагом, без повторной вершины`
             );
-        }
-        if (pad.dxfClosed3d < 2) {
-            problems.push(`откосы: в DXF замкнутых 3D-полилиний ${pad.dxfClosed3d} (флаг 70=9) — ждали бровку и линию выхода`);
         }
     }
 
