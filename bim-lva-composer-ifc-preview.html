@@ -2830,7 +2830,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 2d2faec</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 5fa25bc</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2884,7 +2884,7 @@
                             <button class="btn" id="btnQrView" disabled title="QR-код якоря вида для телефона (камера + геопривязка)">▣ QR / якорь</button>
                             <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
                             <button class="btn" id="btnTour" disabled title="Проезд по маршруту или свободная езда WASD">🚗 Проезд / облёт</button>
-                            <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
+                            <button class="btn on" id="gridBtn" title="Координатная сетка. После загрузки файлов выключается сама — на линейных объектах она остаётся крошечным квадратом у нуля и мешает. Включить можно вручную.">▤ Сетка</button>
                             <button class="btn" id="btnSelectionContour" title="Контур рёбер (опционально). Подсветка по умолчанию — на самой геометрии, без отдельной «коробки»">◇ Контур выделения</button>
                             <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
                             <div class="tb-menu-label">Ближнее отсечение</div>
@@ -5099,6 +5099,33 @@
             get cameraTarget() {
                 return { x: controls.target.x, y: controls.target.y, z: controls.target.z };
             },
+            get cameraDistance() {
+                return camera.position.distanceTo(controls.target);
+            },
+            get sceneMaxDim() { return lastSceneMaxDim; },
+            get gridVisible() { return !!(grid && grid.visible); },
+            setSceneMaxDim(v) {
+                if (Number.isFinite(v) && v > 0) lastSceneMaxDim = v;
+                return lastSceneMaxDim;
+            },
+            setCameraDistance(dist) {
+                const d = Math.max(1, Number(dist) || 1);
+                const dir = camera.position.clone().sub(controls.target);
+                if (dir.lengthSq() < 1e-12) dir.set(1, -1, 0.8);
+                dir.normalize();
+                camera.position.copy(controls.target).add(dir.multiplyScalar(d));
+                controls.update();
+                markNeedsRender();
+                return d;
+            },
+            zoomStep(deltaY, hitGeometry = true) {
+                const before = camera.position.distanceTo(controls.target);
+                zoomCameraTowardPoint(controls.target.clone(), deltaY, { hitGeometry: !!hitGeometry });
+                return {
+                    before,
+                    after: camera.position.distanceTo(controls.target)
+                };
+            },
             /**
              * Что реально на материале элемента: назначенный цвет, цвет меша и
              * свечение выделения. Нужен, чтобы проверять покраску числами —
@@ -6079,9 +6106,11 @@
         fill.position.set(-25, 20, 15); 
         scene.add(fill);
 
-        let grid = new THREE.GridHelper(120, 120, 0xaeb8c3, 0xdde3e9);
+        let gridColors = { major: 0xaeb8c3, minor: 0xdde3e9 };
+        let grid = new THREE.GridHelper(120, 120, gridColors.major, gridColors.minor);
         grid.rotation.x = Math.PI / 2;
         grid.position.set(0, 0, 0);
+        grid.raycast = () => {};
         scene.add(grid);
 
 // 1. Возвращаем правильный разворот по оси X
@@ -16622,6 +16651,7 @@
 
             if (loadedModels.size) {
                 ensureSceneContentNearOrigin();
+                setSceneGridForLoadedModels(true);
                 const frameCamera = () => {
                     globalGroup.updateWorldMatrix(true, true);
                     externalGroup.updateWorldMatrix(true, true);
@@ -28653,6 +28683,7 @@ ${componentXml || '    '}
                 $('btnClipGizmo').disabled = true;
                 pivotLockToSelection = false;
                 $('btnPivotLock').classList.remove('on');
+                setSceneGridForLoadedModels(false);
             } else {
                 fitView();
             }
@@ -29096,14 +29127,24 @@ ${componentXml || '    '}
         function zoomCameraTowardPoint(point, deltaY, options = {}) {
             // Как в OrbitControls: прокрутка вверх (deltaY < 0) — приближение
             const hitGeom = options.hitGeometry === true;
+            const viewDist = camera.position.distanceTo(controls.target) || 1;
+            const toPoint = camera.position.distanceTo(point) || viewDist;
+            const sceneScale = Math.max(lastSceneMaxDim || 10, viewDist, 10);
             let base = hitGeom ? ZOOM_FACTOR : ZOOM_FACTOR_EMPTY;
-            // Мимо модели на большой дистанции — ещё мягче, иначе «пролёт» за 1–2 тика
+            // Мимо модели на большой дистанции — мягче, иначе «пролёт» за 1–2 тика.
+            // Порог от размера сцены, не абсолютные 40 м: на линейных объектах
+            // камера всегда дальше 200 м, и старый коэффициент 40/dist оставлял
+            // колесо почти мёртвым, пока луч не попадёт в тонкую трубу.
             if (!hitGeom) {
-                const dist = camera.position.distanceTo(point);
-                if (dist > 40) base *= Math.max(0.3, 40 / dist);
-                if (dist > 200) base *= 0.7;
+                const far = Math.max(80, sceneScale * 0.35);
+                if (toPoint > far) base *= Math.max(0.5, far / toPoint);
             }
-            const intensityCap = hitGeom ? 2.5 : 1.25;
+            if (sceneScale > 200) {
+                const boost = Math.min(2.8, 1 + Math.log10(sceneScale / 100));
+                base *= boost;
+                if (!hitGeom) base = Math.max(base, ZOOM_FACTOR * boost * 0.75);
+            }
+            const intensityCap = hitGeom ? 2.5 : (sceneScale > 200 ? 2.2 : 1.25);
             const intensity = Math.min(Math.abs(deltaY || 100) / 100, intensityCap);
             const factor = Math.exp(Math.sign(deltaY || 1) * base * intensity);
 
@@ -29262,6 +29303,62 @@ ${componentXml || '    '}
             markNeedsRender();
         }
 
+        function disposeSceneGrid(helper) {
+            if (!helper) return;
+            if (helper.parent) helper.parent.remove(helper);
+            helper.geometry?.dispose();
+            const mats = helper.material;
+            (Array.isArray(mats) ? mats : [mats]).forEach((m) => m?.dispose?.());
+        }
+
+        function placeSceneGrid(size, pos) {
+            const wasVisible = grid ? grid.visible : true;
+            disposeSceneGrid(grid);
+            const gsize = Math.max(40, Number(size) || 120);
+            const divs = Math.max(8, Math.round(gsize / 4));
+            grid = new THREE.GridHelper(gsize, divs, gridColors.major, gridColors.minor);
+            grid.rotation.x = Math.PI / 2;
+            if (pos) grid.position.set(pos.x, pos.y, pos.z);
+            else grid.position.set(0, 0, 0);
+            grid.raycast = () => {};
+            grid.visible = wasVisible;
+            scene.add(grid);
+            return grid;
+        }
+
+        /**
+         * С файлами сетка у нуля только мешает: на линейных объектах это
+         * крошечный квадрат в центре кадра, а «Вписать» раньше ещё и растягивал
+         * её на весь коридор. Пустая сцена — 120 м у начала координат.
+         */
+        function setSceneGridForLoadedModels(hasModels) {
+            if (hasModels) {
+                placeSceneGrid(120, new THREE.Vector3(0, 0, 0));
+                grid.visible = false;
+                $('gridBtn')?.classList.remove('on');
+                return;
+            }
+            placeSceneGrid(120, new THREE.Vector3(0, 0, 0));
+            grid.visible = true;
+            $('gridBtn')?.classList.add('on');
+        }
+
+        function showSceneGridAtContent() {
+            const box = getSceneContentBox();
+            if (box && !box.isEmpty()) {
+                const c = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                const span = Math.min(
+                    400,
+                    Math.max(80, Math.min(Math.max(size.x, size.y) * 0.25, (lastSceneMaxDim || 200) * 0.2))
+                );
+                placeSceneGrid(span, new THREE.Vector3(c.x, c.y, box.min.z));
+            } else {
+                placeSceneGrid(120, new THREE.Vector3(0, 0, 0));
+            }
+            grid.visible = true;
+        }
+
         function fitView() {
             ensureSceneContentNearOrigin();
             globalGroup.updateWorldMatrix(true, true);
@@ -29270,21 +29367,12 @@ ${componentXml || '    '}
             const box = getSceneContentBox();
             if (box.isEmpty()) {
                 frameOriginView();
+                setSceneGridForLoadedModels(false);
                 return;
             }
 
-            const size = box.getSize(new THREE.Vector3());
-            const center = box.getCenter(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z, 0.01);
             frameBox(box);
-
-            scene.remove(grid);
-            const gsize = Math.max(40, Math.ceil(maxDim * 1.6 / 10) * 10);
-            grid = new THREE.GridHelper(gsize, gsize / 4, 0xaeb8c3, 0xdde3e9);
-            grid.rotation.x = Math.PI / 2;
-            grid.position.set(center.x, center.y, box.min.z);
-            grid.visible = $('gridBtn').classList.contains('on');
-            scene.add(grid);
+            setSceneGridForLoadedModels(true);
             markNeedsRender();
         }
 
@@ -29304,8 +29392,17 @@ ${componentXml || '    '}
             trackUsage('fit_view');
         });
         $('gridBtn').addEventListener('click', e => {
-            grid.visible = e.currentTarget.classList.toggle('on');
-            trackUsage('grid_toggle', { on: grid.visible });
+            const on = e.currentTarget.classList.toggle('on');
+            if (on) {
+                if (loadedModels.size) showSceneGridAtContent();
+                else {
+                    placeSceneGrid(120, new THREE.Vector3(0, 0, 0));
+                    grid.visible = true;
+                }
+            } else if (grid) {
+                grid.visible = false;
+            }
+            trackUsage('grid_toggle', { on });
         });
 
         function commitCameraNearFromInput() {
@@ -29431,6 +29528,8 @@ ${componentXml || '    '}
             $('btnPivotLock').classList.remove('on');
 
             document.body.style.cursor = '';
+            setSceneGridForLoadedModels(false);
+            frameOriginView();
         });
 
         // --- Яндекс.Диск (публичная папка как «сервер» моделей) ---
@@ -30874,14 +30973,14 @@ ${componentXml || '    '}
             currentBgIndex = (currentBgIndex + 1) % bgThemes.length; 
             const theme = bgThemes[currentBgIndex];
             
-            renderer.setClearColor(theme.hex, 1); 
-            scene.remove(grid);
-            
-            grid = new THREE.GridHelper(120, 120, theme.grid, theme.grid);
-            grid.rotation.x = Math.PI / 2;
-            grid.position.set(0, 0, 0);
-            grid.visible = $('gridBtn').classList.contains('on'); 
-            scene.add(grid);
+            renderer.setClearColor(theme.hex, 1);
+            gridColors = { major: theme.grid, minor: theme.grid };
+            if (loadedModels.size && $('gridBtn')?.classList.contains('on')) showSceneGridAtContent();
+            else {
+                const vis = $('gridBtn')?.classList.contains('on');
+                placeSceneGrid(120, new THREE.Vector3(0, 0, 0));
+                grid.visible = !!vis;
+            }
         });
 
         // ---- Tour: car drive / fly-through ----
@@ -32321,7 +32420,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: '2d2faec-preview',
+            buildId: '5fa25bc-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -32331,6 +32430,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.13: после загрузки файлов сетка у нуля выключается (на линейных объектах она оставалась крошечным квадратом в центре); зум колесом на большой сцене масштабируется по размеру кадра, а не душится порогом 40 м.',
                 '2026.08.13: Tekla на заводской сетке (~1200 м) больше не садится в ноль из-за вырезов: старый кэш со сбросом отбрасывается, после CSG положение возвращается по координатам файла.',
                 '2026.08.13: «Построить» протягивает шаблон поперечника вдоль оси (полотно); шаблон живой — точки, связи, формы; продольный профиль оси — кнопка 〰.',
                 '2026.08.13: ось трассы — пунктир, кромки ширины сплошные; цвет, слой DXF и толщину оси и кромок можно сменить.',
