@@ -559,6 +559,100 @@
         return ' · ' + bits.join(', ');
     }
 
+    /**
+     * Мировые точки вставки ВСЕХ размещений файла — и их габарит.
+     *
+     * По одному элементу о развороте модели судить нельзя: стальные пластины и
+     * связи законно смотрят в разные стороны, и трассировка одной из них ничего
+     * не доказывает. А вот пятно, которое занимают точки вставки всех
+     * элементов, разворот показывает сразу: у повёрнутой на 90° модели длинная
+     * сторона окажется поперёк.
+     *
+     * Считается по цепочкам размещения, а не по IFCCARTESIANPOINT из основного
+     * отчёта: там в габарит валятся и точки локальных систем, из-за чего он
+     * упирается в точку вставки площадки и про форму модели молчит.
+     */
+    function placementWorldExtents(idx) {
+        const memo = new Map();
+        const IDENTITY = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+
+        function resolve(id, depth) {
+            if (memo.has(id)) return memo.get(id);
+            if (depth > 64) return null;
+            const lp = idx.localPlacements.get(id);
+            if (!lp) return null;
+            // Заглушка до вычисления: если файл замкнул цепочку сам на себя,
+            // рекурсия вернётся сюда и получит null вместо переполнения стека.
+            memo.set(id, null);
+            const parent = lp.relTo != null
+                ? resolve(lp.relTo, depth + 1)
+                : { origin: V3_ZERO, basis: IDENTITY };
+            if (!parent) return null;
+            const ax = lp.rel != null ? idx.axis3d.get(lp.rel) : null;
+            let loc = V3_ZERO;
+            if (ax && ax.loc != null) {
+                const p = idx.points.get(ax.loc);
+                if (p) loc = p;
+            }
+            const b = parent.basis;
+            const origin = [
+                parent.origin[0] + b.x[0] * loc[0] + b.y[0] * loc[1] + b.z[0] * loc[2],
+                parent.origin[1] + b.x[1] * loc[0] + b.y[1] * loc[1] + b.z[1] * loc[2],
+                parent.origin[2] + b.x[2] * loc[0] + b.y[2] * loc[1] + b.z[2] * loc[2]
+            ];
+            const basis = composeBasis(b, buildBasis(
+                ax && ax.axis != null ? idx.dirs.get(ax.axis) : null,
+                ax && ax.refDir != null ? idx.dirs.get(ax.refDir) : null
+            ));
+            const res = { origin, basis };
+            memo.set(id, res);
+            return res;
+        }
+
+        const min = [Infinity, Infinity, Infinity];
+        const max = [-Infinity, -Infinity, -Infinity];
+        let counted = 0;
+        for (const id of idx.localPlacements.keys()) {
+            const r = resolve(id, 0);
+            if (!r) continue;
+            counted++;
+            for (let i = 0; i < 3; i++) {
+                if (r.origin[i] < min[i]) min[i] = r.origin[i];
+                if (r.origin[i] > max[i]) max[i] = r.origin[i];
+            }
+        }
+        return counted ? { min, max, counted } : null;
+    }
+
+    function formatPlacementExtents(idx, k) {
+        const L = ['', '--- Пятно модели по точкам вставки (мировые координаты) ---'];
+        const ext = placementWorldExtents(idx);
+        if (!ext) {
+            L.push('  Ни одной цепочки размещения разрешить не удалось.');
+            return L;
+        }
+        const size = [0, 1, 2].map((i) => (ext.max[i] - ext.min[i]) * k);
+        const ax = ['X (east)', 'Y (north)', 'Z (высота)'];
+        L.push(`  Размещений учтено: ${ext.counted.toLocaleString('ru-RU')}`);
+        for (let i = 0; i < 3; i++) {
+            L.push(
+                `  ${ax[i]}: ${(ext.min[i] * k).toFixed(3)} … ${(ext.max[i] * k).toFixed(3)} м` +
+                `   (размер ${size[i].toFixed(3)} м)`
+            );
+        }
+        // Ради этой строки всё и считалось: сравнив пропорции двух файлов,
+        // разворот на 90° видно без всяких углов в цепочке.
+        const long = size[0] >= size[1] ? 'X (east)' : 'Y (north)';
+        const ratio = Math.max(size[0], size[1]) / Math.max(1e-9, Math.min(size[0], size[1]));
+        L.push(
+            `  В плане длиннее по ${long}, отношение сторон ${ratio.toFixed(2)} : 1.`,
+            '  Это точки ВСТАВКИ элементов, без их собственных габаритов. Сравните',
+            '  строку с соседним файлом сводки: если у одного длинная сторона по X,',
+            '  а у другого по Y при одинаковой планировке — он развёрнут на 90°.'
+        );
+        return L;
+    }
+
     function formatChainTrace(label, startId, idx, k, opts = {}) {
         const L = [`--- ${label} ---`];
         if (startId == null) {
@@ -680,6 +774,7 @@
                 '«не найден» / PlacementRelTo = $ раньше — вот причина, по которой',
                 'элемент не наследует мировые координаты площадки.'
             );
+            L.push(...formatPlacementExtents(idx, k));
 
             // WorldCoordinateSystem контекста — мировой сдвиг ВНЕ цепочки вставки
             // сайта. IfcMapConversion (стандартный способ геопривязки IFC4) в
