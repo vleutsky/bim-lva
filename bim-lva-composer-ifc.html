@@ -799,7 +799,7 @@
            точки на прямой между вершинами ничего не сообщают, а список
            раздувают. */
         #polyProfileChart { height: 260px; }
-        #roadXsChart { height: 220px; }
+        #roadXsChart { height: 240px; background: #f7f9fb; }
         .road-xs-nav {
             display: flex;
             align-items: center;
@@ -3807,11 +3807,12 @@
                 <div class="bulk-note">
                     Ось — выбранная полилиния, пикетаж по плану (с дугами).
                     В каждом пикете сечение идёт по нормали в плане: смещение
-                    положительное <b>вправо по ходу оси</b>. Земля снимается
+                    положительное <b>вправо по ходу оси</b>. На переломе —
+                    одна секущая по биссектрисе угла (кромки сходятся уголком,
+                    а не двумя наложенными перпендикулярами). Земля снимается
                     лучом вниз, как на продольном профиле. Промах — разрыв,
-                    не ноль. Красная черта на чертеже — отметка оси (горизонт
-                    проектной). Поперечники в сцене — отдельные линии, в список
-                    полилиний не попадают.
+                    не ноль. Красная черта на чертеже — отметка оси.
+                    Белый пунктир — кромки ширины, строятся вместе с осью.
                 </div>
             </details>
             <div class="modal-fields">
@@ -3837,7 +3838,7 @@
                 </div>
             </div>
             <div class="bulk-note" id="roadXsMeta">—</div>
-            <svg class="align-profile-svg" id="roadXsChart" viewBox="0 0 560 220"
+            <svg class="align-profile-svg" id="roadXsChart" viewBox="0 0 560 240"
                  preserveAspectRatio="none"></svg>
             <div id="roadXsTable" class="profile-table"></div>
             <div class="modal-actions">
@@ -5268,6 +5269,22 @@
                 if ($('drawModeSelect')) $('drawModeSelect').value = '3d';
                 setDrawMode(true);
             },
+            addDrawWorldPoint(x, y, z) {
+                addDrawPoint(new THREE.Vector3(x, y, z));
+                return drawPoints.length;
+            },
+            get roadAxisDraftEdges() {
+                const n = (line) => {
+                    if (!line) return 0;
+                    const start = line.geometry?.attributes?.instanceStart?.count || 0;
+                    return start ? start + 1 : 0;
+                };
+                return {
+                    left: n(drawRoadEdgeLeft),
+                    right: n(drawRoadEdgeRight),
+                    dashed: !!(drawRoadEdgeLeft?.material?.dashed && drawRoadEdgeRight?.material?.dashed)
+                };
+            },
             /** Картограмма: объёмы выемки/насыпи внутри замкнутого контура. */
             earthwork(id, cell, mode, level) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -5298,9 +5315,13 @@
             get drawOrphans() {
                 const keep = new Set();
                 if (typeof drawDraft !== 'undefined' && drawDraft) keep.add(drawDraft);
+                if (typeof drawRoadEdgeLeft !== 'undefined' && drawRoadEdgeLeft) keep.add(drawRoadEdgeLeft);
+                if (typeof drawRoadEdgeRight !== 'undefined' && drawRoadEdgeRight) keep.add(drawRoadEdgeRight);
                 (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).forEach((r) => {
                     if (r.object) keep.add(r.object);
                     if (r.filletGuideGroup) keep.add(r.filletGuideGroup);
+                    if (r.roadEdgeLeft) keep.add(r.roadEdgeLeft);
+                    if (r.roadEdgeRight) keep.add(r.roadEdgeRight);
                 });
                 return (typeof drawGroup !== 'undefined' ? drawGroup.children : [])
                     .filter((ch) => !keep.has(ch))
@@ -5453,6 +5474,8 @@
                         y: model.stations[0].y,
                         rx: model.stations[0].rx,
                         ry: model.stations[0].ry,
+                        miterScale: model.stations[0].miterScale,
+                        atVertex: !!model.stations[0].atVertex,
                         axisZ: model.stations[0].axisAbs.z,
                         samples: model.stations[0].samples.map((s) => ({
                             off: s.off, x: s.x, y: s.y, z: s.z, hit: s.hit,
@@ -5463,6 +5486,13 @@
                         sta: model.stations[model.stations.length - 1].sta,
                         x: model.stations[model.stations.length - 1].x,
                         y: model.stations[model.stations.length - 1].y
+                    },
+                    corner: model.stations.filter((s) => s.atVertex).map((s) => ({
+                        sta: s.sta, x: s.x, y: s.y, rx: s.rx, ry: s.ry, miterScale: s.miterScale
+                    })),
+                    edges: {
+                        left: (model.edgeLeftPts || []).map((p) => ({ x: p.x, y: p.y, z: p.z })),
+                        right: (model.edgeRightPts || []).map((p) => ({ x: p.x, y: p.y, z: p.z }))
                     }
                 };
             },
@@ -7407,7 +7437,8 @@
                 width,
                 closed: !!opts.closed && pts.length >= 3,
                 length3d: 0,
-                length2d: 0
+                length2d: 0,
+                role: opts.role || null
             };
             line.userData.drawnPolylineId = record.id;
             drawnPolylines.push(record);
@@ -10044,6 +10075,10 @@
         let drawCursorPoint = null; // куда тянется линия прямо сейчас (резиновая нить)
         let drawContinuation = null; // дописываем существующую полилинию: что сохранить
         let drawingRoadAxis = false; // режим «Ось трассы»: после Esc открываем поперечники
+        let drawRoadEdgeLeft = null;
+        let drawRoadEdgeRight = null;
+        const ROAD_EDGE_COLOR = '#f4f7fb';
+        const ROAD_EDGE_WIDTH = 1.6;
 
         function drawKind() {
             return $('drawModeSelect')?.value === '2d' ? '2d' : '3d';
@@ -10089,10 +10124,31 @@
             return line;
         }
 
+        function disposeDrawRoadEdges() {
+            [drawRoadEdgeLeft, drawRoadEdgeRight].forEach((line) => {
+                if (!line) return;
+                drawGroup.remove(line);
+                line.geometry.dispose();
+                disposeLineMaterial(line.material);
+            });
+            drawRoadEdgeLeft = null;
+            drawRoadEdgeRight = null;
+        }
+
+        function roadAxisDraftWidths() {
+            const L = Number($('roadXsWidthL')?.value);
+            const R = Number($('roadXsWidthR')?.value);
+            return {
+                widthL: Math.max(0.5, Number.isFinite(L) ? L : 15),
+                widthR: Math.max(0.5, Number.isFinite(R) ? R : 15)
+            };
+        }
+
         /**
          * Черновик: уже поставленные точки плюс та, где сейчас курсор. Без
          * «резиновой нити» первый отрезок был невидим до второго клика —
-         * не понять, куда тянешь.
+         * не понять, куда тянешь. В режиме оси сразу ведём кромки ширины
+         * белым пунктиром — по биссектрисе на углах, не двумя перпендикулярами.
          */
         function refreshDrawDraft() {
             if (drawDraft) {
@@ -10101,10 +10157,24 @@
                 disposeLineMaterial(drawDraft.material);
                 drawDraft = null;
             }
+            disposeDrawRoadEdges();
             const pts = drawCursorPoint ? [...drawPoints, drawCursorPoint] : drawPoints.slice();
             if (pts.length < 2) { markNeedsRender(); return; }
             drawDraft = makeLineObject(pts, DRAW_COLOR, DRAW_WIDTH, true);
             drawGroup.add(drawDraft);
+            if (drawingRoadAxis) {
+                const { widthL, widthR } = roadAxisDraftWidths();
+                const left = offsetPlanPolyline(pts, -widthL, false);
+                const right = offsetPlanPolyline(pts, widthR, false);
+                if (left.length >= 2) {
+                    drawRoadEdgeLeft = makeLineObject(left, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                    drawGroup.add(drawRoadEdgeLeft);
+                }
+                if (right.length >= 2) {
+                    drawRoadEdgeRight = makeLineObject(right, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                    drawGroup.add(drawRoadEdgeRight);
+                }
+            }
             markNeedsRender();
         }
 
@@ -10381,11 +10451,57 @@
             record.length3d = length3d;
             record.length2d = length2d;
             syncFilletGuides(record, guides);
+            refreshRoadAxisEdges(record);
             if (notifyClamp && clamped) {
                 notify(`«${record.name}»: радиус сопряжения уменьшен — не хватает длины отрезка.`);
             }
             scheduleRoadXsRebuild(record.id);
             markNeedsRender();
+        }
+
+        function disposeRoadAxisEdges(record) {
+            [record?.roadEdgeLeft, record?.roadEdgeRight].forEach((line) => {
+                if (!line) return;
+                drawGroup.remove(line);
+                line.geometry.dispose();
+                disposeLineMaterial(line.material);
+            });
+            if (record) {
+                record.roadEdgeLeft = null;
+                record.roadEdgeRight = null;
+            }
+        }
+
+        function roadAxisWidthsFor(record) {
+            const xs = roadXsModels.find((m) => m.polylineId === record.id);
+            if (xs) return { widthL: xs.widthL, widthR: xs.widthR };
+            return roadAxisDraftWidths();
+        }
+
+        /**
+         * Кромки ширины — часть самой оси, не только поперечников. На угле
+         * сходятся в одну точку (биссектриса), а не двумя перпендикулярами.
+         */
+        function refreshRoadAxisEdges(record) {
+            disposeRoadAxisEdges(record);
+            if (record?.role !== 'road-axis') return;
+            const src = record.renderPts?.length >= 2 ? record.renderPts : record.pts;
+            if (!src || src.length < 2) return;
+            const { widthL, widthR } = roadAxisWidthsFor(record);
+            const left = offsetPlanPolyline(src, -widthL, !!record.closed);
+            const right = offsetPlanPolyline(src, widthR, !!record.closed);
+            if (left.length >= 2) {
+                record.roadEdgeLeft = makeLineObject(left, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                record.roadEdgeLeft.userData.roadEdge = 'left';
+                record.roadEdgeLeft.raycast = () => {};
+                drawGroup.add(record.roadEdgeLeft);
+            }
+            if (right.length >= 2) {
+                record.roadEdgeRight = makeLineObject(right, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                record.roadEdgeRight.userData.roadEdge = 'right';
+                record.roadEdgeRight.raycast = () => {};
+                drawGroup.add(record.roadEdgeRight);
+            }
         }
 
         /**
@@ -10429,6 +10545,7 @@
 
         function disposePolylineObject(record) {
             disposeFilletGuides(record);
+            disposeRoadAxisEdges(record);
             if (!record?.object) return;
             drawGroup.remove(record.object);
             record.object.geometry.dispose();
@@ -10445,9 +10562,13 @@
         function purgeOrphanDrawObjects() {
             const keep = new Set();
             if (drawDraft) keep.add(drawDraft);
+            if (drawRoadEdgeLeft) keep.add(drawRoadEdgeLeft);
+            if (drawRoadEdgeRight) keep.add(drawRoadEdgeRight);
             drawnPolylines.forEach((r) => {
                 if (r.object) keep.add(r.object);
                 if (r.filletGuideGroup) keep.add(r.filletGuideGroup);
+                if (r.roadEdgeLeft) keep.add(r.roadEdgeLeft);
+                if (r.roadEdgeRight) keep.add(r.roadEdgeRight);
             });
             drawGroup.children.slice().forEach((ch) => {
                 if (keep.has(ch)) return;
@@ -11723,8 +11844,8 @@
             let nextHandle = 0x20;
             const allocHandle = () => (nextHandle++).toString(16).toUpperCase();
             const ltypeH = allocHandle();
-            const layers = ['0', 'LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO', 'LVA_XS'];
-            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6];
+            const layers = ['0', 'LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO', 'LVA_XS', 'LVA_ROAD'];
+            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7];
             const layerH = Object.fromEntries(layers.map((name) => [name, allocHandle()]));
             const styleH = allocHandle();
             const appidH = allocHandle();
@@ -13075,10 +13196,89 @@
          */
         const ROAD_XS_MAX_STATIONS = 200;
         const ROAD_XS_MAX_SAMPLES = 201;
-        const ROAD_XS_CHART = { w: 560, h: 220, l: 44, r: 12, t: 10, b: 22 };
+        const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 14, t: 18, b: 28 };
+        const ROAD_XS_MITER_CAP = 8;
         let roadXsSeq = 0;
         let roadXsActive = { modelId: null, index: 0 };
         let roadXsRebuildTimer = 0;
+
+        function planTangentXY(ax, ay, bx, by) {
+            const dx = bx - ax, dy = by - ay;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-9) return null;
+            return { x: dx / len, y: dy / len };
+        }
+
+        function planRightNormal(tx, ty) {
+            return { x: ty, y: -tx };
+        }
+
+        /**
+         * Секущая на переломе — биссектриса правых нормалей входящего и
+         * исходящего. Кромка тогда сходится в одной точке (уголок), а не
+         * двумя перпендикулярами, которые на остром угле наезжают друг на друга.
+         * Civil так и не считает — там на PI остаётся нормаль одного из звеньев.
+         * miterScale = 1 / cos(δ/2): вдоль биссектрисы кромка дальше, чем ширина.
+         */
+        function miterRightFrame(tIn, tOut) {
+            const n1 = planRightNormal(tIn.x, tIn.y);
+            const n2 = planRightNormal(tOut.x, tOut.y);
+            let mx = n1.x + n2.x, my = n1.y + n2.y;
+            const ml = Math.hypot(mx, my);
+            if (ml < 1e-8) {
+                return { rx: n1.x, ry: n1.y, miterScale: 1, miter: false };
+            }
+            mx /= ml;
+            my /= ml;
+            let den = mx * n1.x + my * n1.y;
+            if (den < 0) {
+                mx = -mx;
+                my = -my;
+                den = -den;
+            }
+            const miterScale = den < 1e-6 ? ROAD_XS_MITER_CAP : Math.min(ROAD_XS_MITER_CAP, 1 / den);
+            return { rx: mx, ry: my, miterScale, miter: true };
+        }
+
+        function offsetPlanPolyline(pts, width, closed) {
+            const n = pts?.length || 0;
+            if (n < 2 || !Number.isFinite(width) || Math.abs(width) < 1e-9) return [];
+            const out = [];
+            for (let i = 0; i < n; i++) {
+                const prev = closed ? (i - 1 + n) % n : i - 1;
+                const next = closed ? (i + 1) % n : i + 1;
+                const tIn = prev >= 0 && prev < n && prev !== i
+                    ? planTangentXY(pts[prev].x, pts[prev].y, pts[i].x, pts[i].y) : null;
+                const tOut = next >= 0 && next < n && next !== i
+                    ? planTangentXY(pts[i].x, pts[i].y, pts[next].x, pts[next].y) : null;
+                let rx, ry, scale = 1;
+                if (tIn && tOut) {
+                    const cross = tIn.x * tOut.y - tIn.y * tOut.x;
+                    const dot = tIn.x * tOut.x + tIn.y * tOut.y;
+                    const defl = Math.atan2(cross, dot);
+                    if (Math.abs(defl) > THREE.MathUtils.degToRad(3)) {
+                        const m = miterRightFrame(tIn, tOut);
+                        rx = m.rx;
+                        ry = m.ry;
+                        scale = m.miterScale;
+                    } else {
+                        rx = tOut.y;
+                        ry = -tOut.x;
+                    }
+                } else {
+                    const t = tIn || tOut;
+                    if (!t) { out.push(pts[i].clone()); continue; }
+                    rx = t.y;
+                    ry = -t.x;
+                }
+                out.push(new THREE.Vector3(
+                    pts[i].x + rx * width * scale,
+                    pts[i].y + ry * width * scale,
+                    pts[i].z
+                ));
+            }
+            return out;
+        }
 
         function polylineStationing(record) {
             const pts = record?.renderPts;
@@ -13159,23 +13359,99 @@
          * Пикеты вершин оси — по renderPts (с дугами), как на продольном профиле.
          * Станции берём из pts, не из каждой точки тесселяции дуги: иначе на
          * километровой оси с сопряжениями упрёмся в потолок 200 и потеряем конец.
+         * Вершина с радиусом на трассе уже не PI: секущие идут по дуге.
          */
         function polylineVertexStations(record, stn) {
             const pts = record?.pts;
             if (!pts?.length || !stn) return [];
-            return pts.map((p) => {
+            const radii = record.radii || [];
+            const last = pts.length - 1;
+            return pts.map((p, i) => {
+                if ((radii[i] || 0) > 1e-6 && i !== 0 && i !== last) return null;
                 let best = 0, bestD = Infinity;
-                for (let i = 0; i < stn.pts.length; i++) {
-                    const d = (stn.pts[i].x - p.x) ** 2 + (stn.pts[i].y - p.y) ** 2;
-                    if (d < bestD) { bestD = d; best = i; }
+                for (let k = 0; k < stn.pts.length; k++) {
+                    const d = (stn.pts[k].x - p.x) ** 2 + (stn.pts[k].y - p.y) ** 2;
+                    if (d < bestD) { bestD = d; best = k; }
                 }
                 return stn.cum[best];
+            }).filter((s) => s != null);
+        }
+
+        function roadVertexTurns(record, stn) {
+            const pts = record?.pts;
+            if (!pts?.length || !stn) return [];
+            const radii = record.radii || [];
+            const n = pts.length;
+            const closed = !!record.closed;
+            const turns = [];
+            for (let i = 0; i < n; i++) {
+                if ((radii[i] || 0) > 1e-6) continue;
+                const prev = closed ? (i - 1 + n) % n : i - 1;
+                const next = closed ? (i + 1) % n : i + 1;
+                if (prev < 0 || next >= n || prev === i || next === i) continue;
+                const tIn = planTangentXY(pts[prev].x, pts[prev].y, pts[i].x, pts[i].y);
+                const tOut = planTangentXY(pts[i].x, pts[i].y, pts[next].x, pts[next].y);
+                if (!tIn || !tOut) continue;
+                const defl = Math.atan2(tIn.x * tOut.y - tIn.y * tOut.x, tIn.x * tOut.x + tIn.y * tOut.y);
+                const tanHalf = Math.abs(Math.tan(defl / 2));
+                if (!(tanHalf > 0.04)) continue;
+                let best = 0, bestD = Infinity;
+                for (let k = 0; k < stn.pts.length; k++) {
+                    const d = (stn.pts[k].x - pts[i].x) ** 2 + (stn.pts[k].y - pts[i].y) ** 2;
+                    if (d < bestD) { bestD = d; best = k; }
+                }
+                turns.push({ sta: stn.cum[best], tanHalf, i });
+            }
+            return turns;
+        }
+
+        function pruneStationsNearCorners(stations, turns, width) {
+            if (!turns.length) return stations;
+            return stations.filter((s) => {
+                for (const v of turns) {
+                    if (Math.abs(s - v.sta) <= 0.08) return true;
+                    const keepOff = Math.max(0.5, width * v.tanHalf);
+                    if (Math.abs(s - v.sta) < keepOff * 0.85) return false;
+                }
+                return true;
             });
+        }
+
+        function roadXsFrameAtStation(record, stn, sta) {
+            const loc = stn.loc(sta);
+            const pts = record.pts;
+            const n = pts.length;
+            const closed = !!record.closed;
+            const radii = record.radii || [];
+            let vi = -1;
+            let bestD = 0.08 * 0.08;
+            for (let i = 0; i < n; i++) {
+                if ((radii[i] || 0) > 1e-6) continue;
+                const d = (pts[i].x - loc.p.x) ** 2 + (pts[i].y - loc.p.y) ** 2;
+                if (d <= bestD) { bestD = d; vi = i; }
+            }
+            if (vi >= 0) {
+                const prev = closed ? (vi - 1 + n) % n : vi - 1;
+                const next = closed ? (vi + 1) % n : vi + 1;
+                const tOut = next >= 0 && next < n && next !== vi
+                    ? planTangentXY(pts[vi].x, pts[vi].y, pts[next].x, pts[next].y) : null;
+                const tIn = prev >= 0 && prev < n && prev !== vi
+                    ? planTangentXY(pts[prev].x, pts[prev].y, pts[vi].x, pts[vi].y) : null;
+                if (tIn && tOut) {
+                    const m = miterRightFrame(tIn, tOut);
+                    return { p: loc.p, rx: m.rx, ry: m.ry, miterScale: m.miterScale, atVertex: true };
+                }
+                const t = tIn || tOut;
+                if (t) return { p: loc.p, rx: t.y, ry: -t.x, miterScale: 1, atVertex: true };
+            }
+            return { p: loc.p, rx: loc.ty, ry: -loc.tx, miterScale: 1, atVertex: false };
         }
 
         /**
          * Снять поперечники. opts: step, widthL, widthR, sampleStep.
-         * samples[].off > 0 — вправо по ходу оси.
+         * samples[].off > 0 — вправо по ходу оси, вдоль секущей.
+         * На переломе секущая — биссектриса, диапазон смещений умножается на
+         * miterScale, чтобы кромка попала в сечение.
          */
         function sampleRoadCrossSections(record, opts = {}) {
             const stn = polylineStationing(record);
@@ -13184,13 +13460,16 @@
             const widthL = Math.max(0.5, Number(opts.widthL) || 15);
             const widthR = Math.max(0.5, Number(opts.widthR) || 15);
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
-            const stationsPk = roadXsStationList(stn.total, step, polylineVertexStations(record, stn));
-            const offs = roadXsOffsets(widthL, widthR, sampleStep);
+            const turns = roadVertexTurns(record, stn);
+            let stationsPk = roadXsStationList(stn.total, step, polylineVertexStations(record, stn));
+            stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
             const MISS = Number.NEGATIVE_INFINITY;
             let missed = 0, hits = 0;
             const stations = stationsPk.map((sta) => {
-                const { p, tx, ty } = stn.loc(sta);
-                const rx = ty, ry = -tx;
+                const frame = roadXsFrameAtStation(record, stn, sta);
+                const { p, rx, ry, miterScale, atVertex } = frame;
+                const scale = Math.max(1, miterScale || 1);
+                const offs = roadXsOffsets(widthL * scale, widthR * scale, sampleStep);
                 const axisAbs = worldPointToAbsoluteXYZ(p) || p;
                 const samples = offs.map((off) => {
                     const x = p.x + rx * off;
@@ -13212,7 +13491,7 @@
                 return {
                     sta,
                     x: p.x, y: p.y, z: p.z,
-                    rx, ry,
+                    rx, ry, miterScale: scale, atVertex: !!atVertex,
                     axisAbs: { x: axisAbs.x, y: axisAbs.y, z: axisAbs.z },
                     samples
                 };
@@ -13231,6 +13510,14 @@
                 disposeLineMaterial(line.material);
             });
             model.lines = [];
+            [model.edgeLeft, model.edgeRight].forEach((line) => {
+                if (!line) return;
+                roadXsGroup.remove(line);
+                line.geometry.dispose();
+                disposeLineMaterial(line.material);
+            });
+            model.edgeLeft = null;
+            model.edgeRight = null;
         }
 
         function clearRoadXsModels(polylineId) {
@@ -13281,6 +13568,32 @@
                 flush();
             });
             styleRoadXsLines(model);
+            const rec = drawnPolylines.find((r) => r.id === model.polylineId);
+            const src = rec?.renderPts?.length >= 2 ? rec.renderPts : rec?.pts;
+            if (src?.length >= 2) {
+                const left = offsetPlanPolyline(src, -model.widthL, !!rec.closed);
+                const right = offsetPlanPolyline(src, model.widthR, !!rec.closed);
+                model.edgeLeftPts = left;
+                model.edgeRightPts = right;
+                // Ось трассы уже держит кромки на самой полилинии — вторую
+                // пару в группе поперечников не рисуем, иначе пунктир двоится.
+                if (rec.role !== 'road-axis') {
+                    if (left.length >= 2) {
+                        model.edgeLeft = makeLineObject(left, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                        model.edgeLeft.userData.roadEdge = 'left';
+                        model.edgeLeft.raycast = () => {};
+                        roadXsGroup.add(model.edgeLeft);
+                    }
+                    if (right.length >= 2) {
+                        model.edgeRight = makeLineObject(right, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                        model.edgeRight.userData.roadEdge = 'right';
+                        model.edgeRight.raycast = () => {};
+                        roadXsGroup.add(model.edgeRight);
+                    }
+                } else {
+                    refreshRoadAxisEdges(rec);
+                }
+            }
         }
 
         function buildRoadCrossSections(record, opts = {}) {
@@ -13366,8 +13679,18 @@
                 slider.value = String(model ? roadXsActive.index : 0);
             }
             if (!svg) return;
+            const box = svg.getBoundingClientRect();
+            const pad = { ...ROAD_XS_CHART };
+            pad.w = Math.max(320, Math.round(box.width) || pad.w);
+            pad.h = Math.max(180, Math.round(box.height) || pad.h);
             if (!st) {
-                svg.innerHTML = '';
+                svg.setAttribute('viewBox', `0 0 ${pad.w} ${pad.h}`);
+                svg.innerHTML = `
+                    <rect x="0" y="0" width="${pad.w}" height="${pad.h}" fill="#f7f9fb"/>
+                    <style>text{font:13px 'IBM Plex Sans',sans-serif;fill:#5c6570}</style>
+                    <text x="${(pad.w / 2).toFixed(1)}" y="${(pad.h / 2).toFixed(1)}" text-anchor="middle">
+                        Нет поперечника — нажмите «Построить»
+                    </text>`;
                 if (meta) meta.textContent = '—';
                 if (pk) pk.textContent = 'PK —';
                 if (table) table.innerHTML = '<div class="profile-empty">Нет данных.</div>';
@@ -13379,14 +13702,15 @@
             const zGround = hits.map((s) => s.abs.z);
             let zMin = zAxis, zMax = zAxis;
             zGround.forEach((z) => { zMin = Math.min(zMin, z); zMax = Math.max(zMax, z); });
-            const pad = ROAD_XS_CHART;
-            const spanZ = Math.max(0.4, zMax - zMin) * 1.25;
+            const relief = zMax - zMin;
+            const spanZ = Math.max(3, relief * 1.6, 0.12 * (model.widthL + model.widthR));
             const z0 = (zMin + zMax) / 2;
-            const offMin = -model.widthL;
-            const offMax = model.widthR;
+            const offMin = Math.min(-model.widthL, ...(st.samples.map((s) => s.off)));
+            const offMax = Math.max(model.widthR, ...(st.samples.map((s) => s.off)));
             const px = (off) => pad.l + ((off - offMin) / Math.max(1e-6, offMax - offMin)) * (pad.w - pad.l - pad.r);
             const py = (z) => pad.h / 2 - ((z - z0) / spanZ) * (pad.h - pad.t - pad.b);
             const clipL = pad.l, clipR = pad.w - pad.r;
+            const groundPts = [];
             const groundPaths = [];
             let run = [];
             st.samples.forEach((s) => {
@@ -13395,10 +13719,19 @@
                     run = [];
                     return;
                 }
-                run.push(`${px(s.off).toFixed(1)},${py(s.abs.z).toFixed(1)}`);
+                const pt = `${px(s.off).toFixed(1)},${py(s.abs.z).toFixed(1)}`;
+                run.push(pt);
+                groundPts.push({ x: px(s.off), y: py(s.abs.z), off: s.off, z: s.abs.z });
             });
             if (run.length > 1) groundPaths.push(run.join(' '));
             const axisY = py(zAxis);
+            const baseY = pad.h - pad.b;
+            let fillD = '';
+            if (groundPts.length >= 2) {
+                fillD = `M ${groundPts[0].x.toFixed(1)} ${baseY.toFixed(1)} ` +
+                    groundPts.map((p) => `L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ') +
+                    ` L ${groundPts[groundPts.length - 1].x.toFixed(1)} ${baseY.toFixed(1)} Z`;
+            }
             const grid = [];
             const zStep = niceStep(spanZ / 5);
             const zStart = Math.ceil((z0 - spanZ / 2) / zStep) * zStep;
@@ -13419,25 +13752,44 @@
                 );
             }
             const axisTick = px(0);
+            const leftTick = px(-model.widthL * (st.miterScale || 1));
+            const rightTick = px(model.widthR * (st.miterScale || 1));
+            const roadY0 = axisY - 5, roadY1 = axisY + 5;
             svg.setAttribute('viewBox', `0 0 ${pad.w} ${pad.h}`);
             svg.innerHTML = `
-                <style>text{font:10px 'IBM Plex Mono',monospace;fill:#68727d}</style>
+                <rect x="0" y="0" width="${pad.w}" height="${pad.h}" fill="#f7f9fb"/>
+                <style>text{font:10px 'IBM Plex Mono',monospace;fill:#5c6570}</style>
                 ${grid.join('')}
+                ${fillD ? `<path d="${fillD}" fill="#c5d8ea" fill-opacity="0.55"/>` : ''}
+                <rect x="${Math.min(leftTick, rightTick).toFixed(1)}" y="${Math.min(roadY0, roadY1).toFixed(1)}"
+                      width="${Math.abs(rightTick - leftTick).toFixed(1)}" height="10"
+                      fill="#e8c48a" fill-opacity="0.45"/>
                 <line x1="${clipL}" y1="${axisY.toFixed(1)}" x2="${clipR}" y2="${axisY.toFixed(1)}"
-                      stroke="#e8442a" stroke-width="1.5" stroke-dasharray="5 3"/>
+                      stroke="#e8442a" stroke-width="1.8" stroke-dasharray="6 3"/>
                 <line x1="${axisTick.toFixed(1)}" y1="${pad.t}" x2="${axisTick.toFixed(1)}" y2="${pad.h - pad.b}"
-                      stroke="#e8442a" stroke-width="1"/>
-                ${groundPaths.map((d) => `<polyline fill="none" stroke="#2a7de1" stroke-width="2" points="${d}"/>`).join('')}
+                      stroke="#e8442a" stroke-width="1.2"/>
+                <line x1="${leftTick.toFixed(1)}" y1="${pad.t}" x2="${leftTick.toFixed(1)}" y2="${pad.h - pad.b}"
+                      stroke="#888" stroke-width="1" stroke-dasharray="3 3"/>
+                <line x1="${rightTick.toFixed(1)}" y1="${pad.t}" x2="${rightTick.toFixed(1)}" y2="${pad.h - pad.b}"
+                      stroke="#888" stroke-width="1" stroke-dasharray="3 3"/>
+                ${groundPaths.map((d) => `<polyline fill="none" stroke="#1d6fb0" stroke-width="2.4" points="${d}"/>`).join('')}
+                <text x="${clipL + 4}" y="14">отм., м</text>
+                <text x="${clipR}" y="${pad.h - 8}" text-anchor="end">смещ., м</text>
+                <text x="${(leftTick + 4).toFixed(1)}" y="${(axisY - 8).toFixed(1)}" fill="#7a5a20">кромка</text>
+                <text x="${clipL + 8}" y="${(axisY - 8).toFixed(1)}" fill="#e8442a">ось</text>
             `;
             const hitN = hits.length;
             const work0 = st.samples.find((s) => Math.abs(s.off) < 1e-9);
             if (meta) {
+                const flat = relief < 0.02;
                 meta.textContent =
                     `PK ${st.sta.toFixed(3)} · ось ${zAxis.toFixed(3)}` +
                     (work0?.hit
                         ? ` · земля ${work0.abs.z.toFixed(3)} · рабочая ${work0.work.toFixed(3)}`
                         : ' · под осью земли нет') +
-                    ` · точек ${hitN}/${st.samples.length}`;
+                    ` · точек ${hitN}/${st.samples.length}` +
+                    (st.atVertex ? ' · на угле — биссектриса' : '') +
+                    (flat ? ' · рельеф плоский, масштаб окна ±' + (spanZ / 2).toFixed(1) + ' м' : '');
             }
             if (table) {
                 table.innerHTML = `
@@ -13481,6 +13833,21 @@
                     });
                     flush();
                 });
+                const writeEdge = (pts) => {
+                    if (!pts || pts.length < 2) return;
+                    entityOpen('POLYLINE', 'LVA_ROAD');
+                    ge(66, 1); ge(10, 0); ge(20, 0); ge(30, 0); ge(70, 8);
+                    pts.forEach((p) => {
+                        const abs = worldPointToAbsoluteXYZ(p) || p;
+                        entityOpen('VERTEX', 'LVA_ROAD');
+                        ge(10, n(abs.x)); ge(20, n(abs.y)); ge(30, n(abs.z));
+                        ge(70, 32);
+                    });
+                    entityOpen('SEQEND', 'LVA_ROAD');
+                    count++;
+                };
+                writeEdge(model.edgeLeftPts);
+                writeEdge(model.edgeRightPts);
             });
             return count;
         }
@@ -13565,7 +13932,11 @@
             const modal = $('roadXsModal');
             const wasOpen = modal.classList.contains('show');
             modal.classList.add('show');
-            if (!wasOpen) requestAnimationFrame(() => roadXsPanel.park());
+            if (!wasOpen) requestAnimationFrame(() => {
+                roadXsPanel.park();
+                requestAnimationFrame(() => renderRoadXsView());
+            });
+            else requestAnimationFrame(() => renderRoadXsView());
         }
 
         $('roadXsClose')?.addEventListener('click', () => {
@@ -13628,6 +13999,16 @@
             model.color = $('roadXsColor').value;
             buildRoadXsLines(model);
             markNeedsRender();
+        });
+        ['roadXsWidthL', 'roadXsWidthR'].forEach((id) => {
+            $(id)?.addEventListener('input', () => {
+                if (drawingRoadAxis) refreshDrawDraft();
+                const selId = Number($('roadXsSelect')?.value);
+                const rec = drawnPolylines.find((r) => r.id === selId && r.role === 'road-axis');
+                if (rec && !roadXsModels.some((m) => m.polylineId === rec.id)) {
+                    refreshRoadAxisEdges(rec);
+                }
+            });
         });
 
         function pickRoadXs(clientX, clientY) {
@@ -30794,7 +31175,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: 'xs-2',
+            buildId: 'xs-miter',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -30804,6 +31185,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.13: поперечники на угле — одна секущая по биссектрисе (уголок кромок), не два перпендикуляра; чертёж сечения с полосой дороги даже на плоском рельефе; кромки ширины — белый пунктир вместе с осью.',
                 '2026.08.13: ось трассы — кнопка в «Создать 2Д/3Д» и в «Анализ»; после Esc открываются поперечники.',
                 '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос (d = m·Δz по нормали сечения); вырез островка: «начертить вырез» в таблице площадок (Esc замыкает контур); выемка видна поверх рельефа; площадка в DXF — один 3D-солид (R2010).',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
@@ -30872,7 +31254,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=95').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=96').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

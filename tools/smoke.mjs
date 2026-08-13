@@ -2005,6 +2005,7 @@ async function checkRoadCrossSections(page) {
         return {
             res,
             dxfXs: /LVA_XS/.test(dxf),
+            dxfRoad: /LVA_ROAD/.test(dxf),
             dxfPolys: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
             dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length
         };
@@ -2052,10 +2053,57 @@ async function checkRoadCrossSections(page) {
             );
         }
     }
-    if (!got.dxfXs || got.dxfPolys < 3) {
+    if (!got.dxfXs || !got.dxfRoad || got.dxfPolys < 3) {
         problems.push(
-            `поперечники: DXF LVA_XS ${got.dxfXs}, POLYLINE ${got.dxfPolys} (ждали ≥3)`
+            `поперечники: DXF LVA_XS ${got.dxfXs}, LVA_ROAD ${got.dxfRoad}, POLYLINE ${got.dxfPolys} (ждали оба слоя и ≥3)`
         );
+    }
+
+    // L-угол 90°: на PI одна секущая по биссектрисе, кромка справа в уголке.
+    // tIn=(1,0) tOut=(0,1) → нормали (0,−1) и (1,0) → miter (0.707, −0.707),
+    // scale √2; ширина 2 м → правая кромка (24,17)+(2,−2)=(26,15).
+    const corner = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 21, y: 17, z: g + 0.5 },
+                { x: 24, y: 17, z: g + 0.5 },
+                { x: 24, y: 20, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-угол', role: 'road-axis' }
+        );
+        const res = D.buildRoadXs(id, {
+            step: 10, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        const pi = (res?.corner || []).find((c) => Math.abs(c.x - 24) < 1e-3 && Math.abs(c.y - 17) < 1e-3);
+        const rightPi = (res?.edges?.right || []).find((p) => Math.abs(p.x - 26) < 0.05 && Math.abs(p.y - 15) < 0.05);
+        return {
+            stations: res?.stations,
+            pi,
+            rightPi,
+            rightN: res?.edges?.right?.length || 0,
+            leftN: res?.edges?.left?.length || 0
+        };
+    }, groundZ);
+    if (!corner.pi) {
+        problems.push(`поперечники: на L-угле нет станции в PI (24, 17) — ${JSON.stringify(corner)}`);
+    } else {
+        const rx = corner.pi.rx, ry = corner.pi.ry;
+        const want = Math.SQRT1_2;
+        if (Math.abs(rx - want) > 0.02 || Math.abs(ry + want) > 0.02) {
+            problems.push(
+                `поперечники: биссектриса на угле (${rx?.toFixed(3)}, ${ry?.toFixed(3)}) вместо (0.707, −0.707)`
+            );
+        }
+        if (Math.abs((corner.pi.miterScale || 0) - Math.SQRT2) > 0.05) {
+            problems.push(`поперечники: miterScale ${corner.pi.miterScale} вместо √2`);
+        }
+        if (!corner.rightPi) {
+            problems.push(`поперечники: правая кромка на угле не в (26, 15) — ${JSON.stringify(corner)}`);
+        }
+        if (corner.rightN < 3 || corner.leftN < 3) {
+            problems.push(`поперечники: кромки L-угла left=${corner.leftN} right=${corner.rightN} (ждали по 3 вершины)`);
+        }
     }
 
     const ui = await page.evaluate(() => {
@@ -2087,6 +2135,21 @@ async function checkRoadCrossSections(page) {
         if (!apply || apply.w < 4 || apply.left < -1) {
             problems.push(`поперечники: кнопка «Построить» не видна (${JSON.stringify(apply)})`);
         }
+    }
+
+    await page.waitForTimeout(250);
+    const chart = await page.evaluate(() => {
+        const html = document.getElementById('roadXsChart')?.innerHTML || '';
+        return {
+            hasBg: /fill="#f7f9fb"/.test(html),
+            hasGround: /<polyline /.test(html),
+            hasFill: /<path d=/.test(html),
+            hasRoad: /fill="#e8c48a"/.test(html),
+            hasEdge: /кромка/.test(html)
+        };
+    });
+    if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
+        problems.push(`поперечники: чертёж в окне пустой или без полосы дороги (${JSON.stringify(chart)})`);
     }
 
     await page.evaluate(() => {
@@ -2130,6 +2193,26 @@ async function checkRoadCrossSections(page) {
     if (axisBtn.after.drawMode || axisBtn.after.road || axisBtn.after.on) {
         problems.push(`ось трассы: повторный клик не выключил режим (${JSON.stringify(axisBtn.after)})`);
     }
+
+    const draft = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        D.startRoadAxisDraw();
+        D.addDrawWorldPoint(21, 17, g + 0.5);
+        D.addDrawWorldPoint(24, 17, g + 0.5);
+        const edges = D.roadAxisDraftEdges;
+        document.getElementById('btnRoadAxis')?.click();
+        return edges;
+    }, groundZ);
+    if (!draft || draft.left < 2 || draft.right < 2 || !draft.dashed) {
+        problems.push(`ось трассы: при черчении нет белого пунктира кромок (${JSON.stringify(draft)})`);
+    }
+    await page.evaluate(() => {
+        window.BimLvaDebug.clearRoadXs();
+        document.getElementById('roadXsClose')?.click();
+        document.getElementById('btnPolylineList')?.click();
+        document.getElementById('polylinesClear')?.click();
+        document.getElementById('polylinesClose')?.click();
+    });
 
     return {
         stations: got.res?.stations || 0,
