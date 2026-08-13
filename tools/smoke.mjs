@@ -2014,6 +2014,15 @@ async function checkRoadCrossSections(page) {
     if (!got.res || got.res.stations !== 3) {
         problems.push(`поперечники: сечений ${got.res?.stations} вместо 3 (0 / 1.5 / 3)`);
     } else {
+        if ((got.res.corridorTris || 0) < 8) {
+            problems.push(`поперечники: полотно ${got.res.corridorTris} граней — «Построить» не протянуло шаблон`);
+        }
+        if ((got.res.template?.points?.length || 0) < 5) {
+            problems.push(`поперечники: шаблон ${got.res.template?.points?.length} точек вместо ≥5 (L/CL/R/RB/LB)`);
+        }
+        if ((got.res.template?.shapes?.length || 0) < 1) {
+            problems.push(`поперечники: в шаблоне нет формы покрытия`);
+        }
         if (Math.abs(got.res.first.sta) > 1e-6 || Math.abs(got.res.last.sta - 3) > 1e-4) {
             problems.push(
                 `поперечники: пикеты ${got.res.first.sta} … ${got.res.last.sta} вместо 0 … 3`
@@ -2145,12 +2154,48 @@ async function checkRoadCrossSections(page) {
             hasGround: /<polyline /.test(html),
             hasFill: /<path d=/.test(html),
             hasRoad: /fill="#e8c48a"/.test(html),
-            hasEdge: /кромка/.test(html)
+            hasEdge: /кромка/.test(html),
+            hasKnots: /class="xs-pt"/.test(html),
+            hasShape: /class="xs-shape"/.test(html),
+            profileBtn: !!document.getElementById('roadXsProfile')
         };
     });
     if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
         problems.push(`поперечники: чертёж в окне пустой или без полосы дороги (${JSON.stringify(chart)})`);
     }
+    if (!chart.hasKnots || !chart.hasShape) {
+        problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
+    }
+    if (!chart.profileBtn) {
+        problems.push('поперечники: нет кнопки «Профиль»');
+    }
+
+    const live = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadXsTemplate();
+        const left = before?.points?.find((p) => p.code === 'L');
+        if (!left) return { ok: false, why: 'no L' };
+        D.setRoadXsPoint(left.id, { dz: 0.4 });
+        const after = D.roadXsTemplate();
+        const moved = after?.points?.find((p) => p.id === left.id);
+        const opened = D.openRoadProfile();
+        return {
+            ok: true,
+            dz: moved?.dz,
+            tris: D.roadXs[0]?.corridorTris || 0,
+            profile: !!document.getElementById('polyProfileModal')?.classList.contains('show')
+        };
+    });
+    if (!live.ok || Math.abs((live.dz || 0) - 0.4) > 1e-6) {
+        problems.push(`поперечники: правка точки шаблона не сработала (${JSON.stringify(live)})`);
+    }
+    if ((live.tris || 0) < 8) {
+        problems.push(`поперечники: после правки точки полотно пропало (${live.tris})`);
+    }
+    if (!live.profile) {
+        problems.push('поперечники: «Профиль» не открыл продольный профиль оси');
+    }
+    await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
 
     await page.evaluate(() => {
         window.BimLvaDebug.clearRoadXs();
