@@ -183,6 +183,41 @@ try {
         );
         check(d < 0.5, `${label}: абсолютные координаты заводской сетки сохранены`);
     }
+
+    // СКВОЗНАЯ проверка пути «геометрия вышла пустой → повтор с
+    // COORDINATE_TO_ORIGIN». Выше проверено, что сдвиг ПОСЧИТАЕТСЯ; здесь —
+    // что он реально применяется и модель встаёт на место. Именно на этот путь
+    // попадает настоящий КМ (397 вырезов): правило порогом уже не срабатывает,
+    // а повтор — да, и web-ifc величину своего сдвига не сообщает.
+    await page.goto(`http://127.0.0.1:${port}/bim-lva-composer-ifc.html`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!window.BimLvaDebug, null, { timeout: 60_000 });
+    await page.evaluate(() => window.BimLvaDebug.forceCtoRetryOnce(true));
+    await page.setInputFiles('#localFileInput', kmFile);
+    await page.waitForFunction(
+        () => { const b = document.getElementById('clear'); return b && !b.disabled; },
+        null, { timeout: 120_000 }
+    );
+    const retry = await page.evaluate(() => {
+        const dbg = window.BimLvaDebug;
+        const m = dbg.modelAbsExtents.find((x) => /plant-km/i.test(x.file));
+        const b = dbg.modelBounds.find((x) => /plant-km/i.test(x.file));
+        return {
+            cto: m ? m.cto : null,
+            restored: m ? m.ctoRestored : null,
+            abs: b ? dbg.absoluteAt(b.centerX, b.centerY, b.centerZ) : null
+        };
+    });
+    console.log(`  повтор с CTO: сброс=${retry.cto}, положение восстановлено=${retry.restored}`);
+    check(retry.cto === true, 'крючок сработал: файл открыт со сбросом координат');
+    check(retry.restored === true, 'после сброса положение восстановлено, а не оставлено у нуля');
+    if (retry.abs) {
+        const d = Math.hypot(retry.abs.e - cKM.e, retry.abs.n - cKM.n, retry.abs.h - cKM.h);
+        console.log(
+            `  КМ после повтора: ${retry.abs.e.toFixed(1)} / ${retry.abs.n.toFixed(1)} / ${retry.abs.h.toFixed(1)} м, ` +
+            `ожидалось ${cKM.e.toFixed(1)} / ${cKM.n.toFixed(1)} / ${cKM.h.toFixed(1)} · ошибка ${d.toFixed(2)} м`
+        );
+        check(d < 1.0, `координаты восстановлены после реального сброса (ошибка ${d.toFixed(2)} м)`);
+    }
 } catch (error) {
     problems.push('исключение: ' + (error?.message || error));
 } finally {

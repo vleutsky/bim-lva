@@ -5809,6 +5809,8 @@
                 };
             },
             /** Мировой габарит файлов, как он приехал в IFC (до вычитания нуля сцены). */
+            /** Тестовый крючок: следующая загрузка IFC пойдёт через повтор с CTO. */
+            forceCtoRetryOnce(on = true) { _forceCtoRetryOnce = !!on; },
             get modelAbsExtents() {
                 const out = [];
                 for (const mod of (typeof loadedModels !== 'undefined' ? loadedModels.values() : [])) {
@@ -17100,6 +17102,13 @@ uniform vec3 uBatchSelColor;
          * когда координаты вообще что-то значат.
          */
         const SELF_CENTER_MAX_COORD = 200; // м
+        /**
+         * Только для тестов: заставить загрузку считать первый проход пустым и
+         * уйти в повтор с COORDINATE_TO_ORIGIN. На синтетической фикстуре
+         * геометрия не вырождается, а проверить надо именно этот путь — на него
+         * попадают реальные файлы Tekla с плотной CSG.
+         */
+        let _forceCtoRetryOnce = false;
         let ifcWorldOrigin = null; // {x,y,z} в метрах (до поворота globalGroup)
         /**
          * В каких осях записан ноль сцены. IFC приходит Y-up (E, h, −N) и живёт
@@ -19222,6 +19231,9 @@ uniform vec3 uBatchSelColor;
                 let meshErrors = 0;
                 let presetSkipped = 0;
                 let geometryFromCache = false;
+                // Точный сдвиг, на который web-ifc увёл модель при повторе с CTO
+                // (в его единицах вывода). null — повтора не было.
+                let ctoExactShiftRaw = null;
                 // Сколько стоила именно геометрия — без этого «стало ли быстрее»
                 // тонет в старте страницы и инициализации WASM, и на глаз кэш
                 // выглядит бесполезным даже когда он экономит секунды.
@@ -19255,6 +19267,27 @@ uniform vec3 uBatchSelColor;
                 const countUsableFragments = (frags) =>
                     (frags || []).reduce((n, f) => n + (isFragmentMeshRenderable(f) ? 1 : 0), 0);
 
+                /**
+                 * Центр точек вставки — по МАТРИЦАМ, а не по вершинам.
+                 * web-ifc отдаёт их в double, и они верны даже когда тесселяция
+                 * вырождена (вершин нет, матрицы есть). Это точный якорь для
+                 * возврата модели на место после COORDINATE_TO_ORIGIN: величину
+                 * своего сдвига web-ifc не сообщает (GetCoordinationMatrix — нули),
+                 * а восстановление по выборке точек из текста промахивается
+                 * (замерено 3.67 м на фикстуре).
+                 */
+                function fragmentPlacementCentroid(frags) {
+                    if (!frags?.length) return null;
+                    let n = 0, sx = 0, sy = 0, sz = 0;
+                    for (let i = 0; i < frags.length; i++) {
+                        const e = frags[i]?.matrix?.elements;
+                        if (!e) continue;
+                        if (!Number.isFinite(e[12]) || !Number.isFinite(e[13]) || !Number.isFinite(e[14])) continue;
+                        sx += e[12]; sy += e[13]; sz += e[14]; n++;
+                    }
+                    return n ? new THREE.Vector3(sx / n, sy / n, sz / n) : null;
+                }
+
                 async function reopenAndRestream(nextSettings, reasonLabel) {
                     console.warn(`[BIM.LVA] ${file.name}: ${reasonLabel}`);
                     showLoader('ГЕОМЕТРИЯ', reasonLabel);
@@ -19278,6 +19311,7 @@ uniform vec3 uBatchSelColor;
                 }
 
                 let usableCount = countUsableFragments(fragments);
+                if (_forceCtoRetryOnce) usableCount = 0;
                 // Из кэша приехало пусто — значит запись негодная. Не разбираемся
                 // почему и не показываем пользователю пустую сцену: тесселируем.
                 if (geometryFromCache && usableCount === 0) {
@@ -19288,6 +19322,9 @@ uniform vec3 uBatchSelColor;
                     await new Promise(r => setTimeout(r, 10));
                     ({ fragments, meshErrors, presetSkipped } = await streamIfcMeshes(modelID));
                     usableCount = countUsableFragments(fragments);
+                    // Крючок надо переставлять ПОСЛЕ каждой ветки, которая
+                    // пересчитывает usableCount, иначе она его съест.
+                    if (_forceCtoRetryOnce) usableCount = 0;
                 }
                 // Пресет срезал всё — повторы с другими настройками web-ifc не помогут
                 if (usableCount === 0 && presetSkipped > 0) {
@@ -19304,15 +19341,26 @@ uniform vec3 uBatchSelColor;
                         'Повтор без ускорения boolean…'
                     ));
                     usableCount = countUsableFragments(fragments);
+                    if (_forceCtoRetryOnce) usableCount = 0;
                 }
                 // Крупный origin / float32-CSG: если ещё пусто и CTO не был включён — OpenModel с COORDINATE_TO_ORIGIN
                 if (usableCount === 0 && !openSettings.COORDINATE_TO_ORIGIN) {
+                    // Якорь снимаем ДО переоткрытия — потом настоящих координат
+                    // уже нигде не будет.
+                    const anchorBefore = fragmentPlacementCentroid(fragments);
+                    _forceCtoRetryOnce = false;   // крючок сработал, дальше по-настоящему
                     forceCoordinateToOrigin = true;
                     ({ fragments, meshErrors, presetSkipped } = await reopenAndRestream(
                         { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: false },
                         'Повтор с COORDINATE_TO_ORIGIN…'
                     ));
                     usableCount = countUsableFragments(fragments);
+                    const anchorAfter = fragmentPlacementCentroid(fragments);
+                    if (anchorBefore && anchorAfter) {
+                        // В единицах вывода web-ifc; масштаб в метры применяется
+                        // к фрагментам позже, поэтому и сдвиг домножим тогда же.
+                        ctoExactShiftRaw = anchorBefore.clone().sub(anchorAfter);
+                    }
                 }
 
                 if (fragments.length) {
@@ -19447,10 +19495,15 @@ uniform vec3 uBatchSelColor;
                         )
                         : 0;
                     if (centerMag < SELF_CENTER_MAX_COORD) {
-                        const shift = ifcYUpShiftFromSampledExtents(
-                            coordExtents,
-                            declaredLengthToMeters || lengthToMetersEstimate
-                        );
+                        // Точный сдвиг с матриц вставки бьёт выборку точек из
+                        // текста: та даёт центр КРУПНЫХ точек файла, а это лишь
+                        // приближение положения модели (замерено 3.67 м мимо).
+                        const shift = ctoExactShiftRaw
+                            ? ctoExactShiftRaw.clone().multiplyScalar(modData.lengthToMeters || 1)
+                            : ifcYUpShiftFromSampledExtents(
+                                coordExtents,
+                                declaredLengthToMeters || lengthToMetersEstimate
+                            );
                         if (shift) {
                             applyMatrix4ToFragments(
                                 fragments,
