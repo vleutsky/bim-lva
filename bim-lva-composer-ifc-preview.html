@@ -2767,7 +2767,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 2613f65</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 11f3240</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -2914,6 +2914,11 @@
                             <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT / Tekla / Plant</button>
                             <div class="tb-menu-label">Фильтр при загрузке IFC</div>
                             <select class="editInput" id="loadPresetSelect" title="Какие IFC-классы тянуть в сцену при загрузке. Пресет экономит память на больших моделях: арматура, метизы и мебель не загружаются. Применяется к следующим загружаемым файлам."></select>
+                            <div class="tb-menu-label">Кэш геометрии</div>
+                            <label class="btn" title="Тесселяция — около 80% времени открытия IFC, и для одного и того же файла она всегда даёт один и тот же результат. С кэшем повторное открытие пропускает её целиком: меши читаются с диска. Кэш лежит в браузере (IndexedDB), на сервер ничего не уходит.">
+                                <input type="checkbox" id="geomCacheToggle" checked> Ускорять повторное открытие
+                            </label>
+                            <button class="btn" id="geomCacheClear" title="Удалить сохранённую геометрию всех файлов. Нужно, если место на диске важнее скорости — модели после этого откроются как в первый раз.">🗑 Очистить кэш <span id="geomCacheSize" class="small"></span></button>
                             <div class="tb-menu-label">Сцена</div>
                             <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕ Очистить модели</button>
                             <div class="tb-menu-label" id="tbOverflowLabel" hidden>Инструменты</div>
@@ -4863,6 +4868,28 @@
              * текстового индекса была закрыта тестом: до этого правка и
              * выгрузка IFC не проверялись вообще.
              */
+            /**
+             * Кэш геометрии: пришла ли модель с диска, сколько всего занято,
+             * и когда фоновая запись закончилась. Без последнего тест на
+             * повторное открытие гонялся бы с недописанной записью.
+             */
+            geomCache: {
+                async stats() { return geomCacheStats(); },
+                async clear() { return geomCacheClearAll(); },
+                async idle() { return geomCacheWriteChain; },
+                setEnabled(on) { geomCacheEnabled = !!on; },
+                usedFor(fileRe) {
+                    const re = new RegExp(fileRe, 'i');
+                    const mod = [...loadedModels.values()].find((m) => re.test(m.filename || ''));
+                    return mod ? !!mod.geometryFromCache : null;
+                },
+                /** Сколько заняла именно геометрия — тесселяция или чтение с диска. */
+                phaseMs(fileRe) {
+                    const re = new RegExp(fileRe, 'i');
+                    const mod = [...loadedModels.values()].find((m) => re.test(m.filename || ''));
+                    return mod ? (mod.geomPhaseMs ?? null) : null;
+                }
+            },
             /** Состояние ленивого индекса: построен ли, есть ли откуда строить. */
             ifcIndexState(fileRe) {
                 const re = new RegExp(fileRe, 'i');
@@ -15012,6 +15039,393 @@ uniform vec3 uBatchSelColor;
     } catch (_) {}
   }
 
+  /**
+   * ---- Кэш тесселированной геометрии IFC ----
+   *
+   * Замер (`npm run bench-load`, сетка 20 000 коробок, без CSG): разбор STEP —
+   * 17 % времени открытия, тесселяция — 81 %. На файлах с плотной CSG перекос
+   * ещё сильнее: там boolean и есть вся работа. Поэтому кэшируем именно вывод
+   * `StreamAllMeshes` — при повторном открытии того же файла тесселяции не
+   * будет вовсе. Сам web-ifc всё равно открывается: из него живьём читаются
+   * свойства элемента и связи дерева, и подменять их кэшем — отдельная задача
+   * с куда большим риском разойтись с файлом.
+   *
+   * Что именно кладём: СЫРОЙ вывод потока — локальные вершины (float32, как их
+   * отдаёт web-ifc) и матрица вставки отдельно (float64). Соблазн свести всё в
+   * абсолютные координаты и не хранить матрицы обманчив: у геодезической
+   * модели (55 300 м) float32 даёт шаг ≈4 мм, то есть кэш сам испортил бы
+   * посадку — ровно та же ловушка, из-за которой `COORDINATE_TO_ORIGIN`
+   * включается только против float32-CSG. Здесь точность ровно та же, что без
+   * кэша, потому что данные побайтно те же.
+   *
+   * Из-за этого же вся обработка после потока (единицы, WorldCoordinateSystem,
+   * привязка к нулю сцены) на кэшированном пути выполняется как обычно: она
+   * зависит от того, какие модели уже в сцене, и «запечь» её в кэш нельзя.
+   */
+  const GEOM_CACHE = {
+      db: 'bimlva-geom-cache',
+      store: 'models',
+      // Формат записи. Поднимать при любой смене раскладки буферов ИЛИ при
+      // смене настроек тесселяции: иначе к новой сборке приедет геометрия,
+      // посчитанная старым кодом, и разбираться придётся с призраком.
+      format: 1,
+      // Потолок на весь кэш. Больше — начинаем выселять по давности.
+      budgetBytes: 3 * 1024 * 1024 * 1024,
+      // Одна модель не должна съедать весь бюджет.
+      maxModelShare: 0.5,
+      // Куски, на которые режем буферы: одна аллокация на 32 МБ вместо одной
+      // на всю модель. У файла АР геометрия ≈200 МБ — единым Float32Array это
+      // был бы 200-мегабайтный кусок непрерывной памяти на ровном месте.
+      chunkBytes: 32 * 1024 * 1024
+  };
+  const GEOM_CACHE_STORAGE_KEY = 'bimlva_geom_cache_enabled_v1';
+  let geomCacheEnabled = true;
+  try {
+      const saved = localStorage.getItem(GEOM_CACHE_STORAGE_KEY);
+      if (saved === '0') geomCacheEnabled = false;
+  } catch (_) {}
+
+  let _geomCacheDbPromise = null;
+  /** @returns {Promise<IDBDatabase|null>} null — кэш недоступен (приватный режим, отказ). */
+  function geomCacheDb() {
+      if (_geomCacheDbPromise) return _geomCacheDbPromise;
+      _geomCacheDbPromise = new Promise((resolve) => {
+          let req;
+          try {
+              req = indexedDB.open(GEOM_CACHE.db, 1);
+          } catch (_) {
+              resolve(null);
+              return;
+          }
+          req.onupgradeneeded = () => {
+              const db = req.result;
+              if (!db.objectStoreNames.contains(GEOM_CACHE.store)) {
+                  const st = db.createObjectStore(GEOM_CACHE.store, { keyPath: 'key' });
+                  st.createIndex('usedAt', 'usedAt');
+              }
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(null);
+          req.onblocked = () => resolve(null);
+      }).catch(() => null);
+      return _geomCacheDbPromise;
+  }
+
+  function geomCacheTx(db, mode) {
+      const tx = db.transaction(GEOM_CACHE.store, mode);
+      return { tx, store: tx.objectStore(GEOM_CACHE.store) };
+  }
+
+  function idbRequest(req) {
+      return new Promise((resolve, reject) => {
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error || new Error('IndexedDB'));
+      });
+  }
+
+  /**
+   * Отпечаток файла для ключа кэша. Целиком 72 МБ хэшировать незачем: берём
+   * размер и три куска по 256 КБ (начало, середина, конец). Совпадение размера
+   * И трёх кусков у двух разных выгрузок того же проекта практически исключено,
+   * а стоит это доли миллисекунды вместо секунд.
+   */
+  async function fileCacheFingerprint(file, data) {
+      const CH = 256 * 1024;
+      const n = data.length;
+      const parts = [
+          data.subarray(0, Math.min(CH, n)),
+          data.subarray(Math.max(0, (n >> 1) - CH / 2), Math.max(0, (n >> 1) - CH / 2) + Math.min(CH, n)),
+          data.subarray(Math.max(0, n - CH))
+      ];
+      let total = 0;
+      for (const p of parts) total += p.length;
+      const sample = new Uint8Array(total + 16);
+      let at = 0;
+      for (const p of parts) { sample.set(p, at); at += p.length; }
+      new DataView(sample.buffer).setFloat64(total, n);
+      // crypto.subtle живёт только в secure context (см. CLAUDE.md §8).
+      // Нет его — не отказываемся от кэша, а берём заведомо более слабый хэш:
+      // цена ошибки здесь — промах кэша, а не порча данных.
+      if (globalThis.crypto?.subtle?.digest) {
+          try {
+              const buf = await crypto.subtle.digest('SHA-256', sample);
+              return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+          } catch (_) {}
+      }
+      let h1 = 0x811c9dc5, h2 = 0x01000193;
+      for (let i = 0; i < sample.length; i++) {
+          h1 = (h1 ^ sample[i]) * 16777619 >>> 0;
+          h2 = (h2 + sample[i] * (i + 1)) >>> 0;
+      }
+      return `w${h1.toString(16)}${h2.toString(16)}${n.toString(16)}`;
+  }
+
+  function geomCacheKey(fingerprint, presetId) {
+      return `f${GEOM_CACHE.format}:${presetId || 'all'}:${fingerprint}`;
+  }
+
+  /**
+   * Фрагменты → куски буферов, пригодные для IndexedDB.
+   * Вершины и индексы каждого фрагмента лежат подряд, а смещения — в отдельной
+   * табличке: та же схема, что у текстового индекса IFC, и по той же причине —
+   * 730 000 отдельных типизированных массивов дороже самих данных.
+   */
+  /** Во что обойдётся кэш этой модели — считаем до упаковки, по одним счётчикам. */
+  function estimateFragmentsCacheBytes(fragments) {
+      let bytes = 0;
+      for (let i = 0; i < fragments.length; i++) {
+          const geom = fragments[i].geom;
+          const pos = geom.getAttribute('position');
+          const idx = geom.index;
+          bytes += pos.count * 3 * 4 * 2 + (idx ? idx.count * 4 : 0) + 16 * 8 + 16;
+      }
+      return bytes;
+  }
+
+  async function packFragmentsForCache(fragments) {
+      const chunks = [];
+      let bytes = 0;
+      let i = 0;
+      while (i < fragments.length) {
+          // Уступаем кадр между кусками: упаковка идёт до того, как координатный
+          // конвейер начнёт двигать вершины, поэтому загрузка её ждёт — и
+          // подвесить на это время вкладку было бы плохим обменом.
+          if (chunks.length) await new Promise((r) => setTimeout(r, 0));
+          let vertTotal = 0, idxTotal = 0, count = 0;
+          let chunkBytes = 0;
+          for (let j = i; j < fragments.length; j++) {
+              const geom = fragments[j].geom;
+              const pos = geom.getAttribute('position');
+              const idx = geom.index;
+              const add = pos.count * 3 * 4 * 2 + (idx ? idx.count * 4 : 0);
+              if (count && chunkBytes + add > GEOM_CACHE.chunkBytes) break;
+              vertTotal += pos.count;
+              idxTotal += idx ? idx.count : 0;
+              chunkBytes += add;
+              count++;
+          }
+          const positions = new Float32Array(vertTotal * 3);
+          const normals = new Float32Array(vertTotal * 3);
+          const indices = new Uint32Array(idxTotal);
+          const matrices = new Float64Array(count * 16);
+          const ids = new Int32Array(count);
+          const colors = new Uint32Array(count);
+          const opacities = new Float32Array(count);
+          // [vertStart, vertCount, idxStart, idxCount] на фрагмент
+          const offsets = new Int32Array(count * 4);
+          let vAt = 0, iAt = 0;
+          for (let k = 0; k < count; k++) {
+              const frag = fragments[i + k];
+              const geom = frag.geom;
+              const pos = geom.getAttribute('position');
+              const nor = geom.getAttribute('normal');
+              const idx = geom.index;
+              positions.set(pos.array, vAt * 3);
+              if (nor) normals.set(nor.array, vAt * 3);
+              if (idx) indices.set(idx.array, iAt);
+              (frag.matrix || new THREE.Matrix4()).toArray(matrices, k * 16);
+              ids[k] = frag.expressID;
+              colors[k] = frag.hex >>> 0;
+              opacities[k] = frag.opacity == null ? 1 : frag.opacity;
+              offsets[k * 4] = vAt;
+              offsets[k * 4 + 1] = pos.count;
+              offsets[k * 4 + 2] = iAt;
+              offsets[k * 4 + 3] = idx ? idx.count : 0;
+              vAt += pos.count;
+              iAt += idx ? idx.count : 0;
+          }
+          // Blob, а не голый ArrayBuffer: структурное клонирование в IndexedDB
+          // копирует буфер в куче вкладки, а Blob уходит на диск и держать его
+          // в памяти не надо — на 200 МБ разница заметная.
+          chunks.push({
+              count,
+              positions: new Blob([positions.buffer]),
+              normals: new Blob([normals.buffer]),
+              indices: new Blob([indices.buffer]),
+              matrices, ids, colors, opacities, offsets
+          });
+          bytes += positions.byteLength + normals.byteLength + indices.byteLength
+              + matrices.byteLength + ids.byteLength + colors.byteLength
+              + opacities.byteLength + offsets.byteLength;
+          i += count;
+      }
+      return { chunks, bytes };
+  }
+
+  /** Куски из кэша → фрагменты в том же виде, в каком их отдаёт streamIfcMeshes. */
+  async function unpackFragmentsFromCache(record) {
+      const fragments = [];
+      for (const chunk of record.chunks) {
+          // Один буфер на кусок, а фрагменты смотрят в него подмассивами:
+          // 3 аллокации на 32 МБ вместо трёх на каждый фрагмент.
+          const positions = new Float32Array(await chunk.positions.arrayBuffer());
+          const normals = new Float32Array(await chunk.normals.arrayBuffer());
+          const indices = new Uint32Array(await chunk.indices.arrayBuffer());
+          for (let k = 0; k < chunk.count; k++) {
+              const vAt = chunk.offsets[k * 4];
+              const vCount = chunk.offsets[k * 4 + 1];
+              const iAt = chunk.offsets[k * 4 + 2];
+              const iCount = chunk.offsets[k * 4 + 3];
+              const geom = new THREE.BufferGeometry();
+              geom.setAttribute('position', new THREE.BufferAttribute(
+                  positions.subarray(vAt * 3, (vAt + vCount) * 3), 3));
+              geom.setAttribute('normal', new THREE.BufferAttribute(
+                  normals.subarray(vAt * 3, (vAt + vCount) * 3), 3));
+              if (iCount) {
+                  geom.setIndex(new THREE.BufferAttribute(indices.subarray(iAt, iAt + iCount), 1));
+              }
+              fragments.push({
+                  expressID: chunk.ids[k],
+                  geom,
+                  matrix: new THREE.Matrix4().fromArray(chunk.matrices, k * 16),
+                  hex: chunk.colors[k],
+                  opacity: chunk.opacities[k]
+              });
+          }
+      }
+      return fragments;
+  }
+
+  async function geomCacheRead(key) {
+      if (!geomCacheEnabled) return null;
+      const db = await geomCacheDb();
+      if (!db) return null;
+      try {
+          const { store } = geomCacheTx(db, 'readonly');
+          const rec = await idbRequest(store.get(key));
+          if (!rec || rec.format !== GEOM_CACHE.format) return null;
+          // Отметка «когда пользовались» нужна выселению; промах записи здесь
+          // не должен ломать загрузку, поэтому без await и с глушением.
+          try {
+              const upd = geomCacheTx(db, 'readwrite');
+              rec.usedAt = Date.now();
+              upd.store.put(rec);
+          } catch (_) {}
+          return rec;
+      } catch (_) {
+          return null;
+      }
+  }
+
+  /** Выселение по давности использования, пока кэш не влезет в бюджет. */
+  async function geomCacheEvict(db, needBytes) {
+      const budget = await geomCacheBudget();
+      const { store } = geomCacheTx(db, 'readwrite');
+      const all = await idbRequest(store.getAll());
+      let total = all.reduce((s, r) => s + (r.bytes || 0), 0);
+      if (total + needBytes <= budget) return true;
+      all.sort((a, b) => (a.usedAt || 0) - (b.usedAt || 0));
+      for (const rec of all) {
+          if (total + needBytes <= budget) break;
+          try { store.delete(rec.key); } catch (_) {}
+          total -= rec.bytes || 0;
+      }
+      return total + needBytes <= budget;
+  }
+
+  async function geomCacheBudget() {
+      let budget = GEOM_CACHE.budgetBytes;
+      try {
+          const est = await navigator.storage?.estimate?.();
+          if (est && est.quota) budget = Math.min(budget, Math.floor(est.quota * 0.6));
+      } catch (_) {}
+      return budget;
+  }
+
+  /**
+   * Упаковать геометрию модели для кэша — ДО того, как её начнёт двигать
+   * координатный конвейер (единицы, WorldCoordinateSystem, ноль сцены).
+   * Позже данные уже другие, и в кэш уехала бы модель, посаженная относительно
+   * случайного соседа по сводке.
+   * @returns {Promise<object|null>} null — кэшировать не будем (выключен, нет
+   * места, модель больше своей доли бюджета).
+   */
+  async function geomCachePrepare(fragments, fileName) {
+      if (!geomCacheEnabled || !fragments?.length) return null;
+      const db = await geomCacheDb();
+      if (!db) return null;
+      const estimate = estimateFragmentsCacheBytes(fragments);
+      const budget = await geomCacheBudget();
+      if (estimate > budget * GEOM_CACHE.maxModelShare) {
+          console.info(
+              `[BIM.LVA] ${fileName}: геометрия ≈${(estimate / 1048576).toFixed(0)} МБ — ` +
+              `больше допустимой доли кэша (${(budget * GEOM_CACHE.maxModelShare / 1048576).toFixed(0)} МБ), не сохраняем`
+          );
+          return null;
+      }
+      try {
+          return await packFragmentsForCache(fragments);
+      } catch (error) {
+          console.warn('[BIM.LVA] кэш геометрии: упаковка не удалась', error);
+          return null;
+      }
+  }
+
+  let geomCacheWriteChain = Promise.resolve();
+  /**
+   * Запись на диск — в фоне: модель пользователю уже показана, ждать её незачем.
+   * Ошибки глушим сознательно: кэш — ускорение, его отказ не повод ронять загрузку.
+   */
+  function geomCacheWrite(key, fileName, packed, meta) {
+      if (!packed) return geomCacheWriteChain;
+      geomCacheWriteChain = geomCacheWriteChain.then(async () => {
+          const db = await geomCacheDb();
+          if (!db) return;
+          try {
+              if (!(await geomCacheEvict(db, packed.bytes))) return;
+              const { tx, store } = geomCacheTx(db, 'readwrite');
+              store.put({
+                  key,
+                  format: GEOM_CACHE.format,
+                  fileName,
+                  bytes: packed.bytes,
+                  fragmentCount: packed.chunks.reduce((s, c) => s + c.count, 0),
+                  usedAt: Date.now(),
+                  createdAt: Date.now(),
+                  meta,
+                  chunks: packed.chunks
+              });
+              await new Promise((resolve) => {
+                  tx.oncomplete = resolve;
+                  tx.onerror = resolve;
+                  tx.onabort = resolve;
+              });
+          } catch (error) {
+              console.warn('[BIM.LVA] кэш геометрии: запись не удалась', error);
+          }
+      }).catch(() => {});
+      return geomCacheWriteChain;
+  }
+
+  async function geomCacheStats() {
+      const db = await geomCacheDb();
+      if (!db) return { models: 0, bytes: 0, available: false };
+      try {
+          const { store } = geomCacheTx(db, 'readonly');
+          const all = await idbRequest(store.getAll());
+          return {
+              models: all.length,
+              bytes: all.reduce((s, r) => s + (r.bytes || 0), 0),
+              available: true
+          };
+      } catch (_) {
+          return { models: 0, bytes: 0, available: false };
+      }
+  }
+
+  async function geomCacheClearAll() {
+      const db = await geomCacheDb();
+      if (!db) return false;
+      try {
+          const { tx, store } = geomCacheTx(db, 'readwrite');
+          store.clear();
+          await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; tx.onabort = resolve; });
+          return true;
+      } catch (_) {
+          return false;
+      }
+  }
+
   // ---- Пресеты загрузки IFC: в сцену тянутся только нужные классы ----
   // IFC из Tekla/Revit часто тащит тысячи метизов, арматуры и мебели.
   // Пресет режет их на этапе извлечения мешей: web-ifc всё равно парсит файл
@@ -15165,6 +15579,25 @@ uniform vec3 uBatchSelColor;
                     );
                 }
 
+                // Тесселяция — 80 % времени открытия, и она детерминирована: тот же
+                // файл и тот же пресет дадут те же меши. Если они уже посчитаны
+                // в прошлый раз — берём с диска. Настройки открытия в записи
+                // лежат итоговые (после возможных повторов), чтобы отметка
+                // coordinateToOrigin осталась честной.
+                let cachedGeometry = null;
+                let geomCacheKeyForFile = null;
+                try {
+                    geomCacheKeyForFile = geomCacheKey(
+                        await fileCacheFingerprint(file, data), ifcLoadPresetId
+                    );
+                    cachedGeometry = await geomCacheRead(geomCacheKeyForFile);
+                } catch (cacheError) {
+                    console.warn('[BIM.LVA] кэш геометрии недоступен:', cacheError);
+                }
+                if (cachedGeometry?.meta?.openSettings) {
+                    Object.assign(openSettings, cachedGeometry.meta.openSettings);
+                }
+
                 showLoader(
                     'ОТКРЫТИЕ IFC',
                     preferExactBools
@@ -15188,10 +15621,39 @@ uniform vec3 uBatchSelColor;
                     console.warn('Pset index:', psetError);
                 }
 
-                showLoader('ГЕОМЕТРИЯ', preferExactBools ? 'CSG/boolean (точнее, медленнее)…' : 'Извлечение мешей...');
-                await new Promise(r => setTimeout(r, 10));
+                let fragments = null;
+                let meshErrors = 0;
+                let presetSkipped = 0;
+                let geometryFromCache = false;
+                // Сколько стоила именно геометрия — без этого «стало ли быстрее»
+                // тонет в старте страницы и инициализации WASM, и на глаз кэш
+                // выглядит бесполезным даже когда он экономит секунды.
+                const geomPhaseStart = performance.now();
 
-                let { fragments, meshErrors, presetSkipped } = await streamIfcMeshes(modelID);
+                if (cachedGeometry) {
+                    showLoader(
+                        'ГЕОМЕТРИЯ ИЗ КЭША',
+                        `${(cachedGeometry.fragmentCount || 0).toLocaleString('ru-RU')} фрагментов, тесселяция не нужна…`
+                    );
+                    await new Promise(r => setTimeout(r, 10));
+                    try {
+                        fragments = await unpackFragmentsFromCache(cachedGeometry);
+                        meshErrors = cachedGeometry.meta?.meshErrors || 0;
+                        presetSkipped = cachedGeometry.meta?.presetSkipped || 0;
+                        geometryFromCache = true;
+                    } catch (cacheError) {
+                        // Битая или устаревшая запись не должна мешать открыть файл:
+                        // молча падаем на обычную тесселяцию.
+                        console.warn('[BIM.LVA] кэш геометрии: чтение не удалось, тесселирую заново', cacheError);
+                        fragments = null;
+                    }
+                }
+
+                if (!fragments) {
+                    showLoader('ГЕОМЕТРИЯ', preferExactBools ? 'CSG/boolean (точнее, медленнее)…' : 'Извлечение мешей...');
+                    await new Promise(r => setTimeout(r, 10));
+                    ({ fragments, meshErrors, presetSkipped } = await streamIfcMeshes(modelID));
+                }
 
                 const countUsableFragments = (frags) =>
                     (frags || []).reduce((n, f) => n + (isFragmentMeshRenderable(f) ? 1 : 0), 0);
@@ -15219,6 +15681,17 @@ uniform vec3 uBatchSelColor;
                 }
 
                 let usableCount = countUsableFragments(fragments);
+                // Из кэша приехало пусто — значит запись негодная. Не разбираемся
+                // почему и не показываем пользователю пустую сцену: тесселируем.
+                if (geometryFromCache && usableCount === 0) {
+                    console.warn('[BIM.LVA] кэш геометрии: запись без пригодных мешей, тесселирую заново');
+                    geometryFromCache = false;
+                    cachedGeometry = null;
+                    showLoader('ГЕОМЕТРИЯ', 'Извлечение мешей...');
+                    await new Promise(r => setTimeout(r, 10));
+                    ({ fragments, meshErrors, presetSkipped } = await streamIfcMeshes(modelID));
+                    usableCount = countUsableFragments(fragments);
+                }
                 // Пресет срезал всё — повторы с другими настройками web-ifc не помогут
                 if (usableCount === 0 && presetSkipped > 0) {
                     throw new Error(
@@ -15264,6 +15737,24 @@ uniform vec3 uBatchSelColor;
                         `Попробуйте в Tekla: Export → IFC без лишних вырезов / Coordination View, ` +
                         `или экспортируйте IFC4 с упрощённой геометрией.`
                     );
+                }
+
+                const geomPhaseMs = performance.now() - geomPhaseStart;
+                console.info(
+                    `[BIM.LVA] ${file.name}: геометрия ${geometryFromCache ? 'из кэша' : 'тесселирована'} ` +
+                    `за ${geomPhaseMs.toFixed(0)} мс, фрагментов ${fragments.length.toLocaleString('ru-RU')}`
+                );
+
+                // Упаковать надо ИМЕННО здесь: дальше единицы, WorldCoordinateSystem
+                // и привязка к нулю сцены двигают вершины на месте, а ноль сцены
+                // зависит от того, какие модели уже открыты. Запечь это в кэш —
+                // значит при следующем открытии посадить файл относительно
+                // случайного соседа по прошлой сводке.
+                let geomCachePayload = null;
+                if (!geometryFromCache && geomCacheKeyForFile) {
+                    showLoader('КЭШ ГЕОМЕТРИИ', 'Сохранение для следующего открытия…');
+                    await new Promise(r => setTimeout(r, 10));
+                    geomCachePayload = await geomCachePrepare(fragments, file.name);
                 }
 
                 showLoader('ОПТИМИЗАЦИЯ', `${fragments.length.toLocaleString('ru-RU')} фрагментов…`);
@@ -15428,6 +15919,17 @@ uniform vec3 uBatchSelColor;
                 applyRenderQuality();
                 markNeedsRender();
                 hideLoader();
+
+                modData.geometryFromCache = geometryFromCache;
+                modData.geomPhaseMs = geomPhaseMs;
+                if (geomCachePayload) {
+                    geomCacheWrite(geomCacheKeyForFile, file.name, geomCachePayload, {
+                        openSettings: { ...openSettings },
+                        meshErrors,
+                        presetSkipped,
+                        schema: detectedSchema || ''
+                    });
+                }
 
                 if (presetSkipped > 0) {
                     modData.loadPresetId = ifcLoadPresetId;
@@ -21495,6 +21997,55 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 }
                 trackUsage('ifc_load_preset', { preset: ifcLoadPresetId });
             });
+        })();
+
+        // Кэш геометрии в меню «⋯»: выключатель и очистка с показом занятого места.
+        (function initGeomCacheControls() {
+            const toggle = $('geomCacheToggle');
+            const clearBtn = $('geomCacheClear');
+            const sizeLabel = $('geomCacheSize');
+            if (!toggle || !clearBtn) return;
+
+            async function refreshSize() {
+                if (!sizeLabel) return;
+                const stats = await geomCacheStats();
+                if (!stats.available) {
+                    sizeLabel.textContent = '(недоступен)';
+                    return;
+                }
+                sizeLabel.textContent = stats.models
+                    ? `(${stats.models} моделей, ${(stats.bytes / 1048576).toFixed(0)} МБ)`
+                    : '(пусто)';
+            }
+
+            toggle.checked = geomCacheEnabled;
+            toggle.addEventListener('change', () => {
+                geomCacheEnabled = toggle.checked;
+                try { localStorage.setItem(GEOM_CACHE_STORAGE_KEY, geomCacheEnabled ? '1' : '0'); } catch (_) {}
+                notifyOk(geomCacheEnabled
+                    ? 'Кэш геометрии включён: повторное открытие тех же файлов пропустит тесселяцию.'
+                    : 'Кэш геометрии выключен. Уже сохранённое остаётся на диске — «Очистить кэш» удалит.');
+                trackUsage('geom_cache_toggle', { on: geomCacheEnabled });
+            });
+
+            clearBtn.addEventListener('click', async () => {
+                const before = await geomCacheStats();
+                const ok = await geomCacheClearAll();
+                await refreshSize();
+                if (ok) {
+                    notifyOk(before.bytes
+                        ? `Кэш геометрии очищен: освобождено ${(before.bytes / 1048576).toFixed(0)} МБ.`
+                        : 'Кэш геометрии и так пуст.');
+                } else {
+                    notifyError('Не удалось очистить кэш геометрии — браузер отказал в доступе к IndexedDB.');
+                }
+                trackUsage('geom_cache_clear', {});
+            });
+
+            refreshSize();
+            // Размер меняется после каждой загрузки — обновляем при открытии меню
+            const menu = document.getElementById('menuMore');
+            menu?.addEventListener('click', () => { refreshSize(); });
         })();
 
         $('btnClassFilter').addEventListener('click', async () => {
@@ -28071,7 +28622,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: '2613f65-preview',
+            buildId: '11f3240-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -28081,6 +28632,8 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
+                '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
                 '2026.08.13: выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть, не рёбра линиями; откос верхней площадки обходит углы нижней; переход насыпь→выемка от пересечения с землёй.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
