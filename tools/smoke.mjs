@@ -2924,6 +2924,11 @@ async function main() {
                 .catch(() => false);
             if (!ifcLoaded) problems.push('IFC не загрузился: дерево модели осталось пустым');
             else {
+                const gridHidden = await page.waitForFunction(
+                    () => !window.BimLvaDebug?.gridVisible &&
+                        !document.getElementById('gridBtn')?.classList.contains('on'),
+                    { timeout: 15_000 }
+                ).then(() => true).catch(() => false);
                 const gridZoom = await page.evaluate(() => {
                     const D = window.BimLvaDebug;
                     const grid = {
@@ -2939,7 +2944,7 @@ async function main() {
                     D.setSceneMaxDim(prevDim);
                     return { grid, miss };
                 });
-                if (gridZoom.grid.visible || gridZoom.grid.btn) {
+                if (!gridHidden || gridZoom.grid.visible || gridZoom.grid.btn) {
                     problems.push(
                         `сетка после загрузки не убралась (visible=${gridZoom.grid.visible}, кнопка on=${gridZoom.grid.btn})`
                     );
