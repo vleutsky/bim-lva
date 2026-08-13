@@ -28,7 +28,7 @@
 ## 2. Сайт: что где лежит
 
 - `bim-lva-composer-ifc.html` — **канонический вьювер**, ~900 КБ, весь код в одном
-  файле. Версия и сборка — в объекте `COMPOSER_ABOUT` (сейчас `2026.08.11`).
+  файле. Версия и сборка — в объекте `COMPOSER_ABOUT` (сейчас `2026.08.13`).
 - `bim-lva-composer-ifc-preview.html` — генерируется (`npm run preview`), без
   регистрации service worker, с бейджем сборки. У Pages нет preview-URL для
   веток, поэтому правки проверяем через этот файл в `main`.
@@ -56,7 +56,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v131`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v132`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `FEATURES.md` — трекер фич вьювера (пункты 1–53 закрыты).
 - `LICENSE` — права на код: смотреть можно, копировать и использовать
