@@ -2816,7 +2816,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · ae8efd0</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · f6322d1</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -16133,6 +16133,16 @@ uniform vec3 uBatchSelColor;
         // Локальные модели (|center| < порога) не сдвигаем — они уже у нуля.
         // Важно: IFC часто в мм, LandXML в метрах — перед origin приводим IFC к метрам.
         const LARGE_COORD_THRESHOLD = 5000; // м от (0,0,0)
+        /**
+         * Ниже этого модель считаем «выгруженной в своём нуле»: посадить её в
+         * собственный центр безопасно, сводку это не портит. Выше — координаты
+         * осмысленные (заводская сетка ~1200 м, городская съёмка), и трогать их
+         * нельзя: центрирование каждого файла по отдельности уничтожает взаимное
+         * положение. Отдельная константа, а не LARGE_COORD_THRESHOLD: тот про
+         * точность float32 и про то, когда нужен общий ноль, а этот — про то,
+         * когда координаты вообще что-то значат.
+         */
+        const SELF_CENTER_MAX_COORD = 200; // м
         let ifcWorldOrigin = null; // {x,y,z} в метрах (до поворота globalGroup)
         /**
          * В каких осях записан ноль сцены. IFC приходит Y-up (E, h, −N) и живёт
@@ -16886,6 +16896,15 @@ uniform vec3 uBatchSelColor;
                 if (!b.isEmpty()) box.union(b);
             }
             if (box.isEmpty()) return false;
+            // Сдвиг сцены записывается ТОЛЬКО в ifcWorldOrigin — на нём стоит
+            // равенство «абсолютная = локальная + origin». Нуля нет (координаты
+            // мельче LARGE_COORD_THRESHOLD, скажем заводская сетка ~1200 м) —
+            // записать сдвиг некуда: уже загруженные модели уезжают в ноль, а
+            // следующий файл приходит со своими настоящими координатами и
+            // оказывается за километр. Ровно так разъезжалась сводка из Tekla,
+            // которая в Navisworks садится нормально. Без нуля не двигаем ничего:
+            // на таких координатах float32 даёт 0.14 мм, центрировать незачем.
+            if (!ifcWorldOrigin) return false;
             const centerWorld = box.getCenter(new THREE.Vector3());
             if (centerWorld.lengthSq() < 0.01) return false;
 
@@ -18406,10 +18425,21 @@ uniform vec3 uBatchSelColor;
                 bakeFragmentTransformsIntoGeometry(fragments);
                 modData.coordRebase = rebased ? 'shared' : 'self';
                 if (!rebased) {
-                    // Файл не привязался к общему нулю и садится в СВОЙ центр —
-                    // мировые координаты у него после этого теряются. Раньше это
-                    // происходило молча, и модель просто оказывалась «не там».
-                    const centered = forceCenterFragmentsNearOrigin(fragments);
+                    // Сажать файл в СВОЙ центр можно только когда координаты
+                    // действительно крупные — там это спасает точность float32.
+                    // Заводская сетка (~1200 м, Tekla) под порог не проходила, и
+                    // каждый файл сводки уезжал в собственный центр: взаимное
+                    // положение уничтожалось, хотя координаты в файлах общие и
+                    // согласованные (в Navisworks те же файлы садятся как надо).
+                    // Точность тут ни при чём: на 1200 м шаг float32 ≈ 0.14 мм.
+                    // Центр к тому же считается ПО ВЫБОРКЕ (~400 фрагментов), так
+                    // что у двух файлов промах разный — модели не накладывались,
+                    // а разлетались.
+                    const ownCenter = estimateFragmentsOriginDouble(fragments);
+                    const ownMag = ownCenter ? ownCenter.length() : 0;
+                    const centered = ownMag <= SELF_CENTER_MAX_COORD
+                        ? forceCenterFragmentsNearOrigin(fragments)
+                        : null;
                     if (centered) modData.coordOrigin = { x: centered.x, y: centered.y, z: centered.z };
                     else modData.coordRebase = 'none';
                     if (modData.coordRebase === 'self' && modData.absExtents) {
@@ -31194,7 +31224,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: 'ae8efd0-preview',
+            buildId: 'f6322d1-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
