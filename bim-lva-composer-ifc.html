@@ -2622,6 +2622,17 @@
             color: var(--txt-dim);
         }
 
+        /* Счётчик памяти живёт справа от FPS. `.right` уже съел margin-left:auto,
+           поэтому свой отступ здесь маленький — иначе счётчик уедет за край. */
+        .status .mem-readout {
+            color: var(--txt-dim);
+            cursor: help;
+            white-space: nowrap;
+        }
+        .status .mem-readout.warn { color: var(--accent-dim); }
+        .status .mem-readout.high { color: var(--err); }
+        .status .mem-readout[hidden] { display: none; }
+
         .status .coord-readout {
             display: inline-flex;
             gap: 14px;
@@ -4036,6 +4047,7 @@
         </span>
         <span id="hintControls" title="ЛКМ+drag: вращение · Колесо: зум · F: кадр · 📌 пивот · ⚡ быстро. Камера без инерции — поворот и зум однотипны.">ЛКМ+drag: вращение · Колесо: зум · F: кадр · без инерции камеры</span>
         <span class="right" id="fps">—</span>
+        <span id="memReadout" class="mem-readout" hidden title="Память вкладки. Числа даёт сам Chrome (performance.memory) и он их огрубляет — сравнивать имеет смысл «до и после», а не считать точными. Геометрия в видеопамяти сюда НЕ входит: браузер её не показывает.">—</span>
     </footer>
 
     <script type="importmap">
@@ -12028,10 +12040,70 @@
             new ResizeObserver(() => resize()).observe(stage);
         }
 
+        /**
+         * Сколько памяти держат загруженные модели.
+         *
+         * Геометрия посчитана при загрузке (`geometryBytes`) — обходить фрагменты
+         * заново на каждое обновление счётчика нельзя, на файле АР это 730 000
+         * итераций дважды в секунду. Текстовый индекс ленивый, поэтому его вес
+         * спрашиваем сейчас: у большинства сессий он вообще не построен.
+         */
+        function estimateLoadedModelsBytes() {
+            let bytes = 0;
+            for (const mod of loadedModels.values()) {
+                bytes += mod.geometryBytes || 0;
+                if (mod.ifcIndex) bytes += mod.ifcIndex.size || 0;
+            }
+            return bytes;
+        }
+
+        // Целые мегабайты врут на мелких моделях: 0.4 МБ показывались как «0 МБ»,
+        // и счётчик выглядел сломанным. До 10 МБ — с десятой долей.
+        const mb = (bytes) => {
+            const v = bytes / 1048576;
+            return v < 10 ? v.toFixed(1) : v.toFixed(0);
+        };
+
+        /**
+         * Счётчик памяти в статус-баре.
+         *
+         * `performance.memory` — только Chrome, и он СОЗНАТЕЛЬНО огрубляет числа
+         * (защита от side-channel): читать их как точные нельзя, годятся для
+         * «до и после». В других браузерах строку просто прячем, а не пишем ноль.
+         * Видеопамять сюда не входит вовсе — браузер её не отдаёт.
+         */
+        function updateMemoryReadout() {
+            const el = $('memReadout');
+            if (!el) return;
+            const models = estimateLoadedModelsBytes();
+            const mem = performance.memory;
+            if (!mem || !mem.usedJSHeapSize) {
+                // Свой счёт моделей есть всегда — показываем хотя бы его.
+                if (!models) { el.hidden = true; return; }
+                el.hidden = false;
+                el.className = 'mem-readout';
+                el.textContent = `модели ${mb(models)} МБ`;
+                return;
+            }
+            el.hidden = false;
+            const used = mem.usedJSHeapSize;
+            const limit = mem.jsHeapSizeLimit || 0;
+            const share = limit ? used / limit : 0;
+            el.className = 'mem-readout' + (share > 0.8 ? ' high' : share > 0.6 ? ' warn' : '');
+            el.textContent = models
+                ? `ОЗУ ${mb(used)} МБ · модели ${mb(models)} МБ`
+                : `ОЗУ ${mb(used)} МБ`;
+            el.title =
+                `Память вкладки: ${mb(used)} из ${limit ? mb(limit) + ' МБ доступных' : '—'}.\n` +
+                (models ? `Из них геометрия и индексы загруженных моделей — примерно ${mb(models)} МБ.\n` : '') +
+                'Числа даёт сам Chrome и он их огрубляет — сравнивать имеет смысл «до и после».\n' +
+                'Геометрия в видеопамяти сюда НЕ входит: браузер её не показывает.';
+        }
+
         let last = performance.now();
-        let frames = 0; 
+        let frames = 0;
         let acc = 0;
-        
+
         function tick(now) {
             requestAnimationFrame(tick);
             const dt = Math.min(0.05, ((now - (tick._lastNow || now)) || 16) / 1000);
@@ -12091,10 +12163,11 @@
             acc += now - last; 
             last = now;
             
-            if (acc >= 500) { 
-                $('fps').textContent = Math.round(frames * 1000 / acc) + ' FPS'; 
-                frames = 0; 
-                acc = 0; 
+            if (acc >= 500) {
+                $('fps').textContent = Math.round(frames * 1000 / acc) + ' FPS';
+                frames = 0;
+                acc = 0;
+                updateMemoryReadout();
             }
         }
         requestAnimationFrame(tick);
@@ -15903,6 +15976,12 @@ uniform vec3 uBatchSelColor;
 
                 modData.geometryFromCache = geometryFromCache;
                 modData.geomPhaseMs = geomPhaseMs;
+                // Считаем ОДИН раз здесь: пересчитывать 730 000 фрагментов на
+                // каждое обновление счётчика в статус-баре было бы дороже, чем
+                // всё, что он показывает. Батч держит СВОЮ склеенную копию
+                // вершин рядом с исходными фрагментами — отсюда ×2.
+                modData.geometryBytes =
+                    estimateFragmentsCacheBytes(fragments) * (modData.batched ? 2 : 1);
                 if (geomCachePayload) {
                     geomCacheWrite(geomCacheKeyForFile, file.name, geomCachePayload, {
                         openSettings: { ...openSettings },

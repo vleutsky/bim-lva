@@ -2451,6 +2451,19 @@ async function main() {
         problems.push('BVH не построен ни на одном меше — пикинг остался линейным перебором');
     }
 
+    // Счётчик памяти в статус-баре: он должен что-то показывать при загруженной
+    // модели. Пустая строка тут — не «ноль памяти», а незамеченная поломка.
+    const memReadout = await page.evaluate(() => {
+        const el = document.getElementById('memReadout');
+        if (!el) return null;
+        return { hidden: el.hidden, text: (el.textContent || '').trim() };
+    });
+    if (!memReadout) {
+        problems.push('счётчик памяти #memReadout пропал из статус-бара');
+    } else if (memReadout.hidden || !/\d/.test(memReadout.text)) {
+        problems.push(`счётчик памяти ничего не показывает: «${memReadout.text}» (скрыт: ${memReadout.hidden})`);
+    }
+
     if (process.env.SMOKE_SHOT) {
         await page.screenshot({ path: process.env.SMOKE_SHOT, fullPage: false });
         console.log(`скриншот:  ${process.env.SMOKE_SHOT}`);
@@ -2462,6 +2475,7 @@ async function main() {
     console.log(`Страница:  ${PAGE}`);
     console.log(`canvas:    ${state.canvas ? 'есть' : 'НЕТ'}`);
     console.log(`FPS-метка: ${state.fps || '—'}`);
+    if (memReadout) console.log(`память:    ${memReadout.text}`);
     console.log(`шрифт:     ${state.fontFamily}`);
     if (ifcLoaded !== null) console.log(`IFC:       ${ifcLoaded ? `загружен, узлов дерева ${state.treeItems}` : 'НЕ загрузился'}`);
     if (state.meshCount >= 0) console.log(`мешей:     ${state.meshCount}, с BVH: ${state.bvhCount}`);

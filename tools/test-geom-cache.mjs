@@ -93,7 +93,8 @@ async function openOnce(label, { disableCache = false } = {}) {
             abs,
             size: { x: b.sizeX, y: b.sizeY, z: b.sizeZ },
             meshes: dbg.meshCount ?? 0,
-            treeRows: document.querySelectorAll('#tree .trow').length
+            treeRows: document.querySelectorAll('#tree .trow').length,
+            mem: (document.getElementById('memReadout')?.textContent || '').trim()
         };
     });
     const stats = await page.evaluate(() => window.BimLvaDebug.geomCache.stats());
@@ -183,6 +184,11 @@ try {
         `мешей столько же (${second.meshes} = ${first.meshes})`);
     check(first.treeRows > 0 && second.treeRows === first.treeRows,
         `дерево того же состава (${second.treeRows} = ${first.treeRows} строк)`);
+    // Счётчик в статус-баре обязан приписать вес моделей, а не только вкладки:
+    // ветка «модели N МБ» считается по geometryBytes, и её легко потерять.
+    const memModels = /модели\s+([\d.]+)\s*МБ/.exec(second.mem);
+    check(memModels && Number(memModels[1]) > 0,
+        `счётчик памяти показывает НЕнулевой вес моделей («${second.mem}»)`);
 
     // Очистка обязана вернуть к тесселяции — иначе кнопка врёт.
     await page.evaluate(() => window.BimLvaDebug.geomCache.clear());
