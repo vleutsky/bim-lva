@@ -1229,6 +1229,12 @@ async function checkSlopeToTerrain(page) {
                 problems.push(`откосы: выемка (${s.side}) ${s.cut.toFixed(3)} м³ вместо ${wantVolEach.toFixed(3)}`);
             }
             if (Math.abs(s.fill) > 1e-6) problems.push(`откосы: на выемке набралась насыпь ${s.fill.toFixed(3)} м³ (${s.side})`);
+            if (!(s.cutTriangles > 0)) {
+                problems.push(`откосы: выемка (${s.side}) без поверхности (${s.cutTriangles} треугольников)`);
+            }
+            if (s.cut > 0 && s.cutOverlay !== true) {
+                problems.push(`откосы: выемка (${s.side}) спрятана под рельефом (нужен overlay без depth-test)`);
+            }
         });
         const sides = cut.res.sides.map((s) => s.side).sort().join(',');
         if (sides !== 'left,right') problems.push(`откосы: «в обе стороны» дала стороны ${sides} вместо left,right`);

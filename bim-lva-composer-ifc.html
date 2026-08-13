@@ -5136,7 +5136,10 @@
                         skippedNoGround: s.skippedNoGround,
                         skippedNotReached: s.skippedNotReached,
                         exitPolylineIds: s.exitPolylineIds.slice(),
-                        triangles: s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0,
+                        triangles: (s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0) +
+                            (s.cutMesh && s.cutMesh !== s.mesh ? s.cutMesh.geometry.attributes.position.count / 3 : 0),
+                        cutTriangles: s.cutMesh ? s.cutMesh.geometry.attributes.position.count / 3 : 0,
+                        cutOverlay: !!(s.cutMesh && s.cutMesh.material.depthTest === false),
                         exits: s.sections.map((sec) => sec.valid
                             ? { d: sec.distance, mode: sec.mode, x: sec.exit.x, y: sec.exit.y, z: sec.exit.z }
                             : { valid: false, reason: sec.reason }),
@@ -7462,7 +7465,7 @@
             return faces;
         }
 
-        function slopeMakeMesh(positions, colors, name) {
+        function slopeMakeMesh(positions, colors, name, overlay) {
             if (!positions.length) return null;
             const geom = new THREE.BufferGeometry();
             geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -7470,14 +7473,28 @@
                 geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
             }
             geom.computeVertexNormals();
-            const mat = new THREE.MeshStandardMaterial({
-                vertexColors: !!(colors && colors.length),
-                color: colors && colors.length ? 0xffffff : 0xc9793a,
-                roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide
-            });
+            const mat = overlay
+                ? new THREE.MeshBasicMaterial({
+                    vertexColors: !!(colors && colors.length),
+                    color: colors && colors.length ? 0xffffff : 0x3a83c9,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.92,
+                    depthTest: false,
+                    depthWrite: false,
+                    toneMapped: false
+                })
+                : new THREE.MeshStandardMaterial({
+                    vertexColors: !!(colors && colors.length),
+                    color: colors && colors.length ? 0xffffff : 0xc9793a,
+                    roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide
+                });
             const mesh = new THREE.Mesh(geom, mat);
             mesh.name = name;
+            mesh.renderOrder = overlay ? 49 : 0;
+            mesh.frustumCulled = false;
             mesh.userData.isSlopeSurface = true;
+            mesh.userData.isSlopeCutOverlay = !!overlay;
             slopeGroup.add(mesh);
             return mesh;
         }
@@ -7852,10 +7869,18 @@
             const brows = stations.map((s) => s.brow);
 
             let fill = 0, cut = 0;
-            const positions = [];
-            const colors = [];
+            const fillPos = [], fillCol = [], cutPos = [], cutCol = [];
             const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
             const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
+            const pushMode = (mode, a, b, c) => {
+                const isCut = mode === 'cut';
+                slopePushTri(
+                    isCut ? cutPos : fillPos,
+                    isCut ? cutCol : fillCol,
+                    a, b, c,
+                    isCut ? cutColor : fillColor
+                );
+            };
             const last = closed ? stations.length : stations.length - 1;
             const hinges = [];
             for (let i = 0; i < last; i++) {
@@ -7867,8 +7892,10 @@
                 const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
                 const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
                 if (dist < 1e-6) {
-                    const col = a.mode === 'cut' ? cutColor : fillColor;
-                    slopePushTri(positions, colors, edgeA, exitA, exitB, col);
+                    // Веер с одного угла: если хоть одно сечение выемка —
+                    // кладём в оверлей, иначе треугольник прячется под рельефом.
+                    const mode = (a.mode === 'cut' || b.mode === 'cut') ? 'cut' : 'fill';
+                    pushMode(mode, edgeA, exitA, exitB);
                     continue;
                 }
                 if (a.mode !== 'flat' && b.mode === 'flat') {
@@ -7881,10 +7908,8 @@
                     hinges.push(hinge);
                     const Hv = new THREE.Vector3(hinge.x, hinge.y, hinge.z);
                     const t = Math.min(1, Math.max(0, hinge.t));
-                    const colA = a.mode === 'cut' ? cutColor : fillColor;
-                    const colB = b.mode === 'cut' ? cutColor : fillColor;
-                    slopePushTri(positions, colors, edgeA, exitA, Hv, colA);
-                    slopePushTri(positions, colors, Hv, exitB, edgeB, colB);
+                    pushMode(a.mode === 'cut' ? 'cut' : 'fill', edgeA, exitA, Hv);
+                    pushMode(b.mode === 'cut' ? 'cut' : 'fill', Hv, exitB, edgeB);
                     const volA = 0.5 * a.area * dist * t;
                     const volB = 0.5 * b.area * dist * (1 - t);
                     if (a.mode === 'cut') cut += volA; else fill += volA;
@@ -7896,15 +7921,23 @@
                 else if (a.mode === 'fill' && b.mode === 'fill') fill += vol;
                 else if (a.mode === 'fill' || b.mode === 'fill') fill += vol;
                 else cut += vol;
-                const col = a.mode === 'cut' ? cutColor : fillColor;
-                slopePushTri(positions, colors, edgeA, exitA, exitB, col);
-                slopePushTri(positions, colors, edgeA, exitB, edgeB, col);
+                pushMode(a.mode === 'cut' ? 'cut' : 'fill', edgeA, exitA, exitB);
+                pushMode(
+                    (b.mode === 'cut' || b.mode === 'fill') ? b.mode : (a.mode === 'cut' ? 'cut' : 'fill'),
+                    edgeA, exitB, edgeB
+                );
             }
 
-            const mesh = slopeMakeMesh(
-                positions, colors,
+            const fillMesh = slopeMakeMesh(
+                fillPos, fillCol,
                 `Откос · ${side === 'left' ? 'влево' : 'вправо'}`
             );
+            const cutMesh = slopeMakeMesh(
+                cutPos, cutCol,
+                `Откос · выемка · ${side === 'left' ? 'влево' : 'вправо'}`,
+                true
+            );
+            const mesh = fillMesh || cutMesh;
 
             const skippedNoGround = sections.filter((s) => !s.valid && s.reason === 'no-ground').length;
             const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
@@ -7922,7 +7955,7 @@
             });
 
             return {
-                side, mesh, fill, cut, sections,
+                side, mesh, cutMesh, fill, cut, sections,
                 exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
                 skippedNoGround, skippedNotReached,
                 hinges,
@@ -7960,7 +7993,12 @@
 
         function collectSlopeTin(model) {
             const tris = [];
-            model.sides.forEach((s) => slopeMeshTriangles(s.mesh).forEach((t) => tris.push(t)));
+            model.sides.forEach((s) => {
+                slopeMeshTriangles(s.mesh).forEach((t) => tris.push(t));
+                if (s.cutMesh && s.cutMesh !== s.mesh) {
+                    slopeMeshTriangles(s.cutMesh).forEach((t) => tris.push(t));
+                }
+            });
             if (model.padTriangles?.length) {
                 model.padTriangles.forEach((t) => tris.push(t));
             } else if (model.padMesh) {
@@ -8154,11 +8192,11 @@
                 if (polylineEditingId === rec.id) polylineEditingId = null;
             };
             sm.sides.forEach((s) => {
-                if (s.mesh) {
-                    slopeGroup.remove(s.mesh);
-                    s.mesh.geometry.dispose();
-                    s.mesh.material.dispose();
-                }
+                [s.mesh, s.cutMesh].filter((m, i, arr) => m && arr.indexOf(m) === i).forEach((mesh) => {
+                    slopeGroup.remove(mesh);
+                    mesh.geometry.dispose();
+                    mesh.material.dispose();
+                });
                 s.exitPolylineIds.forEach(dropPoly);
             });
             if (sm.contourPolylineId) dropPoly(sm.contourPolylineId);
@@ -27735,7 +27773,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: '6050c7d',
+            buildId: 'cutvis',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -27745,7 +27783,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: откос верхней площадки садится на нижнюю и обходит её углы; переход насыпь→выемка от пересечения с землёй; ПКМ по линии компактный.',
+                '2026.08.13: выемка видна поверх рельефа; откос верхней площадки обходит углы нижней; переход насыпь→выемка от пересечения с землёй.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
@@ -27810,7 +27848,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=84').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=85').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
