@@ -2097,6 +2097,40 @@ async function checkRoadCrossSections(page) {
         document.getElementById('polylinesClose')?.click();
     });
 
+    const axisBtn = await page.evaluate(() => {
+        const btn = document.getElementById('btnRoadAxis');
+        const analyze = document.getElementById('btnRoadAxisAnalyze');
+        btn?.click();
+        const D = window.BimLvaDebug;
+        const on = {
+            text: (btn?.textContent || '').replace(/\s+/g, ' ').trim(),
+            analyze: (analyze?.textContent || '').replace(/\s+/g, ' ').trim(),
+            disabled: !!btn?.disabled,
+            on: !!btn?.classList.contains('on'),
+            analyzeOn: !!analyze?.classList.contains('on'),
+            drawMode: !!D.drawMode,
+            road: !!D.drawingRoadAxis
+        };
+        btn?.click();
+        return {
+            ...on,
+            after: {
+                drawMode: !!D.drawMode,
+                road: !!D.drawingRoadAxis,
+                on: !!btn?.classList.contains('on')
+            }
+        };
+    });
+    if (!axisBtn.text.includes('Ось трассы') || !axisBtn.analyze.includes('Ось трассы') || axisBtn.disabled) {
+        problems.push(`ось трассы: кнопки нет или выключена (${JSON.stringify(axisBtn)})`);
+    }
+    if (!axisBtn.on || !axisBtn.analyzeOn || !axisBtn.drawMode || !axisBtn.road) {
+        problems.push(`ось трассы: клик не включил черчение (${JSON.stringify(axisBtn)})`);
+    }
+    if (axisBtn.after.drawMode || axisBtn.after.road || axisBtn.after.on) {
+        problems.push(`ось трассы: повторный клик не выключил режим (${JSON.stringify(axisBtn.after)})`);
+    }
+
     return {
         stations: got.res?.stations || 0,
         hits: got.res?.hits || 0

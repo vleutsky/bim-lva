@@ -2875,6 +2875,7 @@
                             <button class="btn" id="btnCompare" disabled title="Сравнить два IFC: добавлено / удалено">⇄ Сравнение IFC</button>
                             <button class="btn" id="btn4d" disabled title="Простая 4D-лента: скрытие/цвет по дате или фазе из Pset">⏱ 4D-лента</button>
                             <button class="btn" id="btnAlignProfile" disabled title="Продольный профиль трассы LandXML: план + station/elev">〰 Профиль трассы</button>
+                            <button class="btn" id="btnRoadAxisAnalyze" disabled title="Начертить ось дороги: клики — вершины, Esc — закончить и открыть поперечники">🛣 Ось трассы</button>
                             <button class="btn" id="btnSchedule" disabled title="Ведомость выделенного → CSV">▦ Ведомость CSV</button>
                             <button class="btn" id="btnCrs" disabled title="Смещение модели / northing (CRS offset)">🌐 CRS / смещение</button>
                         </div>
@@ -2888,6 +2889,7 @@
                             <button class="btn" id="btnCoordPinList" disabled title="Список меток: перелёт к метке, копирование, удаление">📋 Метки: <span id="pinsCount" style="margin-left:2px">0</span></button>
                             <div class="tb-menu-label">Построения</div>
                             <button class="btn" id="btnDraw" disabled title="Черчение полилинии по модели. Клик — точка, Esc или повторное нажатие кнопки — завершить">✏ Полилиния</button>
+                            <button class="btn" id="btnRoadAxis" disabled title="Начертить ось дороги: клики — вершины, Esc — закончить и открыть поперечники">🛣 Ось трассы</button>
                             <button class="btn" id="btnPolylineList" disabled title="Список полилиний: переименование, точки, радиусы сопряжения в углах, приближение, удаление">📐 Полилинии: <span id="polylinesCount" style="margin-left:2px">0</span></button>
                             <button class="btn" id="btnPadList" disabled title="Таблица площадок: имя, цвет, площадь, объёмы насыпи/выемки, выгрузка DXF/LandXML, удаление">▣ Площадки: <span id="padsCount" style="margin-left:2px">0</span></button>
                             <div class="tb-menu-row" title="2D — все точки на отметке первой (как LWPOLYLINE), 3D — с настоящими отметками">
@@ -5258,6 +5260,13 @@
             finishDrawnPolyline() {
                 const rec = finishDrawPolyline();
                 return rec ? rec.id : null;
+            },
+            get drawMode() { return !!drawMode; },
+            get drawingRoadAxis() { return !!drawingRoadAxis; },
+            startRoadAxisDraw() {
+                drawingRoadAxis = true;
+                if ($('drawModeSelect')) $('drawModeSelect').value = '3d';
+                setDrawMode(true);
             },
             /** Картограмма: объёмы выемки/насыпи внутри замкнутого контура. */
             earthwork(id, cell, mode, level) {
@@ -10034,6 +10043,7 @@
         let drawDraft = null;
         let drawCursorPoint = null; // куда тянется линия прямо сейчас (резиновая нить)
         let drawContinuation = null; // дописываем существующую полилинию: что сохранить
+        let drawingRoadAxis = false; // режим «Ось трассы»: после Esc открываем поперечники
 
         function drawKind() {
             return $('drawModeSelect')?.value === '2d' ? '2d' : '3d';
@@ -10497,9 +10507,10 @@
                 if (cont.reversed) { pts.reverse(); radii.reverse(); }
             }
 
+            const asRoad = drawingRoadAxis || cont?.keep?.role === 'road-axis';
             const record = {
                 id: ++drawPolylineSeq,
-                name: cont ? cont.keep.name : `Полилиния ${drawPolylineSeq}`,
+                name: cont ? cont.keep.name : (asRoad ? nextRoadAxisName() : `Полилиния ${drawPolylineSeq}`),
                 kind,
                 pts,
                 radii,
@@ -10510,7 +10521,8 @@
                 width,
                 closed: false,
                 length3d: 0,
-                length2d: 0
+                length2d: 0,
+                role: asRoad ? 'road-axis' : null
             };
             line.userData.drawnPolylineId = record.id;
             drawnPolylines.push(record);
@@ -10520,11 +10532,16 @@
             refreshDrawDraft();
             updateDrawUi();
             notify(
-                `Полилиния ${kind.toUpperCase()}: ${pts.length} точек, ` +
+                `${asRoad ? 'Ось трассы' : 'Полилиния'} ${kind.toUpperCase()}: ${pts.length} точек, ` +
                 `L3D ${record.length3d.toFixed(2)} м · L2D ${record.length2d.toFixed(2)} м`
             );
-            trackUsage('draw_polyline', { kind, points: pts.length });
+            trackUsage(asRoad ? 'road_axis_draw' : 'draw_polyline', { kind, points: pts.length });
             return record;
+        }
+
+        function nextRoadAxisName() {
+            const n = drawnPolylines.filter((r) => r.role === 'road-axis').length + 1;
+            return n <= 1 ? 'Ось трассы' : `Ось трассы ${n}`;
         }
 
         function clearDrawnPolylines() {
@@ -10651,11 +10668,13 @@
             if (fromStart) { pts.reverse(); radii.reverse(); }
             const keep = {
                 name: record.name, color: record.color,
-                width: record.width, kind: record.kind
+                width: record.width, kind: record.kind,
+                role: record.role || null
             };
             deleteDrawnPolyline(record);
             drawPoints = pts;
             drawContinuation = { radii, keep, reversed: fromStart };
+            drawingRoadAxis = keep.role === 'road-axis';
             $('drawModeSelect').value = keep.kind;
             setDrawMode(true);
             refreshDrawDraft();
@@ -11915,12 +11934,18 @@
         }
 
         function setDrawMode(on) {
+            let finishedRoad = null;
             if (!on && drawMode) {
+                const wasRoad = drawingRoadAxis;
                 const rec = finishDrawPolyline();
                 if (pendingPadHolePolylineId != null) consumePendingPadHole(rec);
+                if (wasRoad && rec) finishedRoad = rec;
+                drawingRoadAxis = false;
             }
             drawMode = !!on;
-            $('btnDraw')?.classList.toggle('on', drawMode);
+            $('btnDraw')?.classList.toggle('on', drawMode && !drawingRoadAxis);
+            $('btnRoadAxis')?.classList.toggle('on', drawMode && drawingRoadAxis);
+            $('btnRoadAxisAnalyze')?.classList.toggle('on', drawMode && drawingRoadAxis);
             if (drawMode) {
                 if (isMeasuring) $('btnMeasure').click();
                 if (coordPinMode) setCoordPinMode(false);
@@ -11932,6 +11957,20 @@
                 refreshDrawDraft();
             }
             updateDrawInputPanel();
+            if (finishedRoad) {
+                openRoadXsModal(finishedRoad);
+                const model = buildRoadCrossSections(finishedRoad, {
+                    step: Number($('roadXsStep')?.value) || 20,
+                    widthL: Number($('roadXsWidthL')?.value) || 15,
+                    widthR: Number($('roadXsWidthR')?.value) || 15,
+                    sampleStep: Number($('roadXsSample')?.value) || 1,
+                    color: $('roadXsColor')?.value || '#2a7de1',
+                    live: $('roadXsLive') ? !!$('roadXsLive').checked : true
+                });
+                if (model) {
+                    notify(`Поперечники: ${model.stations.length} сечений по «${finishedRoad.name}».`);
+                }
+            }
         }
 
         /* --- Метки координат -------------------------------------------------
@@ -12133,9 +12172,25 @@
 
         $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
         $('btnDraw')?.addEventListener('click', () => {
-            if (!drawMode) pendingPadHolePolylineId = null;
-            setDrawMode(!drawMode);
+            if (drawMode) { setDrawMode(false); return; }
+            pendingPadHolePolylineId = null;
+            drawingRoadAxis = false;
+            setDrawMode(true);
         });
+        $('btnRoadAxis')?.addEventListener('click', () => {
+            if (drawMode && drawingRoadAxis) { setDrawMode(false); return; }
+            pendingPadHolePolylineId = null;
+            drawingRoadAxis = true;
+            if ($('drawModeSelect')) $('drawModeSelect').value = '3d';
+            if (!drawMode) setDrawMode(true);
+            else {
+                $('btnDraw')?.classList.remove('on');
+                $('btnRoadAxis')?.classList.add('on');
+                $('btnRoadAxisAnalyze')?.classList.add('on');
+            }
+            notify('Ось трассы: клики — вершины, Esc — закончить и открыть поперечники.');
+        });
+        $('btnRoadAxisAnalyze')?.addEventListener('click', () => $('btnRoadAxis')?.click());
         const sweepPanel = createFloatingPanel({
             cardId: 'sweepModalCard', modalId: 'sweepModal',
             handleId: 'sweepModalDrag', defaultWidth: 480
@@ -15182,7 +15237,7 @@
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -27063,7 +27118,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -27602,8 +27657,8 @@ ${componentXml || '    '}
             }
             if (event.key === 'Escape' && drawMode) {
                 event.preventDefault();
-                if (drawPoints.length) finishDrawPolyline();
-                else setDrawMode(false);
+                if (drawingRoadAxis || !drawPoints.length) setDrawMode(false);
+                else finishDrawPolyline();
                 return;
             }
             if (event.key === 'f' || event.key === 'F' || event.key === 'а' || event.key === 'А') {
@@ -27816,7 +27871,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -30739,7 +30794,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: 'xs-1',
+            buildId: 'xs-2',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -30749,7 +30804,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: поперечники по оси дороги — сечения по нормали в плане, земля с рельефа, чертёж смещение/отметка, DXF слой LVA_XS.',
+                '2026.08.13: ось трассы — кнопка в «Создать 2Д/3Д» и в «Анализ»; после Esc открываются поперечники.',
                 '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос (d = m·Δz по нормали сечения); вырез островка: «начертить вырез» в таблице площадок (Esc замыкает контур); выемка видна поверх рельефа; площадка в DXF — один 3D-солид (R2010).',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
                 '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
@@ -30817,7 +30872,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=94').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=95').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
