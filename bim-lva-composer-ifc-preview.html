@@ -1395,15 +1395,29 @@
             min-height: 24px;
             border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent);
         }
-        .polyline-row { grid-template-columns: 86px minmax(0, 1fr) 16px 34px auto auto; }
+        .polyline-block { border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent); }
+        .polyline-block:last-child { border-bottom: none; }
+        .polyline-block:nth-child(even) {
+            background: color-mix(in srgb, var(--txt) 3%, transparent);
+        }
+        .polyline-row { grid-template-columns: 80px minmax(0, 1fr) 16px 34px 72px auto auto; border-bottom: none; }
+        .polyline-edge-row {
+            display: grid;
+            grid-template-columns: 52px 16px 34px 72px 1fr;
+            align-items: center;
+            gap: 3px 5px;
+            padding: 0 6px 4px 10px;
+            font-size: 10px;
+            color: var(--txt-dim, #6b7280);
+        }
+        .polyline-layer { width: 72px; padding-left: 3px !important; padding-right: 3px !important; font-size: 10px !important; }
         .pad-row { grid-template-columns: 96px minmax(0, 1fr) 16px auto; border-bottom: none; }
         .pad-block { border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent); }
         .pad-block:last-child { border-bottom: none; }
-        .polyline-row:last-child { border-bottom: none; }
-        .polyline-row:nth-child(even), .pad-block:nth-child(even) {
+        .pad-block:nth-child(even) {
             background: color-mix(in srgb, var(--txt) 3%, transparent);
         }
-        .polyline-row:hover, .pad-block:hover {
+        .polyline-row:hover, .polyline-block:hover, .pad-block:hover {
             background: color-mix(in srgb, var(--accent) 8%, transparent);
         }
         .pad-kdo {
@@ -2816,7 +2830,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · a300c48</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 126d192</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -3663,7 +3677,9 @@
             <details class="table-help">
                 <summary>Как править</summary>
                 <div class="bulk-note">
-                    Имя, цвет и толщина правятся прямо в строке. «✎» раскрывает
+                    Имя, цвет, толщина и слой DXF правятся прямо в строке.
+                    У оси трассы ось — пунктир, кромки ширины — сплошные; их
+                    цвет, толщина и слой — во второй строке. «✎» раскрывает
                     вершины: <b>H</b> — абсолютная отметка, <b>L</b> — длина отрезка
                     до следующей вершины, <b>i‰</b> — его уклон, <b>R</b> — радиус
                     сопряжения в углу. После вписывания радиуса касательные до
@@ -3831,7 +3847,8 @@
                     а не двумя наложенными перпендикулярами). Земля снимается
                     лучом вниз, как на продольном профиле. Промах — разрыв,
                     не ноль. Красная черта на чертеже — отметка оси.
-                    Белый пунктир — кромки ширины, строятся вместе с осью.
+                    Ось — пунктир, кромки ширины — сплошные белые (цвет, слой
+                    и толщину оси и кромок можно сменить).
                 </div>
             </details>
             <div class="modal-fields">
@@ -3840,11 +3857,17 @@
                 <div class="prop small"><div class="k">Шаг по сечению, м</div><input class="editInput" id="roadXsSample" type="number" min="0.1" step="0.1" value="1"></div>
                 <div class="prop small"><div class="k">Влево, м</div><input class="editInput" id="roadXsWidthL" type="number" min="0.5" step="0.5" value="15"></div>
                 <div class="prop small"><div class="k">Вправо, м</div><input class="editInput" id="roadXsWidthR" type="number" min="0.5" step="0.5" value="15"></div>
-                <div class="prop small"><div class="k">Цвет</div><input type="color" class="polyline-color" id="roadXsColor" value="#2a7de1"></div>
+                <div class="prop small"><div class="k">Сечения, цвет</div><input type="color" class="polyline-color" id="roadXsColor" value="#2a7de1" title="Цвет линий поперечников в сцене"></div>
                 <div class="prop small">
                     <div class="k">Связать с осью</div>
                     <input type="checkbox" id="roadXsLive" checked title="Перестраивать поперечники при правке оси">
                 </div>
+                <div class="prop small"><div class="k">Ось, цвет</div><input type="color" class="polyline-color" id="roadAxisColor" value="#1f8f5f" title="Цвет пунктирной оси трассы"></div>
+                <div class="prop small"><div class="k">Ось, px</div><input class="editInput" id="roadAxisWidth" type="number" min="0.5" step="0.5" value="2" title="Толщина оси в пикселях"></div>
+                <div class="prop small span-2"><div class="k">Ось, слой</div><input class="editInput" id="roadAxisLayer" value="LVA_AXIS" title="Слой DXF для оси"></div>
+                <div class="prop small"><div class="k">Кромки, цвет</div><input type="color" class="polyline-color" id="roadEdgeColor" value="#f4f7fb" title="Цвет сплошных кромок ширины"></div>
+                <div class="prop small"><div class="k">Кромки, px</div><input class="editInput" id="roadEdgeWidth" type="number" min="0.5" step="0.5" value="1.6" title="Толщина кромок в пикселях"></div>
+                <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="LVA_ROAD" title="Слой DXF для кромок ширины"></div>
             </div>
             <div class="bulk-note" id="roadXsStatus">—</div>
             <div class="prop small">
@@ -5138,7 +5161,9 @@
                         length3d: r.length3d, length2d: r.length2d,
                         points: r.pts.length, radii: r.radii.slice(),
                         closed: !!r.closed, area: polylinePlanArea(r),
-                        color: r.color, width: r.width
+                        color: r.color, width: r.width,
+                        layer: r.layer || null, role: r.role || null,
+                        dashed: !!r.object?.material?.dashed
                     }));
             },
             /** Задать радиус сопряжения в вершине полилинии (для проверки фаски). */
@@ -5257,9 +5282,26 @@
                 return {
                     color: rec.color,
                     width: rec.width,
+                    layer: rec.layer || defaultPolylineLayer(rec.kind, rec.role),
+                    dashed: !!rec.object?.material?.dashed,
                     materialColor: '#' + rec.object.material.color.getHexString(),
-                    materialWidth: rec.object.material.linewidth
+                    materialWidth: rec.object.material.linewidth,
+                    edgeColor: rec.edgeColor || null,
+                    edgeWidth: rec.edgeWidth || null,
+                    edgeLayer: rec.edgeLayer || null,
+                    edgeDashed: !!(rec.roadEdgeLeft?.material?.dashed),
+                    edgeMaterialColor: rec.roadEdgeLeft
+                        ? '#' + rec.roadEdgeLeft.material.color.getHexString()
+                        : null,
+                    edgeMaterialWidth: rec.roadEdgeLeft?.material?.linewidth ?? null,
+                    role: rec.role || null
                 };
+            },
+            stylePolyline(id, opts) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                setPolylineStyle(rec, opts || {});
+                return true;
             },
             /** Точек в черновике (резиновая нить) — 0, если её не видно. */
             get drawDraftPoints() {
@@ -5298,10 +5340,14 @@
                     const start = line.geometry?.attributes?.instanceStart?.count || 0;
                     return start ? start + 1 : 0;
                 };
+                const hex = (line) => line?.material ? '#' + line.material.color.getHexString() : null;
                 return {
                     left: n(drawRoadEdgeLeft),
                     right: n(drawRoadEdgeRight),
-                    dashed: !!(drawRoadEdgeLeft?.material?.dashed && drawRoadEdgeRight?.material?.dashed)
+                    axisDashed: !!drawDraft?.material?.dashed,
+                    edgeDashed: !!(drawRoadEdgeLeft?.material?.dashed || drawRoadEdgeRight?.material?.dashed),
+                    axisColor: hex(drawDraft),
+                    edgeColor: hex(drawRoadEdgeLeft)
                 };
             },
             /** Картограмма: объёмы выемки/насыпи внутри замкнутого контура. */
@@ -7447,14 +7493,18 @@
         function addPolylineFromPoints(points, opts = {}) {
             if (!points || points.length < 2) return null;
             const pts = points.map((p) => (p instanceof THREE.Vector3 ? p.clone() : new THREE.Vector3(p.x, p.y, p.z)));
+            const role = opts.role || null;
             const color = opts.color || DRAW_COLOR;
             const width = opts.width || DRAW_WIDTH;
-            const line = makeLineObject(pts, color, width, !!opts.dashed);
+            const dashed = opts.dashed != null ? !!opts.dashed : role === 'road-axis';
+            const kind = opts.kind || '3d';
+            const layer = opts.layer || defaultPolylineLayer(kind, role);
+            const line = makeLineObject(pts, color, width, dashed);
             drawGroup.add(line);
             const record = {
                 id: ++drawPolylineSeq,
                 name: opts.name || `Полилиния ${drawPolylineSeq}`,
-                kind: opts.kind || '3d',
+                kind,
                 pts,
                 radii: pts.map(() => 0),
                 renderPts: [],
@@ -7462,10 +7512,15 @@
                 object: line,
                 color,
                 width,
+                layer,
+                dashed,
                 closed: !!opts.closed && pts.length >= 3,
                 length3d: 0,
                 length2d: 0,
-                role: opts.role || null
+                role,
+                edgeColor: opts.edgeColor || ROAD_EDGE_COLOR,
+                edgeWidth: opts.edgeWidth || ROAD_EDGE_WIDTH,
+                edgeLayer: opts.edgeLayer || ROAD_EDGE_LAYER
             };
             line.userData.drawnPolylineId = record.id;
             drawnPolylines.push(record);
@@ -10106,6 +10161,34 @@
         let drawRoadEdgeRight = null;
         const ROAD_EDGE_COLOR = '#f4f7fb';
         const ROAD_EDGE_WIDTH = 1.6;
+        const ROAD_AXIS_LAYER = 'LVA_AXIS';
+        const ROAD_EDGE_LAYER = 'LVA_ROAD';
+
+        function sanitizeDxfLayer(name, fallback = '0') {
+            const s = String(name || '').trim().replace(/[<>/\\":;?*|,=`'\n\r]/g, '_').slice(0, 255);
+            return s || fallback;
+        }
+
+        function defaultPolylineLayer(kind, role) {
+            if (role === 'road-axis') return ROAD_AXIS_LAYER;
+            return kind === '2d' ? 'LVA_2D' : 'LVA_3D';
+        }
+
+        function roadAxisDraftStyle() {
+            const keep = drawContinuation?.keep;
+            const color = keep?.color || $('roadAxisColor')?.value || DRAW_COLOR;
+            const width = Number(keep?.width) || Number($('roadAxisWidth')?.value) || DRAW_WIDTH;
+            const edgeColor = keep?.edgeColor || $('roadEdgeColor')?.value || ROAD_EDGE_COLOR;
+            const edgeWidth = Number(keep?.edgeWidth) || Number($('roadEdgeWidth')?.value) || ROAD_EDGE_WIDTH;
+            return {
+                color,
+                width: Math.max(0.5, Number.isFinite(width) ? width : DRAW_WIDTH),
+                edgeColor,
+                edgeWidth: Math.max(0.5, Number.isFinite(edgeWidth) ? edgeWidth : ROAD_EDGE_WIDTH),
+                layer: sanitizeDxfLayer(keep?.layer || $('roadAxisLayer')?.value, ROAD_AXIS_LAYER),
+                edgeLayer: sanitizeDxfLayer(keep?.edgeLayer || $('roadEdgeLayer')?.value, ROAD_EDGE_LAYER)
+            };
+        }
 
         function drawKind() {
             return $('drawModeSelect')?.value === '2d' ? '2d' : '3d';
@@ -10174,8 +10257,8 @@
         /**
          * Черновик: уже поставленные точки плюс та, где сейчас курсор. Без
          * «резиновой нити» первый отрезок был невидим до второго клика —
-         * не понять, куда тянешь. В режиме оси сразу ведём кромки ширины
-         * белым пунктиром — по биссектрисе на углах, не двумя перпендикулярами.
+         * не понять, куда тянешь. В режиме оси сама ось — пунктир, кромки
+         * ширины — сплошные белые (биссектриса на углах).
          */
         function refreshDrawDraft() {
             if (drawDraft) {
@@ -10187,20 +10270,23 @@
             disposeDrawRoadEdges();
             const pts = drawCursorPoint ? [...drawPoints, drawCursorPoint] : drawPoints.slice();
             if (pts.length < 2) { markNeedsRender(); return; }
-            drawDraft = makeLineObject(pts, DRAW_COLOR, DRAW_WIDTH, true);
-            drawGroup.add(drawDraft);
             if (drawingRoadAxis) {
-                const { widthL, widthR } = roadAxisDraftWidths();
-                const left = offsetPlanPolyline(pts, -widthL, false);
-                const right = offsetPlanPolyline(pts, widthR, false);
+                const st = roadAxisDraftStyle();
+                drawDraft = makeLineObject(pts, st.color, st.width, true);
+                drawGroup.add(drawDraft);
+                const left = offsetPlanPolyline(pts, -roadAxisDraftWidths().widthL, false);
+                const right = offsetPlanPolyline(pts, roadAxisDraftWidths().widthR, false);
                 if (left.length >= 2) {
-                    drawRoadEdgeLeft = makeLineObject(left, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                    drawRoadEdgeLeft = makeLineObject(left, st.edgeColor, st.edgeWidth, false);
                     drawGroup.add(drawRoadEdgeLeft);
                 }
                 if (right.length >= 2) {
-                    drawRoadEdgeRight = makeLineObject(right, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                    drawRoadEdgeRight = makeLineObject(right, st.edgeColor, st.edgeWidth, false);
                     drawGroup.add(drawRoadEdgeRight);
                 }
+            } else {
+                drawDraft = makeLineObject(pts, DRAW_COLOR, DRAW_WIDTH, true);
+                drawGroup.add(drawDraft);
             }
             markNeedsRender();
         }
@@ -10515,16 +10601,20 @@
             const src = record.renderPts?.length >= 2 ? record.renderPts : record.pts;
             if (!src || src.length < 2) return;
             const { widthL, widthR } = roadAxisWidthsFor(record);
+            const color = record?.edgeColor || ROAD_EDGE_COLOR;
+            const width = Math.max(0.5, Number(record?.edgeWidth) || ROAD_EDGE_WIDTH);
             const left = offsetPlanPolyline(src, -widthL, !!record.closed);
             const right = offsetPlanPolyline(src, widthR, !!record.closed);
+            record.edgeLeftPts = left;
+            record.edgeRightPts = right;
             if (left.length >= 2) {
-                record.roadEdgeLeft = makeLineObject(left, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                record.roadEdgeLeft = makeLineObject(left, color, width, false);
                 record.roadEdgeLeft.userData.roadEdge = 'left';
                 record.roadEdgeLeft.raycast = () => {};
                 drawGroup.add(record.roadEdgeLeft);
             }
             if (right.length >= 2) {
-                record.roadEdgeRight = makeLineObject(right, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                record.roadEdgeRight = makeLineObject(right, color, width, false);
                 record.roadEdgeRight.userData.roadEdge = 'right';
                 record.roadEdgeRight.raycast = () => {};
                 drawGroup.add(record.roadEdgeRight);
@@ -10612,17 +10702,34 @@
             });
         }
 
-        function setPolylineStyle(record, { color, width } = {}) {
+        function setPolylineStyle(record, { color, width, layer, edgeColor, edgeWidth, edgeLayer } = {}) {
             if (color != null) record.color = color;
             if (width != null) record.width = Math.max(0.5, Number(width) || 1);
-            record.object.material.color.set(record.color);
-            record.object.material.linewidth = record.width;
-            record.object.material.needsUpdate = true;
+            if (layer != null) record.layer = sanitizeDxfLayer(layer, defaultPolylineLayer(record.kind, record.role));
+            if (edgeColor != null) record.edgeColor = edgeColor;
+            if (edgeWidth != null) record.edgeWidth = Math.max(0.5, Number(edgeWidth) || ROAD_EDGE_WIDTH);
+            if (edgeLayer != null) record.edgeLayer = sanitizeDxfLayer(edgeLayer, ROAD_EDGE_LAYER);
+            if (record.object?.material) {
+                record.object.material.color.set(record.color);
+                record.object.material.linewidth = record.width;
+                record.object.material.needsUpdate = true;
+            }
             if (record.filletGuideGroup) {
                 const gw = Math.max(0.6, record.width * 0.4);
                 record.filletGuideGroup.children.forEach((line) => {
                     line.material.color.set(record.color);
                     line.material.linewidth = gw;
+                    line.material.needsUpdate = true;
+                });
+            }
+            if (record.role === 'road-axis' && (edgeColor != null || edgeWidth != null || record.roadEdgeLeft || record.roadEdgeRight)) {
+                const ec = record.edgeColor || ROAD_EDGE_COLOR;
+                const ew = Math.max(0.5, Number(record.edgeWidth) || ROAD_EDGE_WIDTH);
+                [record.roadEdgeLeft, record.roadEdgeRight].forEach((line) => {
+                    if (!line?.material) return;
+                    line.material.color.set(ec);
+                    line.material.linewidth = ew;
+                    line.material.dashed = false;
                     line.material.needsUpdate = true;
                 });
             }
@@ -10641,9 +10748,13 @@
             drawContinuation = null;
             const kind = cont ? cont.keep.kind : drawKind();
             const pts = drawPoints.slice();
-            const color = cont ? cont.keep.color : DRAW_COLOR;
-            const width = cont ? cont.keep.width : DRAW_WIDTH;
-            const line = makeLineObject(pts, color, width);
+            const asRoad = drawingRoadAxis || cont?.keep?.role === 'road-axis';
+            const st = asRoad ? roadAxisDraftStyle() : null;
+            const color = cont ? cont.keep.color : (st ? st.color : DRAW_COLOR);
+            const width = cont ? cont.keep.width : (st ? st.width : DRAW_WIDTH);
+            const dashed = asRoad;
+            const layer = cont?.keep?.layer || (st ? st.layer : defaultPolylineLayer(kind, null));
+            const line = makeLineObject(pts, color, width, dashed);
             drawGroup.add(line);
 
             // Продолжение: старые радиусы сохраняются за своими вершинами,
@@ -10655,7 +10766,6 @@
                 if (cont.reversed) { pts.reverse(); radii.reverse(); }
             }
 
-            const asRoad = drawingRoadAxis || cont?.keep?.role === 'road-axis';
             const record = {
                 id: ++drawPolylineSeq,
                 name: cont ? cont.keep.name : (asRoad ? nextRoadAxisName() : `Полилиния ${drawPolylineSeq}`),
@@ -10667,10 +10777,15 @@
                 object: line,
                 color,
                 width,
+                layer,
+                dashed,
                 closed: false,
                 length3d: 0,
                 length2d: 0,
-                role: asRoad ? 'road-axis' : null
+                role: asRoad ? 'road-axis' : null,
+                edgeColor: cont?.keep?.edgeColor || st?.edgeColor || ROAD_EDGE_COLOR,
+                edgeWidth: cont?.keep?.edgeWidth || st?.edgeWidth || ROAD_EDGE_WIDTH,
+                edgeLayer: cont?.keep?.edgeLayer || st?.edgeLayer || ROAD_EDGE_LAYER
             };
             line.userData.drawnPolylineId = record.id;
             drawnPolylines.push(record);
@@ -10817,7 +10932,12 @@
             const keep = {
                 name: record.name, color: record.color,
                 width: record.width, kind: record.kind,
-                role: record.role || null
+                role: record.role || null,
+                layer: record.layer,
+                dashed: !!record.dashed,
+                edgeColor: record.edgeColor,
+                edgeWidth: record.edgeWidth,
+                edgeLayer: record.edgeLayer
             };
             deleteDrawnPolyline(record);
             drawPoints = pts;
@@ -11662,6 +11782,15 @@
                 widthInput.title = 'Толщина линии, px';
                 widthInput.addEventListener('change', () => setPolylineStyle(r, { width: widthInput.value }));
 
+                const layerInput = document.createElement('input');
+                layerInput.className = 'editInput polyline-layer';
+                layerInput.value = r.layer || defaultPolylineLayer(r.kind, r.role);
+                layerInput.title = 'Слой DXF';
+                layerInput.addEventListener('change', () => {
+                    setPolylineStyle(r, { layer: layerInput.value });
+                    layerInput.value = r.layer;
+                });
+
                 const edit = document.createElement('button');
                 edit.className = 'btn';
                 edit.textContent = '✎';
@@ -11726,8 +11855,43 @@
                 const tools = document.createElement('div');
                 tools.className = 'polyline-tools';
                 tools.append(edit, prof, earth, lift, slope, xs, go, plan, del);
-                row.append(nameInput, info, colorInput, widthInput, closeBtn, tools);
-                frag.appendChild(row);
+                row.append(nameInput, info, colorInput, widthInput, layerInput, closeBtn, tools);
+
+                const block = document.createElement('div');
+                block.className = 'polyline-block';
+                block.append(row);
+                if (r.role === 'road-axis') {
+                    const edgeRow = document.createElement('div');
+                    edgeRow.className = 'polyline-edge-row';
+                    const edgeLab = document.createElement('span');
+                    edgeLab.textContent = 'кромки';
+                    edgeLab.title = 'Сплошные линии ширины дороги';
+                    const edgeColor = document.createElement('input');
+                    edgeColor.type = 'color';
+                    edgeColor.className = 'polyline-color';
+                    edgeColor.value = r.edgeColor || ROAD_EDGE_COLOR;
+                    edgeColor.title = 'Цвет кромок';
+                    edgeColor.addEventListener('input', () => setPolylineStyle(r, { edgeColor: edgeColor.value }));
+                    const edgeWidth = document.createElement('input');
+                    edgeWidth.type = 'number';
+                    edgeWidth.min = '0.5';
+                    edgeWidth.step = '0.5';
+                    edgeWidth.className = 'editInput polyline-width';
+                    edgeWidth.value = String(r.edgeWidth || ROAD_EDGE_WIDTH);
+                    edgeWidth.title = 'Толщина кромок, px';
+                    edgeWidth.addEventListener('change', () => setPolylineStyle(r, { edgeWidth: edgeWidth.value }));
+                    const edgeLayer = document.createElement('input');
+                    edgeLayer.className = 'editInput polyline-layer';
+                    edgeLayer.value = r.edgeLayer || ROAD_EDGE_LAYER;
+                    edgeLayer.title = 'Слой DXF кромок';
+                    edgeLayer.addEventListener('change', () => {
+                        setPolylineStyle(r, { edgeLayer: edgeLayer.value });
+                        edgeLayer.value = r.edgeLayer;
+                    });
+                    edgeRow.append(edgeLab, edgeColor, edgeWidth, edgeLayer);
+                    block.append(edgeRow);
+                }
+                frag.appendChild(block);
             });
             body.replaceChildren(frag);
 
@@ -11871,8 +12035,31 @@
             let nextHandle = 0x20;
             const allocHandle = () => (nextHandle++).toString(16).toUpperCase();
             const ltypeH = allocHandle();
-            const layers = ['0', 'LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO', 'LVA_XS', 'LVA_ROAD'];
-            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7];
+            const dashedH = allocHandle();
+            const layers = ['0', 'LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO', 'LVA_XS', 'LVA_ROAD', 'LVA_AXIS'];
+            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3];
+            const dashedLayers = new Set(['LVA_AXIS']);
+            const addLayer = (name, color) => {
+                const nm = sanitizeDxfLayer(name, '');
+                if (!nm || layers.includes(nm)) return nm;
+                layers.push(nm);
+                layerColors.push(color ?? 7);
+                return nm;
+            };
+            (polylines || []).forEach((p) => {
+                const axisLayer = addLayer(p.layer || defaultPolylineLayer(p.kind, p.role), p.role === 'road-axis' ? 3 : 5);
+                if (p.role === 'road-axis' || p.dashed) dashedLayers.add(axisLayer || ROAD_AXIS_LAYER);
+                if (p.role === 'road-axis') addLayer(p.edgeLayer || ROAD_EDGE_LAYER, 7);
+            });
+            if (typeof roadXsModels !== 'undefined') {
+                roadXsModels.forEach((m) => {
+                    const rec = drawnPolylines.find((r) => r.id === m.polylineId);
+                    if (!rec) return;
+                    const axisLayer = addLayer(rec.layer || defaultPolylineLayer(rec.kind, rec.role), 3);
+                    if (rec.role === 'road-axis' || rec.dashed) dashedLayers.add(axisLayer || ROAD_AXIS_LAYER);
+                    addLayer(rec.edgeLayer || ROAD_EDGE_LAYER, 7);
+                });
+            }
             const layerH = Object.fromEntries(layers.map((name) => [name, allocHandle()]));
             const styleH = allocHandle();
             const appidH = allocHandle();
@@ -11910,10 +12097,27 @@
             };
 
             const skipPolyIds = slopeDerivedPolylineIds();
+            const writeAbsPolyline = (pts, layer, is3d, closed) => {
+                if (!pts || pts.length < 2) return;
+                entityOpen('POLYLINE', layer);
+                ge(66, 1);
+                ge(10, 0); ge(20, 0); ge(30, is3d ? 0 : n(pts[0].z));
+                ge(70, (is3d ? 8 : 0) | (closed ? 1 : 0));
+                pts.forEach((p) => {
+                    const abs = p.abs ? p : (worldPointToAbsoluteXYZ(p) || p);
+                    entityOpen('VERTEX', layer);
+                    ge(10, n(abs.x)); ge(20, n(abs.y)); ge(30, n(abs.z));
+                    if (is3d) ge(70, 32);
+                    else if (p.bulge) ge(42, n(p.bulge));
+                });
+                entityOpen('SEQEND', layer);
+            };
             if (!opts.xsOnly) polylines.forEach((poly) => {
                 if (skipPolyIds.has(poly.id)) return;
                 const is3d = poly.kind === '3d';
-                const layer = is3d ? 'LVA_3D' : 'LVA_2D';
+                const layer = sanitizeDxfLayer(
+                    poly.layer, defaultPolylineLayer(poly.kind, poly.role)
+                );
                 const { verts } = buildDxfPolylineVertices(poly);
                 if (!verts.length) return;
                 entityOpen('POLYLINE', layer);
@@ -11927,6 +12131,11 @@
                     else if (p.bulge) ge(42, n(p.bulge));
                 });
                 entityOpen('SEQEND', layer);
+                if (poly.role === 'road-axis') {
+                    const el = sanitizeDxfLayer(poly.edgeLayer, ROAD_EDGE_LAYER);
+                    writeAbsPolyline(poly.edgeLeftPts, el, true, false);
+                    writeAbsPolyline(poly.edgeRightPts, el, true, false);
+                }
             });
             if (onlySlope == null && !opts.xsOnly) {
                 sweptSolids.forEach((solid) => {
@@ -11940,7 +12149,7 @@
                 });
             }
             if (!opts.xsOnly) slopeTinFacesToDxfPairs(ge, onlySlope, allocHandle, blockRecModel);
-            if (onlySlope == null) writeRoadXsToDxf(ge, entityOpen, n);
+            if (onlySlope == null) writeRoadXsToDxf(ge, entityOpen, n, { edges: !!opts.xsOnly });
             if (!opts.xsOnly) pins.forEach((pin) => {
                 entityOpen('POINT', 'LVA_POINTS');
                 ge(100, 'AcDbPoint');
@@ -11972,14 +12181,18 @@
             g(40, 50); g(41, 1.5); g(42, 50); g(43, 0); g(44, 0); g(50, 0); g(51, 0);
             g(71, 0); g(72, 100); g(73, 1); g(74, 3); g(75, 0); g(76, 0); g(77, 0); g(78, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'LTYPE'); g(5, tblLtype); g(100, 'AcDbSymbolTable'); g(70, 1);
+            g(0, 'TABLE'); g(2, 'LTYPE'); g(5, tblLtype); g(100, 'AcDbSymbolTable'); g(70, 2);
             g(0, 'LTYPE'); g(5, ltypeH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLinetypeTableRecord');
             g(2, 'CONTINUOUS'); g(70, 0); g(3, 'Solid line'); g(72, 65); g(73, 0); g(40, 0);
+            g(0, 'LTYPE'); g(5, dashedH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLinetypeTableRecord');
+            g(2, 'DASHED'); g(70, 0); g(3, 'Dashed __ __'); g(72, 65); g(73, 2); g(40, 0.75);
+            g(49, 0.5); g(74, 0); g(49, -0.25); g(74, 0);
             g(0, 'ENDTAB');
             g(0, 'TABLE'); g(2, 'LAYER'); g(5, tblLayer); g(100, 'AcDbSymbolTable'); g(70, layers.length);
             layers.forEach((name, i) => {
                 g(0, 'LAYER'); g(5, layerH[name]); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLayerTableRecord');
-                g(2, name); g(70, 0); g(62, layerColors[i]); g(6, 'CONTINUOUS');
+                g(2, name); g(70, 0); g(62, layerColors[i]);
+                g(6, dashedLayers.has(name) ? 'DASHED' : 'CONTINUOUS');
             });
             g(0, 'ENDTAB');
             g(0, 'TABLE'); g(2, 'STYLE'); g(5, tblStyle); g(100, 'AcDbSymbolTable'); g(70, 1);
@@ -13605,14 +13818,16 @@
                 // Ось трассы уже держит кромки на самой полилинии — вторую
                 // пару в группе поперечников не рисуем, иначе пунктир двоится.
                 if (rec.role !== 'road-axis') {
+                    const ec = rec.edgeColor || ROAD_EDGE_COLOR;
+                    const ew = Math.max(0.5, Number(rec.edgeWidth) || ROAD_EDGE_WIDTH);
                     if (left.length >= 2) {
-                        model.edgeLeft = makeLineObject(left, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                        model.edgeLeft = makeLineObject(left, ec, ew, false);
                         model.edgeLeft.userData.roadEdge = 'left';
                         model.edgeLeft.raycast = () => {};
                         roadXsGroup.add(model.edgeLeft);
                     }
                     if (right.length >= 2) {
-                        model.edgeRight = makeLineObject(right, ROAD_EDGE_COLOR, ROAD_EDGE_WIDTH, true);
+                        model.edgeRight = makeLineObject(right, ec, ew, false);
                         model.edgeRight.userData.roadEdge = 'right';
                         model.edgeRight.raycast = () => {};
                         roadXsGroup.add(model.edgeRight);
@@ -13836,7 +14051,7 @@
             }
         }
 
-        function writeRoadXsToDxf(ge, entityOpen, n) {
+        function writeRoadXsToDxf(ge, entityOpen, n, opts = {}) {
             let count = 0;
             roadXsModels.forEach((model) => {
                 model.stations.forEach((st) => {
@@ -13860,21 +14075,24 @@
                     });
                     flush();
                 });
+                if (opts.edges === false) return;
+                const rec = drawnPolylines.find((r) => r.id === model.polylineId);
+                const layer = sanitizeDxfLayer(rec?.edgeLayer, ROAD_EDGE_LAYER);
                 const writeEdge = (pts) => {
                     if (!pts || pts.length < 2) return;
-                    entityOpen('POLYLINE', 'LVA_ROAD');
+                    entityOpen('POLYLINE', layer);
                     ge(66, 1); ge(10, 0); ge(20, 0); ge(30, 0); ge(70, 8);
                     pts.forEach((p) => {
                         const abs = worldPointToAbsoluteXYZ(p) || p;
-                        entityOpen('VERTEX', 'LVA_ROAD');
+                        entityOpen('VERTEX', layer);
                         ge(10, n(abs.x)); ge(20, n(abs.y)); ge(30, n(abs.z));
                         ge(70, 32);
                     });
-                    entityOpen('SEQEND', 'LVA_ROAD');
+                    entityOpen('SEQEND', layer);
                     count++;
                 };
-                writeEdge(model.edgeLeftPts);
-                writeEdge(model.edgeRightPts);
+                writeEdge(rec?.edgeLeftPts || model.edgeLeftPts);
+                writeEdge(rec?.edgeRightPts || model.edgeRightPts);
             });
             return count;
         }
@@ -13923,6 +14141,42 @@
             handleId: 'roadXsDrag', defaultWidth: 560
         });
 
+        function fillRoadAxisStyleForm(rec) {
+            const set = (id, v) => { const el = $(id); if (el && v != null) el.value = String(v); };
+            set('roadAxisColor', rec?.color || DRAW_COLOR);
+            set('roadAxisWidth', rec?.width || DRAW_WIDTH);
+            set('roadAxisLayer', rec?.layer || defaultPolylineLayer(rec?.kind, rec?.role));
+            set('roadEdgeColor', rec?.edgeColor || ROAD_EDGE_COLOR);
+            set('roadEdgeWidth', rec?.edgeWidth || ROAD_EDGE_WIDTH);
+            set('roadEdgeLayer', rec?.edgeLayer || ROAD_EDGE_LAYER);
+        }
+
+        function applyRoadAxisStyleForm() {
+            const id = Number($('roadXsSelect')?.value);
+            const rec = drawnPolylines.find((r) => r.id === id);
+            if (!rec) {
+                if (drawingRoadAxis) refreshDrawDraft();
+                return;
+            }
+            setPolylineStyle(rec, {
+                color: $('roadAxisColor')?.value,
+                width: $('roadAxisWidth')?.value,
+                layer: $('roadAxisLayer')?.value,
+                edgeColor: $('roadEdgeColor')?.value,
+                edgeWidth: $('roadEdgeWidth')?.value,
+                edgeLayer: $('roadEdgeLayer')?.value
+            });
+            if (rec.role === 'road-axis' && rec.object) {
+                rec.object.material.dashed = true;
+                rec.object.computeLineDistances();
+            }
+            if (drawingRoadAxis) refreshDrawDraft();
+            if (rec.role !== 'road-axis') {
+                const model = roadXsModels.find((m) => m.polylineId === rec.id);
+                if (model) buildRoadXsLines(model);
+            }
+        }
+
         function fillRoadXsSelect(targetId) {
             const sel = $('roadXsSelect');
             if (!sel) return;
@@ -13944,6 +14198,7 @@
             }
             const target = record && candidates.includes(record) ? record : candidates[candidates.length - 1];
             fillRoadXsSelect(target.id);
+            fillRoadAxisStyleForm(target);
             const existing = roadXsModels.find((m) => m.polylineId === target.id);
             if (existing) {
                 $('roadXsStep').value = existing.step;
@@ -14012,6 +14267,8 @@
         });
         $('roadXsSelect')?.addEventListener('change', () => {
             const id = Number($('roadXsSelect').value);
+            const rec = drawnPolylines.find((r) => r.id === id);
+            if (rec) fillRoadAxisStyleForm(rec);
             const existing = roadXsModels.find((m) => m.polylineId === id);
             if (existing) setRoadXsActive(existing.id, 0);
             else {
@@ -14036,6 +14293,15 @@
                     refreshRoadAxisEdges(rec);
                 }
             });
+        });
+        ['roadAxisColor', 'roadEdgeColor'].forEach((id) => {
+            $(id)?.addEventListener('input', applyRoadAxisStyleForm);
+        });
+        ['roadAxisWidth', 'roadEdgeWidth', 'roadAxisLayer', 'roadEdgeLayer'].forEach((id) => {
+            $(id)?.addEventListener('change', applyRoadAxisStyleForm);
+        });
+        ['roadAxisWidth', 'roadEdgeWidth'].forEach((id) => {
+            $(id)?.addEventListener('input', () => { if (drawingRoadAxis) refreshDrawDraft(); });
         });
 
         function pickRoadXs(clientX, clientY) {
@@ -31251,7 +31517,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: 'a300c48-preview',
+            buildId: '126d192-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -31261,7 +31527,8 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: поперечники на угле — одна секущая по биссектрисе (уголок кромок), не два перпендикуляра; чертёж сечения с полосой дороги даже на плоском рельефе; кромки ширины — белый пунктир вместе с осью.',
+                '2026.08.13: ось трассы — пунктир, кромки ширины сплошные; цвет, слой DXF и толщину оси и кромок можно сменить.',
+                '2026.08.13: поперечники на угле — одна секущая по биссектрисе (уголок кромок), не два перпендикуляра; чертёж сечения с полосой дороги даже на плоском рельефе; кромки ширины строятся вместе с осью.',
                 '2026.08.13: ось трассы — кнопка в «Создать 2Д/3Д» и в «Анализ»; после Esc открываются поперечники.',
                 '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос (d = m·Δz по нормали сечения); вырез островка: «начертить вырез» в таблице площадок (Esc замыкает контур); выемка видна поверх рельефа; площадка в DXF — один 3D-солид (R2010).',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
