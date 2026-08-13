@@ -1389,14 +1389,34 @@
             border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent);
         }
         .polyline-row { grid-template-columns: 86px minmax(0, 1fr) 16px 34px auto auto; }
-        .pad-row { grid-template-columns: 96px minmax(0, 1fr) 16px auto; }
-        .polyline-row:last-child, .pad-row:last-child { border-bottom: none; }
-        .polyline-row:nth-child(even), .pad-row:nth-child(even) {
+        .pad-row { grid-template-columns: 96px minmax(0, 1fr) 16px auto; border-bottom: none; }
+        .pad-block { border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent); }
+        .pad-block:last-child { border-bottom: none; }
+        .polyline-row:last-child { border-bottom: none; }
+        .polyline-row:nth-child(even), .pad-block:nth-child(even) {
             background: color-mix(in srgb, var(--txt) 3%, transparent);
         }
-        .polyline-row:hover, .pad-row:hover {
+        .polyline-row:hover, .pad-block:hover {
             background: color-mix(in srgb, var(--accent) 8%, transparent);
         }
+        .pad-kdo {
+            padding: 2px 6px 6px 10px;
+            font-size: 10.5px;
+        }
+        .pad-kdo summary {
+            cursor: pointer;
+            color: var(--txt-dim, #6b7280);
+            list-style: none;
+        }
+        .pad-kdo summary::-webkit-details-marker { display: none; }
+        .pad-kdo-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 54px 16px 20px;
+            gap: 4px;
+            align-items: center;
+            margin-top: 3px;
+        }
+        .pad-kdo-tools { display: flex; gap: 4px; margin-top: 4px; align-items: center; }
         .polyline-row.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
         .polyline-row .pin-xyz, .pad-row .pin-xyz {
             font-size: 10px;
@@ -1424,7 +1444,7 @@
             gap: 2px;
         }
         /* Кнопки в строке — с рамкой: без неё значки читались как просто текст */
-        .polyline-row .btn, .pad-row .btn, .polyline-point-row .btn {
+        .polyline-row .btn, .pad-row .btn, .polyline-point-row .btn, .pad-kdo .btn {
             padding: 0 5px;
             height: 20px;
             font-size: 10.5px;
@@ -2767,7 +2787,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 2613f65</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b50c92d</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -3768,9 +3788,11 @@
                 <div class="bulk-note">
                     Каждая строка — одно построение откосов. Имя и цвет площадки
                     правятся в строке (цвет без пересчёта TIN). Площадь — в плане
-                    по бровке, объёмы — насыпь и выемка откосов. «⬇ DXF» и
-                    «⬇ XML» выгружают эту площадку, «✕» снимает её со сцены,
-                    бровку не трогает.
+                    по бровке, объёмы — насыпь и выемка откосов. «КДО» — слои
+                    дорожной одежды вниз от верха площадки (толщина вертикальная,
+                    объём = площадь × толщина). Шаблоны — ориентир, не расчёт по
+                    ОДН. «⬇ DXF» и «⬇ XML» выгружают эту площадку, «✕» снимает
+                    её со сцены, бровку не трогает.
                 </div>
             </details>
             <div id="padsList" class="compact-table-list"></div>
@@ -5218,7 +5240,8 @@
                         color: '#' + model.padMesh.material.color.getHexString(),
                         opacity: model.padMesh.material.opacity,
                         depthTest: !!model.padMesh.material.depthTest
-                    } : null
+                    } : null,
+                    kdo: padKdoSummary(model)
                 };
             },
             /** Все текущие построения откосов — сводка (без геометрии). */
@@ -5255,7 +5278,8 @@
                     return {
                         id: sm.id, name: sm.name, polylineId: sm.polylineId,
                         area: s.area, fill: s.fill, cut: s.cut,
-                        padColor: s.padColor, faces: s.faces, side: sm.side
+                        padColor: s.padColor, faces: s.faces, side: sm.side,
+                        kdo: padKdoSummary(sm)
                     };
                 });
             },
@@ -5291,6 +5315,28 @@
                     .find((m) => id == null || id === 0 || m.id === id)
                     || slopeModels[slopeModels.length - 1];
                 return sm?.tin?.faces?.length ? buildDxf([], [], sm) : '';
+            },
+            /**
+             * Слои КДО площадки. id построения или 0/null — последнее.
+             */
+            padKdo(id) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                return sm ? padKdoSummary(sm) : null;
+            },
+            /** Задать слои КДО (сверху вниз). Толщина в метрах, вертикальная. */
+            setPadKdo(id, layers) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                return sm ? setPadKdoLayers(sm, layers) : null;
+            },
+            applyPadKdoTemplate(id, templateId) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                return sm ? applyKdoTemplate(sm, templateId) : null;
             },
             /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
             focusPolyline(id, how) {
@@ -7155,6 +7201,34 @@
          * ------------------------------------------------------------------ */
         let slopeModels = [];
         let slopeSeq = 0;
+        let kdoLayerSeq = 0;
+        const padsKdoOpen = new Set();
+
+        /**
+         * Шаблоны КДО — ориентиры по толщинам, не расчёт по ОДН.
+         * Сверху вниз от верха площадки. Объём слоя = площадь в плане × толщина
+         * (вертикальная, как в Civil).
+         */
+        const KDO_TEMPLATES = [
+            { id: '', label: 'без слоёв', layers: [] },
+            {
+                id: 'cap3',
+                label: 'капитальная III',
+                layers: [
+                    { name: 'Покрытие', thickness: 0.10, color: '#2c2c2c' },
+                    { name: 'Основание', thickness: 0.20, color: '#8a8680' },
+                    { name: 'Доп. слой', thickness: 0.30, color: '#c4b896' }
+                ]
+            },
+            {
+                id: 'trans',
+                label: 'переходная',
+                layers: [
+                    { name: 'Покрытие', thickness: 0.08, color: '#3a3a3a' },
+                    { name: 'Основание', thickness: 0.18, color: '#9a958c' }
+                ]
+            }
+        ];
         const slopeGroup = new THREE.Group();
         slopeGroup.name = 'SlopeModels';
         scene.add(slopeGroup);
@@ -7240,7 +7314,8 @@
             slopeGroup.updateMatrixWorld(true);
             const targets = [];
             slopeGroup.traverse((o) => {
-                if (o.isMesh && o.visible && o.userData?.isSlopeSurface && !o.userData?.isSlopePadOverlay) {
+                if (o.isMesh && o.visible && o.userData?.isSlopeSurface
+                    && !o.userData?.isSlopePadOverlay && !o.userData?.isSlopeKdoLayer) {
                     targets.push(o);
                 }
             });
@@ -7664,6 +7739,146 @@
             };
         }
 
+        function kdoShiftPt(p, dz) {
+            return { x: p.x, y: p.y, z: p.z - dz };
+        }
+
+        /** Рёбра контура TIN: встречаются один раз. */
+        function kdoBoundaryEdges(tris) {
+            const map = new Map();
+            const pk = (p) => `${p.x.toFixed(5)},${p.y.toFixed(5)},${p.z.toFixed(5)}`;
+            const ek = (a, b) => {
+                const ka = pk(a), kb = pk(b);
+                return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+            };
+            (tris || []).forEach(([a, b, c]) => {
+                [[a, b], [b, c], [c, a]].forEach(([p, q]) => {
+                    const k = ek(p, q);
+                    if (map.has(k)) map.delete(k);
+                    else map.set(k, [p, q]);
+                });
+            });
+            return [...map.values()];
+        }
+
+        /**
+         * Тело слоя: верх и низ — копии треугольников площадки, сдвинутые
+         * вниз по Z (толщина вертикальная). Бока — вертикальные грани по контуру.
+         */
+        function makeKdoLayerMesh(tris, zTop, zBot, colorHex, name) {
+            if (!tris?.length || !(zBot > zTop)) return null;
+            const positions = [];
+            tris.forEach(([a, b, c]) => {
+                slopePushTri(positions, null, kdoShiftPt(a, zTop), kdoShiftPt(b, zTop), kdoShiftPt(c, zTop), null);
+            });
+            tris.forEach(([a, b, c]) => {
+                slopePushTri(positions, null, kdoShiftPt(a, zBot), kdoShiftPt(c, zBot), kdoShiftPt(b, zBot), null);
+            });
+            kdoBoundaryEdges(tris).forEach(([p, q]) => {
+                const pt = kdoShiftPt(p, zTop), qt = kdoShiftPt(q, zTop);
+                const pb = kdoShiftPt(p, zBot), qb = kdoShiftPt(q, zBot);
+                slopePushTri(positions, null, pt, qt, qb, null);
+                slopePushTri(positions, null, pt, qb, pb, null);
+            });
+            if (!positions.length) return null;
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.computeVertexNormals();
+            const mat = new THREE.MeshStandardMaterial({
+                color: new THREE.Color(colorHex || '#888888'),
+                roughness: 0.85,
+                metalness: 0.02,
+                side: THREE.DoubleSide
+            });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.name = name || 'КДО';
+            mesh.frustumCulled = false;
+            mesh.userData.isSlopeKdoLayer = true;
+            slopeGroup.add(mesh);
+            return mesh;
+        }
+
+        function cloneKdoLayers(layers) {
+            return (layers || []).map((l) => ({
+                id: l.id != null ? l.id : ++kdoLayerSeq,
+                name: String(l.name || 'Слой'),
+                thickness: Math.max(0, Number(l.thickness) || 0),
+                color: l.color || '#888888'
+            }));
+        }
+
+        function disposePadKdo(sm) {
+            (sm.kdoMeshes || []).forEach((mesh) => {
+                slopeGroup.remove(mesh);
+                mesh.geometry.dispose();
+                mesh.material.dispose();
+            });
+            sm.kdoMeshes = [];
+        }
+
+        function rebuildPadKdo(sm) {
+            disposePadKdo(sm);
+            const tris = sm?.padTriangles;
+            const layers = sm?.kdoLayers || [];
+            if (!tris?.length || !layers.length) return;
+            const area = slopeModelSummary(sm).area;
+            let zOff = 0;
+            sm.kdoMeshes = [];
+            layers.forEach((layer) => {
+                const h = Math.max(0, Number(layer.thickness) || 0);
+                layer.volume = area * h;
+                layer.zTop = zOff;
+                layer.zBot = zOff + h;
+                if (h <= 0) {
+                    layer.faces = 0;
+                    return;
+                }
+                const mesh = makeKdoLayerMesh(
+                    tris, zOff, zOff + h, layer.color,
+                    `КДО · ${layer.name}`
+                );
+                layer.faces = mesh ? mesh.geometry.attributes.position.count / 3 : 0;
+                if (mesh) {
+                    mesh.userData.kdoLayerId = layer.id;
+                    sm.kdoMeshes.push(mesh);
+                }
+                zOff += h;
+            });
+            markNeedsRender();
+        }
+
+        function setPadKdoLayers(sm, layers) {
+            if (!sm) return null;
+            sm.kdoLayers = cloneKdoLayers(layers);
+            sm.kdoTemplate = '';
+            rebuildPadKdo(sm);
+            return padKdoSummary(sm);
+        }
+
+        function applyKdoTemplate(sm, templateId) {
+            const tpl = KDO_TEMPLATES.find((t) => t.id === templateId) || KDO_TEMPLATES[0];
+            sm.kdoTemplate = tpl.id;
+            sm.kdoLayers = cloneKdoLayers(tpl.layers.map((l) => ({ ...l, id: ++kdoLayerSeq })));
+            rebuildPadKdo(sm);
+            return padKdoSummary(sm);
+        }
+
+        function padKdoSummary(sm) {
+            const layers = (sm?.kdoLayers || []).map((l) => ({
+                id: l.id,
+                name: l.name,
+                thickness: l.thickness,
+                color: l.color,
+                volume: l.volume || 0,
+                faces: l.faces || 0,
+                zTop: l.zTop || 0,
+                zBot: l.zBot || 0
+            }));
+            const totalH = layers.reduce((s, l) => s + l.thickness, 0);
+            const totalV = layers.reduce((s, l) => s + l.volume, 0);
+            return { layers, count: layers.length, totalH, totalV };
+        }
+
         /**
          * Торцы разомкнутой линии: откос вдоль оси на начале и конце, плюс
          * треугольник бровка–левый выход–правый выход — иначе в торец смотришь
@@ -8083,7 +8298,10 @@
             if (!record.renderPts || record.renderPts.length < 2) return null;
             if (!allMeshes.length) return null;
             // Повторное «Построить» по той же бровке заменяет старое, а не
-            // копит вторую площадку и вторую линию выхода.
+            // копит вторую площадку и вторую линию выхода. Слои КДО переносим.
+            const prev = slopeModels.find((sm) => sm.polylineId === record.id);
+            const keepKdo = cloneKdoLayers(prev?.kdoLayers);
+            const keepTpl = prev?.kdoTemplate || '';
             removeSlopeModelsForPolyline(record.id);
             const ownRing = record.closed ? record.renderPts.slice(0, -1) : null;
             const ownPadTris = ownRing && ownRing.length >= 3 ? triangulateRingXY(ownRing) : null;
@@ -8110,9 +8328,13 @@
                 capCut: caps.cut,
                 padFaces: pad.triangles.length,
                 capFaces: caps.triangles.length,
-                contourPolylineId: contour ? contour.id : null
+                contourPolylineId: contour ? contour.id : null,
+                kdoLayers: keepKdo,
+                kdoTemplate: keepTpl,
+                kdoMeshes: []
             };
             model.tin = collectSlopeTin(model);
+            rebuildPadKdo(model);
             slopeModels.push(model);
             updateSlopeStatus();
             markNeedsRender();
@@ -8185,9 +8407,9 @@
          * Внутренние рёбра прячем (отрицательный индекс вершины), чтобы в
          * каркасе не читалась сетка треугольников.
          */
-        function slopeTinToPolyfaceDxf(g, n, sm) {
-            const tin = sm?.tin;
+        function tinToPolyfaceDxf(g, n, tin, layer) {
             if (!tin?.faces?.length || !tin.points?.length) return 0;
+            const layerName = layer || 'LVA_SLOPE';
             const absPts = tin.points.map((p) => scenePointToAbs(p));
             const edgeKey = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
             const edgeUse = new Map();
@@ -8197,17 +8419,17 @@
                     edgeUse.set(k, (edgeUse.get(k) || 0) + 1);
                 }
             });
-            g(0, 'POLYLINE'); g(8, 'LVA_SLOPE'); g(66, 1);
+            g(0, 'POLYLINE'); g(8, layerName); g(66, 1);
             g(70, 64);
             g(71, absPts.length);
             g(72, tin.faces.length);
             absPts.forEach((p) => {
-                g(0, 'VERTEX'); g(8, 'LVA_SLOPE');
+                g(0, 'VERTEX'); g(8, layerName);
                 g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
                 g(70, 192);
             });
             tin.faces.forEach((f) => {
-                g(0, 'VERTEX'); g(8, 'LVA_SLOPE');
+                g(0, 'VERTEX'); g(8, layerName);
                 g(10, 0); g(20, 0); g(30, 0);
                 g(70, 128);
                 for (let i = 0; i < 3; i++) {
@@ -8218,8 +8440,22 @@
                 }
                 g(74, 0);
             });
-            g(0, 'SEQEND'); g(8, 'LVA_SLOPE');
+            g(0, 'SEQEND'); g(8, layerName);
             return tin.faces.length;
+        }
+
+        function slopeTinToPolyfaceDxf(g, n, sm) {
+            return tinToPolyfaceDxf(g, n, sm?.tin, 'LVA_SLOPE');
+        }
+
+        function kdoLayersToDxf(g, n, only) {
+            let faces = 0;
+            slopeModelsForDxf(only).forEach((sm) => {
+                (sm.kdoMeshes || []).forEach((mesh) => {
+                    faces += tinToPolyfaceDxf(g, n, weldTin(slopeMeshTriangles(mesh)), 'LVA_KDO');
+                });
+            });
+            return faces;
         }
 
         function slopeModelsForDxf(only) {
@@ -8232,6 +8468,7 @@
             slopeModelsForDxf(only).forEach((sm) => {
                 faces += slopeTinToPolyfaceDxf(g, n, sm);
             });
+            faces += kdoLayersToDxf(g, n, only);
             return faces;
         }
 
@@ -8272,10 +8509,15 @@
                 `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dxf`,
                 'application/dxf'
             );
+            const kdoN = list.reduce((n, sm) => n + (sm.kdoMeshes?.length || 0), 0);
             notify(
                 list.length === 1
-                    ? `DXF площадки «${target.name}»: 3D-сеть, ${faces} треугольников, без контурных линий. Координаты мировые, метры.`
-                    : `DXF: ${list.length} площадок, ${faces} треугольников 3D-сети, без контурных линий.`
+                    ? `DXF площадки «${target.name}»: 3D-сеть, ${faces} треугольников` +
+                        (kdoN ? `, КДО ${kdoN} сл.` : '') +
+                        `, без контурных линий. Координаты мировые, метры.`
+                    : `DXF: ${list.length} площадок, ${faces} треугольников 3D-сети` +
+                        (kdoN ? `, КДО ${kdoN} сл.` : '') +
+                        `, без контурных линий.`
             );
             trackUsage('slope_export_dxf', { faces, pads: list.length });
             return true;
@@ -8324,6 +8566,7 @@
                 mesh.geometry.dispose();
                 mesh.material.dispose();
             });
+            disposePadKdo(sm);
         }
 
         /** Убрать откосы, привязанные к этой линии (источник или линия выхода). */
@@ -8433,11 +8676,127 @@
             if (rec) focusPolyline(rec, how);
         }
 
+        function renderPadKdoEditor(sm) {
+            const kdo = padKdoSummary(sm);
+            const box = document.createElement('details');
+            box.className = 'pad-kdo';
+            box.open = padsKdoOpen.has(sm.id);
+            box.addEventListener('toggle', () => {
+                if (box.open) padsKdoOpen.add(sm.id);
+                else padsKdoOpen.delete(sm.id);
+            });
+            const sum = document.createElement('summary');
+            sum.textContent = kdo.count
+                ? `КДО · ${kdo.count} сл. · ${kdo.totalH.toFixed(2)} м · ${kdo.totalV.toFixed(2)} м³`
+                : 'КДО · нет слоёв';
+            box.appendChild(sum);
+
+            const tpl = document.createElement('select');
+            tpl.className = 'editInput';
+            tpl.style.cssText = 'margin-top:4px;width:100%';
+            tpl.title = 'Шаблон слоёв — ориентир по толщинам, не расчёт одежды';
+            KDO_TEMPLATES.forEach((t) => {
+                const o = document.createElement('option');
+                o.value = t.id;
+                o.textContent = t.label;
+                tpl.appendChild(o);
+            });
+            tpl.value = sm.kdoTemplate || '';
+            tpl.addEventListener('change', () => {
+                applyKdoTemplate(sm, tpl.value);
+                renderPadsList();
+            });
+            box.appendChild(tpl);
+
+            (sm.kdoLayers || []).forEach((layer, idx) => {
+                const row = document.createElement('div');
+                row.className = 'pad-kdo-row';
+                const name = document.createElement('input');
+                name.className = 'editInput';
+                name.value = layer.name;
+                name.title = 'Имя слоя';
+                name.addEventListener('change', () => {
+                    layer.name = (name.value || '').trim() || layer.name;
+                    name.value = layer.name;
+                    sm.kdoTemplate = '';
+                });
+                const thick = document.createElement('input');
+                thick.className = 'editInput';
+                thick.type = 'number';
+                thick.min = '0';
+                thick.step = '0.01';
+                thick.value = String(layer.thickness);
+                thick.title = 'Толщина, м (вертикальная)';
+                thick.addEventListener('change', () => {
+                    layer.thickness = Math.max(0, Number(thick.value) || 0);
+                    thick.value = String(layer.thickness);
+                    sm.kdoTemplate = '';
+                    rebuildPadKdo(sm);
+                    sum.textContent = (() => {
+                        const k = padKdoSummary(sm);
+                        return k.count
+                            ? `КДО · ${k.count} сл. · ${k.totalH.toFixed(2)} м · ${k.totalV.toFixed(2)} м³`
+                            : 'КДО · нет слоёв';
+                    })();
+                });
+                const color = document.createElement('input');
+                color.type = 'color';
+                color.className = 'polyline-color';
+                color.value = layer.color || '#888888';
+                color.title = 'Цвет слоя';
+                color.addEventListener('input', () => {
+                    layer.color = color.value;
+                    sm.kdoTemplate = '';
+                    const mesh = (sm.kdoMeshes || []).find((m) => m.userData.kdoLayerId === layer.id);
+                    if (mesh?.material?.color) {
+                        mesh.material.color.set(layer.color);
+                        markNeedsRender();
+                    } else rebuildPadKdo(sm);
+                });
+                const del = document.createElement('button');
+                del.className = 'btn';
+                del.textContent = '✕';
+                del.title = 'Убрать слой';
+                del.addEventListener('click', () => {
+                    sm.kdoLayers = (sm.kdoLayers || []).filter((l) => l !== layer);
+                    sm.kdoTemplate = '';
+                    rebuildPadKdo(sm);
+                    renderPadsList();
+                });
+                row.append(name, thick, color, del);
+                box.appendChild(row);
+            });
+
+            const tools = document.createElement('div');
+            tools.className = 'pad-kdo-tools';
+            const add = document.createElement('button');
+            add.className = 'btn';
+            add.textContent = '+ слой';
+            add.title = 'Добавить слой снизу';
+            add.addEventListener('click', () => {
+                if (!sm.kdoLayers) sm.kdoLayers = [];
+                sm.kdoLayers.push({
+                    id: ++kdoLayerSeq,
+                    name: `Слой ${sm.kdoLayers.length + 1}`,
+                    thickness: 0.10,
+                    color: '#888888'
+                });
+                sm.kdoTemplate = '';
+                rebuildPadKdo(sm);
+                padsKdoOpen.add(sm.id);
+                renderPadsList();
+            });
+            tools.appendChild(add);
+            box.appendChild(tools);
+            return box;
+        }
+
         function renderPadsList() {
             const count = $('padsCount');
             if (count) count.textContent = String(slopeModels.length);
             const body = $('padsList');
             if (!body) return;
+            if (body.contains(document.activeElement) && document.activeElement.closest('.pad-kdo')) return;
             if (!slopeModels.length) {
                 body.innerHTML = '<div class="empty">Площадок пока нет. В списке полилиний нажмите «△ Откосы» и постройте.</div>';
                 return;
@@ -8445,6 +8804,8 @@
             const frag = document.createDocumentFragment();
             slopeModels.forEach((sm) => {
                 const sum = slopeModelSummary(sm);
+                const block = document.createElement('div');
+                block.className = 'pad-block';
                 const row = document.createElement('div');
                 row.className = 'pad-row';
                 row.dataset.padId = String(sm.id);
@@ -8461,9 +8822,11 @@
 
                 const info = document.createElement('span');
                 info.className = 'pin-xyz';
+                const kdo = padKdoSummary(sm);
                 info.textContent =
                     `S ${sum.area.toFixed(2)} м² · насыпь ${sum.fill.toFixed(2)} · выемка ${sum.cut.toFixed(2)}` +
-                    ` · ${sum.sideLabel} · TIN ${sum.faces}`;
+                    ` · ${sum.sideLabel} · TIN ${sum.faces}` +
+                    (kdo.count ? ` · КДО ${kdo.totalH.toFixed(2)} м` : '');
 
                 const colorInput = document.createElement('input');
                 colorInput.type = 'color';
@@ -8500,7 +8863,9 @@
                 tools.className = 'pad-tools';
                 tools.append(plan, dxf, xml, del);
                 row.append(nameInput, info, colorInput, tools);
-                frag.appendChild(row);
+                block.appendChild(row);
+                if (sm.padTriangles?.length) block.appendChild(renderPadKdoEditor(sm));
+                frag.appendChild(block);
             });
             body.replaceChildren(frag);
         }
@@ -8512,10 +8877,15 @@
             }
             const rows = [[
                 'Площадка', 'Сторона', 'Насыпь 1:m', 'Выемка 1:m',
-                'Площадь, м²', 'Насыпь, м³', 'Выемка, м³', 'Грани TIN', 'Цвет'
+                'Площадь, м²', 'Насыпь, м³', 'Выемка, м³', 'Грани TIN', 'Цвет',
+                'КДО, м', 'КДО, м³'
+            ]];
+            const kdoRows = [[
+                'Площадка', 'Слой', 'Толщина, м', 'Объём, м³', 'Цвет'
             ]];
             slopeModels.forEach((sm) => {
                 const s = slopeModelSummary(sm);
+                const kdo = padKdoSummary(sm);
                 rows.push([
                     sm.name,
                     s.sideLabel,
@@ -8524,11 +8894,24 @@
                     Number(s.fill.toFixed(3)),
                     Number(s.cut.toFixed(3)),
                     s.faces,
-                    s.padColor
+                    s.padColor,
+                    Number(kdo.totalH.toFixed(3)),
+                    Number(kdo.totalV.toFixed(3))
                 ]);
+                kdo.layers.forEach((l) => {
+                    kdoRows.push([
+                        sm.name, l.name,
+                        Number(l.thickness.toFixed(3)),
+                        Number(l.volume.toFixed(3)),
+                        l.color
+                    ]);
+                });
             });
             downloadWorkbookSheets(
-                [{ name: 'Площадки', rows }],
+                [
+                    { name: 'Площадки', rows },
+                    { name: 'КДО', rows: kdoRows }
+                ],
                 `bim-lva-pads-${slopeModels.length}.xls`
             );
             notifyOk(`Выгружено площадок: ${slopeModels.length}.`);
@@ -10359,11 +10742,11 @@
             g(9, '$MEASUREMENT'); g(70, 1);          // метрическая
             g(0, 'ENDSEC');
 
-            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE'];
+            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO'];
             g(0, 'SECTION'); g(2, 'TABLES');
             g(0, 'TABLE'); g(2, 'LAYER'); g(70, layers.length);
             layers.forEach((name, i) => {
-                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1, 30, 32][i]); g(6, 'CONTINUOUS');
+                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1, 30, 32, 8][i]); g(6, 'CONTINUOUS');
             });
             g(0, 'ENDTAB'); g(0, 'ENDSEC');
 
@@ -28071,7 +28454,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: '2613f65-preview',
+            buildId: 'b50c92d-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -28081,7 +28464,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть, не рёбра линиями; откос верхней площадки обходит углы нижней; переход насыпь→выемка от пересечения с землёй.',
+                '2026.08.13: слои КДО под площадкой; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть; откос верхней площадки обходит углы нижней.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',

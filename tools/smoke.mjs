@@ -1420,6 +1420,37 @@ async function checkSlopeToTerrain(page) {
                 `замыкание должно быть флагом, без повторной вершины`
             );
         }
+        const kdo = await page.evaluate((id) => {
+            const D = window.BimLvaDebug;
+            const applied = D.setPadKdo(id, [
+                { name: 'Покрытие', thickness: 0.10, color: '#111111' },
+                { name: 'Основание', thickness: 0.20, color: '#888888' }
+            ]);
+            const dxf = D.slopeDxfPreview(id) || '';
+            return {
+                count: applied?.count,
+                totalH: applied?.totalH,
+                totalV: applied?.totalV,
+                v0: applied?.layers?.[0]?.volume,
+                v1: applied?.layers?.[1]?.volume,
+                faces0: applied?.layers?.[0]?.faces,
+                dxfKdo: /LVA_KDO/.test(dxf),
+                dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length
+            };
+        }, pad.res.id);
+        // Квадрат 4×4: объём = 16 × толщина. Слои — тела, не плёнка.
+        if (kdo.count !== 2 || Math.abs(kdo.totalH - 0.3) > 1e-9) {
+            problems.push(`откосы: КДО слоёв ${kdo.count} / высота ${kdo.totalH} — ждали 2 сл. на 0.30 м`);
+        }
+        if (Math.abs((kdo.v0 || 0) - 1.6) > 1e-6 || Math.abs((kdo.v1 || 0) - 3.2) > 1e-6) {
+            problems.push(`откосы: КДО объёмы ${kdo.v0} / ${kdo.v1} м³ вместо 1.6 / 3.2`);
+        }
+        if (!(kdo.faces0 > 0)) {
+            problems.push(`откосы: слой КДО без граней (${kdo.faces0})`);
+        }
+        if (!kdo.dxfKdo || kdo.dxfPolyface !== 3) {
+            problems.push(`откосы: DXF КДО слой ${kdo.dxfKdo}, сетей ${kdo.dxfPolyface} (ждали 1 TIN + 2 слоя)`);
+        }
     }
 
     // Таблица площадок — как список полилиний: строка с именем, цветом, площадью
