@@ -4859,7 +4859,7 @@
                     afterName: after ? after.args[2] : null,
                     beforeClass: before.className,
                     afterClass: after ? after.className : null,
-                    entities: mod.ifcIndex.index.size,
+                    entities: mod.ifcIndex.slotById.size,
                     edited: !!mod.edited,
                     text: exportIfcModelText(mod)
                 };
@@ -12090,28 +12090,88 @@
             return result;
         }
 
+        /**
+         * Текстовый индекс IFC: где какая сущность лежит в файле.
+         *
+         * Храним ОДИН исходный текст плюс смещения в символах, а не массив
+         * строк. Причина измерена: `split()` в V8 не копирует куски, а делает
+         * «срезы», ссылающиеся на исходную строку. То есть массив из 730 тысяч
+         * строк удерживал и себя (~64 МБ на файле АР), и весь исходный текст
+         * (~82 МБ), который иначе можно было бы отпустить. Смещения в
+         * типизированных массивах занимают на порядок меньше и ничего не
+         * удерживают сверх самого текста.
+         *
+         * Формат: { text, ids, starts, ends, slotById, dataEndPos }
+         * `starts`/`ends` — позиции первого символа сущности и символа за её
+         * точкой с запятой. `slotById` переводит номер сущности в её слот.
+         */
         function indexIfcText(rawText) {
-            const lines = rawText.split(/\r\n|\n|\r/);
-            const index = new Map();
-            let dataEndLine = -1, inData = false;
-            for (let i = 0; i < lines.length; i++) {
-                if (/^\s*DATA\s*;\s*$/i.test(lines[i])) { inData = true; continue; }
-                if (inData && /^\s*ENDSEC\s*;\s*$/i.test(lines[i])) { dataEndLine = i; break; }
-                if (!inData) continue;
-                const match = lines[i].match(/^\s*#(\d+)\s*=/);
-                if (!match) continue;
-                let end = i;
-                while (end < lines.length - 1 && !/;\s*$/.test(lines[end])) end++;
-                index.set(parseInt(match[1], 10), { start: i, end });
-                i = end;
+            const text = rawText;
+            const starts = [];
+            const ends = [];
+            const ids = [];
+            const slotById = new Map();
+
+            // Ищем начала сущностей «#N=» построчно по позициям, не разрезая текст
+            const re = /(^|[\r\n])\s*#(\d+)\s*=/g;
+            const dataAt = /(^|[\r\n])\s*DATA\s*;/i.exec(text);
+            const dataFrom = dataAt ? dataAt.index + dataAt[0].length : 0;
+            re.lastIndex = dataFrom;
+
+            let m;
+            while ((m = re.exec(text)) !== null) {
+                const from = m.index + (m[1] ? m[1].length : 0);
+                // Конец сущности — первая «;» вне строковой литеры
+                let i = re.lastIndex;
+                let inStr = false;
+                let end = -1;
+                for (; i < text.length; i++) {
+                    const c = text[i];
+                    if (inStr) {
+                        if (c === "'") {
+                            if (text[i + 1] === "'") i++;
+                            else inStr = false;
+                        }
+                        continue;
+                    }
+                    if (c === "'") { inStr = true; continue; }
+                    if (c === ';') { end = i + 1; break; }
+                }
+                if (end < 0) break;
+                const id = parseInt(m[2], 10);
+                slotById.set(id, ids.length);
+                ids.push(id);
+                starts.push(from);
+                ends.push(end);
+                re.lastIndex = end;
             }
-            return { lines, index, dataEndLine };
+
+            // Где кончается DATA — туда дописываются новые сущности
+            const endSec = /(^|[\r\n])\s*ENDSEC\s*;/i.exec(text.slice(dataFrom));
+            const dataEndPos = endSec ? dataFrom + endSec.index + (endSec[1] ? endSec[1].length : 0) : text.length;
+
+            return {
+                text,
+                ids: Int32Array.from(ids),
+                starts: Int32Array.from(starts),
+                ends: Int32Array.from(ends),
+                slotById,
+                dataEndPos,
+                get size() { return this.slotById.size; }
+            };
+        }
+
+        /** Текст одной сущности целиком, по её слоту. */
+        function ifcEntityText(idx, slot) {
+            return idx.text.slice(idx.starts[slot], idx.ends[slot]);
         }
 
         function getEntityParts(modData, expressID) {
-            const span = modData.ifcIndex && modData.ifcIndex.index.get(expressID);
-            if (!span) return null;
-            const full = modData.ifcIndex.lines.slice(span.start, span.end + 1).join(' ');
+            const idx = modData.ifcIndex;
+            if (!idx) return null;
+            const slot = idx.slotById.get(expressID);
+            if (slot === undefined) return null;
+            const full = ifcEntityText(idx, slot);
             const eq = full.indexOf('=');
             const start = full.indexOf('(', eq);
             const end = full.lastIndexOf(')');
@@ -12121,7 +12181,8 @@
             return {
                 className: classMatch[1].toUpperCase(),
                 args: splitStepArgs(full.slice(start + 1, end)),
-                span
+                // span в символах — им пользуется правка при пересборке текста
+                span: { start: idx.starts[slot], end: idx.ends[slot], slot }
             };
         }
 
@@ -12154,54 +12215,58 @@
                 },
                 append(line) { appended.push(line); },
                 deleteEntity(id) {
-                    if (!modData.ifcIndex.index.has(id)) return false;
+                    if (!modData.ifcIndex.slotById.has(id)) return false;
                     deleted.add(id);
                     changed.delete(id);
                     return true;
                 },
                 commit() {
+                    const idx = modData.ifcIndex;
+                    const spanOf = (id) => {
+                        const slot = idx.slotById.get(id);
+                        return slot === undefined
+                            ? null
+                            : { start: idx.starts[slot], end: idx.ends[slot] };
+                    };
                     const operations = [
                         ...[...changed.entries()].map(([id, item]) => ({
-                            id, span: item.span,
+                            span: item.span,
                             line: `#${id}=${item.className}(${item.args.join(',')});`
                         })),
-                        ...[...deleted].map(id => ({
-                            id,
-                            span: modData.ifcIndex.index.get(id),
-                            line: null
-                        }))
+                        ...[...deleted].map(id => ({ span: spanOf(id), line: null }))
                     ].filter(operation => operation.span);
-                    operations
-                        .sort((a, b) => b.span.start - a.span.start)
-                        .forEach(operation => {
-                            modData.ifcIndex.lines.splice(
-                                operation.span.start,
-                                operation.span.end - operation.span.start + 1,
-                                ...(operation.line == null ? [] : [operation.line])
-                            );
-                        });
-                    if (operations.length) {
-                        modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
+
+                    if (operations.length || appended.length) {
+                        // Пересобираем текст срезами: с конца к началу, чтобы
+                        // ранее посчитанные смещения не поехали.
+                        let text = idx.text;
+                        operations
+                            .sort((a, b) => b.span.start - a.span.start)
+                            .forEach((operation) => {
+                                text = text.slice(0, operation.span.start)
+                                    + (operation.line == null ? '' : operation.line + '\n')
+                                    + text.slice(operation.span.end).replace(/^\r?\n/, '');
+                            });
+                        if (appended.length) {
+                            const at = idx.dataEndPos;
+                            text = text.slice(0, at) + appended.join('\n') + '\n' + text.slice(at);
+                        }
+                        modData.ifcIndex = indexIfcText(text);
+                        modData.edited = true;
                     }
-                    if (appended.length) {
-                        const at = modData.ifcIndex.dataEndLine;
-                        modData.ifcIndex.lines.splice(at < 0 ? modData.ifcIndex.lines.length : at, 0, ...appended);
-                        modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
-                    }
-                    if (operations.length || appended.length) modData.edited = true;
                 }
             };
         }
 
         function getMaxExpressId(modData) {
             let max = 0;
-            for (const id of modData.ifcIndex.index.keys()) if (id > max) max = id;
+            for (const id of modData.ifcIndex.slotById.keys()) if (id > max) max = id;
             return max;
         }
 
         function getIfcIdsByClass(modData, className) {
             const result = [];
-            for (const expressID of modData.ifcIndex.index.keys()) {
+            for (const expressID of modData.ifcIndex.slotById.keys()) {
                 const entity = getEntityParts(modData, expressID);
                 if (entity && entity.className === className) result.push(expressID);
             }
@@ -12218,7 +12283,7 @@
         }
 
         function normalizeIfcSpatialStructure(modData, options) {
-            const schemaLine = modData.ifcIndex.lines.find(line => /FILE_SCHEMA/i.test(line)) || '';
+            const schemaLine = (modData.ifcIndex.text.match(/FILE_SCHEMA[^;]*;/i) || [''])[0];
             if (!/IFC4/i.test(schemaLine)) {
                 throw new Error(`${modData.filename}: автоматическая нормализация поддерживает IFC4/IFC4X3.`);
             }
@@ -24113,7 +24178,7 @@ ${componentXml || '    '}
 
         /** Текст IFC для выгрузки. Отдельно от кнопки — чтобы его мог проверить тест. */
         function exportIfcModelText(modData) {
-            return modData.ifcIndex ? modData.ifcIndex.lines.join('\n') : '';
+            return modData.ifcIndex ? modData.ifcIndex.text : '';
         }
 
         function downloadEditedIfcModels() {
@@ -24158,7 +24223,7 @@ ${componentXml || '    '}
 
         function buildMergedIfcText(models, combinedFileName) {
             models.forEach(modData => {
-                const schemaLine = modData.ifcIndex.lines.find(line => /FILE_SCHEMA/i.test(line)) || '';
+                const schemaLine = (modData.ifcIndex.text.match(/FILE_SCHEMA[^;]*;/i) || [''])[0];
                 if (!/IFC4/i.test(schemaLine)) {
                     throw new Error(`${modData.filename}: объединение поддерживает только схему IFC4/IFC4X3.`);
                 }
@@ -24186,7 +24251,7 @@ ${componentXml || '    '}
                 const isMaster = index === 0;
                 const oldProjectNewID = projectOldID != null ? projectOldID + offset : null;
 
-                for (const oldId of modData.ifcIndex.index.keys()) {
+                for (const oldId of modData.ifcIndex.slotById.keys()) {
                     if (!isMaster && oldId === projectOldID) continue;
                     const entity = getEntityParts(modData, oldId);
                     if (!entity) continue;
