@@ -1427,39 +1427,45 @@ async function checkSlopeToTerrain(page) {
                 { name: 'Основание', thickness: 0.20, color: '#888888' }
             ]);
             const dxf = D.slopeDxfPreview(applied?.id || id) || '';
-            const m = 1.5;
-            const areaAt = (h) => {
-                const s = 4 + 2 * m * h;
-                return s * s;
-            };
-            const prism = (h0, h1) => {
-                const a0 = areaAt(h0), a1 = areaAt(h1);
-                return (h1 - h0) / 3 * (a0 + a1 + Math.sqrt(a0 * a1));
+            const southY = (ring) => {
+                const pts = (ring || []).filter((p) => p.x > 20.5 && p.x < 23.5);
+                if (!pts.length) return null;
+                return Math.min(...pts.map((p) => p.y));
             };
             return {
                 count: applied?.count,
                 totalH: applied?.totalH,
                 v0: applied?.layers?.[0]?.volume,
                 v1: applied?.layers?.[1]?.volume,
-                want0: prism(0, 0.10),
-                want1: prism(0.10, 0.30),
                 flare0: applied?.layers?.[0]?.flareBot,
                 flare1: applied?.layers?.[1]?.flareBot,
                 faces0: applied?.layers?.[0]?.faces,
                 meanExit: applied?.meanExit,
+                south0: southY(D.kdoRing(applied?.id || id, 0)),
+                south10: southY(D.kdoRing(applied?.id || id, 0.10)),
+                south30: southY(D.kdoRing(applied?.id || id, 0.30)),
                 dxfKdo: /LVA_KDO/.test(dxf),
                 dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length
             };
         }, pad.res.id);
-        // Квадрат 4×4, 1:1.5: слои внутри откоса, уширение низа = m·h.
+        // Квадрат 4×4, 1:1.5: бока КДО на тех же лучах, что откос (южная бровка y=15).
         if (kdo.count !== 2 || Math.abs(kdo.totalH - 0.3) > 1e-9) {
             problems.push(`откосы: КДО слоёв ${kdo.count} / высота ${kdo.totalH} — ждали 2 сл. на 0.30 м`);
         }
         if (Math.abs((kdo.flare0 || 0) - 0.15) > 1e-9 || Math.abs((kdo.flare1 || 0) - 0.45) > 1e-9) {
             problems.push(`откосы: КДО уширение низа ${kdo.flare0} / ${kdo.flare1} вместо 0.15 / 0.45`);
         }
-        if (Math.abs((kdo.v0 || 0) - kdo.want0) > 1e-6 || Math.abs((kdo.v1 || 0) - kdo.want1) > 1e-6) {
-            problems.push(`откосы: КДО объёмы ${kdo.v0} / ${kdo.v1} м³ вместо ${kdo.want0} / ${kdo.want1}`);
+        if (!(kdo.v0 > 1.6 && kdo.v0 < 1.9) || !(kdo.v1 > 3.2 && kdo.v1 < 4.6)) {
+            problems.push(`откосы: КДО объёмы ${kdo.v0} / ${kdo.v1} м³ — ждали больше вертикальных 1.6/3.2 и около призмоида`);
+        }
+        if (Math.abs((kdo.south0 ?? 0) - 15) > 0.04) {
+            problems.push(`откосы: КДО верх южной бровки y=${kdo.south0} вместо 15`);
+        }
+        if (Math.abs((kdo.south10 ?? 0) - 14.85) > 0.04) {
+            problems.push(`откосы: КДО на 0.10 м y=${kdo.south10} вместо 14.85 (тот же 1:1.5, что откос)`);
+        }
+        if (Math.abs((kdo.south30 ?? 0) - 14.55) > 0.04) {
+            problems.push(`откосы: КДО на 0.30 м y=${kdo.south30} вместо 14.55`);
         }
         if (!(kdo.faces0 > 0)) {
             problems.push(`откосы: слой КДО без граней (${kdo.faces0})`);
@@ -1467,7 +1473,7 @@ async function checkSlopeToTerrain(page) {
         if (!kdo.dxfKdo || kdo.dxfPolyface !== 3) {
             problems.push(`откосы: DXF КДО слой ${kdo.dxfKdo}, сетей ${kdo.dxfPolyface} (ждали 1 TIN + 2 слоя)`);
         }
-        // Откос с бровки верха: H=2, 1:1.5 → d=3.0, не от низа одежды.
+        // Откос с бровки верха: H=2, 1:1.5 → d=3.0.
         if (!(Math.abs((kdo.meanExit || 0) - 3.0) < 0.2)) {
             problems.push(`откосы: КДО откос с бровки d=${kdo.meanExit} вместо ≈3.0`);
         }
