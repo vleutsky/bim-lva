@@ -2809,7 +2809,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 8fda122</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d12203b</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -3774,7 +3774,7 @@
                 налезать друг на друга — это не вычищается. Где поверхность не
                 найдена или откос не дотянулся за максимальный вылет — участок
                 пропускается.
-                Готовый TIN уходит в Civil 3D как DXF (одна 3D-сеть на площадку,
+                Готовый TIN уходит в Civil 3D как DXF (один 3D-солид на площадку,
                 без контурных линий) или LandXML (Surface).
             </div>
             <div class="prop small"><div class="k">Линия (бровка)</div><select class="editInput" id="slopeSelect"></select></div>
@@ -3794,7 +3794,7 @@
             <div class="prop small"><div class="k">Цвет площадки</div><input type="color" class="polyline-color" id="slopePadColor" value="#d4a05a" title="Заливка середины замкнутого контура — видна сверху поверх рельефа"></div>
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
-                <button class="btn" id="slopeExportDxf" title="Площадка и откосы одной 3D-сетью (POLYFACE MESH), координаты абсолютные, единицы — метры. Civil и nanoCAD открывают R12">⬇ DXF</button>
+                <button class="btn" id="slopeExportDxf" title="Площадка и откосы одним 3D-солидом (3DSOLID, DXF R2010), координаты абсолютные, единицы — метры. Civil 2018+ и nanoCAD открывают">⬇ DXF</button>
                 <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
                 <button class="btn" id="slopeOpenTable" title="Таблица всех построенных площадок">▣ Таблица</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
@@ -5362,7 +5362,7 @@
                 return sm ? buildSlopeLandXml(sm) : null;
             },
             /**
-             * DXF одной площадки без скачивания: полигональная сеть (не рёбра
+             * DXF одной площадки без скачивания: один 3DSOLID (не рёбра
              * отдельными 3D-полилиниями). id построения или 0/null — последнее.
              */
             slopeDxfPreview(id) {
@@ -9004,58 +9004,206 @@
         }
 
         /**
-         * Площадка в DXF — одна POLYFACE MESH на построение (флаг 70=64),
-         * а не набор 3D-полилиний по рёбрам. R12 не умеет 3DSOLID, сеть из
-         * сваренных треугольников TIN — ближайшее к «единому 3D-телу».
-         * Внутренние рёбра прячем (отрицательный индекс вершины), чтобы в
-         * каркасе не читалась сетка треугольников.
+         * ACIS SAT 700 из треугольной сети — содержимое 3DSOLID (DXF R2000…R2010).
+         * Замкнутая сеть → солид, открытая (TIN откоса) → оболочка double-sided.
+         * Записи как у ezdxf.body_from_mesh.
          */
-        function tinToPolyfaceDxf(g, n, tin, layer) {
-            if (!tin?.faces?.length || !tin.points?.length) return 0;
-            const layerName = layer || 'LVA_SLOPE';
-            const absPts = tin.points.map((p) => scenePointToAbs(p));
-            const edgeKey = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
+        function satNum(v) {
+            if (!Number.isFinite(v)) return '0';
+            const x = Math.abs(v) < 1e-15 ? 0 : v;
+            return String(x);
+        }
+
+        function satEncryptLine(text) {
+            let s = '';
+            for (let i = 0; i < text.length; i++) {
+                const c = text.charCodeAt(i);
+                if (c === 0x20) s += ' ';
+                else if (c === 0x5F) s += '@';
+                else if (c === 0x40) s += '_';
+                else if (c >= 0x41 && c <= 0x5E) {
+                    s += String.fromCharCode(0x5E - (c - 0x41));
+                    if (c === 0x41) s += ' ';
+                } else s += String.fromCharCode(c ^ 0x5F);
+            }
+            return s;
+        }
+
+        function acisSatFromMesh(points, faces) {
+            if (!points?.length || !faces?.length) return null;
+            const tris = [];
+            faces.forEach((f) => {
+                if (!f || f.length < 3) return;
+                const a = points[f[0]], b = points[f[1]], c = points[f[2]];
+                if (!a || !b || !c) return;
+                const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+                const vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+                const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                const nl = Math.hypot(nx, ny, nz), ul = Math.hypot(ux, uy, uz);
+                if (!(nl > 1e-12) || !(ul > 1e-12)) return;
+                tris.push({
+                    i: [f[0], f[1], f[2]],
+                    o: a,
+                    n: { x: nx / nl, y: ny / nl, z: nz / nl },
+                    u: { x: ux / ul, y: uy / ul, z: uz / ul }
+                });
+            });
+            if (!tris.length) return null;
+            const ek = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
             const edgeUse = new Map();
-            tin.faces.forEach((f) => {
-                for (let i = 0; i < 3; i++) {
-                    const k = edgeKey(f[i], f[(i + 1) % 3]);
-                    edgeUse.set(k, (edgeUse.get(k) || 0) + 1);
+            tris.forEach((t) => {
+                for (let k = 0; k < 3; k++) {
+                    const key = ek(t.i[k], t.i[(k + 1) % 3]);
+                    edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
                 }
             });
-            g(0, 'POLYLINE'); g(8, layerName); g(66, 1);
-            g(70, 64);
-            g(71, absPts.length);
-            g(72, tin.faces.length);
-            absPts.forEach((p) => {
-                g(0, 'VERTEX'); g(8, layerName);
-                g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
-                g(70, 192);
-            });
-            tin.faces.forEach((f) => {
-                g(0, 'VERTEX'); g(8, layerName);
-                g(10, 0); g(20, 0); g(30, 0);
-                g(70, 128);
-                for (let i = 0; i < 3; i++) {
-                    const a = f[i];
-                    const b = f[(i + 1) % 3];
-                    const hidden = (edgeUse.get(edgeKey(a, b)) || 0) > 1;
-                    g(71 + i, hidden ? -(a + 1) : (a + 1));
+            let open = false;
+            edgeUse.forEach((c) => { if (c !== 2) open = true; });
+
+            const recs = [];
+            const add = (type) => {
+                recs.push({ type, tok: [] });
+                return recs.length - 1;
+            };
+            const P = (i) => (i == null || i < 0 ? '$-1' : `$${i}`);
+            const body = add('body'), lump = add('lump'), shell = add('shell');
+            const vtxOf = new Map();
+            const vertAt = (idx) => {
+                if (vtxOf.has(idx)) return vtxOf.get(idx);
+                const pt = add('point');
+                const vt = add('vertex');
+                recs[pt].tok = ['$-1', satNum(points[idx].x), satNum(points[idx].y), satNum(points[idx].z)];
+                recs[vt].tok = ['$-1', P(-1), P(pt)];
+                vtxOf.set(idx, vt);
+                return vt;
+            };
+            const edges = new Map();
+            const firstCoedge = new Map();
+            tris.forEach((t) => {
+                const plane = add('plane-surface');
+                recs[plane].tok = [
+                    '$-1',
+                    satNum(t.o.x), satNum(t.o.y), satNum(t.o.z),
+                    satNum(t.n.x), satNum(t.n.y), satNum(t.n.z),
+                    satNum(t.u.x), satNum(t.u.y), satNum(t.u.z),
+                    'forward_v', 'I', 'I', 'I', 'I'
+                ];
+                const face = add('face');
+                const loop = add('loop');
+                const cids = [];
+                for (let k = 0; k < 3; k++) {
+                    const i1 = t.i[k], i2 = t.i[(k + 1) % 3];
+                    const cid = add('coedge');
+                    cids.push(cid);
+                    const key = ek(i1, i2);
+                    let sense = 'forward';
+                    let e1 = i1, e2 = i2;
+                    if (e1 > e2) { sense = 'reversed'; const sw = e1; e1 = e2; e2 = sw; }
+                    let eid = edges.get(key);
+                    if (eid == null) {
+                        const curve = add('straight-curve');
+                        const p1 = points[e1], p2 = points[e2];
+                        const dx = p2.x - p1.x, dy = p2.y - p1.y, dz = p2.z - p1.z;
+                        const len = Math.hypot(dx, dy, dz) || 1;
+                        recs[curve].tok = [
+                            '$-1',
+                            satNum(p1.x), satNum(p1.y), satNum(p1.z),
+                            satNum(dx / len), satNum(dy / len), satNum(dz / len),
+                            'I', 'I'
+                        ];
+                        eid = add('edge');
+                        const v1 = vertAt(e1), v2 = vertAt(e2);
+                        recs[eid].tok = [
+                            '$-1', P(v1), '0', P(v2), satNum(len),
+                            P(cid), P(curve), 'forward', '@7', 'unknown'
+                        ];
+                        if (recs[v1].tok[1] === '$-1') recs[v1].tok[1] = P(eid);
+                        if (recs[v2].tok[1] === '$-1') recs[v2].tok[1] = P(eid);
+                        edges.set(key, eid);
+                        firstCoedge.set(key, cid);
+                        recs[cid].tok = ['$-1', null, null, '$-1', P(eid), sense, null, '$-1'];
+                    } else {
+                        const partner = firstCoedge.get(key);
+                        recs[cid].tok = ['$-1', null, null, P(partner), P(eid), sense, null, '$-1'];
+                        if (partner != null && recs[partner].tok) recs[partner].tok[3] = P(cid);
+                    }
                 }
-                g(74, 0);
+                cids.forEach((cid, k) => {
+                    recs[cid].tok[1] = P(cids[(k + 1) % 3]);
+                    recs[cid].tok[2] = P(cids[(k + 2) % 3]);
+                    recs[cid].tok[6] = P(loop);
+                });
+                recs[loop].tok = ['$-1', '$-1', P(cids[0]), P(face)];
+                recs[face].tok = [
+                    '$-1', '$-1', P(loop), P(shell), '$-1', P(plane),
+                    'forward', open ? 'double' : 'single'
+                ];
+                if (open) recs[face].tok.push('out');
+                t._face = face;
             });
-            g(0, 'SEQEND'); g(8, layerName);
+            let prevFace = -1;
+            tris.forEach((t) => {
+                if (prevFace >= 0) recs[prevFace].tok[1] = P(t._face);
+                prevFace = t._face;
+            });
+            recs[body].tok = ['$-1', P(lump), '$-1', '$-1'];
+            recs[lump].tok = ['$-1', '$-1', P(shell), P(body)];
+            recs[shell].tok = ['$-1', '$-1', '$-1', P(tris[0]._face), '$-1', P(lump)];
+            const date = 'Thu Aug 13 12:00:00 2026';
+            const product = 'BIM.LVA Composer';
+            const acis = 'ACIS 32.0 NT';
+            const header = [
+                '700 0 1 0 ',
+                `@${product.length} ${product} @${acis.length} ${acis} @${date.length} ${date} `,
+                '1000 9.9999999999999995e-007 1e-010 '
+            ];
+            const lines = recs.map((r, i) => `${r.type} $-1 ${i} ${r.tok.join(' ')} #`);
+            lines.push('End-of-ACIS-data ');
+            return header.concat(lines);
+        }
+
+        function writeDxfSatLines(g, satLines) {
+            satLines.forEach((raw) => {
+                const line = satEncryptLine(String(raw).replace(/\n/g, '').replace(/\s+$/g, ''));
+                g(1, line.slice(0, 255));
+                for (let i = 255; i < line.length; i += 255) g(3, line.slice(i, i + 255));
+            });
+        }
+
+        /**
+         * Площадка / слой КДО / тело по оси — один 3DSOLID (SAT 700), не POLYFACE.
+         * Файл DXF R2010: Civil 2018+ / nanoCAD открывают; R2013+ телам нужен SAB.
+         */
+        function tinToSolidDxf(g, tin, layer, allocHandle, ownerHandle) {
+            if (!tin?.faces?.length || !tin.points?.length) return 0;
+            const absTin = {
+                points: tin.points.map((p) => scenePointToAbs(p)),
+                faces: tin.faces
+            };
+            const sat = acisSatFromMesh(absTin.points, absTin.faces);
+            if (!sat) return 0;
+            const layerName = layer || 'LVA_SLOPE';
+            g(0, '3DSOLID');
+            g(5, allocHandle());
+            if (ownerHandle) g(330, ownerHandle);
+            g(100, 'AcDbEntity');
+            g(8, layerName);
+            g(100, 'AcDbModelerGeometry');
+            g(70, 1);
+            writeDxfSatLines(g, sat);
+            g(100, 'AcDb3dSolid');
             return tin.faces.length;
         }
 
-        function slopeTinToPolyfaceDxf(g, n, sm) {
-            return tinToPolyfaceDxf(g, n, sm?.tin, 'LVA_SLOPE');
+        function slopeTinToSolidDxf(g, sm, allocHandle, ownerHandle) {
+            return tinToSolidDxf(g, sm?.tin, 'LVA_SLOPE', allocHandle, ownerHandle);
         }
 
-        function kdoLayersToDxf(g, n, only) {
+        function kdoLayersToDxf(g, only, allocHandle, ownerHandle) {
             let faces = 0;
             slopeModelsForDxf(only).forEach((sm) => {
                 (sm.kdoMeshes || []).forEach((mesh) => {
-                    faces += tinToPolyfaceDxf(g, n, weldTin(slopeMeshTriangles(mesh)), 'LVA_KDO');
+                    faces += tinToSolidDxf(g, weldTin(slopeMeshTriangles(mesh)), 'LVA_KDO', allocHandle, ownerHandle);
                 });
             });
             return faces;
@@ -9066,12 +9214,12 @@
             return Array.isArray(only) ? only : [only];
         }
 
-        function slopeTinFacesToDxfPairs(g, n, only) {
+        function slopeTinFacesToDxfPairs(g, only, allocHandle, ownerHandle) {
             let faces = 0;
             slopeModelsForDxf(only).forEach((sm) => {
-                faces += slopeTinToPolyfaceDxf(g, n, sm);
+                faces += slopeTinToSolidDxf(g, sm, allocHandle, ownerHandle);
             });
-            faces += kdoLayersToDxf(g, n, only);
+            faces += kdoLayersToDxf(g, only, allocHandle, ownerHandle);
             return faces;
         }
 
@@ -9115,10 +9263,10 @@
             const kdoN = list.reduce((n, sm) => n + (sm.kdoMeshes?.length || 0), 0);
             notify(
                 list.length === 1
-                    ? `DXF площадки «${target.name}»: 3D-сеть, ${faces} треугольников` +
+                    ? `DXF площадки «${target.name}»: 3D-солид, ${faces} треугольников` +
                         (kdoN ? `, КДО ${kdoN} сл.` : '') +
                         `, без контурных линий. Координаты мировые, метры.`
-                    : `DXF: ${list.length} площадок, ${faces} треугольников 3D-сети` +
+                    : `DXF: ${list.length} площадок, ${faces} треугольников 3D-солида` +
                         (kdoN ? `, КДО ${kdoN} сл.` : '') +
                         `, без контурных линий.`
             );
@@ -9548,7 +9696,7 @@
                 const dxf = document.createElement('button');
                 dxf.className = 'btn';
                 dxf.textContent = '⬇ DXF';
-                dxf.title = 'Выгрузить эту площадку одной 3D-сетью, без контурных линий';
+                dxf.title = 'Выгрузить эту площадку одним 3D-солидом, без контурных линий';
                 dxf.addEventListener('click', () => exportSlopeDxf(sm));
 
                 const xml = document.createElement('button');
@@ -11434,78 +11582,196 @@
         }
 
         /**
-         * ASCII DXF R12: HEADER с единицами (метры), TABLES со слоями и ENTITIES.
-         * R12 намеренно: его читают все, включая старые версии Civil и nanoCAD,
-         * а LWPOLYLINE из R13+ там уже не откроется.
-         * Координаты — абсолютные, иначе файл ляжет у нуля, а не на площадке.
+         * ASCII DXF R2010 (AC1024) — самая новая версия, где 3DSOLID ещё SAT.
+         * R2013+ (AC1027) кладёт тела бинарным SAB в ACDSDATA; этого не пишем.
+         * DWG не пишем: формат закрытый, dwgdxf только DWG→DXF.
+         * Полилинии — POLYLINE (не LWPOLYLINE), координаты абсолютные, метры.
          */
         function buildDxf(polylines, pins, onlySlope) {
             const out = [];
             const g = (code, value) => { out.push(String(code)); out.push(String(value)); };
             const n = (v) => (Math.round(v * 1e6) / 1e6).toFixed(6);
+            let nextHandle = 0x20;
+            const allocHandle = () => (nextHandle++).toString(16).toUpperCase();
+            const ltypeH = allocHandle();
+            const layers = ['0', 'LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO'];
+            const layerColors = [7, 3, 5, 1, 30, 32, 8];
+            const layerH = Object.fromEntries(layers.map((name) => [name, allocHandle()]));
+            const styleH = allocHandle();
+            const appidH = allocHandle();
+            const dimstyleH = allocHandle();
+            const vportH = allocHandle();
+            const blockRecModel = allocHandle();
+            const blockRecPaper = allocHandle();
+            const blockModel = allocHandle();
+            const blockPaper = allocHandle();
+            const dictH = allocHandle();
+            const dictGroupH = allocHandle();
+            const dictLayoutH = allocHandle();
+            const layoutModelH = allocHandle();
+            const layoutPaperH = allocHandle();
+            const tblVport = allocHandle();
+            const tblLtype = allocHandle();
+            const tblLayer = allocHandle();
+            const tblStyle = allocHandle();
+            const tblView = allocHandle();
+            const tblUcs = allocHandle();
+            const tblAppid = allocHandle();
+            const tblDimstyle = allocHandle();
+            const tblBlockRec = allocHandle();
+            const endblkModelH = allocHandle();
+            const endblkPaperH = allocHandle();
 
-            g(0, 'SECTION'); g(2, 'HEADER');
-            g(9, '$ACADVER'); g(1, 'AC1009');
-            g(9, '$INSUNITS'); g(70, 6);            // 6 = метры
-            g(9, '$MEASUREMENT'); g(70, 1);          // метрическая
-            g(0, 'ENDSEC');
+            const ent = [];
+            const ge = (code, value) => { ent.push(String(code)); ent.push(String(value)); };
+            const entityOpen = (type, layer) => {
+                ge(0, type);
+                ge(5, allocHandle());
+                ge(330, blockRecModel);
+                ge(100, 'AcDbEntity');
+                ge(8, layer);
+            };
 
-            const layers = ['LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO'];
-            g(0, 'SECTION'); g(2, 'TABLES');
-            g(0, 'TABLE'); g(2, 'LAYER'); g(70, layers.length);
-            layers.forEach((name, i) => {
-                g(0, 'LAYER'); g(2, name); g(70, 0); g(62, [3, 5, 1, 30, 32, 8][i]); g(6, 'CONTINUOUS');
-            });
-            g(0, 'ENDTAB'); g(0, 'ENDSEC');
-
-            g(0, 'SECTION'); g(2, 'ENTITIES');
             const skipPolyIds = slopeDerivedPolylineIds();
             polylines.forEach((poly) => {
                 if (skipPolyIds.has(poly.id)) return;
                 const is3d = poly.kind === '3d';
                 const layer = is3d ? 'LVA_3D' : 'LVA_2D';
-                // У замкнутого контура замыкание задаётся флагом (бит 1),
-                // а не повторной вершиной.
                 const { verts } = buildDxfPolylineVertices(poly);
                 if (!verts.length) return;
-                g(0, 'POLYLINE'); g(8, layer); g(66, 1);
-                g(70, (is3d ? 8 : 0) | (poly.closed ? 1 : 0));
-                g(10, 0); g(20, 0); g(30, is3d ? 0 : n(verts[0].z));
+                entityOpen('POLYLINE', layer);
+                ge(66, 1);
+                ge(10, 0); ge(20, 0); ge(30, is3d ? 0 : n(verts[0].z));
+                ge(70, (is3d ? 8 : 0) | (poly.closed ? 1 : 0));
                 verts.forEach((p) => {
-                    g(0, 'VERTEX'); g(8, layer);
-                    g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
-                    if (is3d) g(70, 32);             // вершина 3D-полилинии
-                    else if (p.bulge) g(42, n(p.bulge));
+                    entityOpen('VERTEX', layer);
+                    ge(10, n(p.x)); ge(20, n(p.y)); ge(30, n(p.z));
+                    if (is3d) ge(70, 32);
+                    else if (p.bulge) ge(42, n(p.bulge));
                 });
-                g(0, 'SEQEND'); g(8, layer);
+                entityOpen('SEQEND', layer);
             });
-            // Тела уходят треугольниками 3DFACE: их читает и Civil, и nanoCAD,
-            // а телесных примитивов в R12 просто нет. Площадки — отдельно
-            // полигональной сетью (одно тело на построение), не 3DFACE.
             if (onlySlope == null) {
                 sweptSolids.forEach((solid) => {
-                    const pos = solid.mesh.geometry.attributes.position;
-                    for (let i = 0; i < pos.count; i += 3) {
-                        g(0, '3DFACE'); g(8, 'LVA_SOLID');
-                        for (let k = 0; k < 3; k++) {
-                            const abs = worldPointToAbsoluteXYZ(
-                                new THREE.Vector3(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k))
-                            );
-                            g(10 + k, n(abs.x)); g(20 + k, n(abs.y)); g(30 + k, n(abs.z));
-                        }
-                        // Четвёртая точка совпадает с третьей — так пишут треугольник
-                        const last = worldPointToAbsoluteXYZ(
-                            new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2))
-                        );
-                        g(13, n(last.x)); g(23, n(last.y)); g(33, n(last.z));
-                    }
+                    tinToSolidDxf(
+                        ge,
+                        weldTin(slopeMeshTriangles(solid.mesh)),
+                        'LVA_SOLID',
+                        allocHandle,
+                        blockRecModel
+                    );
                 });
             }
-            slopeTinFacesToDxfPairs(g, n, onlySlope);
+            slopeTinFacesToDxfPairs(ge, onlySlope, allocHandle, blockRecModel);
             pins.forEach((pin) => {
-                g(0, 'POINT'); g(8, 'LVA_POINTS');
-                g(10, n(pin.abs.x)); g(20, n(pin.abs.y)); g(30, n(pin.abs.z));
+                entityOpen('POINT', 'LVA_POINTS');
+                ge(100, 'AcDbPoint');
+                ge(10, n(pin.abs.x)); ge(20, n(pin.abs.y)); ge(30, n(pin.abs.z));
             });
+
+            const handseed = (nextHandle + 8).toString(16).toUpperCase();
+            g(0, 'SECTION'); g(2, 'HEADER');
+            g(9, '$ACADVER'); g(1, 'AC1024');
+            g(9, '$ACADMAINTVER'); g(70, 6);
+            g(9, '$DWGCODEPAGE'); g(3, 'ANSI_1251');
+            g(9, '$HANDSEED'); g(5, handseed);
+            g(9, '$INSUNITS'); g(70, 6);
+            g(9, '$MEASUREMENT'); g(70, 1);
+            g(0, 'ENDSEC');
+
+            g(0, 'SECTION'); g(2, 'CLASSES');
+            g(0, 'CLASS');
+            g(1, 'ACDB3DSOLID'); g(2, 'AcDb3dSolid'); g(3, 'ObjectDBX Classes');
+            g(90, 1153); g(91, 1); g(280, 0); g(281, 1);
+            g(0, 'ENDSEC');
+
+            g(0, 'SECTION'); g(2, 'TABLES');
+            g(0, 'TABLE'); g(2, 'VPORT'); g(5, tblVport); g(100, 'AcDbSymbolTable'); g(70, 1);
+            g(0, 'VPORT'); g(5, vportH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbViewportTableRecord');
+            g(2, '*ACTIVE'); g(70, 0); g(10, 0); g(20, 0); g(11, 1); g(21, 1);
+            g(12, 0); g(22, 0); g(13, 0); g(23, 0); g(14, 10); g(24, 10); g(15, 10); g(25, 10);
+            g(16, 0); g(26, 0); g(36, 1); g(17, 0); g(27, 0); g(37, 0);
+            g(40, 50); g(41, 1.5); g(42, 50); g(43, 0); g(44, 0); g(50, 0); g(51, 0);
+            g(71, 0); g(72, 100); g(73, 1); g(74, 3); g(75, 0); g(76, 0); g(77, 0); g(78, 0);
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'LTYPE'); g(5, tblLtype); g(100, 'AcDbSymbolTable'); g(70, 1);
+            g(0, 'LTYPE'); g(5, ltypeH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLinetypeTableRecord');
+            g(2, 'CONTINUOUS'); g(70, 0); g(3, 'Solid line'); g(72, 65); g(73, 0); g(40, 0);
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'LAYER'); g(5, tblLayer); g(100, 'AcDbSymbolTable'); g(70, layers.length);
+            layers.forEach((name, i) => {
+                g(0, 'LAYER'); g(5, layerH[name]); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLayerTableRecord');
+                g(2, name); g(70, 0); g(62, layerColors[i]); g(6, 'CONTINUOUS');
+            });
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'STYLE'); g(5, tblStyle); g(100, 'AcDbSymbolTable'); g(70, 1);
+            g(0, 'STYLE'); g(5, styleH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbTextStyleTableRecord');
+            g(2, 'STANDARD'); g(70, 0); g(40, 0); g(41, 1); g(50, 0); g(71, 0); g(42, 2.5);
+            g(3, 'txt'); g(4, '');
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'VIEW'); g(5, tblView); g(100, 'AcDbSymbolTable'); g(70, 0);
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'UCS'); g(5, tblUcs); g(100, 'AcDbSymbolTable'); g(70, 0);
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'APPID'); g(5, tblAppid); g(100, 'AcDbSymbolTable'); g(70, 1);
+            g(0, 'APPID'); g(5, appidH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbRegAppTableRecord');
+            g(2, 'ACAD'); g(70, 0);
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'DIMSTYLE'); g(5, tblDimstyle); g(100, 'AcDbSymbolTable'); g(70, 1); g(100, 'AcDbDimStyleTable');
+            g(0, 'DIMSTYLE'); g(105, dimstyleH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbDimStyleTableRecord');
+            g(2, 'STANDARD'); g(70, 0);
+            g(0, 'ENDTAB');
+            g(0, 'TABLE'); g(2, 'BLOCK_RECORD'); g(5, tblBlockRec); g(100, 'AcDbSymbolTable'); g(70, 2);
+            g(0, 'BLOCK_RECORD'); g(5, blockRecModel); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
+            g(2, '*MODEL_SPACE'); g(340, layoutModelH);
+            g(0, 'BLOCK_RECORD'); g(5, blockRecPaper); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
+            g(2, '*PAPER_SPACE'); g(340, layoutPaperH);
+            g(0, 'ENDTAB');
+            g(0, 'ENDSEC');
+
+            g(0, 'SECTION'); g(2, 'BLOCKS');
+            g(0, 'BLOCK'); g(5, blockModel); g(330, blockRecModel); g(100, 'AcDbEntity'); g(8, '0');
+            g(100, 'AcDbBlockBegin'); g(2, '*MODEL_SPACE'); g(70, 0); g(10, 0); g(20, 0); g(30, 0); g(3, '*MODEL_SPACE'); g(1, '');
+            g(0, 'ENDBLK'); g(5, endblkModelH); g(330, blockRecModel); g(100, 'AcDbEntity'); g(8, '0'); g(100, 'AcDbBlockEnd');
+            g(0, 'BLOCK'); g(5, blockPaper); g(330, blockRecPaper); g(100, 'AcDbEntity'); g(8, '0');
+            g(100, 'AcDbBlockBegin'); g(2, '*PAPER_SPACE'); g(70, 0); g(10, 0); g(20, 0); g(30, 0); g(3, '*PAPER_SPACE'); g(1, '');
+            g(0, 'ENDBLK'); g(5, endblkPaperH); g(330, blockRecPaper); g(100, 'AcDbEntity'); g(8, '0'); g(100, 'AcDbBlockEnd');
+            g(0, 'ENDSEC');
+
+            g(0, 'SECTION'); g(2, 'ENTITIES');
+            out.push(...ent);
+            g(0, 'ENDSEC');
+
+            g(0, 'SECTION'); g(2, 'OBJECTS');
+            g(0, 'DICTIONARY'); g(5, dictH); g(330, 0); g(100, 'AcDbDictionary'); g(281, 1);
+            g(3, 'ACAD_GROUP'); g(350, dictGroupH);
+            g(3, 'ACAD_LAYOUT'); g(350, dictLayoutH);
+            g(0, 'DICTIONARY'); g(5, dictGroupH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
+            g(0, 'DICTIONARY'); g(5, dictLayoutH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
+            g(3, 'Model'); g(350, layoutModelH);
+            g(3, 'Layout1'); g(350, layoutPaperH);
+            const writeLayout = (handle, name, tab, blockRec) => {
+                g(0, 'LAYOUT'); g(5, handle); g(330, dictLayoutH);
+                g(100, 'AcDbPlotSettings');
+                g(1, ''); g(2, 'none'); g(4, ''); g(6, '');
+                g(40, 0); g(41, 0); g(42, 0); g(43, 0); g(44, 0); g(45, 0);
+                g(70, 688); g(72, 0); g(73, 0); g(74, 5); g(7, '');
+                g(75, 0); g(76, 0); g(77, 0); g(78, 0); g(147, 1); g(148, 0); g(149, 0);
+                g(100, 'AcDbLayout');
+                g(1, name); g(70, 1); g(71, tab);
+                g(10, 0); g(20, 0); g(11, 12); g(21, 9);
+                g(12, 0); g(22, 0); g(32, 0);
+                g(14, 0); g(24, 0); g(34, 0);
+                g(15, 0); g(25, 0); g(35, 0);
+                g(146, 0);
+                g(13, 0); g(23, 0); g(33, 0);
+                g(16, 1); g(26, 0); g(36, 0);
+                g(17, 0); g(27, 1); g(37, 0);
+                g(76, 0);
+                g(330, blockRec);
+            };
+            writeLayout(layoutModelH, 'Model', 1, blockRecModel);
+            writeLayout(layoutPaperH, 'Layout1', 2, blockRecPaper);
             g(0, 'ENDSEC');
             g(0, 'EOF');
             return out.join('\r\n') + '\r\n';
@@ -11529,7 +11795,7 @@
             const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
             notify(
                 `DXF: полилиний ${polyCount}, точек ${coordPins.length}` +
-                (padCount ? `, площадок ${padCount} (3D-сеть)` : '') +
+                (padCount ? `, площадок ${padCount} (3D-солид)` : '') +
                 `. Координаты мировые, единицы — метры.`
             );
             trackUsage('draw_export_dxf', { polylines: drawnPolylines.length, pins: coordPins.length });
@@ -29759,7 +30025,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: '8fda122-preview',
+            buildId: 'd12203b-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -29769,7 +30035,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос (d = m·Δz по нормали сечения); вырез островка: «начертить вырез» в таблице площадок (Esc замыкает контур); выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
+                '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос (d = m·Δz по нормали сечения); вырез островка: «начертить вырез» в таблице площадок (Esc замыкает контур); выемка видна поверх рельефа; площадка в DXF — один 3D-солид (R2010).',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
                 '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
