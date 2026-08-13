@@ -2808,7 +2808,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b575f4d</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 0d15707</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -5406,6 +5406,20 @@
                     || slopeModels[slopeModels.length - 1];
                 return sm ? sampleTrianglesZ(sm.padTriangles, x, y) : null;
             },
+            /** Контур КДО на глубине (м вниз от бровки) — те же лучи, что откос. */
+            kdoRing(id, depth) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                if (!sm) return null;
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                    .find((r) => r.id === sm.polylineId);
+                const padRing = rec?.closed && rec.renderPts?.length >= 4
+                    ? rec.renderPts.slice(0, -1)
+                    : null;
+                if (!padRing) return null;
+                return kdoOuterRingAtDepth(sm, padRing, Math.max(0, Number(depth) || 0));
+            },
             /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
             focusPolyline(id, how) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -7954,24 +7968,20 @@
         }
 
         /**
-         * Тело слоя внутри откоса: верх и низ — контуры с уширением m·h,
-         * бока — лофт (наклон 1:m), дыры островка — вертикальные.
+         * Тело слоя: верх/низ уже в мире (контур по лучам откоса), бока —
+         * лофт, дыры островка — вертикальные.
          */
         function makeKdoLayerMesh(topTris, botTris, topRing, botRing, holes, zTop, zBot, colorHex, name) {
             if (!(zBot > zTop)) return null;
             const positions = [];
             (topTris || []).forEach(([a, b, c]) => {
-                slopePushTri(positions, null, kdoShiftPt(a, zTop), kdoShiftPt(b, zTop), kdoShiftPt(c, zTop), null);
+                slopePushTri(positions, null, a, b, c, null);
             });
             (botTris || []).forEach(([a, b, c]) => {
-                slopePushTri(positions, null, kdoShiftPt(a, zBot), kdoShiftPt(c, zBot), kdoShiftPt(b, zBot), null);
+                slopePushTri(positions, null, a, c, b, null);
             });
             if (topRing?.length >= 3 && botRing?.length >= 3) {
-                kdoLoftRings(
-                    positions,
-                    topRing.map((p) => kdoShiftPt(p, zTop)),
-                    botRing.map((p) => kdoShiftPt(p, zBot))
-                );
+                kdoLoftRings(positions, topRing, botRing);
             }
             (holes || []).forEach((hole) => {
                 if (!hole || hole.length < 3) return;
@@ -8029,6 +8039,61 @@
             sm.kdoMeshes = [];
         }
 
+        /** Сторона откоса, по которой строим контур КДО — та, где больше насыпи. */
+        function kdoFillSide(sm) {
+            let best = null, nBest = -1;
+            (sm?.sides || []).forEach((s) => {
+                const n = (s.sections || []).filter((sec) => sec?.valid && sec.mode === 'fill').length;
+                if (n > nBest) { best = s; nBest = n; }
+            });
+            return best;
+        }
+
+        /**
+         * Точка на луче бровка→выход на глубине depth (вертикально вниз).
+         * Тот же луч, которым натянута поверхность откоса — иначе на углах
+         * параллельный offset даёт другую плоскость, чем веер сечений.
+         */
+        function kdoPointOnSlope(brow, sec, depth) {
+            if (!brow) return null;
+            const z = brow.z - depth;
+            if (!sec?.valid || sec.mode !== 'fill' || !sec.exit) {
+                return { x: brow.x, y: brow.y, z };
+            }
+            const ex = sec.exit;
+            const drop = brow.z - ex.z;
+            if (!(drop > 1e-9)) return { x: brow.x, y: brow.y, z };
+            const t = Math.max(0, Math.min(1, depth / drop));
+            return {
+                x: brow.x + t * (ex.x - brow.x),
+                y: brow.y + t * (ex.y - brow.y),
+                z: brow.z + t * (ex.z - brow.z)
+            };
+        }
+
+        function kdoOuterRingAtDepth(sm, padRing, depth) {
+            const side = kdoFillSide(sm);
+            const brows = side?.brows;
+            const sections = side?.sections;
+            if (brows?.length >= 3 && sections?.length === brows.length) {
+                const pts = [];
+                for (let i = 0; i < brows.length; i++) {
+                    const p = kdoPointOnSlope(brows[i], sections[i], depth);
+                    if (!p) continue;
+                    const prev = pts[pts.length - 1];
+                    if (prev && Math.hypot(p.x - prev.x, p.y - prev.y) < 1e-5) continue;
+                    pts.push(p);
+                }
+                if (pts.length >= 2) {
+                    const a = pts[0], b = pts[pts.length - 1];
+                    if (Math.hypot(a.x - b.x, a.y - b.y) < 1e-5) pts.pop();
+                }
+                if (pts.length >= 3) return pts;
+            }
+            const flare = kdoFlareAt(sm?.mFill, depth);
+            return offsetRingXY(padRing, flare).map((p) => kdoShiftPt(p, depth));
+        }
+
         function rebuildPadKdo(sm) {
             disposePadKdo(sm);
             const rec = drawnPolylines.find((r) => r.id === sm?.polylineId);
@@ -8044,10 +8109,10 @@
             sm.kdoMeshes = [];
             layers.forEach((layer) => {
                 const h = Math.max(0, Number(layer.thickness) || 0);
+                const topXY = kdoOuterRingAtDepth(sm, padRing, zOff);
+                const botXY = kdoOuterRingAtDepth(sm, padRing, zOff + h);
                 const flareTop = kdoFlareAt(mFill, zOff);
                 const flareBot = kdoFlareAt(mFill, zOff + h);
-                const topXY = offsetRingXY(padRing, flareTop);
-                const botXY = offsetRingXY(padRing, flareBot);
                 const aTop = Math.max(0, ringPlanArea(topXY) - holeArea);
                 const aBot = Math.max(0, ringPlanArea(botXY) - holeArea);
                 layer.volume = kdoPrismVolume(aTop, aBot, h);
@@ -8596,6 +8661,7 @@
 
             return {
                 side, mesh, cutMesh, fill, cut, sections,
+                brows: stations.map((s) => ({ x: s.brow.x, y: s.brow.y, z: s.brow.z })),
                 exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
                 skippedNoGround, skippedNotReached,
                 hinges,
@@ -9092,7 +9158,7 @@
 
             const hint = document.createElement('p');
             hint.className = 'pad-kdo-hint';
-            hint.textContent = 'Слои внутри тела площадки, вниз от верха. Уширение нижних — по откосу насыпи 1:m от бровки верха, не отдельной ступенью снаружи. Вырез — замкнутая полилиния внутри (островок под здание).';
+            hint.textContent = 'Слои внутри тела площадки. Бока КДО — те же лучи, что откос площадки (насыпь 1:m), в том числе на углах. Вырез — замкнутая полилиния внутри (островок под здание).';
             box.appendChild(hint);
 
             (sm.kdoLayers || []).forEach((layer, idx) => {
@@ -29486,7 +29552,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: 'b575f4d-preview',
+            buildId: '0d15707-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -29496,7 +29562,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: КДО внутри тела площадки — уширение нижних слоёв по откосу 1:m от бровки верха; вырез островка; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
+                '2026.08.13: КДО внутри площадки — бока по тем же лучам, что откос (и на углах); вырез островка; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
                 '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
