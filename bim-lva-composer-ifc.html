@@ -7658,6 +7658,23 @@
             return out;
         }
 
+        /** Нормаль смотрит внутрь кольца. С угла нормаль ребра идёт вдоль
+         *  соседней стороны — граница even-odd не считается внутренностью,
+         *  поэтому смотрим ещё и к центроиду. */
+        function slopeLooksInward(ring, brow, normal, look) {
+            if (!ring || ring.length < 3 || !normal) return false;
+            const x = brow.x + normal.x * look;
+            const y = brow.y + normal.y * look;
+            if (pointInRingXY(ring, x, y)) return true;
+            let cx = 0, cy = 0;
+            ring.forEach((p) => { cx += p.x; cy += p.y; });
+            cx /= ring.length;
+            cy /= ring.length;
+            const d0 = Math.hypot(brow.x - cx, brow.y - cy);
+            const d1 = Math.hypot(x - cx, y - cy);
+            return d1 < d0 - 1e-6;
+        }
+
         function slopeLerpPt(a, b, t) {
             return {
                 x: a.x + (b.x - a.x) * t,
@@ -7700,6 +7717,7 @@
             }
             const stations = [];
             const pushFanAt = (P, n0, n1, edgeIdx) => {
+                if (slopeLooksInward(ring, P, n0, 0.05) && slopeLooksInward(ring, P, n1, 0.05)) return;
                 const da = slopeSignedAngle(n0, n1);
                 if (da <= 0.08 || da >= Math.PI - 0.02) return;
                 const a0 = Math.atan2(n0.y, n0.x);
@@ -7721,14 +7739,15 @@
                         const dist = Math.hypot(wx, wy);
                         if (dist < 1e-4 || dist >= maxReach) return;
                         if (!slopeVecInFan({ x: wx, y: wy }, n0, n1)) return;
-                        let ang = Math.atan2(wy, wx) - a0;
-                        while (ang <= -Math.PI) ang += 2 * Math.PI;
-                        while (ang > Math.PI) ang -= 2 * Math.PI;
-                        if (ang <= 1e-4 || ang >= da - 1e-4) return;
+                        const wN = { x: wx / dist, y: wy / dist };
+                        let ang = slopeSignedAngle(n0, wN);
+                        if (ang < 0) ang += 2 * Math.PI;
+                        if (ang <= 1e-4) ang = 1e-3;
+                        if (ang >= da - 1e-4) ang = da - 1e-3;
                         items.push({
                             ang,
                             brow: { x: P.x, y: P.y, z: P.z },
-                            normal: { x: wx / dist, y: wy / dist },
+                            normal: wN,
                             kind: 'pad',
                             padVert: V,
                             padDist: dist,
@@ -7798,9 +7817,7 @@
                     stations.push({ ...st, section: { valid: false, reason: 'no-ground' } });
                     return;
                 }
-                if (ownPadTris && pointInRingXY(
-                    ring, brow.x + normal.x * look, brow.y + normal.y * look
-                )) {
+                if (ownPadTris && slopeLooksInward(ring, brow, normal, look)) {
                     stations.push({ ...st, section: { valid: false, reason: 'own-pad' } });
                     return;
                 }
@@ -7852,6 +7869,9 @@
                     const col = a.mode === 'cut' ? cutColor : fillColor;
                     slopePushTri(positions, colors, edgeA, exitA, exitB, col);
                     continue;
+                }
+                if (a.mode !== 'flat' && b.mode === 'flat') {
+                    hinges.push({ x: b.exit.x, y: b.exit.y, z: b.exit.z, t: 1 });
                 }
                 const modeChange = a.mode !== b.mode && a.mode !== 'flat' && b.mode !== 'flat';
                 const hinge = modeChange ? findSlopeHinge(edgeA, edgeB, sampleZ, opts.step) : null;

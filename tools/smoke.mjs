@@ -1597,7 +1597,9 @@ async function checkSlopeToTerrain(page) {
             { name: 'Откос-тест-шарнир-кольцо', closed: true }
         );
         const res = D.buildSlopeOnPolyline(id, { side: 'both', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
-        const side = (res?.sides || []).find((s) => (s.hinges || []).length) || res?.sides?.[0];
+        const side = (res?.sides || []).find((s) =>
+            (s.exits || []).some((e) => e.mode === 'fill' || e.mode === 'cut')
+        ) || res?.sides?.[0];
         const lines = (side?.exitPolylineIds || []).map((eid) => D.drawn.find((d) => d.id === eid)).filter(Boolean);
         const cutLine = lines.find((d) => /выемка/.test(d.name));
         const fillLine = lines.find((d) => /насыпь/.test(d.name));
