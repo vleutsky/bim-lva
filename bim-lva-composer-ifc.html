@@ -4837,6 +4837,33 @@
                 applySweep();
                 return (typeof sweptSolids !== 'undefined' ? sweptSolids.length : 0);
             },
+            /**
+             * Правка IFC тем же путём, что и UI (createIfcEditBatch → commit),
+             * плюс текст, который уйдёт в «Экспорт IFC». Нужен, чтобы механика
+             * текстового индекса была закрыта тестом: до этого правка и
+             * выгрузка IFC не проверялись вообще.
+             */
+            ifcEditProbe(fileRe, expressID, newName) {
+                const re = new RegExp(fileRe, 'i');
+                const mod = [...loadedModels.values()]
+                    .find((m) => !m.isFBX && m.ifcIndex && re.test(m.filename || ''));
+                if (!mod) return null;
+                const before = getEntityParts(mod, expressID);
+                if (!before) return null;
+                const batch = createIfcEditBatch(mod);
+                batch.setAttr(expressID, 2, `'${newName}'`);   // Name у IfcRoot
+                batch.commit();
+                const after = getEntityParts(mod, expressID);
+                return {
+                    beforeName: before.args[2],
+                    afterName: after ? after.args[2] : null,
+                    beforeClass: before.className,
+                    afterClass: after ? after.className : null,
+                    entities: mod.ifcIndex.index.size,
+                    edited: !!mod.edited,
+                    text: exportIfcModelText(mod)
+                };
+            },
             sweepProbe(points, kind, dims, offsetZ) {
                 const path = points.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
                 const r = buildSweptSolid(path, kind, dims || {}, offsetZ || 0);
@@ -24084,6 +24111,11 @@ ${componentXml || '    '}
             }
         }
 
+        /** Текст IFC для выгрузки. Отдельно от кнопки — чтобы его мог проверить тест. */
+        function exportIfcModelText(modData) {
+            return modData.ifcIndex ? modData.ifcIndex.lines.join('\n') : '';
+        }
+
         function downloadEditedIfcModels() {
             const editedModels = [...loadedModels.values()].filter(
                 modData => !modData.isFBX && modData.edited && modData.ifcIndex
@@ -24096,7 +24128,7 @@ ${componentXml || '    '}
             editedModels.forEach((modData, index) => {
                 setTimeout(() => {
                     const blob = new Blob(
-                        [modData.ifcIndex.lines.join('\n')],
+                        [exportIfcModelText(modData)],
                         { type: 'application/x-step' }
                     );
                     const url = URL.createObjectURL(blob);
