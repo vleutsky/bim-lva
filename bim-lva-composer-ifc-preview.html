@@ -2767,7 +2767,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · c8b14bf</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d78781a</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -4856,6 +4856,46 @@
                 }
                 applySweep();
                 return (typeof sweptSolids !== 'undefined' ? sweptSolids.length : 0);
+            },
+            /**
+             * Правка IFC тем же путём, что и UI (createIfcEditBatch → commit),
+             * плюс текст, который уйдёт в «Экспорт IFC». Нужен, чтобы механика
+             * текстового индекса была закрыта тестом: до этого правка и
+             * выгрузка IFC не проверялись вообще.
+             */
+            /** Состояние ленивого индекса: построен ли, есть ли откуда строить. */
+            ifcIndexState(fileRe) {
+                const re = new RegExp(fileRe, 'i');
+                const mod = [...loadedModels.values()].find((m) => re.test(m.filename || ''));
+                if (!mod) return null;
+                return {
+                    canEdit: canEditIfc(mod),
+                    built: hasIfcIndex(mod),
+                    hasFile: !!mod.ifcFile,
+                    entities: mod.ifcIndex ? mod.ifcIndex.slotById.size : 0
+                };
+            },
+            async ifcEditProbe(fileRe, expressID, newName) {
+                const re = new RegExp(fileRe, 'i');
+                const mod = [...loadedModels.values()]
+                    .find((m) => canEditIfc(m) && re.test(m.filename || ''));
+                if (!mod) return null;
+                await ensureIfcIndex(mod);          // индекс ленивый
+                const before = getEntityParts(mod, expressID);
+                if (!before) return null;
+                const batch = createIfcEditBatch(mod);
+                batch.setAttr(expressID, 2, `'${newName}'`);   // Name у IfcRoot
+                batch.commit();
+                const after = getEntityParts(mod, expressID);
+                return {
+                    beforeName: before.args[2],
+                    afterName: after ? after.args[2] : null,
+                    beforeClass: before.className,
+                    afterClass: after ? after.className : null,
+                    entities: mod.ifcIndex.slotById.size,
+                    edited: !!mod.edited,
+                    text: exportIfcModelText(mod)
+                };
             },
             sweepProbe(points, kind, dims, offsetZ) {
                 const path = points.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
@@ -12188,28 +12228,159 @@
             return result;
         }
 
+        /**
+         * Текстовый индекс IFC: где какая сущность лежит в файле.
+         *
+         * Храним ОДИН исходный текст плюс смещения в символах, а не массив
+         * строк. Причина измерена: `split()` в V8 не копирует куски, а делает
+         * «срезы», ссылающиеся на исходную строку. То есть массив из 730 тысяч
+         * строк удерживал и себя (~64 МБ на файле АР), и весь исходный текст
+         * (~82 МБ), который иначе можно было бы отпустить. Смещения в
+         * типизированных массивах занимают на порядок меньше и ничего не
+         * удерживают сверх самого текста.
+         *
+         * Формат: { text, ids, starts, ends, slotById, dataEndPos }
+         * `starts`/`ends` — позиции первого символа сущности и символа за её
+         * точкой с запятой. `slotById` переводит номер сущности в её слот.
+         */
         function indexIfcText(rawText) {
-            const lines = rawText.split(/\r\n|\n|\r/);
-            const index = new Map();
-            let dataEndLine = -1, inData = false;
-            for (let i = 0; i < lines.length; i++) {
-                if (/^\s*DATA\s*;\s*$/i.test(lines[i])) { inData = true; continue; }
-                if (inData && /^\s*ENDSEC\s*;\s*$/i.test(lines[i])) { dataEndLine = i; break; }
-                if (!inData) continue;
-                const match = lines[i].match(/^\s*#(\d+)\s*=/);
-                if (!match) continue;
-                let end = i;
-                while (end < lines.length - 1 && !/;\s*$/.test(lines[end])) end++;
-                index.set(parseInt(match[1], 10), { start: i, end });
-                i = end;
+            const text = rawText;
+            const starts = [];
+            const ends = [];
+            const ids = [];
+            const slotById = new Map();
+
+            // Ищем начала сущностей «#N=» построчно по позициям, не разрезая текст
+            const re = /(^|[\r\n])\s*#(\d+)\s*=/g;
+            const dataAt = /(^|[\r\n])\s*DATA\s*;/i.exec(text);
+            const dataFrom = dataAt ? dataAt.index + dataAt[0].length : 0;
+            re.lastIndex = dataFrom;
+
+            let m;
+            while ((m = re.exec(text)) !== null) {
+                const from = m.index + (m[1] ? m[1].length : 0);
+                // Конец сущности — первая «;» вне строковой литеры
+                let i = re.lastIndex;
+                let inStr = false;
+                let end = -1;
+                for (; i < text.length; i++) {
+                    const c = text[i];
+                    if (inStr) {
+                        if (c === "'") {
+                            if (text[i + 1] === "'") i++;
+                            else inStr = false;
+                        }
+                        continue;
+                    }
+                    if (c === "'") { inStr = true; continue; }
+                    if (c === ';') { end = i + 1; break; }
+                }
+                if (end < 0) break;
+                const id = parseInt(m[2], 10);
+                slotById.set(id, ids.length);
+                ids.push(id);
+                starts.push(from);
+                ends.push(end);
+                re.lastIndex = end;
             }
-            return { lines, index, dataEndLine };
+
+            // Где кончается DATA — туда дописываются новые сущности
+            const endSec = /(^|[\r\n])\s*ENDSEC\s*;/i.exec(text.slice(dataFrom));
+            const dataEndPos = endSec ? dataFrom + endSec.index + (endSec[1] ? endSec[1].length : 0) : text.length;
+
+            return {
+                text,
+                ids: Int32Array.from(ids),
+                starts: Int32Array.from(starts),
+                ends: Int32Array.from(ends),
+                slotById,
+                dataEndPos,
+                get size() { return this.slotById.size; }
+            };
+        }
+
+        /** Текст одной сущности целиком, по её слоту. */
+        function ifcEntityText(idx, slot) {
+            return idx.text.slice(idx.starts[slot], idx.ends[slot]);
+        }
+
+        /* --- Ленивый текстовый индекс ------------------------------------------
+         * При загрузке индекс НЕ строится: он нужен только правке, фильтру
+         * классов, ведомости, объединению и выгрузке. На файле АР это ~110 МБ
+         * (текст + структуры), которые при обычном просмотре лежат мёртвым
+         * грузом. Держим ссылку на файл и читаем его с диска при первом
+         * обращении.
+         *
+         * ВАЖНО: `canEditIfc` — синхронная проверка «эта модель в принципе
+         * редактируема», ей пользуются кнопки и меню. Само построение
+         * (`ensureIfcIndex`) асинхронно, потому что чтение файла асинхронно.
+         * Раньше обе роли играло само наличие `ifcIndex`, и лениво его сделать
+         * было нельзя — 35 проверок молча решили бы, что IFC не редактируется.
+         */
+        function canEditIfc(modData) {
+            return !!modData && !modData.isFBX && !!(modData.ifcIndex || modData.ifcFile);
+        }
+
+        /** Есть ли уже построенный индекс (без попытки его строить). */
+        function hasIfcIndex(modData) {
+            return !!(modData && !modData.isFBX && modData.ifcIndex);
+        }
+
+        let _ifcIndexBuilding = new WeakMap();
+
+        async function ensureIfcIndex(modData, { quiet = false } = {}) {
+            if (!modData || modData.isFBX) return null;
+            if (modData.ifcIndex) return modData.ifcIndex;
+            if (!modData.ifcFile) return null;
+            // Параллельные вызовы не должны читать файл дважды
+            if (_ifcIndexBuilding.has(modData)) return _ifcIndexBuilding.get(modData);
+
+            const job = (async () => {
+                const mb = (modData.ifcFile.size / 1048576).toFixed(1);
+                if (!quiet) {
+                    showLoader('ИНДЕКС IFC', `${modData.filename}: чтение ${mb} МБ…`);
+                    await new Promise((r) => setTimeout(r, 10));
+                }
+                try {
+                    const text = await modData.ifcFile.text();
+                    modData.ifcIndex = indexIfcText(text);
+                    console.info(
+                        `[BIM.LVA] Текстовый индекс построен по запросу: ${modData.filename}, ` +
+                        `сущностей ${modData.ifcIndex.slotById.size}`
+                    );
+                    return modData.ifcIndex;
+                } catch (error) {
+                    // Файл мог уехать с диска: File из <input> — снимок, и
+                    // перечитать его позже браузер даёт не всегда.
+                    console.warn('IFC text index:', error);
+                    notifyError(
+                        `${modData.filename}: не удалось перечитать файл для правки — ` +
+                        'возможно, он перемещён или изменён. Загрузите модель заново.'
+                    );
+                    modData.ifcFile = null;   // больше не пробуем
+                    return null;
+                } finally {
+                    _ifcIndexBuilding.delete(modData);
+                    if (!quiet) hideLoader();
+                }
+            })();
+            _ifcIndexBuilding.set(modData, job);
+            return job;
+        }
+
+        /** Построить индексы у всех моделей, которым он нужен для операции. */
+        async function ensureIfcIndexes(models) {
+            const list = [...models].filter((m) => canEditIfc(m) && !m.ifcIndex);
+            for (const m of list) await ensureIfcIndex(m);
+            return list.length;
         }
 
         function getEntityParts(modData, expressID) {
-            const span = modData.ifcIndex && modData.ifcIndex.index.get(expressID);
-            if (!span) return null;
-            const full = modData.ifcIndex.lines.slice(span.start, span.end + 1).join(' ');
+            const idx = modData.ifcIndex;
+            if (!idx) return null;
+            const slot = idx.slotById.get(expressID);
+            if (slot === undefined) return null;
+            const full = ifcEntityText(idx, slot);
             const eq = full.indexOf('=');
             const start = full.indexOf('(', eq);
             const end = full.lastIndexOf(')');
@@ -12219,7 +12390,8 @@
             return {
                 className: classMatch[1].toUpperCase(),
                 args: splitStepArgs(full.slice(start + 1, end)),
-                span
+                // span в символах — им пользуется правка при пересборке текста
+                span: { start: idx.starts[slot], end: idx.ends[slot], slot }
             };
         }
 
@@ -12252,54 +12424,58 @@
                 },
                 append(line) { appended.push(line); },
                 deleteEntity(id) {
-                    if (!modData.ifcIndex.index.has(id)) return false;
+                    if (!modData.ifcIndex.slotById.has(id)) return false;
                     deleted.add(id);
                     changed.delete(id);
                     return true;
                 },
                 commit() {
+                    const idx = modData.ifcIndex;
+                    const spanOf = (id) => {
+                        const slot = idx.slotById.get(id);
+                        return slot === undefined
+                            ? null
+                            : { start: idx.starts[slot], end: idx.ends[slot] };
+                    };
                     const operations = [
                         ...[...changed.entries()].map(([id, item]) => ({
-                            id, span: item.span,
+                            span: item.span,
                             line: `#${id}=${item.className}(${item.args.join(',')});`
                         })),
-                        ...[...deleted].map(id => ({
-                            id,
-                            span: modData.ifcIndex.index.get(id),
-                            line: null
-                        }))
+                        ...[...deleted].map(id => ({ span: spanOf(id), line: null }))
                     ].filter(operation => operation.span);
-                    operations
-                        .sort((a, b) => b.span.start - a.span.start)
-                        .forEach(operation => {
-                            modData.ifcIndex.lines.splice(
-                                operation.span.start,
-                                operation.span.end - operation.span.start + 1,
-                                ...(operation.line == null ? [] : [operation.line])
-                            );
-                        });
-                    if (operations.length) {
-                        modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
+
+                    if (operations.length || appended.length) {
+                        // Пересобираем текст срезами: с конца к началу, чтобы
+                        // ранее посчитанные смещения не поехали.
+                        let text = idx.text;
+                        operations
+                            .sort((a, b) => b.span.start - a.span.start)
+                            .forEach((operation) => {
+                                text = text.slice(0, operation.span.start)
+                                    + (operation.line == null ? '' : operation.line + '\n')
+                                    + text.slice(operation.span.end).replace(/^\r?\n/, '');
+                            });
+                        if (appended.length) {
+                            const at = idx.dataEndPos;
+                            text = text.slice(0, at) + appended.join('\n') + '\n' + text.slice(at);
+                        }
+                        modData.ifcIndex = indexIfcText(text);
+                        modData.edited = true;
                     }
-                    if (appended.length) {
-                        const at = modData.ifcIndex.dataEndLine;
-                        modData.ifcIndex.lines.splice(at < 0 ? modData.ifcIndex.lines.length : at, 0, ...appended);
-                        modData.ifcIndex = indexIfcText(modData.ifcIndex.lines.join('\n'));
-                    }
-                    if (operations.length || appended.length) modData.edited = true;
                 }
             };
         }
 
         function getMaxExpressId(modData) {
             let max = 0;
-            for (const id of modData.ifcIndex.index.keys()) if (id > max) max = id;
+            for (const id of modData.ifcIndex.slotById.keys()) if (id > max) max = id;
             return max;
         }
 
         function getIfcIdsByClass(modData, className) {
             const result = [];
-            for (const expressID of modData.ifcIndex.index.keys()) {
+            for (const expressID of modData.ifcIndex.slotById.keys()) {
                 const entity = getEntityParts(modData, expressID);
                 if (entity && entity.className === className) result.push(expressID);
             }
@@ -12316,7 +12492,7 @@
         }
 
         function normalizeIfcSpatialStructure(modData, options) {
-            const schemaLine = modData.ifcIndex.lines.find(line => /FILE_SCHEMA/i.test(line)) || '';
+            const schemaLine = (modData.ifcIndex.text.match(/FILE_SCHEMA[^;]*;/i) || [''])[0];
             if (!/IFC4/i.test(schemaLine)) {
                 throw new Error(`${modData.filename}: автоматическая нормализация поддерживает IFC4/IFC4X3.`);
             }
@@ -12538,7 +12714,8 @@
                 this.psetIndex = new Map();
                 this.searchCache = new Map(); 
                 this.customGroups = new Map();
-                this.ifcIndex = null;
+                this.ifcIndex = null;   // строится лениво, см. ensureIfcIndex
+                this.ifcFile = null;    // ссылка на файл: сам текст в памяти не держим
                 this.edited = false;
                 this.appearanceByID = new Map();
                 this.globalIdByExpress = new Map();
@@ -12981,7 +13158,7 @@
         });
 
         function updateIfcToolButtons() {
-            const ifcModels = [...loadedModels.values()].filter(m => !m.isFBX && m.ifcIndex);
+            const ifcModels = [...loadedModels.values()].filter(canEditIfc);
             $('btnExportIFC').disabled = ifcModels.length === 0;
             $('btnNormalizeIFC').disabled = ifcModels.length === 0;
             $('btnMergeIFC').disabled = ifcModels.length < 2;
@@ -15232,15 +15409,13 @@ uniform vec3 uBatchSelColor;
 
                 totalElements += modData.meshesByID.size;
 
-                // Текстовый STEP-индекс ПОСЛЕ геометрии — иначе пик RAM удваивается на каждом файле
-                showLoader('ИНДЕКС IFC', 'Подготовка к редактированию…');
-                await new Promise(r => setTimeout(r, 10));
-                try {
-                    modData.ifcIndex = indexIfcText(new TextDecoder('utf-8').decode(data));
-                } catch (indexError) {
-                    console.warn('IFC text index:', indexError);
-                    modData.ifcIndex = null;
-                }
+                // Текстовый STEP-индекс НЕ строим при загрузке: он нужен только
+                // для правки, фильтра классов, ведомости и выгрузки, а стоит на
+                // файле АР (72 МБ) порядка 110 МБ вместе с удерживаемым текстом.
+                // Держим только ссылку на сам файл — она памяти не занимает,
+                // текст читается с диска при первом обращении (ensureIfcIndex).
+                modData.ifcFile = file;
+                modData.ifcIndex = null;
                 data = null;
 
                 showLoader('GUID', 'Индекс GlobalId…');
@@ -18794,9 +18969,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
          * класс во ВСЕХ загруженных IFC-моделях (федерация); для DXF/DWG — та же
          * сущность (линия/полилиния/…) на том же слое в пределах одного файла.
          */
-        function selectSimilarElements(ref) {
+        async function selectSimilarElements(ref) {
             const mod = loadedModels.get(ref.modelID);
             if (!mod) return;
+            // IFC-ветка ниже читает классы из текстового индекса — он ленивый
+            if (!mod.isFBX) await ensureIfcIndexes(loadedModels.values());
 
             if (mod.isFBX) {
                 const entry = mod.dxfEntities?.get(ref.expressID);
@@ -18816,8 +18993,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 return;
             }
 
-            if (!mod.ifcIndex) {
-                notifyError('Выбор подобных недоступен: нет индекса файла.');
+            if (!hasIfcIndex(mod)) {
+                notifyError('Выбор подобных недоступен: не удалось прочитать файл.');
                 return;
             }
             const targetClass = getEntityParts(mod, ref.expressID)?.className;
@@ -18827,7 +19004,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             const matches = [];
             for (const [modelID, m] of loadedModels) {
-                if (m.isFBX || !m.ifcIndex) continue;
+                if (!canEditIfc(m)) continue;
                 for (const eid of m.meshesByID.keys()) {
                     if (getEntityParts(m, eid)?.className === targetClass) {
                         matches.push({ modelID, expressID: eid });
@@ -19558,7 +19735,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const rebuild = new Set();
 
             for (const [modelID, mod] of loadedModels) {
-                if (mod.isFBX || !mod.ifcIndex) continue;
+                if (!canEditIfc(mod)) continue;
                 const ids = mod.meshesByID ? [...mod.meshesByID.keys()] : [];
                 ids.forEach(expressID => {
                     const key = valueFn(mod, expressID) || '(пусто)';
@@ -19690,7 +19867,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         // --- Clash / class filter / compare / CSV / CRS / share ---
         function fillModelSelect(selectEl, ifcOnly = false) {
             selectEl.innerHTML = [...loadedModels.entries()]
-                .filter(([, mod]) => !ifcOnly || (!mod.isFBX && mod.ifcIndex))
+                .filter(([, mod]) => !ifcOnly || canEditIfc(mod))
                 .map(([id, mod]) => `<option value="${id}">${esc(mod.filename || id)}</option>`)
                 .join('');
         }
@@ -20131,7 +20308,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         function collectElementEditablePropRows(mod, expressID) {
             const out = [];
-            if (!mod || mod.isFBX || !mod.ifcIndex || expressID == null) return out;
+            if (!canEditIfc(mod) || expressID == null) return out;
             const ref = makeElementRef(mod, expressID) || {};
             const entity = getEntityParts(mod, expressID);
             const entityName = entity
@@ -20201,7 +20378,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const seen = new Set();
             for (const item of items || []) {
                 const mod = loadedModels.get(item.modelID);
-                if (!mod || mod.isFBX || !mod.ifcIndex) continue;
+                if (!canEditIfc(mod)) continue;
                 const key = `${item.modelID}:${item.expressID}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
@@ -20220,7 +20397,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (editableSel.length) return editableSel;
             const all = [];
             for (const mod of loadedModels.values()) {
-                if (mod.isFBX || !mod.ifcIndex) continue;
+                if (!canEditIfc(mod)) continue;
                 for (const eid of mod.meshesByID.keys()) {
                     all.push({ modelID: mod.modelID, expressID: eid });
                 }
@@ -20518,7 +20695,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const expressID = Number(row.expressID);
             if (gid) {
                 for (const mod of loadedModels.values()) {
-                    if (mod.isFBX || !mod.ifcIndex) continue;
+                    if (!canEditIfc(mod)) continue;
                     if (mod.expressByGlobalId?.has(gid)) {
                         return { mod, expressID: mod.expressByGlobalId.get(gid) };
                     }
@@ -20526,7 +20703,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             if (file) {
                 for (const mod of loadedModels.values()) {
-                    if (mod.isFBX || !mod.ifcIndex) continue;
+                    if (!canEditIfc(mod)) continue;
                     if (String(mod.filename || '').toLowerCase() !== file) continue;
                     if (Number.isFinite(expressID) && (mod.meshesByID.has(expressID) || mod.searchCache?.has(expressID))) {
                         return { mod, expressID };
@@ -20535,7 +20712,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             if (Number.isFinite(expressID)) {
                 for (const mod of loadedModels.values()) {
-                    if (mod.isFBX || !mod.ifcIndex) continue;
+                    if (!canEditIfc(mod)) continue;
                     if (mod.meshesByID.has(expressID) || mod.searchCache?.has(expressID)) {
                         return { mod, expressID };
                     }
@@ -21287,10 +21464,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
         });
 
+        /** Классы читаются из текстового индекса — перед вызовом нужен ensureIfcIndexes. */
         function collectIfcClasses() {
             const map = new Map();
             for (const mod of loadedModels.values()) {
-                if (mod.isFBX || !mod.ifcIndex) continue;
+                if (!canEditIfc(mod)) continue;
                 for (const eid of mod.meshesByID.keys()) {
                     const cls = (getEntityParts(mod, eid)?.className || 'UNKNOWN').replace(/^IFC/, '');
                     map.set(cls, (map.get(cls) || 0) + 1);
@@ -21319,7 +21497,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             });
         })();
 
-        $('btnClassFilter').addEventListener('click', () => {
+        $('btnClassFilter').addEventListener('click', async () => {
+            await ensureIfcIndexes(loadedModels.values());
             const classes = collectIfcClasses();
             $('classFilterList').innerHTML = classes.map(([cls, n]) => `
                 <label class="bulk-note" style="display:flex;gap:8px;align-items:center;cursor:pointer;margin:4px 0">
@@ -21357,7 +21536,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             classFilterAllowed = allowedSet ? new Set(allowedSet) : null;
             const rebuild = new Set();
             for (const [modelID, mod] of loadedModels) {
-                if (mod.isFBX || !mod.ifcIndex) continue;
+                if (!canEditIfc(mod)) continue;
                 for (const eid of [...mod.meshesByID.keys()]) {
                     const cls = (getEntityParts(mod, eid)?.className || 'UNKNOWN').replace(/^IFC/, '');
                     const hide = classFilterAllowed ? !classFilterAllowed.has(cls) : false;
@@ -21369,7 +21548,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             markNeedsRender();
         }
 
-        $('applyClassFilter').addEventListener('click', () => {
+        $('applyClassFilter').addEventListener('click', async () => {
+            await ensureIfcIndexes(loadedModels.values());
             const allowed = new Set([...document.querySelectorAll('.class-filter-cb:checked')].map(c => c.dataset.cls));
             applyClassFilterSet(allowed);
             $('classFilterModal').classList.remove('show');
@@ -21416,7 +21596,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             let dup = 0;
             for (const eid of modData.meshesByID.keys()) {
                 let gid = readLineGlobalId(modData, eid);
-                if (!gid && modData.ifcIndex) {
+                if (!gid && hasIfcIndex(modData)) {
                     const ent = getEntityParts(modData, eid);
                     const raw = ent?.args?.[0];
                     if (typeof raw === 'string') {
@@ -21607,7 +21787,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
         });
 
-        $('btnSchedule').addEventListener('click', () => {
+        $('btnSchedule').addEventListener('click', async () => {
+            await ensureIfcIndexes(loadedModels.values());
             const items = selectedItems.length ? selectedItems : [];
             if (!items.length) {
                 notifyError('Выделите элементы для ведомости.');
@@ -21619,7 +21800,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (!mod) return;
                 let cls = '';
                 let name = '';
-                if (!mod.isFBX && mod.ifcIndex) {
+                if (canEditIfc(mod)) {
                     const ent = getEntityParts(mod, item.expressID);
                     cls = ent?.className || '';
                     name = ent ? unquoteStepString(ent.args?.[2] || '') : '';
@@ -21985,7 +22166,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             }
             const bucket = new Map(); // key -> {label, items:[]}
             for (const [modelID, mod] of loadedModels) {
-                if (mod.isFBX || !mod.ifcIndex) continue;
+                if (!canEditIfc(mod)) continue;
                 for (const eid of mod.meshesByID.keys()) {
                     const raw = readElementPsetValue(mod, eid, pset, prop);
                     const parsed = parseTimelineValue(raw);
@@ -22034,7 +22215,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const dated = new Set(timeline4dItems.map(it => `${it.modelID}::${it.expressID}`));
             const rebuild = new Set();
             for (const [modelID, mod] of loadedModels) {
-                if (mod.isFBX || !mod.ifcIndex) continue;
+                if (!canEditIfc(mod)) continue;
                 for (const eid of [...mod.meshesByID.keys()]) {
                     const key = `${modelID}::${eid}`;
                     const hasDate = dated.has(key);
@@ -22901,7 +23082,7 @@ ${componentXml || '    '}
         }
 
         $('openPropSearch').addEventListener('click', () => {
-            const hasIfc = [...loadedModels.values()].some(m => !m.isFBX && m.ifcIndex);
+            const hasIfc = [...loadedModels.values()].some(canEditIfc);
             if (!hasIfc) {
                 notifyError('Сначала загрузите хотя бы один IFC-файл.');
                 return;
@@ -22934,7 +23115,7 @@ ${componentXml || '    '}
 
             let found = [];
             for (const modData of loadedModels.values()) {
-                if (modData.isFBX || !modData.ifcIndex) continue;
+                if (!canEditIfc(modData)) continue;
                 findElementsByProperty(modData, { psetName, propertyName, valueMode, valueText })
                     .forEach(expressID => found.push({ modelID: modData.modelID, expressID }));
             }
@@ -22953,7 +23134,7 @@ ${componentXml || '    '}
         function getSelectedIfcObjects() {
             return selectedItems.filter(item => {
                 const modData = loadedModels.get(item.modelID);
-                return modData && !modData.isFBX && modData.ifcIndex && getEntityParts(modData, item.expressID);
+                return canEditIfc(modData) && getEntityParts(modData, item.expressID);
             });
         }
 
@@ -22970,7 +23151,7 @@ ${componentXml || '    '}
             const rawModelID = fileRow.dataset.mid;
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const modData = loadedModels.get(modelID);
-            if (!modData || modData.isFBX || !modData.ifcIndex) {
+            if (!canEditIfc(modData)) {
                 notifyError('Пользовательские ветки можно создавать только внутри IFC-файла.');
                 return;
             }
@@ -23064,7 +23245,8 @@ ${componentXml || '    '}
             $('normalizeModal').classList.remove('show');
         }
 
-        $('btnNormalizeIFC').addEventListener('click', () => {
+        $('btnNormalizeIFC').addEventListener('click', async () => {
+            await ensureIfcIndexes(loadedModels.values());
             $('normalizeModal').classList.add('show');
             $('normalizeProjectName').focus();
             $('normalizeProjectName').select();
@@ -23090,7 +23272,7 @@ ${componentXml || '    '}
                 notifyError('Все четыре названия пространственной структуры обязательны.');
                 return;
             }
-            const models = [...loadedModels.values()].filter(model => !model.isFBX && model.ifcIndex);
+            const models = [...loadedModels.values()].filter(canEditIfc);
             if (!models.length) return;
             if (!confirm(`Нормализовать пространственную структуру в ${models.length} IFC-файлах?`)) return;
 
@@ -23192,7 +23374,7 @@ ${componentXml || '    '}
         function getEditableSelection() {
             return selectedItems.filter(item => {
                 const modData = loadedModels.get(item.modelID);
-                return modData && !modData.isFBX && modData.ifcIndex;
+                return canEditIfc(modData);
             });
         }
 
@@ -23339,8 +23521,15 @@ ${componentXml || '    '}
             const tag = `<span class="tag">ВЫДЕЛЕНО: ${countTotal} шт.</span>`;
             const materialHtml = renderAppearancePanel(countTotal, modelID, expressID);
             let editHtml = '';
-            if (modData && modData.ifcIndex) {
+            if (hasIfcIndex(modData)) {
                 editHtml += `<div class="edit-legend">Оранжевые поля редактируются. На вкладке «Свойства» имя и значение — в одной строке; сохраняйте сразу весь Pset кнопкой ниже.</div>`;
+            } else if (canEditIfc(modData)) {
+                const mb = modData.ifcFile ? (modData.ifcFile.size / 1048576).toFixed(1) : '?';
+                editHtml += `<div class="edit-legend">
+                    Правка свойств выключена, чтобы не держать текст файла в памяти.
+                    Включите — файл (${mb} МБ) будет прочитан один раз.
+                    <button class="btn" id="enableIfcEdit" style="margin-top:6px">✎ Включить правку свойств</button>
+                </div>`;
             }
             editHtml += renderBulkEditor();
 
@@ -23353,7 +23542,7 @@ ${componentXml || '    '}
             const entityName = rawEntity
                 ? unquoteStepString(rawEntity.args[2])
                 : (line.Name ? readVal(line.Name) : '');
-            if (countTotal === 1 && modData.ifcIndex && rawEntity && rawEntity.args.length > 2) {
+            if (countTotal === 1 && hasIfcIndex(modData) && rawEntity && rawEntity.args.length > 2) {
                 infoHtml += `<div class="prop-inline">
                     <input class="editInput prop-name" data-entity-name="${expressID}" value="${escAttr(entityName)}" title="Имя элемента">
                     <div class="v" style="opacity:.75">ExpressID ${expressID}</div>
@@ -23363,7 +23552,7 @@ ${componentXml || '    '}
                 infoHtml += propRow('ExpressID', String(expressID));
             }
 
-            if (countTotal === 1 && modData.ifcIndex) {
+            if (countTotal === 1 && hasIfcIndex(modData)) {
                 infoHtml += `<button type="button" class="btn load-btn props-save-all" data-act="saveAllProperties" data-model="${modelID}">💾 Сохранить все параметры</button>`;
             }
             
@@ -23394,7 +23583,7 @@ ${componentXml || '    '}
                     }
                 });
 
-                if (countTotal === 1 && modData.ifcIndex) {
+                if (countTotal === 1 && hasIfcIndex(modData)) {
                     items += `<div class="prop-inline-head"><span>Параметр</span><span>Значение</span></div>`;
                 }
 
@@ -23415,7 +23604,7 @@ ${componentXml || '    '}
                         const canEditValue = rawProperty && rawProperty.className === 'IFCPROPERTYSINGLEVALUE';
                         const rawValue = canEditValue ? unwrapIfcValue(rawProperty.args[2]) : null;
                         if (!v && rawValue) v = rawValue.value;
-                        if (countTotal === 1 && modData.ifcIndex && propId != null) {
+                        if (countTotal === 1 && hasIfcIndex(modData) && propId != null) {
                             items += `<div class="prop-inline" data-prop-row="${propId}">
                                 <input class="editInput prop-name" data-property-name="${propId}" value="${escAttr(propertyName)}" title="Имя параметра">
                                 ${canEditValue
@@ -23427,8 +23616,8 @@ ${componentXml || '    '}
                         }
                 }
                 
-                if (items || modData.ifcIndex) {
-                    const renameControl = countTotal === 1 && modData.ifcIndex
+                if (items || hasIfcIndex(modData)) {
+                    const renameControl = countTotal === 1 && hasIfcIndex(modData)
                         ? `<div class="pset-toolbar">
                             <div class="row">
                                 <input class="editInput" data-pset-name="${pid}" value="${escAttr(pname)}" title="Имя Pset">
@@ -23446,6 +23635,19 @@ ${componentXml || '    '}
                 material: materialHtml,
                 edit: editHtml || null
             });
+
+            // Индекс ленивый: пока он не построен, правка недоступна. Не строим
+            // его молча на первом же клике по элементу — это чтение всего файла
+            // с диска. Даём явную кнопку: кто только смотрит, тот и не платит.
+            const enable = propsBox.querySelector('#enableIfcEdit');
+            if (enable) {
+                enable.addEventListener('click', async () => {
+                    enable.disabled = true;
+                    const idx = await ensureIfcIndex(modData);
+                    if (idx) showProps(modelID, expressID, countTotal);
+                    else enable.disabled = false;
+                });
+            }
         }
 
         function applyBulkClassChange() {
@@ -23733,7 +23935,7 @@ ${componentXml || '    '}
             const rawModelID = button.dataset.model;
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const modData = loadedModels.get(modelID);
-            if (!modData || !modData.ifcIndex) {
+            if (!canEditIfc(modData)) {
                 notifyError('Нет IFC-индекса для записи параметров.');
                 return;
             }
@@ -24209,9 +24411,14 @@ ${componentXml || '    '}
             }
         }
 
-        function downloadEditedIfcModels() {
+        /** Текст IFC для выгрузки. Отдельно от кнопки — чтобы его мог проверить тест. */
+        function exportIfcModelText(modData) {
+            return modData.ifcIndex ? modData.ifcIndex.text : '';
+        }
+
+        async function downloadEditedIfcModels() {
             const editedModels = [...loadedModels.values()].filter(
-                modData => !modData.isFBX && modData.edited && modData.ifcIndex
+                modData => canEditIfc(modData) && modData.edited
             );
             if (!editedModels.length) {
                 notifyError('Нет изменённых IFC-файлов для сохранения.');
@@ -24221,7 +24428,7 @@ ${componentXml || '    '}
             editedModels.forEach((modData, index) => {
                 setTimeout(() => {
                     const blob = new Blob(
-                        [modData.ifcIndex.lines.join('\n')],
+                        [exportIfcModelText(modData)],
                         { type: 'application/x-step' }
                     );
                     const url = URL.createObjectURL(blob);
@@ -24236,7 +24443,10 @@ ${componentXml || '    '}
                 }, index * 200);
             });
         }
-        $('btnExportIFC').addEventListener('click', downloadEditedIfcModels);
+        $('btnExportIFC').addEventListener('click', async () => {
+            await ensureIfcIndexes(loadedModels.values());
+            downloadEditedIfcModels();
+        });
 
         // --- ОБЪЕДИНЕНИЕ НЕСКОЛЬКИХ IFC В ОДИН ФАЙЛ ---
         function remapStepArgRef(arg, offset) {
@@ -24251,7 +24461,7 @@ ${componentXml || '    '}
 
         function buildMergedIfcText(models, combinedFileName) {
             models.forEach(modData => {
-                const schemaLine = modData.ifcIndex.lines.find(line => /FILE_SCHEMA/i.test(line)) || '';
+                const schemaLine = (modData.ifcIndex.text.match(/FILE_SCHEMA[^;]*;/i) || [''])[0];
                 if (!/IFC4/i.test(schemaLine)) {
                     throw new Error(`${modData.filename}: объединение поддерживает только схему IFC4/IFC4X3.`);
                 }
@@ -24279,7 +24489,7 @@ ${componentXml || '    '}
                 const isMaster = index === 0;
                 const oldProjectNewID = projectOldID != null ? projectOldID + offset : null;
 
-                for (const oldId of modData.ifcIndex.index.keys()) {
+                for (const oldId of modData.ifcIndex.slotById.keys()) {
                     if (!isMaster && oldId === projectOldID) continue;
                     const entity = getEntityParts(modData, oldId);
                     if (!entity) continue;
@@ -24315,7 +24525,8 @@ ${componentXml || '    '}
         }
 
         $('btnMergeIFC').addEventListener('click', async () => {
-            const models = [...loadedModels.values()].filter(m => !m.isFBX && m.ifcIndex);
+            await ensureIfcIndexes(loadedModels.values());
+            const models = [...loadedModels.values()].filter(canEditIfc);
             if (models.length < 2) {
                 notifyError('Для объединения нужно как минимум два загруженных IFC-файла.');
                 return;
@@ -26374,7 +26585,7 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const expressID = parseInt(treeContextRow.dataset.eid, 10);
             const modData = loadedModels.get(modelID);
-            if (!modData || modData.isFBX || !modData.ifcIndex) {
+            if (!canEditIfc(modData)) {
                 notifyError('Переименование веток доступно только для IFC.');
                 return;
             }
@@ -27860,7 +28071,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: 'c8b14bf-preview',
+            buildId: 'd78781a-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
