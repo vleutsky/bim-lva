@@ -62,13 +62,12 @@ function dxfSatPayload(dxf) {
     const chunks = [];
     let buf = '';
     let inSolid = false;
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i + 1 < lines.length; i += 2) {
         const code = lines[i].trim();
-        const val = lines[i + 1] ?? '';
+        const val = lines[i + 1];
         if (code === '0' && val.trim() === '3DSOLID') {
             if (buf) { chunks.push(dxfSatDecrypt(buf)); buf = ''; }
             inSolid = true;
-            i++;
             continue;
         }
         if (inSolid && code === '0') {
@@ -79,13 +78,10 @@ function dxfSatPayload(dxf) {
         if (inSolid && code === '1') {
             if (buf) chunks.push(dxfSatDecrypt(buf));
             buf = val;
-            i++;
             continue;
         }
         if (inSolid && code === '3') {
             buf += val;
-            i++;
-            continue;
         }
     }
     if (buf) chunks.push(dxfSatDecrypt(buf));
