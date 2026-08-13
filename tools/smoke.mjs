@@ -2157,7 +2157,9 @@ async function checkRoadCrossSections(page) {
             hasEdge: /кромка/.test(html),
             hasKnots: /class="xs-pt"/.test(html),
             hasShape: /class="xs-shape"/.test(html),
-            profileBtn: !!document.getElementById('roadXsProfile')
+            hasSlope: /class="xs-slope"/.test(html),
+            profileBtn: !!document.getElementById('roadXsProfile'),
+            slopeBtn: !!document.getElementById('roadXsSlope')
         };
     });
     if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
@@ -2166,8 +2168,14 @@ async function checkRoadCrossSections(page) {
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
     }
+    if (!chart.hasSlope) {
+        problems.push('поперечники: на чертеже нет лучей откоса до земли');
+    }
     if (!chart.profileBtn) {
         problems.push('поперечники: нет кнопки «Профиль»');
+    }
+    if (!chart.slopeBtn) {
+        problems.push('поперечники: нет кнопки «Откосы»');
     }
 
     const live = await page.evaluate(() => {
@@ -2195,6 +2203,64 @@ async function checkRoadCrossSections(page) {
     if (!live.profile) {
         problems.push('поперечники: «Профиль» не открыл продольный профиль оси');
     }
+
+    await page.waitForTimeout(250);
+    const pair = await page.evaluate(() => {
+        const p = document.getElementById('polyProfileCard')?.getBoundingClientRect();
+        const x = document.getElementById('roadXsCard')?.getBoundingClientRect();
+        if (!p || !x) return { ok: false };
+        const overlap = p.left < x.right - 4 && x.left < p.right - 4
+            && p.top < x.bottom - 4 && x.top < p.bottom - 4;
+        return {
+            ok: true,
+            overlap,
+            gap: Math.round(x.left - p.right),
+            sameRow: Math.abs(p.top - x.top) < 80,
+            pLeft: Math.round(p.left),
+            xLeft: Math.round(x.left)
+        };
+    });
+    if (!pair.ok) {
+        problems.push('поперечники: нет карточек профиля и сечения');
+    } else if (pair.overlap) {
+        problems.push(`поперечники: профиль и поперечник наложились (${JSON.stringify(pair)})`);
+    } else if (!pair.sameRow || pair.pLeft >= pair.xLeft) {
+        problems.push(`поперечники: окна не рядом (профиль слева, сечение справа) — ${JSON.stringify(pair)}`);
+    }
+
+    const slopes = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const left = D.roadXsTemplate()?.points?.find((p) => p.code === 'L');
+        if (left) D.setRoadXsPoint(left.id, { dz: 0 });
+        const res = D.buildRoadXsSlopes({ mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const html = document.getElementById('roadXsChart')?.innerHTML || '';
+        return {
+            res,
+            hasRay: /class="xs-slope"/.test(html),
+            hasBtn: !!document.getElementById('roadXsSlope'),
+            tin: res?.tinFaces || 0,
+            fill: (res?.sides || []).reduce((n, s) => n + (s.fill || 0), 0),
+            cut: (res?.sides || []).reduce((n, s) => n + (s.cut || 0), 0),
+            n: res?.sides?.length || 0
+        };
+    });
+    if (!slopes.hasBtn) problems.push('поперечники: нет кнопки «Откосы»');
+    if (!slopes.hasRay) problems.push('поперечники: на чертеже нет лучей откоса до земли');
+    if (slopes.n !== 2) {
+        problems.push(`поперечники: откосы сторон ${slopes.n} вместо 2 (${JSON.stringify(slopes.res)})`);
+    }
+    if (slopes.tin < 4) {
+        problems.push(`поперечники: TIN откосов ${slopes.tin} граней — в модели не построилось`);
+    }
+    // Ось на 0.5 м над площадкой, кромки L/R с ΔZ=0, 1:1.5, длина 3 м, две стороны:
+    // площадь 0.5·0.5·0.75 = 0.1875 → объём 0.1875·3·2 = 1.125 м³.
+    if (Math.abs(slopes.fill - 1.125) > 0.08) {
+        problems.push(`поперечники: объём откосов от кромок ${slopes.fill} вместо ≈1.125`);
+    }
+    if (Math.abs(slopes.cut) > 0.05) {
+        problems.push(`поперечники: на насыпи от кромок набралась выемка ${slopes.cut}`);
+    }
+
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
 
     await page.evaluate(() => {
