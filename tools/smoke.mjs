@@ -35,6 +35,7 @@ let draw = null;
 let dxfEntities = null;
 let sweep = null;
 let slope = null;
+let roadXs = null;
 
 /** Обратное к шифру ACIS в DXF (как ezdxf.tools.crypt.decode). */
 function dxfSatDecrypt(s) {
@@ -1976,6 +1977,167 @@ async function checkSlopeToTerrain(page) {
 }
 
 /**
+ * Поперечники по оси. Ось числами вдоль X на той же площадке, что откосы.
+ * Смещение > 0 — вправо по ходу: при ходе на восток (+X) вправо это −Y.
+ */
+async function checkRoadCrossSections(page) {
+    const groundZ = await page.evaluate(() => {
+        const b = window.BimLvaDebug.modelBounds;
+        return b.length ? Math.max(...b.map((m) => m.centerZ + m.sizeZ / 2)) : null;
+    });
+    if (groundZ == null) {
+        problems.push('поперечники: нет отметки площадки — проверка пропущена');
+        return null;
+    }
+    const got = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20.5, y: 17, z: g + 0.5 },
+                { x: 23.5, y: 17, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-поперечники' }
+        );
+        const res = D.buildRoadXs(id, {
+            step: 1.5, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        const dxf = D.roadXsDxfPreview() || '';
+        return {
+            res,
+            dxfXs: /LVA_XS/.test(dxf),
+            dxfPolys: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
+            dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length
+        };
+    }, groundZ);
+
+    if (!got.res || got.res.stations !== 3) {
+        problems.push(`поперечники: сечений ${got.res?.stations} вместо 3 (0 / 1.5 / 3)`);
+    } else {
+        if (Math.abs(got.res.first.sta) > 1e-6 || Math.abs(got.res.last.sta - 3) > 1e-4) {
+            problems.push(
+                `поперечники: пикеты ${got.res.first.sta} … ${got.res.last.sta} вместо 0 … 3`
+            );
+        }
+        if (Math.abs(got.res.first.x - 20.5) > 1e-4 || Math.abs(got.res.first.y - 17) > 1e-4) {
+            problems.push(
+                `поперечники: начало (${got.res.first.x}, ${got.res.first.y}) не на оси (20.5, 17)`
+            );
+        }
+        if (Math.abs(got.res.last.x - 23.5) > 1e-4 || Math.abs(got.res.last.y - 17) > 1e-4) {
+            problems.push(
+                `поперечники: конец (${got.res.last.x}, ${got.res.last.y}) не на оси (23.5, 17)`
+            );
+        }
+        // Вправо по ходу +X: ry = -1, offset +2 → y = 17-2 = 15
+        const right = got.res.first.samples.find((s) => Math.abs(s.off - 2) < 1e-6);
+        const left = got.res.first.samples.find((s) => Math.abs(s.off + 2) < 1e-6);
+        const axis = got.res.first.samples.find((s) => Math.abs(s.off) < 1e-6);
+        if (!right || Math.abs(right.y - 15) > 1e-3) {
+            problems.push(`поперечники: вправо +2 ожидался Y=15, получили ${JSON.stringify(right)}`);
+        }
+        if (!left || Math.abs(left.y - 19) > 1e-3) {
+            problems.push(`поперечники: влево −2 ожидался Y=19, получили ${JSON.stringify(left)}`);
+        }
+        if (!axis?.hit || Math.abs(axis.absZ - groundZ) > 0.05) {
+            problems.push(
+                `поперечники: земля под осью ${axis?.absZ} вместо ${groundZ.toFixed(3)}`
+            );
+        }
+        if (axis?.work == null || Math.abs(axis.work - 0.5) > 0.05) {
+            problems.push(`поперечники: рабочая под осью ${axis?.work} вместо 0.5`);
+        }
+        if (Math.abs((got.res.first.rx || 0) - 0) > 1e-6 || Math.abs((got.res.first.ry || 0) + 1) > 1e-6) {
+            problems.push(
+                `поперечники: правая нормаль (${got.res.first.rx}, ${got.res.first.ry}) вместо (0, -1)`
+            );
+        }
+    }
+    if (!got.dxfXs || got.dxfPolys < 3) {
+        problems.push(
+            `поперечники: DXF LVA_XS ${got.dxfXs}, POLYLINE ${got.dxfPolys} (ждали ≥3)`
+        );
+    }
+
+    const ui = await page.evaluate(() => {
+        document.getElementById('btnPolylineList')?.click();
+        const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
+        const row = rows.find((r) => r.querySelector('input.editInput')?.value === 'Ось-тест-поперечники');
+        const btn = [...(row?.querySelectorAll('button') || [])].find((b) => (b.title || '').includes('Поперечники'));
+        btn?.click();
+        const card = document.getElementById('roadXsCard');
+        const cr = card?.getBoundingClientRect();
+        const btns = [...(card?.querySelectorAll('.modal-actions button') || [])].map((b) => {
+            const r = b.getBoundingClientRect();
+            return { t: (b.textContent || '').trim(), left: r.left, w: r.width, h: r.height };
+        });
+        return {
+            found: !!btn,
+            shown: document.getElementById('roadXsModal')?.classList.contains('show'),
+            left: cr?.left ?? -1,
+            vw: innerWidth,
+            btns
+        };
+    });
+    if (!ui.found || !ui.shown) {
+        problems.push(`поперечники: кнопка в списке не открыла окно (${JSON.stringify(ui)})`);
+    } else if (ui.left < -1) {
+        problems.push(`поперечники: окно уехало влево (${ui.left})`);
+    } else {
+        const apply = ui.btns.find((b) => b.t.includes('Построить'));
+        if (!apply || apply.w < 4 || apply.left < -1) {
+            problems.push(`поперечники: кнопка «Построить» не видна (${JSON.stringify(apply)})`);
+        }
+    }
+
+    await page.evaluate(() => {
+        window.BimLvaDebug.clearRoadXs();
+        document.getElementById('roadXsClose')?.click();
+        document.getElementById('btnPolylineList')?.click();
+        document.getElementById('polylinesClear')?.click();
+        document.getElementById('polylinesClose')?.click();
+    });
+
+    const axisBtn = await page.evaluate(() => {
+        const btn = document.getElementById('btnRoadAxis');
+        const analyze = document.getElementById('btnRoadAxisAnalyze');
+        btn?.click();
+        const D = window.BimLvaDebug;
+        const on = {
+            text: (btn?.textContent || '').replace(/\s+/g, ' ').trim(),
+            analyze: (analyze?.textContent || '').replace(/\s+/g, ' ').trim(),
+            disabled: !!btn?.disabled,
+            on: !!btn?.classList.contains('on'),
+            analyzeOn: !!analyze?.classList.contains('on'),
+            drawMode: !!D.drawMode,
+            road: !!D.drawingRoadAxis
+        };
+        btn?.click();
+        return {
+            ...on,
+            after: {
+                drawMode: !!D.drawMode,
+                road: !!D.drawingRoadAxis,
+                on: !!btn?.classList.contains('on')
+            }
+        };
+    });
+    if (!axisBtn.text.includes('Ось трассы') || !axisBtn.analyze.includes('Ось трассы') || axisBtn.disabled) {
+        problems.push(`ось трассы: кнопки нет или выключена (${JSON.stringify(axisBtn)})`);
+    }
+    if (!axisBtn.on || !axisBtn.analyzeOn || !axisBtn.drawMode || !axisBtn.road) {
+        problems.push(`ось трассы: клик не включил черчение (${JSON.stringify(axisBtn)})`);
+    }
+    if (axisBtn.after.drawMode || axisBtn.after.road || axisBtn.after.on) {
+        problems.push(`ось трассы: повторный клик не выключил режим (${JSON.stringify(axisBtn.after)})`);
+    }
+
+    return {
+        stations: got.res?.stations || 0,
+        hits: got.res?.hits || 0
+    };
+}
+
+/**
  * Видовой куб. Проверяем не «кнопка нажалась», а куда встала камера: вид
  * сверху обязан смотреть строго вниз, вид с юга — строго на север, иначе
  * это не стандартный вид, а «примерно похоже».
@@ -2634,6 +2796,7 @@ async function main() {
                     draw = await checkDrawDxf(page);
                     sweep = await checkSweep(page);
                     slope = await checkSlopeToTerrain(page);
+                    roadXs = await checkRoadCrossSections(page);
                     viewCube = await checkViewCube(page);
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
@@ -2724,6 +2887,11 @@ async function main() {
         console.log(
             `откосы:    насыпь ${slope.fillVolume.toFixed(2)} м³, выемка ${slope.cutVolume.toFixed(2)} м³ ` +
             '(сошлись с аналитикой на ровной площадке)'
+        );
+    }
+    if (roadXs) {
+        console.log(
+            `поперечники: сечений ${roadXs.stations}, точек земли ${roadXs.hits}`
         );
     }
     if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');
