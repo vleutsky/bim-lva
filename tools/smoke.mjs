@@ -2924,6 +2924,34 @@ async function main() {
                 .catch(() => false);
             if (!ifcLoaded) problems.push('IFC не загрузился: дерево модели осталось пустым');
             else {
+                const gridZoom = await page.evaluate(() => {
+                    const D = window.BimLvaDebug;
+                    const grid = {
+                        visible: !!D.gridVisible,
+                        btn: !!document.getElementById('gridBtn')?.classList.contains('on')
+                    };
+                    const prevDim = D.sceneMaxDim;
+                    const dist0 = D.cameraDistance;
+                    D.setCameraDistance(2500);
+                    D.setSceneMaxDim(2500);
+                    const miss = D.zoomStep(-100, false);
+                    D.setCameraDistance(dist0);
+                    D.setSceneMaxDim(prevDim);
+                    return { grid, miss };
+                });
+                if (gridZoom.grid.visible || gridZoom.grid.btn) {
+                    problems.push(
+                        `сетка после загрузки не убралась (visible=${gridZoom.grid.visible}, кнопка on=${gridZoom.grid.btn})`
+                    );
+                }
+                const miss = gridZoom.miss;
+                if (!miss || !(miss.after < miss.before * 0.92)) {
+                    problems.push(
+                        `зум колесом на большой сцене слишком мелкий: ` +
+                        `${miss?.before?.toFixed?.(1)} → ${miss?.after?.toFixed?.(1)} м`
+                    );
+                }
+
                 // Порядок важен: «Ведомость» ругается только когда ничего не
                 // выделено, а прогон коллизий выделяет тысячи элементов —
                 // поэтому уведомления идут первыми, коллизии последними.

@@ -27,6 +27,8 @@ const problems = [];   // ломают страницу — это чинить
 const warnings = [];   // стоит знать, но само по себе не поломка
 
 async function resolveChromium() {
+    const explicit = process.env.SMOKE_CHROMIUM;
+    if (explicit) return explicit;
     const base = process.env.PLAYWRIGHT_BROWSERS_PATH;
     if (!base) return undefined;
     for (const dir of (await fs.readdir(base).catch(() => []))
