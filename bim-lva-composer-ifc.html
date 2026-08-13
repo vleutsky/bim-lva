@@ -3699,8 +3699,8 @@
                 От каждой точки линии откос идёт по нормали в плане до пересечения
                 с рельефом или с уже построенными откосами и площадками: выше
                 земли на бровке — насыпь, ниже — выемка. Линия
-                выхода добавляется отдельной полилинией (правится,
-                уходит в DXF). У замкнутого контура середина заполняется как
+                выхода добавляется отдельной полилинией (правится на сцене).
+                У замкнутого контура середина заполняется как
                 площадка (заливка поверх рельефа, цвет задаётся отдельно);
                 внутрь своей площадки откос не идёт. У разомкнутой линии
                 торцы закрываются откосом вдоль оси. На вогнутых
@@ -3708,7 +3708,8 @@
                 налезать друг на друга — это не вычищается. Где поверхность не
                 найдена или откос не дотянулся за максимальный вылет — участок
                 пропускается.
-                Готовый TIN уходит в Civil 3D как DXF (3DFACE) или LandXML (Surface).
+                Готовый TIN уходит в Civil 3D как DXF (одна 3D-сеть на площадку,
+                без контурных линий) или LandXML (Surface).
             </div>
             <div class="prop small"><div class="k">Линия (бровка)</div><select class="editInput" id="slopeSelect"></select></div>
             <div class="prop small">
@@ -3727,7 +3728,7 @@
             <div class="prop small"><div class="k">Цвет площадки</div><input type="color" class="polyline-color" id="slopePadColor" value="#d4a05a" title="Заливка середины замкнутого контура — видна сверху поверх рельефа"></div>
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
-                <button class="btn" id="slopeExportDxf" title="Площадка и откосы треугольниками 3DFACE, координаты абсолютные, единицы — метры. Civil и nanoCAD открывают R12">⬇ DXF</button>
+                <button class="btn" id="slopeExportDxf" title="Площадка и откосы одной 3D-сетью (POLYFACE MESH), координаты абсолютные, единицы — метры. Civil и nanoCAD открывают R12">⬇ DXF</button>
                 <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
                 <button class="btn" id="slopeOpenTable" title="Таблица всех построенных площадок">▣ Таблица</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
@@ -5176,7 +5177,10 @@
                         skippedNoGround: s.skippedNoGround,
                         skippedNotReached: s.skippedNotReached,
                         exitPolylineIds: s.exitPolylineIds.slice(),
-                        triangles: s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0,
+                        triangles: (s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0) +
+                            (s.cutMesh && s.cutMesh !== s.mesh ? s.cutMesh.geometry.attributes.position.count / 3 : 0),
+                        cutTriangles: s.cutMesh ? s.cutMesh.geometry.attributes.position.count / 3 : 0,
+                        cutOverlay: !!(s.cutMesh && s.cutMesh.material.depthTest === false),
                         exits: s.sections.map((sec) => sec.valid
                             ? { d: sec.distance, mode: sec.mode, x: sec.exit.x, y: sec.exit.y, z: sec.exit.z }
                             : { valid: false, reason: sec.reason }),
@@ -5258,6 +5262,16 @@
                     .find((m) => id == null || id === 0 || m.id === id)
                     || slopeModels[slopeModels.length - 1];
                 return sm ? buildSlopeLandXml(sm) : null;
+            },
+            /**
+             * DXF одной площадки без скачивания: полигональная сеть (не рёбра
+             * отдельными 3D-полилиниями). id построения или 0/null — последнее.
+             */
+            slopeDxfPreview(id) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                return sm?.tin?.faces?.length ? buildDxf([], [], sm) : '';
             },
             /** Кадрировать полилинию: 'keep' — текущим видом, 'plan' — сверху. */
             focusPolyline(id, how) {
@@ -7502,7 +7516,7 @@
             return faces;
         }
 
-        function slopeMakeMesh(positions, colors, name) {
+        function slopeMakeMesh(positions, colors, name, overlay) {
             if (!positions.length) return null;
             const geom = new THREE.BufferGeometry();
             geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -7510,14 +7524,28 @@
                 geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
             }
             geom.computeVertexNormals();
-            const mat = new THREE.MeshStandardMaterial({
-                vertexColors: !!(colors && colors.length),
-                color: colors && colors.length ? 0xffffff : 0xc9793a,
-                roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide
-            });
+            const mat = overlay
+                ? new THREE.MeshBasicMaterial({
+                    vertexColors: !!(colors && colors.length),
+                    color: colors && colors.length ? 0xffffff : 0x3a83c9,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.92,
+                    depthTest: false,
+                    depthWrite: false,
+                    toneMapped: false
+                })
+                : new THREE.MeshStandardMaterial({
+                    vertexColors: !!(colors && colors.length),
+                    color: colors && colors.length ? 0xffffff : 0xc9793a,
+                    roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide
+                });
             const mesh = new THREE.Mesh(geom, mat);
             mesh.name = name;
+            mesh.renderOrder = overlay ? 49 : 0;
+            mesh.frustumCulled = false;
             mesh.userData.isSlopeSurface = true;
+            mesh.userData.isSlopeCutOverlay = !!overlay;
             slopeGroup.add(mesh);
             return mesh;
         }
@@ -7892,10 +7920,18 @@
             const brows = stations.map((s) => s.brow);
 
             let fill = 0, cut = 0;
-            const positions = [];
-            const colors = [];
+            const fillPos = [], fillCol = [], cutPos = [], cutCol = [];
             const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
             const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
+            const pushMode = (mode, a, b, c) => {
+                const isCut = mode === 'cut';
+                slopePushTri(
+                    isCut ? cutPos : fillPos,
+                    isCut ? cutCol : fillCol,
+                    a, b, c,
+                    isCut ? cutColor : fillColor
+                );
+            };
             const last = closed ? stations.length : stations.length - 1;
             const hinges = [];
             for (let i = 0; i < last; i++) {
@@ -7907,8 +7943,10 @@
                 const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
                 const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
                 if (dist < 1e-6) {
-                    const col = a.mode === 'cut' ? cutColor : fillColor;
-                    slopePushTri(positions, colors, edgeA, exitA, exitB, col);
+                    // Веер с одного угла: если хоть одно сечение выемка —
+                    // кладём в оверлей, иначе треугольник прячется под рельефом.
+                    const mode = (a.mode === 'cut' || b.mode === 'cut') ? 'cut' : 'fill';
+                    pushMode(mode, edgeA, exitA, exitB);
                     continue;
                 }
                 if (a.mode !== 'flat' && b.mode === 'flat') {
@@ -7921,10 +7959,8 @@
                     hinges.push(hinge);
                     const Hv = new THREE.Vector3(hinge.x, hinge.y, hinge.z);
                     const t = Math.min(1, Math.max(0, hinge.t));
-                    const colA = a.mode === 'cut' ? cutColor : fillColor;
-                    const colB = b.mode === 'cut' ? cutColor : fillColor;
-                    slopePushTri(positions, colors, edgeA, exitA, Hv, colA);
-                    slopePushTri(positions, colors, Hv, exitB, edgeB, colB);
+                    pushMode(a.mode === 'cut' ? 'cut' : 'fill', edgeA, exitA, Hv);
+                    pushMode(b.mode === 'cut' ? 'cut' : 'fill', Hv, exitB, edgeB);
                     const volA = 0.5 * a.area * dist * t;
                     const volB = 0.5 * b.area * dist * (1 - t);
                     if (a.mode === 'cut') cut += volA; else fill += volA;
@@ -7936,15 +7972,23 @@
                 else if (a.mode === 'fill' && b.mode === 'fill') fill += vol;
                 else if (a.mode === 'fill' || b.mode === 'fill') fill += vol;
                 else cut += vol;
-                const col = a.mode === 'cut' ? cutColor : fillColor;
-                slopePushTri(positions, colors, edgeA, exitA, exitB, col);
-                slopePushTri(positions, colors, edgeA, exitB, edgeB, col);
+                pushMode(a.mode === 'cut' ? 'cut' : 'fill', edgeA, exitA, exitB);
+                pushMode(
+                    (b.mode === 'cut' || b.mode === 'fill') ? b.mode : (a.mode === 'cut' ? 'cut' : 'fill'),
+                    edgeA, exitB, edgeB
+                );
             }
 
-            const mesh = slopeMakeMesh(
-                positions, colors,
+            const fillMesh = slopeMakeMesh(
+                fillPos, fillCol,
                 `Откос · ${side === 'left' ? 'влево' : 'вправо'}`
             );
+            const cutMesh = slopeMakeMesh(
+                cutPos, cutCol,
+                `Откос · выемка · ${side === 'left' ? 'влево' : 'вправо'}`,
+                true
+            );
+            const mesh = fillMesh || cutMesh;
 
             const skippedNoGround = sections.filter((s) => !s.valid && s.reason === 'no-ground').length;
             const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
@@ -7962,7 +8006,7 @@
             });
 
             return {
-                side, mesh, fill, cut, sections,
+                side, mesh, cutMesh, fill, cut, sections,
                 exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
                 skippedNoGround, skippedNotReached,
                 hinges,
@@ -7973,8 +8017,8 @@
         /**
          * Замкнутый контур выхода для разомкнутой бровки «в обе стороны»:
          * левый выход + торец конца + правый выход назад + торец начала.
-         * Без этого в DXF уезжают две разомкнутые линии, и Civil не видит
-         * границу площадки.
+         * На сцене это одна линия границы; в DXF площадки уходит TIN-сеть,
+         * а не этот контур.
          */
         function buildSlopeOuterContour(record, sideResults, capExits, opts) {
             if (record.closed) return null;
@@ -8000,7 +8044,12 @@
 
         function collectSlopeTin(model) {
             const tris = [];
-            model.sides.forEach((s) => slopeMeshTriangles(s.mesh).forEach((t) => tris.push(t)));
+            model.sides.forEach((s) => {
+                slopeMeshTriangles(s.mesh).forEach((t) => tris.push(t));
+                if (s.cutMesh && s.cutMesh !== s.mesh) {
+                    slopeMeshTriangles(s.cutMesh).forEach((t) => tris.push(t));
+                }
+            });
             if (model.padTriangles?.length) {
                 model.padTriangles.forEach((t) => tris.push(t));
             } else if (model.padMesh) {
@@ -8110,23 +8159,73 @@
             return lines.join('\n');
         }
 
+        /**
+         * Площадка в DXF — одна POLYFACE MESH на построение (флаг 70=64),
+         * а не набор 3D-полилиний по рёбрам. R12 не умеет 3DSOLID, сеть из
+         * сваренных треугольников TIN — ближайшее к «единому 3D-телу».
+         * Внутренние рёбра прячем (отрицательный индекс вершины), чтобы в
+         * каркасе не читалась сетка треугольников.
+         */
+        function slopeTinToPolyfaceDxf(g, n, sm) {
+            const tin = sm?.tin;
+            if (!tin?.faces?.length || !tin.points?.length) return 0;
+            const absPts = tin.points.map((p) => scenePointToAbs(p));
+            const edgeKey = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
+            const edgeUse = new Map();
+            tin.faces.forEach((f) => {
+                for (let i = 0; i < 3; i++) {
+                    const k = edgeKey(f[i], f[(i + 1) % 3]);
+                    edgeUse.set(k, (edgeUse.get(k) || 0) + 1);
+                }
+            });
+            g(0, 'POLYLINE'); g(8, 'LVA_SLOPE'); g(66, 1);
+            g(70, 64);
+            g(71, absPts.length);
+            g(72, tin.faces.length);
+            absPts.forEach((p) => {
+                g(0, 'VERTEX'); g(8, 'LVA_SLOPE');
+                g(10, n(p.x)); g(20, n(p.y)); g(30, n(p.z));
+                g(70, 192);
+            });
+            tin.faces.forEach((f) => {
+                g(0, 'VERTEX'); g(8, 'LVA_SLOPE');
+                g(10, 0); g(20, 0); g(30, 0);
+                g(70, 128);
+                for (let i = 0; i < 3; i++) {
+                    const a = f[i];
+                    const b = f[(i + 1) % 3];
+                    const hidden = (edgeUse.get(edgeKey(a, b)) || 0) > 1;
+                    g(71 + i, hidden ? -(a + 1) : (a + 1));
+                }
+                g(74, 0);
+            });
+            g(0, 'SEQEND'); g(8, 'LVA_SLOPE');
+            return tin.faces.length;
+        }
+
+        function slopeModelsForDxf(only) {
+            if (!only) return slopeModels;
+            return Array.isArray(only) ? only : [only];
+        }
+
         function slopeTinFacesToDxfPairs(g, n, only) {
-            const faces = [];
-            const list = only ? [only] : slopeModels;
-            list.forEach((sm) => {
-                (sm.tin?.faces || []).forEach((f) => {
-                    const pts = f.map((i) => scenePointToAbs(sm.tin.points[i]));
-                    faces.push(pts);
+            let faces = 0;
+            slopeModelsForDxf(only).forEach((sm) => {
+                faces += slopeTinToPolyfaceDxf(g, n, sm);
+            });
+            return faces;
+        }
+
+        /** Линии выхода и наружный контур — следствие TIN, в DXF не дублируем. */
+        function slopeDerivedPolylineIds() {
+            const ids = new Set();
+            slopeModels.forEach((sm) => {
+                if (sm.contourPolylineId) ids.add(sm.contourPolylineId);
+                (sm.sides || []).forEach((s) => {
+                    (s.exitPolylineIds || []).forEach((id) => ids.add(id));
                 });
             });
-            faces.forEach((pts) => {
-                g(0, '3DFACE'); g(8, 'LVA_SLOPE');
-                for (let k = 0; k < 3; k++) {
-                    g(10 + k, n(pts[k].x)); g(20 + k, n(pts[k].y)); g(30 + k, n(pts[k].z));
-                }
-                g(13, n(pts[2].x)); g(23, n(pts[2].y)); g(33, n(pts[2].z));
-            });
-            return faces.length;
+            return ids;
         }
 
         function downloadTextFile(text, filename, mime) {
@@ -8139,29 +8238,27 @@
             URL.revokeObjectURL(url);
         }
 
-        function slopeRelatedPolylines(sm) {
-            const ids = new Set([sm.polylineId, sm.contourPolylineId].filter(Boolean));
-            sm.sides.forEach((s) => s.exitPolylineIds.forEach((id) => ids.add(id)));
-            return drawnPolylines.filter((r) => ids.has(r.id));
-        }
-
         function exportSlopeDxf(model) {
-            const target = model || slopeModels[slopeModels.length - 1];
-            if (!target?.tin?.faces?.length) {
+            const list = (model ? [model] : slopeModels).filter((sm) => sm?.tin?.faces?.length);
+            if (!list.length) {
                 notifyError('Сначала постройте откосы — выгружать нечего.');
                 return false;
             }
-            const text = model
-                ? buildDxf(slopeRelatedPolylines(target), [], target)
-                : buildDxf(drawnPolylines, coordPins);
+            const target = list[0];
+            const text = buildDxf([], [], model || list);
+            const faces = list.reduce((n, sm) => n + sm.tin.faces.length, 0);
             const slug = String(target.name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
             downloadTextFile(
                 text,
                 `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dxf`,
                 'application/dxf'
             );
-            notify(`DXF площадки «${target.name}»: ${target.tin.faces.length} треугольников, координаты мировые, метры.`);
-            trackUsage('slope_export_dxf', { faces: target.tin.faces.length });
+            notify(
+                list.length === 1
+                    ? `DXF площадки «${target.name}»: 3D-сеть, ${faces} треугольников, без контурных линий. Координаты мировые, метры.`
+                    : `DXF: ${list.length} площадок, ${faces} треугольников 3D-сети, без контурных линий.`
+            );
+            trackUsage('slope_export_dxf', { faces, pads: list.length });
             return true;
         }
 
@@ -8194,11 +8291,11 @@
                 if (polylineEditingId === rec.id) polylineEditingId = null;
             };
             sm.sides.forEach((s) => {
-                if (s.mesh) {
-                    slopeGroup.remove(s.mesh);
-                    s.mesh.geometry.dispose();
-                    s.mesh.material.dispose();
-                }
+                [s.mesh, s.cutMesh].filter((m, i, arr) => m && arr.indexOf(m) === i).forEach((mesh) => {
+                    slopeGroup.remove(mesh);
+                    mesh.geometry.dispose();
+                    mesh.material.dispose();
+                });
                 s.exitPolylineIds.forEach(dropPoly);
             });
             if (sm.contourPolylineId) dropPoly(sm.contourPolylineId);
@@ -8365,7 +8462,7 @@
                 const dxf = document.createElement('button');
                 dxf.className = 'btn';
                 dxf.textContent = '⬇ DXF';
-                dxf.title = 'Выгрузить эту площадку в DXF';
+                dxf.title = 'Выгрузить эту площадку одной 3D-сетью, без контурных линий';
                 dxf.addEventListener('click', () => exportSlopeDxf(sm));
 
                 const xml = document.createElement('button');
@@ -10252,7 +10349,9 @@
             g(0, 'ENDTAB'); g(0, 'ENDSEC');
 
             g(0, 'SECTION'); g(2, 'ENTITIES');
+            const skipPolyIds = slopeDerivedPolylineIds();
             polylines.forEach((poly) => {
+                if (skipPolyIds.has(poly.id)) return;
                 const is3d = poly.kind === '3d';
                 const layer = is3d ? 'LVA_3D' : 'LVA_2D';
                 // У замкнутого контура замыкание задаётся флагом (бит 1),
@@ -10271,24 +10370,27 @@
                 g(0, 'SEQEND'); g(8, layer);
             });
             // Тела уходят треугольниками 3DFACE: их читает и Civil, и nanoCAD,
-            // а телесных примитивов в R12 просто нет
-            sweptSolids.forEach((solid) => {
-                const pos = solid.mesh.geometry.attributes.position;
-                for (let i = 0; i < pos.count; i += 3) {
-                    g(0, '3DFACE'); g(8, 'LVA_SOLID');
-                    for (let k = 0; k < 3; k++) {
-                        const abs = worldPointToAbsoluteXYZ(
-                            new THREE.Vector3(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k))
+            // а телесных примитивов в R12 просто нет. Площадки — отдельно
+            // полигональной сетью (одно тело на построение), не 3DFACE.
+            if (onlySlope == null) {
+                sweptSolids.forEach((solid) => {
+                    const pos = solid.mesh.geometry.attributes.position;
+                    for (let i = 0; i < pos.count; i += 3) {
+                        g(0, '3DFACE'); g(8, 'LVA_SOLID');
+                        for (let k = 0; k < 3; k++) {
+                            const abs = worldPointToAbsoluteXYZ(
+                                new THREE.Vector3(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k))
+                            );
+                            g(10 + k, n(abs.x)); g(20 + k, n(abs.y)); g(30 + k, n(abs.z));
+                        }
+                        // Четвёртая точка совпадает с третьей — так пишут треугольник
+                        const last = worldPointToAbsoluteXYZ(
+                            new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2))
                         );
-                        g(10 + k, n(abs.x)); g(20 + k, n(abs.y)); g(30 + k, n(abs.z));
+                        g(13, n(last.x)); g(23, n(last.y)); g(33, n(last.z));
                     }
-                    // Четвёртая точка совпадает с третьей — так пишут треугольник
-                    const last = worldPointToAbsoluteXYZ(
-                        new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2))
-                    );
-                    g(13, n(last.x)); g(23, n(last.y)); g(33, n(last.z));
-                }
-            });
+                });
+            }
             slopeTinFacesToDxfPairs(g, n, onlySlope);
             pins.forEach((pin) => {
                 g(0, 'POINT'); g(8, 'LVA_POINTS');
@@ -10312,9 +10414,13 @@
             a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}.dxf`;
             a.click();
             URL.revokeObjectURL(url);
+            const derived = slopeDerivedPolylineIds();
+            const polyCount = drawnPolylines.filter((p) => !derived.has(p.id)).length;
+            const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
             notify(
-                `DXF: полилиний ${drawnPolylines.length}, точек ${coordPins.length}. ` +
-                `Координаты мировые, единицы — метры.`
+                `DXF: полилиний ${polyCount}, точек ${coordPins.length}` +
+                (padCount ? `, площадок ${padCount} (3D-сеть)` : '') +
+                `. Координаты мировые, единицы — метры.`
             );
             trackUsage('draw_export_dxf', { polylines: drawnPolylines.length, pins: coordPins.length });
         }
@@ -27946,7 +28052,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: '6050c7d',
+            buildId: 'padmesh',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -27956,7 +28062,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: откос верхней площадки садится на нижнюю и обходит её углы; переход насыпь→выемка от пересечения с землёй; ПКМ по линии компактный.',
+                '2026.08.13: выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть, не рёбра линиями; откос верхней площадки обходит углы нижней; переход насыпь→выемка от пересечения с землёй.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
@@ -28021,7 +28127,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=84').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=86').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
