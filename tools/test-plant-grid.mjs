@@ -32,6 +32,8 @@ const check = (ok, what) => {
 };
 
 async function resolveChromium() {
+    const explicit = process.env.SMOKE_CHROMIUM;
+    if (explicit) return explicit;
     const base = process.env.PLAYWRIGHT_BROWSERS_PATH;
     if (!base) return undefined;
     const entries = await fs.readdir(base).catch(() => []);
@@ -125,7 +127,9 @@ try {
     // Ни один файл не должен садиться в свой центр: координаты общие.
     // Именно 'self' и уничтожал сводку.
     const rebases = await page.evaluate(() =>
-        window.BimLvaDebug.modelAbsExtents.map((m) => ({ file: m.file, rebase: m.rebase, cto: m.cto })));
+        window.BimLvaDebug.modelAbsExtents.map((m) => ({
+            file: m.file, rebase: m.rebase, cto: m.cto, ctoRestored: m.ctoRestored
+        })));
     rebases.forEach((r) => {
         console.log(`  ${r.file}: rebase=${r.rebase}, COORDINATE_TO_ORIGIN=${r.cto}`);
         check(r.rebase !== 'self',
@@ -135,6 +139,34 @@ try {
         check(!r.cto,
             `${r.file} открыт БЕЗ сброса координат в ноль`);
     });
+
+    const policy = await page.evaluate(() => window.BimLvaDebug.coordToOriginPolicy({
+        maxAbs: 1_195_000, looksLikeMillimetres: true, lengthToMeters: 0.001,
+        isTekla: true, isIfc2x3: true, booleanOpsCount: 397
+    }));
+    check(!policy, 'КМ 1195 м / 397 вырезов — без упреждающего сброса координат');
+
+    const kmText = await fs.readFile(kmFile, 'utf8');
+    const sampled = await page.evaluate(
+        (text) => window.BimLvaDebug.sampleIfcWorldCenter(text, 0.001),
+        kmText
+    );
+    console.log(`  выборка КМ: maxAbs=${sampled.maxAbs}, shift=${JSON.stringify(sampled.shift)}`);
+    check(!!sampled.shift, 'по точкам файла считается сдвиг для восстановления после CTO');
+    if (sampled.shift) {
+        check(Math.abs(sampled.shift.x - KM.x) < 0.6,
+            `восстановление E ${sampled.shift.x.toFixed(2)} ≈ ${KM.x}`);
+        check(Math.abs(sampled.shift.y - KM.z) < 0.6,
+            `восстановление h ${sampled.shift.y.toFixed(2)} ≈ ${KM.z}`);
+        check(Math.abs(sampled.shift.z + KM.y) < 0.6,
+            `восстановление −N ${sampled.shift.z.toFixed(2)} ≈ ${-KM.y}`);
+    }
+
+    const toasts = await page.evaluate(() =>
+        [...document.querySelectorAll('.toast-text, .toast .toast-text')]
+            .map((t) => t.textContent || '').join('\n'));
+    check(!/СБРОСОМ КООРДИНАТ/.test(toasts),
+        'нет предупреждения о сбросе координат на заводской сетке');
 
     // И абсолютные координаты должны остаться настоящими — заводская сетка
     // это такие же честные координаты, как геодезические.

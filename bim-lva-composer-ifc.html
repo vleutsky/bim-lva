@@ -5820,10 +5820,40 @@
                         file: mod.filename || '',
                         rebase: mod.coordRebase || '',
                         cto: !!mod.coordinateToOrigin,
+                        ctoRestored: !!(mod.ctoWorldRestored || mod.worldContextShiftApplied),
                         ...mod.absExtents
                     });
                 }
                 return out;
+            },
+            /**
+             * Решение «открывать ли IFC со сбросом в ноль» — то же, что при загрузке.
+             * Заводская сетка (~1200 м) + вырезы Tekla не должна давать true.
+             */
+            coordToOriginPolicy(opts = {}) {
+                return shouldForceCoordinateToOrigin({
+                    coordExtents: {
+                        maxAbs: opts.maxAbs,
+                        looksLikeMillimetres: !!opts.looksLikeMillimetres
+                    },
+                    lengthToMeters: opts.lengthToMeters,
+                    isTekla: !!opts.isTekla,
+                    isIfc2x3: !!opts.isIfc2x3,
+                    booleanOpsCount: opts.booleanOpsCount
+                });
+            },
+            sampleIfcWorldCenter(text, lengthToMeters) {
+                const ext = sampleIfcCartesianPointExtents(text);
+                const shift = ifcYUpShiftFromSampledExtents(ext, lengthToMeters);
+                return {
+                    maxAbs: ext.maxAbs,
+                    samples: ext.samples,
+                    looksLikeMillimetres: ext.looksLikeMillimetres,
+                    center: ext.center,
+                    shift: shift
+                        ? { x: shift.x, y: shift.y, z: shift.z, mag: shift.length() }
+                        : null
+                };
             }
         });
         renderer.setPixelRatio(basePixelRatio);
@@ -18320,8 +18350,11 @@ uniform vec3 uBatchSelColor;
         }
 
         function sampleIfcCartesianPointExtents(ifcText, maxSamples = 80) {
-    const out = { maxAbs: 0, samples: 0, looksLikeMillimetres: false };
+    const out = {
+        maxAbs: 0, samples: 0, looksLikeMillimetres: false, center: null
+    };
     if (!ifcText) return out;
+    const pts = [];
     const re = /IFCCARTESIANPOINT\s*\(\s*\(([^)]*)\)/gi;
     let m;
     while ((m = re.exec(ifcText)) && out.samples < maxSamples) {
@@ -18329,13 +18362,50 @@ uniform vec3 uBatchSelColor;
         .split(',')
         .map((p) => Number(String(p).trim()))
         .filter((n) => Number.isFinite(n));
-      if (!nums.length) continue;
+      if (nums.length < 2) continue;
+      const x = nums[0], y = nums[1], z = nums.length > 2 ? nums[2] : 0;
+      const mag = Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
       out.samples += 1;
-      for (const n of nums) out.maxAbs = Math.max(out.maxAbs, Math.abs(n));
+      out.maxAbs = Math.max(out.maxAbs, mag);
+      pts.push({ x, y, z, mag });
     }
     out.looksLikeMillimetres = out.maxAbs >= 1e5;
+    const cut = out.maxAbs * 0.25;
+    const large = pts.filter((p) => p.mag >= cut);
+    if (large.length) {
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      large.forEach((p) => {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+        minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+      });
+      out.center = {
+        x: (minX + maxX) / 2,
+        y: (minY + maxY) / 2,
+        z: (minZ + maxZ) / 2
+      };
+    }
     return out;
   }
+
+        /**
+         * Центр крупных IFCCARTESIANPOINT → сдвиг фрагментов web-ifc (Y-up, метры).
+         * Файл STEP обычно Z-up (E, N, h); web-ifc отдаёт (E, h, −N).
+         * Нужен, когда COORDINATE_TO_ORIGIN уже съел абсолютное положение:
+         * GetCoordinationMatrix нули, а координаты площадки в тексте файла живы.
+         */
+        function ifcYUpShiftFromSampledExtents(coordExtents, lengthToMeters) {
+            const c = coordExtents?.center;
+            if (!c) return null;
+            const toM = Number(lengthToMeters);
+            const scale = Number.isFinite(toM) && toM > 0
+                ? toM
+                : (coordExtents.looksLikeMillimetres ? 0.001 : 1);
+            const x = c.x * scale, y = c.y * scale, z = c.z * scale;
+            if (!(Math.hypot(x, y, z) >= SELF_CENTER_MAX_COORD)) return null;
+            return new THREE.Vector3(x, z, -y);
+        }
 
   /**
    * IfcGeometricRepresentationContext.WorldCoordinateSystem — мировой сдвиг,
@@ -19109,7 +19179,20 @@ uniform vec3 uBatchSelColor;
                     console.warn('[BIM.LVA] кэш геометрии недоступен:', cacheError);
                 }
                 if (cachedGeometry?.meta?.openSettings) {
-                    Object.assign(openSettings, cachedGeometry.meta.openSettings);
+                    const cachedCto = !!cachedGeometry.meta.openSettings.COORDINATE_TO_ORIGIN;
+                    // Старый кэш мог быть посчитан со сбросом в ноль (правило Tekla
+                    // на 50 м). Политика с тех пор другая — на заводской сетке
+                    // CTO не включаем заранее. Геометрию из такой записи брать
+                    // нельзя: она уже у нуля, и сводка снова разъедется.
+                    if (cachedCto !== !!forceCoordinateToOrigin) {
+                        console.warn(
+                            `[BIM.LVA] ${file.name}: кэш геометрии с COORDINATE_TO_ORIGIN=` +
+                            `${cachedCto}, сейчас ${!!forceCoordinateToOrigin} — тесселирую заново`
+                        );
+                        cachedGeometry = null;
+                    } else {
+                        Object.assign(openSettings, cachedGeometry.meta.openSettings);
+                    }
                 }
 
                 showLoader(
@@ -19323,7 +19406,14 @@ uniform vec3 uBatchSelColor;
                                 angleRad: wcsRaw.angleRad
                             };
                             const wcsMag = Math.hypot(...wcs.location);
-                            if (wcsMag >= LARGE_COORD_THRESHOLD) {
+                            // После CTO геометрия уже у нуля, и заводская сетка
+                            // (~1200 м) тоже «маленькая» для порога 5000.
+                            // Обычный путь (без CTO) порог не трогаем — иначе
+                            // WCS и цепочка размещения наложатся дважды.
+                            const wcsNeed = modData.coordinateToOrigin
+                                ? SELF_CENTER_MAX_COORD
+                                : LARGE_COORD_THRESHOLD;
+                            if (wcsMag >= wcsNeed) {
                                 const corr = buildWorldCoordinateSystemCorrectionMatrix(wcs);
                                 applyMatrix4ToFragments(fragments, corr);
                                 bakeFragmentTransformsIntoGeometry(fragments);
@@ -19341,6 +19431,39 @@ uniform vec3 uBatchSelColor;
                                     `экспорта через ODA (Renga, nanoCAD). Применены автоматически.`
                                 );
                             }
+                        }
+                    }
+                }
+
+                // CTO съел абсолютные координаты. WCS мог уже вернуть их выше;
+                // если геометрия всё ещё у нуля — сажаем по крупным точкам файла.
+                if (modData.coordinateToOrigin && !modData.worldContextShiftApplied) {
+                    const ax = modData.absExtents;
+                    const centerMag = ax
+                        ? Math.hypot(
+                            (ax.e.min + ax.e.max) / 2,
+                            (ax.n.min + ax.n.max) / 2,
+                            (ax.h.min + ax.h.max) / 2
+                        )
+                        : 0;
+                    if (centerMag < SELF_CENTER_MAX_COORD) {
+                        const shift = ifcYUpShiftFromSampledExtents(
+                            coordExtents,
+                            declaredLengthToMeters || lengthToMetersEstimate
+                        );
+                        if (shift) {
+                            applyMatrix4ToFragments(
+                                fragments,
+                                new THREE.Matrix4().makeTranslation(shift.x, shift.y, shift.z)
+                            );
+                            bakeFragmentTransformsIntoGeometry(fragments);
+                            modData.absExtents = computeFragmentsAbsoluteBounds(fragments);
+                            modData.ctoWorldRestored = true;
+                            console.info(
+                                `[BIM.LVA] ${file.name}: после COORDINATE_TO_ORIGIN положение ` +
+                                `восстановлено по точкам файла (${shift.x.toFixed(2)}, ` +
+                                `${shift.y.toFixed(2)}, ${shift.z.toFixed(2)} м, Y-up)`
+                            );
                         }
                     }
                 }
@@ -19419,13 +19542,22 @@ uniform vec3 uBatchSelColor;
                 // абсолютное положение без единого слова. Предупреждать надо
                 // всюду, где координаты вообще что-то значили.
                 if (modData.coordinateToOrigin && coordExtents.maxAbs * lengthToMetersEstimate >= SELF_CENTER_MAX_COORD) {
-                    notify(
-                        `${file.name}: файл нёс координаты (≈ ${Math.round(coordExtents.maxAbs * lengthToMetersEstimate)} м), ` +
-                        `но из-за плотной CSG-геометрии (${booleanOps}+ вырезов) открыт со СБРОСОМ КООРДИНАТ В НОЛЬ — ` +
-                        `иначе геометрия теряется. Абсолютное положение потеряно: в сводке этот файл встанет не на место, ` +
-                        `а рядом с нулём. Поставьте его: «Выравнивание» → координаты точки вставки.`,
-                        'error'
-                    );
+                    const approxM = Math.round(coordExtents.maxAbs * lengthToMetersEstimate);
+                    if (modData.ctoWorldRestored || modData.worldContextShiftApplied) {
+                        notify(
+                            `${file.name}: плотный CSG (${booleanOps}+ вырезов) тесселирован у нуля, ` +
+                            `положение возвращено по координатам файла (≈ ${approxM} м).`
+                        );
+                    } else {
+                        notify(
+                            `${file.name}: файл нёс координаты (≈ ${approxM} м), ` +
+                            `но из-за плотной CSG-геометрии (${booleanOps}+ вырезов) открыт со СБРОСОМ КООРДИНАТ В НОЛЬ — ` +
+                            `иначе геометрия теряется. Абсолютное положение не удалось восстановить: ` +
+                            `в сводке этот файл встанет не на место, а рядом с нулём. ` +
+                            `Поставьте его: «Выравнивание» → координаты точки вставки.`,
+                            'error'
+                        );
+                    }
                 }
 
                 totalElements += modData.meshesByID.size;
@@ -32170,7 +32302,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: 'road-corridor',
+            buildId: 'cto-restore',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -32180,6 +32312,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.13: Tekla на заводской сетке (~1200 м) больше не садится в ноль из-за вырезов: старый кэш со сбросом отбрасывается, после CSG положение возвращается по координатам файла.',
                 '2026.08.13: «Построить» протягивает шаблон поперечника вдоль оси (полотно); шаблон живой — точки, связи, формы; продольный профиль оси — кнопка 〰.',
                 '2026.08.13: ось трассы — пунктир, кромки ширины сплошные; цвет, слой DXF и толщину оси и кромок можно сменить.',
                 '2026.08.13: поперечники на угле — одна секущая по биссектрисе (уголок кромок), не два перпендикуляра; чертёж сечения с полосой дороги даже на плоском рельефе; кромки ширины строятся вместе с осью.',
@@ -32251,7 +32384,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=99').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=100').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
