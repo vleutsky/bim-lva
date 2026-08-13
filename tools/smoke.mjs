@@ -661,6 +661,32 @@ async function checkDrawDxf(page) {
         if (touched !== 1) {
             problems.push(`радиус лёг в ${touched} углов вместо одного: [${filleted.radii.join(', ')}]`);
         }
+        const guides = await page.evaluate(
+            (id) => window.BimLvaDebug.filletGuides(id),
+            three.id
+        );
+        if (!guides?.length) {
+            problems.push('после сопряжения нет пунктирных тангенсов до вершины');
+        } else {
+            if (guides.length !== 1) {
+                problems.push(`тангенсов сопряжения ${guides.length} вместо 1`);
+            }
+            const g = guides[0];
+            const v = three.vertsAbs[1];
+            const dv = Math.hypot(g.vertex.x - v.x, g.vertex.y - v.y, g.vertex.z - v.z);
+            if (dv > 1e-4) {
+                problems.push(`тангенс сопряжения не к той вершине (сдвиг ${dv.toFixed(4)} м)`);
+            }
+            const dIn = Math.hypot(g.tangentIn.x - v.x, g.tangentIn.y - v.y, g.tangentIn.z - v.z);
+            const dOut = Math.hypot(g.tangentOut.x - v.x, g.tangentOut.y - v.y, g.tangentOut.z - v.z);
+            if (dIn < 1e-4 || dOut < 1e-4) {
+                problems.push('тангенс сопряжения выродился в точку');
+            }
+            if (!g.dashed) problems.push('тангенсы сопряжения не пунктирные');
+            if (!(g.width > 0 && g.width < (filleted.width || 2) - 1e-6)) {
+                problems.push(`тангенсы сопряжения толщиной ${g.width} — ждали тоньше линии (${filleted.width})`);
+            }
+        }
     }
 
     // Клик/ПКМ по линии в сцене. Целимся по СПРОЕЦИРОВАННЫМ вершинам, а не по
@@ -1005,8 +1031,14 @@ async function checkDrawDxf(page) {
     const renamed = await page.evaluate(() => window.BimLvaDebug.drawn.some((d) => d.name === 'Ось-тест'));
     if (!renamed) problems.push('переименование полилинии в списке не сработало');
     await page.evaluate(() => document.getElementById('polylinesClear')?.click());
-    const afterClear = await page.evaluate(() => window.BimLvaDebug.drawn.length);
-    if (afterClear !== 0) problems.push(`«Удалить все» оставило ${afterClear} полилиний`);
+    const afterClear = await page.evaluate(() => ({
+        n: window.BimLvaDebug.drawn.length,
+        orphans: window.BimLvaDebug.drawOrphans
+    }));
+    if (afterClear.n !== 0) problems.push(`«Удалить все» оставило ${afterClear.n} полилиний`);
+    if (afterClear.orphans?.length) {
+        problems.push(`«Удалить все» оставило в сцене сирот: ${afterClear.orphans.join(', ')}`);
+    }
     await page.evaluate(() => document.getElementById('polylinesClose')?.click());
 
     // Ввод точки числами. Оси сцены: X — восток, Y — север, азимут в геодезии
@@ -1199,10 +1231,63 @@ async function checkSlopeToTerrain(page) {
         });
         const sides = cut.res.sides.map((s) => s.side).sort().join(',');
         if (sides !== 'left,right') problems.push(`откосы: «в обе стороны» дала стороны ${sides} вместо left,right`);
+        if (!(cut.res.tin?.capFaces > 0)) {
+            problems.push('откосы: торцы разомкнутой линии не закрылись — в TIN дыра с конца');
+        }
+        const contour = await page.evaluate((pid) => {
+            const D = window.BimLvaDebug;
+            const rec = D.drawn.find((d) => d.id === pid);
+            return rec ? { closed: rec.closed, points: rec.points } : null;
+        }, cut.res.contourPolylineId);
+        if (!contour?.closed || contour.points < 4) {
+            problems.push(`откосы: контур выхода «в обе стороны» не замкнут (${JSON.stringify(contour)})`);
+        }
+    }
+
+    // Удаление линии выхода не должно вычёркивать из списка СОСЕДНЮЮ полилинию,
+    // оставляя её объект в сцене: в таблице пусто, а контур на площадке виден.
+    const ghost = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const keepId = D.createPolylineFromPoints(
+            [{ x: -30, y: 12, z: g + 1 }, { x: -26, y: 12, z: g + 1 }],
+            { name: 'Не-трогать' }
+        );
+        const srcId = D.createPolylineFromPoints(
+            [{ x: 10, y: 12, z: g + 2 }, { x: 14.4, y: 12, z: g + 2 }],
+            { name: 'Бровка-выход' }
+        );
+        const res = D.buildSlopeOnPolyline(srcId, { side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const exitId = res?.sides?.[0]?.exitPolylineIds?.[0];
+        const deleted = D.deletePolyline(exitId);
+        const after = D.drawn;
+        return {
+            deleted, exitId, keepId, srcId,
+            keepAlive: after.some((d) => d.id === keepId),
+            srcAlive: after.some((d) => d.id === srcId),
+            exitGone: !after.some((d) => d.id === exitId),
+            orphans: D.drawOrphans.slice()
+        };
+    }, groundZ);
+    if (!ghost.deleted || ghost.exitId == null) {
+        problems.push(`откосы: не удалось удалить линию выхода (${JSON.stringify(ghost)})`);
+    } else {
+        if (!ghost.keepAlive) {
+            problems.push('откосы: удаление линии выхода вычеркнуло соседнюю полилинию из списка, оставив её на сцене');
+        }
+        if (!ghost.srcAlive) {
+            problems.push('откосы: удаление линии выхода сняло и бровку');
+        }
+        if (!ghost.exitGone) problems.push('откосы: линия выхода осталась в списке после удаления');
+        if (ghost.orphans.length) {
+            problems.push(`откосы: после удаления выхода в сцене сироты ${JSON.stringify(ghost.orphans)}`);
+        }
     }
 
     // Максимальный вылет меньше экзит-дистанции — сечения обязаны выпасть из
     // расчёта (пропущены), а не подставить какой-то объём.
+    // Насыпь с прошлого шага лежит на той же бровке: без очистки новый откос
+    // вышел бы на её поверхность, а не в «недолёт».
+    await page.evaluate(() => window.BimLvaDebug.clearSlopes());
     const short = await page.evaluate(([h, m, g]) => {
         const D = window.BimLvaDebug;
         const id = D.createPolylineFromPoints(
@@ -1223,6 +1308,228 @@ async function checkSlopeToTerrain(page) {
             problems.push(`откосы: при недолёте объём не нулевой (насыпь ${s.fill}, выемка ${s.cut})`);
         }
         if (s.exitPolylineIds.length) problems.push('откосы: при недолёте всё равно создалась линия выхода');
+    }
+
+    // Площадка: замкнутый квадрат 4×4 м. Середина обязана заполниться
+    // (2 треугольника), иначе в TIN дыра до исходного рельефа. LandXML —
+    // northing easting elev, DXF — 3DFACE на слое LVA_SLOPE; оба в абсолютных
+    // метрах, как ждёт Civil 3D.
+    await page.evaluate(() => window.BimLvaDebug.clearSlopes());
+    const pad = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const z = g + 2;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 15, z }, { x: 24, y: 15, z },
+                { x: 24, y: 19, z }, { x: 20, y: 19, z }
+            ],
+            { name: 'Откос-тест-площадка', closed: true }
+        );
+        const res = D.buildSlopeOnPolyline(id, {
+            side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30,
+            padColor: '#ff00aa'
+        });
+        const tin = D.slopeTin(res?.id);
+        const xml = D.slopeLandXml(res?.id) || '';
+        const dxf = D.dxfPreview();
+        const p1 = xml.match(/<P id="1">([^<]+)<\/P>/);
+        const xyz = p1 ? p1[1].trim().split(/\s+/).map(Number) : null;
+        const exitId = res?.sides?.[0]?.exitPolylineIds?.[0];
+        const exit = exitId != null ? D.drawn.find((d) => d.id === exitId) : null;
+        return {
+            res, tin,
+            xmlFaces: (xml.match(/<F>/g) || []).length,
+            xmlPnts: (xml.match(/<P id="/g) || []).length,
+            xmlHasSurface: /<Surface /i.test(xml) && /surfType="TIN"/i.test(xml),
+            dxfFaces: (dxf.match(/\r\n3DFACE\r\n/g) || []).length,
+            dxfSlopeLayer: /LVA_SLOPE/.test(dxf),
+            dxfClosed3d: (dxf.match(/\r\n70\r\n9\r\n/g) || []).length,
+            p1: xyz,
+            tin0: tin?.points?.[0] || null,
+            exitClosed: !!exit?.closed,
+            exitPoints: exit?.points || 0,
+            exitDxfVerts: exitId != null ? (D.dxfVertices(exitId)?.verts.length || 0) : 0
+        };
+    }, groundZ);
+    if (!pad.res?.tin) {
+        problems.push('откосы: площадка не собрала TIN');
+    } else {
+        if (pad.res.tin.padFaces !== 2) {
+            problems.push(`откосы: середина площадки ${pad.res.tin.padFaces} треугольников вместо 2 — дыра в TIN`);
+        }
+        const overlay = pad.res.padOverlay;
+        if (!overlay || overlay.depthTest !== false) {
+            problems.push(`откосы: заливка площадки не поверх рельефа (${JSON.stringify(overlay)})`);
+        }
+        if (overlay && overlay.color !== '#ff00aa') {
+            problems.push(`откосы: цвет площадки ${overlay.color} вместо #ff00aa`);
+        }
+        if (pad.res.tin.capFaces) {
+            problems.push(`откосы: у замкнутой площадки не должно быть торцов (${pad.res.tin.capFaces})`);
+        }
+        if (pad.res.tin.faces < 10) {
+            problems.push(`откосы: TIN площадки ${pad.res.tin.faces} граней — мало (середина 2 + 4 борта по 2)`);
+        }
+        if (!pad.xmlHasSurface || pad.xmlFaces !== pad.res.tin.faces || pad.xmlPnts !== pad.res.tin.points) {
+            problems.push(
+                `откосы: LandXML не сходится с TIN (граней xml ${pad.xmlFaces}/${pad.res.tin.faces}, ` +
+                `точек ${pad.xmlPnts}/${pad.res.tin.points})`
+            );
+        }
+        if (pad.p1 && pad.tin0) {
+            // LandXML: northing easting elev = Y X Z абсолютные
+            const dn = Math.abs(pad.p1[0] - pad.tin0.y);
+            const de = Math.abs(pad.p1[1] - pad.tin0.x);
+            const dz = Math.abs(pad.p1[2] - pad.tin0.z);
+            if (dn > 1e-5 || de > 1e-5 || dz > 1e-5) {
+                problems.push(
+                    `откосы: LandXML точка 1 (${pad.p1.join(', ')}) не совпала с TIN ` +
+                    `(N=${pad.tin0.y}, E=${pad.tin0.x}, Z=${pad.tin0.z})`
+                );
+            }
+        } else {
+            problems.push('откосы: в LandXML нет точки id=1');
+        }
+        if (!pad.dxfSlopeLayer || pad.dxfFaces < pad.res.tin.faces) {
+            problems.push(`откосы: DXF площадки — 3DFACE ${pad.dxfFaces}, слой LVA_SLOPE ${pad.dxfSlopeLayer}`);
+        }
+        if (!pad.exitClosed) {
+            problems.push('откосы: линия выхода площадки не замкнута — в DXF Civil откроет её разомкнутой');
+        }
+        if (pad.exitClosed && pad.exitDxfVerts !== pad.exitPoints) {
+            problems.push(
+                `откосы: в DXF у линии выхода ${pad.exitDxfVerts} вершин при ${pad.exitPoints} в контуре — ` +
+                `замыкание должно быть флагом, без повторной вершины`
+            );
+        }
+        if (pad.dxfClosed3d < 2) {
+            problems.push(`откосы: в DXF замкнутых 3D-полилиний ${pad.dxfClosed3d} (флаг 70=9) — ждали бровку и линию выхода`);
+        }
+    }
+
+    // Таблица площадок — как список полилиний: строка с именем, цветом, площадью
+    // и объёмами. Переименование пишется в модель, не в бровку.
+    const padsUi = await page.evaluate(() => {
+        document.getElementById('btnPadList')?.click();
+        const rows = [...document.querySelectorAll('#padsList .pad-row')];
+        const row = rows.find((r) => r.querySelector('input.editInput')?.value === 'Откос-тест-площадка');
+        const rec = (window.BimLvaDebug.pads || []).find((p) => p.name === 'Откос-тест-площадка');
+        if (row) {
+            const nameInput = row.querySelector('input.editInput');
+            nameInput.value = 'Площадка-переименована';
+            nameInput.dispatchEvent(new Event('change'));
+        }
+        const after = (window.BimLvaDebug.pads || []).find((p) => p.id === rec?.id);
+        return {
+            shown: document.getElementById('padsModal')?.classList.contains('show'),
+            count: Number(document.getElementById('padsCount')?.textContent),
+            found: !!row,
+            color: (row?.querySelector('input[type=color]')?.value || '').toLowerCase(),
+            info: row?.querySelector('.pin-xyz')?.textContent || '',
+            area: rec?.area,
+            renamed: after?.name || null
+        };
+    });
+    if (!padsUi.shown || !padsUi.found) {
+        problems.push(`площадки: таблица не открылась или нет строки (${JSON.stringify(padsUi)})`);
+    } else {
+        if (padsUi.color !== '#ff00aa') {
+            problems.push(`площадки: цвет в таблице ${padsUi.color} вместо #ff00aa`);
+        }
+        if (!(padsUi.area > 15.9 && padsUi.area < 16.1)) {
+            problems.push(`площадки: площадь ${padsUi.area} вместо 16 м² (квадрат 4×4)`);
+        }
+        if (!/насыпь/.test(padsUi.info) || !/TIN/.test(padsUi.info)) {
+            problems.push(`площадки: в строке нет объёмов (${padsUi.info})`);
+        }
+        if (padsUi.renamed !== 'Площадка-переименована') {
+            problems.push(`площадки: переименование не записалось (${padsUi.renamed})`);
+        }
+        if (!(padsUi.count >= 1)) {
+            problems.push(`площадки: счётчик ${padsUi.count}`);
+        }
+    }
+
+    // Соседние откосы и площадки — целевая поверхность, а не «дырка до
+    // исходного рельефа». Считаем аналитически на ровной площадке.
+    const interact = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const m = 1.5;
+        // 1) Выход на чужую площадку: у A почти нет бортов (maxReach мал),
+        //    середина есть. Бровка C в 2 м от края, H=4 → без площадки экзит
+        //    6 м сквозь неё на рельеф; с площадкой — на её отметке, d=3 м.
+        const padA = D.createPolylineFromPoints(
+            [
+                { x: -24, y: 28, z: g + 2 }, { x: -16, y: 28, z: g + 2 },
+                { x: -16, y: 36, z: g + 2 }, { x: -24, y: 36, z: g + 2 }
+            ],
+            { name: 'Откос-тест-цель-площадка', closed: true }
+        );
+        D.buildSlopeOnPolyline(padA, { side: 'right', mFill: m, mCut: 1, step: 0.5, maxReach: 0.25 });
+        const lineC = D.createPolylineFromPoints(
+            [{ x: -14, y: 30, z: g + 4 }, { x: -14, y: 34, z: g + 4 }],
+            { name: 'Откос-тест-на-площадку' }
+        );
+        const toPad = D.buildSlopeOnPolyline(lineC, { side: 'left', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const padHits = (toPad?.sides?.[0]?.exits || []).filter((e) => e.d != null);
+
+        // 2) Выход на чужой откос: две параллельные бровки, зазор 4 м, обе
+        //    на g+3, 1:1.5. Без учёта соседа экзит 4.5 м на рельеф; с учётом —
+        //    встреча посередине, d=2 м, z = g+3 − 2/1.5. Прямые, не квадрат:
+        //    у квадрата нормаль в углу — биссектриса, и аналитика разъезжается.
+        const a2 = D.createPolylineFromPoints(
+            [{ x: 8, y: -36, z: g + 3 }, { x: 8, y: -28, z: g + 3 }],
+            { name: 'Откос-тест-сосед-A' }
+        );
+        D.buildSlopeOnPolyline(a2, { side: 'right', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const b2 = D.createPolylineFromPoints(
+            [{ x: 12, y: -36, z: g + 3 }, { x: 12, y: -28, z: g + 3 }],
+            { name: 'Откос-тест-сосед-B' }
+        );
+        const toSlope = D.buildSlopeOnPolyline(b2, { side: 'left', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const west = (toSlope?.sides?.[0]?.exits || []).filter((e) => e.d != null);
+
+        // 3) Своя площадка: «в обе стороны» на замкнутом контуре — внутрь
+        //    откос не идёт (own-pad), наружу — как раньше, d = H·m.
+        const self = D.createPolylineFromPoints(
+            [
+                { x: -8, y: -36, z: g + 2 }, { x: -4, y: -36, z: g + 2 },
+                { x: -4, y: -32, z: g + 2 }, { x: -8, y: -32, z: g + 2 }
+            ],
+            { name: 'Откос-тест-своя-площадка', closed: true }
+        );
+        const both = D.buildSlopeOnPolyline(self, { side: 'both', mFill: m, mCut: 1, step: 0.5, maxReach: 30 });
+        const left = both?.sides?.find((s) => s.side === 'left');
+        const right = both?.sides?.find((s) => s.side === 'right');
+        const sideReasons = (s) => (s?.exits || []).map((e) => e.reason || e.mode);
+        const sideD = (s) => (s?.exits || []).filter((e) => e.d != null).map((e) => e.d);
+        return {
+            padHits: padHits.map((e) => ({ d: e.d, x: e.x, z: e.z })),
+            west: west.map((e) => ({ d: e.d, x: e.x, z: e.z })),
+            left: sideReasons(left),
+            right: sideReasons(right),
+            leftD: sideD(left),
+            rightD: sideD(right)
+        };
+    }, groundZ);
+    const padHitOk = interact.padHits.length >= 2 &&
+        interact.padHits.every((e) => Math.abs(e.d - 3) < 0.08 && Math.abs(e.x - (-17)) < 0.08 && Math.abs(e.z - (groundZ + 2)) < 0.08);
+    if (!padHitOk) {
+        problems.push(`откосы: выход на чужую площадку ${JSON.stringify(interact.padHits)} — ждали d≈3, x≈-17, z≈g+2`);
+    }
+    const wantZ = groundZ + 3 - 2 / 1.5;
+    const slopeHitOk = interact.west.length >= 2 &&
+        interact.west.every((e) => Math.abs(e.d - 2) < 0.08 && Math.abs(e.x - 10) < 0.08 && Math.abs(e.z - wantZ) < 0.08);
+    if (!slopeHitOk) {
+        problems.push(`откосы: выход на чужой откос ${JSON.stringify(interact.west)} — ждали d≈2, x≈10, z≈g+1.667`);
+    }
+    const inward = [interact.left, interact.right].find((r) => r.length && r.every((x) => x === 'own-pad'));
+    const outwardD = [interact.leftD, interact.rightD].find((d) => d.length && d.every((x) => Math.abs(x - 3) < 0.08));
+    if (!inward) {
+        problems.push(`откосы: внутрь своей площадки откос не должен идти (лево ${JSON.stringify(interact.left)}, право ${JSON.stringify(interact.right)})`);
+    }
+    if (!outwardD) {
+        problems.push(`откосы: наружу от своей площадки d лево ${JSON.stringify(interact.leftD)} право ${JSON.stringify(interact.rightD)} вместо ≈3`);
     }
 
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
