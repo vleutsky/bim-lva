@@ -7058,11 +7058,13 @@
         /* ------------------------------------------------------------------
          * Откосы до рельефа / до уже построенных площадок.
          *
-         * От каждой вершины renderPts идём наружу по нормали в плане с шагом
-         * (slopeStep), пока отметка откоса (постоянный проектный уклон 1:m от
-         * бровки) не сойдётся с целевой поверхностью: сначала уже построенные
-         * откосы и площадки (они заменяют исходный рельеф там, где есть),
-         * иначе sampleTerrainZ. Своя середина замкнутого контура — тоже
+         * По каждому ребру бровки идём наружу по нормали ребра (не биссектрисе
+         * угла) с шагом slopeStep, пока отметка откоса (постоянный уклон 1:m)
+         * не сойдётся с целевой поверхностью: сначала уже построенные откосы
+         * и площадки, иначе sampleTerrainZ. На выпуклом углу — веер нормалей
+         * между двумя рёбрами, плюс вершины чужой площадки, которые попали в
+         * этот сектор: иначе линия выхода режет соседнюю площадку по диагонали
+         * и не описывает её угол. Своя середина замкнутого контура — тоже
          * поверхность: внутрь контура откос не идёт. Выше земли на
          * бровке — насыпь (вниз по 1:mFill), ниже — выемка (вверх по 1:mCut).
          * Профиль откоса ЛИНЕЕН по построению (постоянный уклон), поэтому саму
@@ -7611,7 +7613,8 @@
                 const cap = computeSlopeCrossSection(C, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach, sampleZ);
                 const exits = [];
                 sideResults.forEach((s) => {
-                    const sec = s.sections?.[end.i];
+                    const idx = ei === 0 ? 0 : (s.sections?.length || 1) - 1;
+                    const sec = s.sections?.[idx];
                     if (sec?.valid) exits.push(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z));
                 });
                 const col = (cap.valid && cap.mode === 'cut') ? cutColor : fillColor;
@@ -7639,43 +7642,217 @@
             return { meshes: mesh ? [mesh] : [], triangles, fill, cut, capExits };
         }
 
+        /** Кольца уже построенных чужих площадок — чтобы обойти их углы. */
+        function collectOtherPadRings(ownPolylineId) {
+            const out = [];
+            slopeModels.forEach((sm) => {
+                if (sm.polylineId === ownPolylineId) return;
+                if (!sm.padTriangles || !sm.padTriangles.length) return;
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                    .find((r) => r.id === sm.polylineId);
+                if (!rec?.closed || !rec.renderPts || rec.renderPts.length < 4) return;
+                const ring = rec.renderPts.slice(0, -1);
+                if (ring.length < 3) return;
+                out.push({ ring, tris: sm.padTriangles });
+            });
+            return out;
+        }
+
+        function slopeLerpPt(a, b, t) {
+            return {
+                x: a.x + (b.x - a.x) * t,
+                y: a.y + (b.y - a.y) * t,
+                z: a.z + (b.z - a.z) * t
+            };
+        }
+
+        function slopeSignedAngle(n0, n1) {
+            let da = Math.atan2(n1.y, n1.x) - Math.atan2(n0.y, n0.x);
+            while (da <= -Math.PI) da += 2 * Math.PI;
+            while (da > Math.PI) da -= 2 * Math.PI;
+            return da;
+        }
+
+        /** Вектор w от угла лежит в наружном секторе между нормалями n0→n1. */
+        function slopeVecInFan(w, n0, n1) {
+            const da = slopeSignedAngle(n0, n1);
+            if (da <= 1e-6) return false;
+            const c0 = n0.x * w.y - n0.y * w.x;
+            const c1 = w.x * n1.y - w.y * n1.x;
+            return da > 0 ? (c0 >= -1e-9 && c1 >= -1e-9) : (c0 <= 1e-9 && c1 <= 1e-9);
+        }
+
+        /**
+         * Станции откоса: вдоль каждого ребра по его нормали, на выпуклом
+         * угле — веер, плюс вершины чужих площадок в этом веере.
+         */
+        function buildSlopeStationLoop(ring, closed, side, step, maxReach, pads) {
+            const n = ring.length;
+            const last = closed ? n : n - 1;
+            const edges = [];
+            for (let i = 0; i < last; i++) {
+                const j = (i + 1) % n;
+                const A = ring[i], B = ring[j];
+                const len = Math.hypot(B.x - A.x, B.y - A.y);
+                if (len < 1e-9) continue;
+                const dir = { x: (B.x - A.x) / len, y: (B.y - A.y) / len };
+                edges.push({ i, j, A, B, dir, nrm: slopeSideNormal(dir, side), len });
+            }
+            const stations = [];
+            const pushFanAt = (P, n0, n1, edgeIdx) => {
+                const da = slopeSignedAngle(n0, n1);
+                if (da <= 0.08 || da >= Math.PI - 0.02) return;
+                const a0 = Math.atan2(n0.y, n0.x);
+                const items = [];
+                const nFan = Math.max(1, Math.ceil(da / (Math.PI / 12)));
+                for (let k = 1; k <= nFan; k++) {
+                    const a = a0 + da * (k / (nFan + 1));
+                    items.push({
+                        ang: da * (k / (nFan + 1)),
+                        brow: { x: P.x, y: P.y, z: P.z },
+                        normal: { x: Math.cos(a), y: Math.sin(a) },
+                        kind: 'fan',
+                        padVert: null
+                    });
+                }
+                (pads || []).forEach((pad) => {
+                    pad.ring.forEach((V) => {
+                        const wx = V.x - P.x, wy = V.y - P.y;
+                        const dist = Math.hypot(wx, wy);
+                        if (dist < 1e-4 || dist >= maxReach) return;
+                        if (!slopeVecInFan({ x: wx, y: wy }, n0, n1)) return;
+                        let ang = Math.atan2(wy, wx) - a0;
+                        while (ang <= -Math.PI) ang += 2 * Math.PI;
+                        while (ang > Math.PI) ang -= 2 * Math.PI;
+                        if (ang <= 1e-4 || ang >= da - 1e-4) return;
+                        items.push({
+                            ang,
+                            brow: { x: P.x, y: P.y, z: P.z },
+                            normal: { x: wx / dist, y: wy / dist },
+                            kind: 'pad',
+                            padVert: V,
+                            padDist: dist,
+                            padTris: pad.tris
+                        });
+                    });
+                });
+                items.sort((a, b) => a.ang - b.ang);
+                const dedup = [];
+                items.forEach((it) => {
+                    const prev = dedup[dedup.length - 1];
+                    if (prev && Math.abs(it.ang - prev.ang) < 0.03) {
+                        if (it.kind === 'pad' && prev.kind !== 'pad') {
+                            dedup[dedup.length - 1] = it;
+                        }
+                        return;
+                    }
+                    dedup.push(it);
+                });
+                dedup.forEach((it) => {
+                    stations.push({
+                        brow: it.brow,
+                        normal: it.normal,
+                        kind: it.kind,
+                        edge: edgeIdx,
+                        padVert: it.padVert || null,
+                        padDist: it.padDist,
+                        padTris: it.padTris
+                    });
+                });
+            };
+            for (let e = 0; e < edges.length; e++) {
+                const ed = edges[e];
+                const nSt = Math.max(2, Math.ceil(ed.len / Math.max(0.25, step)) + 1);
+                for (let k = 0; k < nSt; k++) {
+                    const t = k / (nSt - 1);
+                    stations.push({
+                        brow: slopeLerpPt(ed.A, ed.B, t),
+                        normal: ed.nrm,
+                        kind: 'edge',
+                        edge: e,
+                        t
+                    });
+                }
+                const hasNext = closed || e < edges.length - 1;
+                if (!hasNext) continue;
+                const next = edges[(e + 1) % edges.length];
+                pushFanAt(ed.B, ed.nrm, next.nrm, e);
+            }
+            return stations;
+        }
+
         /** Один откос (одна сторона) по всей линии: поверхность + линия выхода + объёмы. */
         function computeSlopeSide(record, side, opts, sampleZ, ownPadTris) {
             const closed = !!record.closed;
             const ring = closed ? record.renderPts.slice(0, -1) : record.renderPts.slice();
             if (ring.length < 2) return null;
-            const normals = slopeVertexNormals(ring, closed, side);
-            // 1 мм вдоль нормали: если сразу попадаем внутрь своего контура —
-            // это внутренняя сторона площадки, откос туда не идёт.
+            const pads = collectOtherPadRings(record.id);
             const look = 0.05;
-            const sections = ring.map((p, i) => {
-                const normal = normals[i];
-                if (!normal) return { valid: false, reason: 'no-ground' };
-                if (ownPadTris && pointInRingXY(
-                    ring, p.x + normal.x * look, p.y + normal.y * look
-                )) {
-                    return { valid: false, reason: 'own-pad' };
+            const raw = buildSlopeStationLoop(
+                ring, closed, side, opts.step, opts.maxReach, pads
+            );
+            const stations = [];
+            raw.forEach((st) => {
+                const { brow, normal } = st;
+                if (!normal) {
+                    stations.push({ ...st, section: { valid: false, reason: 'no-ground' } });
+                    return;
                 }
-                return computeSlopeCrossSection(
-                    p, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach, sampleZ
+                if (ownPadTris && pointInRingXY(
+                    ring, brow.x + normal.x * look, brow.y + normal.y * look
+                )) {
+                    stations.push({ ...st, section: { valid: false, reason: 'own-pad' } });
+                    return;
+                }
+                let sec = computeSlopeCrossSection(
+                    brow, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach, sampleZ
                 );
+                if (st.kind === 'pad' && st.padVert) {
+                    const V = st.padVert;
+                    const dist = st.padDist != null
+                        ? st.padDist
+                        : Math.hypot(V.x - brow.x, V.y - brow.y);
+                    // Сечение дотянулось до вершины площадки или промахнулось
+                    // мимо угла — садимся на саму вершину, а не режем хордой.
+                    if (!sec.valid || sec.distance >= dist - 0.2) {
+                        const mode = Math.abs(brow.z - V.z) < 1e-6
+                            ? 'flat'
+                            : (brow.z > V.z ? 'fill' : 'cut');
+                        sec = {
+                            valid: true,
+                            mode,
+                            exit: { x: V.x, y: V.y, z: V.z },
+                            distance: dist,
+                            area: 0.5 * Math.abs(brow.z - V.z) * dist
+                        };
+                    }
+                }
+                stations.push({ ...st, section: sec });
             });
+
+            const sections = stations.map((s) => s.section);
+            const brows = stations.map((s) => s.brow);
 
             let fill = 0, cut = 0;
             const positions = [];
             const colors = [];
             const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
             const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
-            const last = closed ? ring.length : ring.length - 1;
+            const last = closed ? stations.length : stations.length - 1;
             const hinges = [];
             for (let i = 0; i < last; i++) {
-                const j = (i + 1) % ring.length;
-                const a = sections[i], b = sections[j];
+                const j = (i + 1) % stations.length;
+                const a = stations[i].section, b = stations[j].section;
                 if (!a.valid || !b.valid) continue;
-                const edgeA = ring[i], edgeB = ring[j];
+                const edgeA = stations[i].brow, edgeB = stations[j].brow;
                 const dist = Math.hypot(edgeB.x - edgeA.x, edgeB.y - edgeA.y);
                 const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
                 const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
+                if (dist < 1e-6) {
+                    const col = a.mode === 'cut' ? cutColor : fillColor;
+                    slopePushTri(positions, colors, edgeA, exitA, exitB, col);
+                    continue;
+                }
                 const modeChange = a.mode !== b.mode && a.mode !== 'flat' && b.mode !== 'flat';
                 const hinge = modeChange ? findSlopeHinge(edgeA, edgeB, sampleZ, opts.step) : null;
                 if (hinge) {
@@ -7709,7 +7886,7 @@
 
             const skippedNoGround = sections.filter((s) => !s.valid && s.reason === 'no-ground').length;
             const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
-            const tokens = slopeExitTokens(sections, ring, closed, sampleZ, opts.step);
+            const tokens = slopeExitTokens(sections, brows, closed, sampleZ, opts.step);
             const groups = slopeExitGroups(tokens, closed, sections.length);
             const exitLines = groups.map((g, gi) => {
                 const modeName = g.mode === 'cut' ? 'выемка' : g.mode === 'fill' ? 'насыпь' : 'откос';
@@ -27546,7 +27723,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: переход насыпь→выемка — линия выемки от пересечения бровки с землёй, не от угла; ПКМ по линии компактный; заливка площадки поверх рельефа.',
+                '2026.08.13: откос верхней площадки садится на нижнюю и обходит её углы; переход насыпь→выемка от пересечения с землёй; ПКМ по линии компактный.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
@@ -27611,7 +27788,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=82').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=83').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

@@ -1192,13 +1192,14 @@ async function checkSlopeToTerrain(page) {
             problems.push(`откосы: насыпь на сплошной площадке пропустила сечения (${s.skippedNoGround}+${s.skippedNotReached})`);
         }
         if (!s.triangles) problems.push('откосы: поверхность насыпи не построилась (нет треугольников)');
-        if (!fill.exit || fill.exit.points !== 2) {
-            problems.push('откосы: линия выхода насыпи не создалась или не в две точки');
+        if (!fill.exit || fill.exit.points < 2) {
+            problems.push('откосы: линия выхода насыпи не создалась');
         } else {
             const wantY = 15 - H1 * M1;
-            const got = fill.exit.vertsAbs;
-            const dOk = Math.abs(got[0].y - wantY) < 0.02 && Math.abs(got[1].y - wantY) < 0.02 &&
-                Math.abs(got[0].z - groundZ) < 0.02 && Math.abs(got[1].z - groundZ) < 0.02;
+            const got = fill.exit.vertsAbs || [];
+            const dOk = got.length >= 2 && got.every((p) =>
+                Math.abs(p.y - wantY) < 0.02 && Math.abs(p.z - groundZ) < 0.02
+            );
             if (!dOk) {
                 problems.push(
                     `откосы: линия выхода насыпи ${JSON.stringify(got)} — ожидалась Y≈${wantY.toFixed(2)}, Z≈${groundZ.toFixed(2)}`
@@ -1636,6 +1637,54 @@ async function checkSlopeToTerrain(page) {
     }
     if (!(hingeClosed.fill > 0) || !(hingeClosed.cut > 0)) {
         problems.push(`откосы: на замкнутом переходе ждали и насыпь и выемку (насыпь ${hingeClosed.fill}, выемка ${hingeClosed.cut})`);
+    }
+
+    // Верхняя площадка садится на нижнюю и обходит её углы, а не режет
+    // хордой по диагонали. Нижняя 20×16 на g+2, верхняя уже и правее на g+6;
+    // 1:1.5 даёт посадку на верхней грани нижней, а СВ/ЮВ углы нижней
+    // попадают в веер угла верхней.
+    const padWrap = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const low = D.createPolylineFromPoints(
+            [
+                { x: 80, y: 80, z: g + 2 }, { x: 100, y: 80, z: g + 2 },
+                { x: 100, y: 96, z: g + 2 }, { x: 80, y: 96, z: g + 2 }
+            ],
+            { name: 'Откос-тест-низ', closed: true }
+        );
+        D.buildSlopeOnPolyline(low, { side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 0.25 });
+        const high = D.createPolylineFromPoints(
+            [
+                { x: 104, y: 84, z: g + 6 }, { x: 116, y: 84, z: g + 6 },
+                { x: 116, y: 92, z: g + 6 }, { x: 104, y: 92, z: g + 6 }
+            ],
+            { name: 'Откос-тест-верх', closed: true }
+        );
+        const res = D.buildSlopeOnPolyline(high, { side: 'both', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const distPlan = (p, x, y) => Math.hypot(p.x - x, p.y - y);
+        const pts = [];
+        (res?.sides || []).forEach((s) => {
+            (s.exitPolylineIds || []).forEach((eid) => {
+                const line = D.drawn.find((d) => d.id === eid);
+                (line?.vertsAbs || []).forEach((p) => pts.push(p));
+            });
+        });
+        return {
+            nSides: res?.sides?.length || 0,
+            nPts: pts.length,
+            nearNE: pts.filter((p) => distPlan(p, 100, 96) < 0.45).length,
+            nearSE: pts.filter((p) => distPlan(p, 100, 80) < 0.45).length,
+            onPad: pts.filter((p) => p.x > 90 && p.x < 100.2 && p.y > 83 && p.y < 93 && Math.abs(p.z - (g + 2)) < 0.15).length,
+            sample: pts.slice(0, 12)
+        };
+    }, groundZ);
+    if (padWrap.nearNE < 1 || padWrap.nearSE < 1) {
+        problems.push(
+            `откосы: верхняя площадка не обошла углы нижней (СВ ${padWrap.nearNE}, ЮВ ${padWrap.nearSE}, ${JSON.stringify(padWrap)})`
+        );
+    }
+    if (padWrap.onPad < 2) {
+        problems.push(`откосы: верхняя площадка не села на поверхность нижней (${JSON.stringify(padWrap)})`);
     }
 
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
