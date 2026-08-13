@@ -1532,6 +1532,55 @@ async function checkSlopeToTerrain(page) {
         problems.push(`откосы: наружу от своей площадки d лево ${JSON.stringify(interact.leftD)} право ${JSON.stringify(interact.rightD)} вместо ≈3`);
     }
 
+    // Переход насыпь→выемка: линия выемки начинается от пересечения бровки
+    // с землёй (шарнир), а не от угла площадки.
+    const hinge = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [{ x: 30, y: 8, z: g + 2 }, { x: 30, y: 18, z: g - 2 }],
+            { name: 'Откос-тест-шарнир' }
+        );
+        const res = D.buildSlopeOnPolyline(id, { side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const side = res?.sides?.[0];
+        const lines = (side?.exitPolylineIds || []).map((eid) => D.drawn.find((d) => d.id === eid)).filter(Boolean);
+        const cutLine = lines.find((d) => /выемка/.test(d.name)) || lines[lines.length - 1];
+        const pts = cutLine?.vertsAbs || [];
+        const distPlan = (p, x, y) => Math.hypot(p.x - x, p.y - y);
+        const nearHinge = pts.filter((p) => distPlan(p, 30, 13) < 0.25);
+        const nearCorner = pts.filter((p) => distPlan(p, 30, 18) < 0.25);
+        return {
+            modes: (side?.exits || []).map((e) => e.mode || e.reason),
+            hinges: side?.hinges || [],
+            nLines: lines.length,
+            cutName: cutLine?.name || null,
+            cutPts: pts,
+            nearHinge: nearHinge.length,
+            nearCorner: nearCorner.length,
+            fill: side?.fill,
+            cut: side?.cut
+        };
+    }, groundZ);
+    if (!hinge.hinges?.length) {
+        problems.push(`откосы: переход насыпь/выемка не поставил шарнир на бровке (${JSON.stringify(hinge)})`);
+    } else {
+        const h0 = hinge.hinges[0];
+        if (Math.abs(h0.x - 30) > 0.15 || Math.abs(h0.y - 13) > 0.15 || Math.abs(h0.z - groundZ) > 0.15) {
+            problems.push(`откосы: шарнир ${JSON.stringify(h0)} — ждали (30, 13, g)`);
+        }
+        if (Math.abs((h0.t ?? 0.5) - 0.5) > 0.08) {
+            problems.push(`откосы: шарнир t=${h0.t} вместо ≈0.5`);
+        }
+    }
+    if (hinge.nearHinge < 1) {
+        problems.push(`откосы: линия выемки не идёт от пересечения с землёй (${JSON.stringify(hinge.cutPts)})`);
+    }
+    if (hinge.nearCorner) {
+        problems.push(`откосы: линия выемки сидит на угле бровки, а не на пересечении с землёй (${JSON.stringify(hinge.cutPts)})`);
+    }
+    if (!(hinge.fill > 0) || !(hinge.cut > 0)) {
+        problems.push(`откосы: на переходе ждали и насыпь и выемку (насыпь ${hinge.fill}, выемка ${hinge.cut})`);
+    }
+
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
     // проверяем, что кнопка в строке списка находит СВОЮ полилинию, поля
     // читаются с формы (а не остались значением по умолчанию из прошлого

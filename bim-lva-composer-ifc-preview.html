@@ -2767,7 +2767,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · cff3621</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 0c95e42</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -5158,7 +5158,8 @@
                         triangles: s.mesh ? s.mesh.geometry.attributes.position.count / 3 : 0,
                         exits: s.sections.map((sec) => sec.valid
                             ? { d: sec.distance, mode: sec.mode, x: sec.exit.x, y: sec.exit.y, z: sec.exit.z }
-                            : { valid: false, reason: sec.reason })
+                            : { valid: false, reason: sec.reason }),
+                        hinges: (s.hinges || []).map((h) => ({ x: h.x, y: h.y, z: h.z, t: h.t }))
                     })),
                     tin: model.tin ? {
                         points: model.tin.points.length,
@@ -7276,28 +7277,142 @@
         }
 
         /**
-         * Непрерывные куски линии выхода. У замкнутого кольца кусок, который
-         * переходит через первую/последнюю вершину, склеивается; если все
-         * сечения валидны — это замкнутый контур (в DXF уйдёт флагом, а не
-         * повторной вершиной).
+         * Точка на бровке, где насыпь сменяется выемкой: бровка пересекает
+         * землю. Без неё линия выхода прыгает с дальнего выхода насыпи на
+         * дальний выход выемки, а поверхность выемки садится на угол бровки.
          */
-        function slopeValidGroups(sections, closedRing) {
+        function findSlopeHinge(a, b, sampleZ, step) {
+            const MISS = Number.NEGATIVE_INFINITY;
+            const sample = sampleZ || ((x, y, fb) => sampleTerrainZ(x, y, fb));
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const n = Math.max(8, Math.ceil(len / Math.max(0.15, step || 0.5)));
+            const at = (t) => ({
+                x: a.x + (b.x - a.x) * t,
+                y: a.y + (b.y - a.y) * t,
+                z: a.z + (b.z - a.z) * t
+            });
+            const diffAt = (t) => {
+                const p = at(t);
+                const g = sample(p.x, p.y, MISS);
+                if (g === MISS) return null;
+                return { t, p, g, diff: p.z - g };
+            };
+            let prev = null;
+            for (let i = 0; i <= n; i++) {
+                const cur = diffAt(i / n);
+                if (!cur) continue;
+                if (prev && prev.diff * cur.diff <= 0) {
+                    const span = cur.diff - prev.diff;
+                    const u = Math.abs(span) < 1e-12 ? 0 : prev.diff / (prev.diff - cur.diff);
+                    const tH = prev.t + u * (cur.t - prev.t);
+                    const p = at(tH);
+                    const g = sample(p.x, p.y, p.z);
+                    return { x: p.x, y: p.y, z: g === MISS ? p.z : g, t: tH };
+                }
+                prev = cur;
+            }
+            if (prev) {
+                const dA = diffAt(0);
+                const dB = diffAt(1);
+                if (dA && dB && dA.diff * dB.diff <= 0) {
+                    const span = dB.diff - dA.diff;
+                    const tH = Math.abs(span) < 1e-12 ? 0.5 : dA.diff / (dA.diff - dB.diff);
+                    const p = at(tH);
+                    const g = sample(p.x, p.y, p.z);
+                    return { x: p.x, y: p.y, z: g === MISS ? p.z : g, t: tH };
+                }
+            }
+            return null;
+        }
+
+        /**
+         * Сечения по вершинам + шарниры на рёбрах, где меняется насыпь/выемка.
+         * kind: exit | hinge | break.
+         */
+        function slopeExitTokens(sections, ring, closed, sampleZ, step) {
+            const n = sections.length;
+            const tokens = [];
+            for (let i = 0; i < n; i++) {
+                const s = sections[i];
+                if (s.valid) tokens.push({ kind: 'exit', mode: s.mode, pt: s.exit });
+                else tokens.push({ kind: 'break' });
+                if (!closed && i === n - 1) break;
+                const j = (i + 1) % n;
+                const a = sections[i], b = sections[j];
+                if (!a?.valid || !b?.valid) continue;
+                if (a.mode === b.mode || a.mode === 'flat' || b.mode === 'flat') continue;
+                const H = findSlopeHinge(ring[i], ring[j], sampleZ, step);
+                if (H) tokens.push({ kind: 'hinge', pt: H, from: a.mode, to: b.mode, t: H.t, i, j });
+            }
+            return tokens;
+        }
+
+        /**
+         * Непрерывные куски линии выхода. На смене насыпь/выемка вставляется
+         * шарнир на бровке и кусок рвётся: линия выемки начинается от земли,
+         * а не от угла площадки.
+         */
+        function slopeExitGroups(tokens, closedRing, sectionCount) {
             const groups = [];
             let cur = [];
-            sections.forEach((s) => {
-                if (s.valid) cur.push(s.exit);
-                else if (cur.length) { groups.push(cur); cur = []; }
+            let curMode = null;
+            const flush = (closed) => {
+                if (cur.length >= 2) groups.push({ pts: cur, mode: curMode, closed: !!closed });
+                cur = [];
+                curMode = null;
+            };
+            tokens.forEach((t) => {
+                if (t.kind === 'break') {
+                    flush(false);
+                    return;
+                }
+                if (t.kind === 'hinge') {
+                    cur.push(t.pt);
+                    const hinge = t.pt;
+                    flush(false);
+                    cur = [hinge];
+                    curMode = t.to === 'flat' ? null : t.to;
+                    return;
+                }
+                if (t.mode === 'flat') {
+                    cur.push(t.pt);
+                    const saved = t.pt;
+                    flush(false);
+                    cur = [saved];
+                    curMode = null;
+                    return;
+                }
+                if (curMode && t.mode !== curMode) flush(false);
+                if (!curMode) curMode = t.mode;
+                cur.push(t.pt);
             });
-            if (cur.length) groups.push(cur);
-            if (closedRing && groups.length >= 2 && sections[0]?.valid && sections[sections.length - 1]?.valid) {
-                const first = groups.shift();
-                groups[groups.length - 1] = groups[groups.length - 1].concat(first);
+            const allExits = tokens.length > 0 && tokens.every((t) => t.kind === 'exit');
+            const wrapClosed = !!closedRing && allExits && tokens.length === sectionCount && cur.length >= 2;
+            flush(wrapClosed);
+            if (closedRing && groups.length >= 2) {
+                const first = groups[0], last = groups[groups.length - 1];
+                if (first.mode && first.mode === last.mode) {
+                    groups[0] = { pts: last.pts.concat(first.pts), mode: first.mode, closed: false };
+                    groups.pop();
+                }
             }
-            const allValid = !!closedRing && sections.length >= 3 && sections.every((s) => s.valid);
-            return groups.filter((g) => g.length >= 2).map((pts) => ({
-                pts,
-                closed: allValid && pts.length === sections.length
-            }));
+            return groups;
+        }
+
+        /** Одна цепочка точек выхода (с шарнирами) — для внешнего контура. */
+        function slopeExitChain(tokens) {
+            const chains = [];
+            let cur = [];
+            tokens.forEach((t) => {
+                if (t.kind === 'break') {
+                    if (cur.length >= 2) chains.push(cur);
+                    cur = [];
+                    return;
+                }
+                cur.push(t.pt);
+            });
+            if (cur.length >= 2) chains.push(cur);
+            return chains;
         }
 
         /**
@@ -7562,19 +7677,36 @@
             const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
             const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
             const last = closed ? ring.length : ring.length - 1;
+            const hinges = [];
             for (let i = 0; i < last; i++) {
                 const j = (i + 1) % ring.length;
                 const a = sections[i], b = sections[j];
                 if (!a.valid || !b.valid) continue;
-                const dist = Math.hypot(ring[j].x - ring[i].x, ring[j].y - ring[i].y);
+                const edgeA = ring[i], edgeB = ring[j];
+                const dist = Math.hypot(edgeB.x - edgeA.x, edgeB.y - edgeA.y);
+                const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
+                const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
+                const modeChange = a.mode !== b.mode && a.mode !== 'flat' && b.mode !== 'flat';
+                const hinge = modeChange ? findSlopeHinge(edgeA, edgeB, sampleZ, opts.step) : null;
+                if (hinge) {
+                    hinges.push(hinge);
+                    const Hv = new THREE.Vector3(hinge.x, hinge.y, hinge.z);
+                    const t = Math.min(1, Math.max(0, hinge.t));
+                    const colA = a.mode === 'cut' ? cutColor : fillColor;
+                    const colB = b.mode === 'cut' ? cutColor : fillColor;
+                    slopePushTri(positions, colors, edgeA, exitA, Hv, colA);
+                    slopePushTri(positions, colors, Hv, exitB, edgeB, colB);
+                    const volA = 0.5 * a.area * dist * t;
+                    const volB = 0.5 * b.area * dist * (1 - t);
+                    if (a.mode === 'cut') cut += volA; else fill += volA;
+                    if (b.mode === 'cut') cut += volB; else fill += volB;
+                    continue;
+                }
                 const vol = 0.5 * (a.area + b.area) * dist;
                 if (a.mode === 'cut' && b.mode === 'cut') cut += vol;
                 else if (a.mode === 'fill' && b.mode === 'fill') fill += vol;
                 else if (a.mode === 'fill' || b.mode === 'fill') fill += vol;
                 else cut += vol;
-                const edgeA = ring[i], edgeB = ring[j];
-                const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
-                const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
                 const col = a.mode === 'cut' ? cutColor : fillColor;
                 slopePushTri(positions, colors, edgeA, exitA, exitB, col);
                 slopePushTri(positions, colors, edgeA, exitB, edgeB, col);
@@ -7587,19 +7719,25 @@
 
             const skippedNoGround = sections.filter((s) => !s.valid && s.reason === 'no-ground').length;
             const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
-            const groups = slopeValidGroups(sections, closed);
-            const exitLines = groups.map((g, gi) => addPolylineFromPoints(g.pts, {
-                name: `${record.name} — откос (${side === 'left' ? 'влево' : 'вправо'})` +
-                    (groups.length > 1 ? ` #${gi + 1}` : ''),
-                color: opts.exitColor || '#2c8f4a',
-                width: 1.5,
-                closed: g.closed
-            }));
+            const tokens = slopeExitTokens(sections, ring, closed, sampleZ, opts.step);
+            const groups = slopeExitGroups(tokens, closed, sections.length);
+            const exitLines = groups.map((g, gi) => {
+                const modeName = g.mode === 'cut' ? 'выемка' : g.mode === 'fill' ? 'насыпь' : 'откос';
+                return addPolylineFromPoints(g.pts, {
+                    name: `${record.name} — ${modeName} (${side === 'left' ? 'влево' : 'вправо'})` +
+                        (groups.length > 1 ? ` #${gi + 1}` : ''),
+                    color: g.mode === 'cut' ? '#3a83c9' : (opts.exitColor || '#2c8f4a'),
+                    width: 1.5,
+                    closed: g.closed
+                });
+            });
 
             return {
                 side, mesh, fill, cut, sections,
                 exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
-                skippedNoGround, skippedNotReached
+                skippedNoGround, skippedNotReached,
+                hinges,
+                exitChain: slopeExitChain(tokens)[0] || null
             };
         }
 
@@ -7614,13 +7752,13 @@
             const left = sideResults.find((s) => s.side === 'left');
             const right = sideResults.find((s) => s.side === 'right');
             if (!left?.sections || !right?.sections) return null;
-            const leftG = slopeValidGroups(left.sections, false)[0];
-            const rightG = slopeValidGroups(right.sections, false)[0];
+            const leftG = left.exitChain;
+            const rightG = right.exitChain;
             if (!leftG || !rightG) return null;
             const ring = [];
-            leftG.pts.forEach((p) => ring.push(p));
+            leftG.forEach((p) => ring.push(p));
             if (capExits?.[1]) ring.push(capExits[1]);
-            rightG.pts.slice().reverse().forEach((p) => ring.push(p));
+            rightG.slice().reverse().forEach((p) => ring.push(p));
             if (capExits?.[0]) ring.push(capExits[0]);
             if (ring.length < 3) return null;
             return addPolylineFromPoints(ring, {
@@ -27408,7 +27546,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.12',
-            buildId: 'cff3621-preview',
+            buildId: '0c95e42-preview',
             released: '2026-08-12',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -27418,7 +27556,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: ПКМ по линии — компактное меню в один столбец; заливка середины площадки поднята над рельефом (в TIN отметки свои).',
+                '2026.08.13: переход насыпь→выемка — линия выемки от пересечения бровки с землёй, не от угла; ПКМ по линии компактный; заливка площадки поверх рельефа.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
                 '2026.08.08: исправлено — геопривязанные файлы больше не схлопываются в кучу, сводка собирается по своим координатам.',
                 '2026.08.08: журнал уведомлений (🔔) — все сообщения сессии, даже закрывшиеся, с копированием.',
