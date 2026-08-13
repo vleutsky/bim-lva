@@ -1639,6 +1639,62 @@ async function checkSlopeToTerrain(page) {
         }
     }
 
+    // Угол площадки: скругление = два луча (нормали рёбер) + веер; острый =
+    // биссектриса, вылет d/cos(α/2). Квадрат 4×4, H=2, 1:1.5 → d=3.
+    const corner = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const z = g + 2;
+        const sq = (ox) => [
+            { x: ox, y: 15, z }, { x: ox + 4, y: 15, z },
+            { x: ox + 4, y: 19, z }, { x: ox, y: 19, z }
+        ];
+        const idF = D.createPolylineFromPoints(sq(40), { name: 'Угол-дуга', closed: true });
+        const fillet = D.buildSlopeOnPolyline(idF, {
+            side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30, cornerMode: 'fillet'
+        });
+        const idM = D.createPolylineFromPoints(sq(50), { name: 'Угол-острый', closed: true });
+        const miter = D.buildSlopeOnPolyline(idM, {
+            side: 'right', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30, cornerMode: 'miter'
+        });
+        const fromVertex = (res, vx, vy) => {
+            const ex = [];
+            (res?.sides || []).forEach((s) => {
+                (s.exits || []).forEach((e) => {
+                    if (e.valid === false) return;
+                    if (Math.hypot((e.bx ?? 1e9) - vx, (e.by ?? 1e9) - vy) < 0.08) ex.push(e);
+                });
+            });
+            return ex;
+        };
+        const fSE = fromVertex(fillet, 44, 15);
+        const mSE = fromVertex(miter, 54, 15);
+        const hasSelect = !!document.getElementById('slopeCorner');
+        return {
+            hasSelect,
+            fN: fSE.length,
+            fSouth: fSE.some((e) => Math.hypot(e.x - 44, e.y - 12) < 0.3),
+            fEast: fSE.some((e) => Math.hypot(e.x - 47, e.y - 15) < 0.3),
+            fFan: fSE.some((e) => e.kind === 'fan'),
+            mN: mSE.length,
+            mKind: mSE.map((e) => e.kind),
+            mHit: mSE.some((e) => Math.hypot(e.x - 57, e.y - 12) < 0.3),
+            mMode: miter?.cornerMode
+        };
+    }, groundZ);
+    if (!corner.hasSelect) {
+        problems.push('откосы: в окне нет выбора «Угол внизу»');
+    }
+    if (!corner.fSouth || !corner.fEast || corner.fN < 3) {
+        problems.push(
+            `откосы: скругление угла — ждали лучи на юг и восток плюс веер (${JSON.stringify(corner)})`
+        );
+    }
+    if (corner.mMode !== 'miter' || !corner.mHit || !corner.mKind.includes('miter')) {
+        problems.push(
+            `откосы: острый угол — ждали точку (57,12) по биссектрисе (${JSON.stringify(corner)})`
+        );
+    }
+
     // Вырез островка 2×2 в квадрате 4×4: площадь 12; в дыре TIN нет.
     const island = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
