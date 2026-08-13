@@ -1530,7 +1530,7 @@ async function checkSlopeToTerrain(page) {
             area: holed?.area,
             holes: holed?.holes?.length,
             hitHole: D.padHitAt(holed?.id, 22, 17),
-            hitPad: D.padHitAt(holed?.id, 20.5, 15.5)
+            hitPad: D.padHitAt(holed?.id, 20.5, 17)
         };
     }, groundZ);
     if (!island.ok) {
