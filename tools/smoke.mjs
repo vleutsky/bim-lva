@@ -1422,35 +1422,44 @@ async function checkSlopeToTerrain(page) {
         }
         const kdo = await page.evaluate((id) => {
             const D = window.BimLvaDebug;
-            // Restake меняет id построения — DXF и дальнейшие шаги только по новому.
             const applied = D.setPadKdo(id, [
                 { name: 'Покрытие', thickness: 0.10, color: '#111111' },
                 { name: 'Основание', thickness: 0.20, color: '#888888' }
             ]);
-            const dxf = D.slopeDxfPreview(applied?.id) || '';
-            const stepped = D.setPadKdo(applied?.id, [
-                { name: 'Покрытие', thickness: 0.10, offset: 0, color: '#111111' },
-                { name: 'Основание', thickness: 0.20, offset: 0.5, color: '#888888' }
-            ]);
+            const dxf = D.slopeDxfPreview(applied?.id || id) || '';
+            const m = 1.5;
+            const areaAt = (h) => {
+                const s = 4 + 2 * m * h;
+                return s * s;
+            };
+            const prism = (h0, h1) => {
+                const a0 = areaAt(h0), a1 = areaAt(h1);
+                return (h1 - h0) / 3 * (a0 + a1 + Math.sqrt(a0 * a1));
+            };
             return {
                 count: applied?.count,
                 totalH: applied?.totalH,
                 v0: applied?.layers?.[0]?.volume,
                 v1: applied?.layers?.[1]?.volume,
+                want0: prism(0, 0.10),
+                want1: prism(0.10, 0.30),
+                flare0: applied?.layers?.[0]?.flareBot,
+                flare1: applied?.layers?.[1]?.flareBot,
                 faces0: applied?.layers?.[0]?.faces,
                 meanExit: applied?.meanExit,
                 dxfKdo: /LVA_KDO/.test(dxf),
-                dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length,
-                stepV0: stepped?.layers?.[0]?.volume,
-                stepV1: stepped?.layers?.[1]?.volume
+                dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length
             };
         }, pad.res.id);
-        // Квадрат 4×4: объём = 16 × толщина. Слои — тела, не плёнка.
+        // Квадрат 4×4, 1:1.5: слои внутри откоса, уширение низа = m·h.
         if (kdo.count !== 2 || Math.abs(kdo.totalH - 0.3) > 1e-9) {
             problems.push(`откосы: КДО слоёв ${kdo.count} / высота ${kdo.totalH} — ждали 2 сл. на 0.30 м`);
         }
-        if (Math.abs((kdo.v0 || 0) - 1.6) > 1e-6 || Math.abs((kdo.v1 || 0) - 3.2) > 1e-6) {
-            problems.push(`откосы: КДО объёмы ${kdo.v0} / ${kdo.v1} м³ вместо 1.6 / 3.2`);
+        if (Math.abs((kdo.flare0 || 0) - 0.15) > 1e-9 || Math.abs((kdo.flare1 || 0) - 0.45) > 1e-9) {
+            problems.push(`откосы: КДО уширение низа ${kdo.flare0} / ${kdo.flare1} вместо 0.15 / 0.45`);
+        }
+        if (Math.abs((kdo.v0 || 0) - kdo.want0) > 1e-6 || Math.abs((kdo.v1 || 0) - kdo.want1) > 1e-6) {
+            problems.push(`откосы: КДО объёмы ${kdo.v0} / ${kdo.v1} м³ вместо ${kdo.want0} / ${kdo.want1}`);
         }
         if (!(kdo.faces0 > 0)) {
             problems.push(`откосы: слой КДО без граней (${kdo.faces0})`);
@@ -1458,13 +1467,9 @@ async function checkSlopeToTerrain(page) {
         if (!kdo.dxfKdo || kdo.dxfPolyface !== 3) {
             problems.push(`откосы: DXF КДО слой ${kdo.dxfKdo}, сетей ${kdo.dxfPolyface} (ждали 1 TIN + 2 слоя)`);
         }
-        // Откос от низа одежды (0.30 м), не от бровки верха: H=1.7, 1:1.5 → d=2.55, не 3.0.
-        if (!(Math.abs((kdo.meanExit || 0) - 2.55) < 0.2)) {
-            problems.push(`откосы: КДО откос от низа d=${kdo.meanExit} вместо ≈2.55 (от верха было бы 3.0)`);
-        }
-        // Ступень 0.5 м у второго слоя: 5×5×0.20 = 5.0 м³, верх без уширения 1.6.
-        if (Math.abs((kdo.stepV0 || 0) - 1.6) > 1e-6 || Math.abs((kdo.stepV1 || 0) - 5.0) > 1e-6) {
-            problems.push(`откосы: КДО ступень объёмы ${kdo.stepV0} / ${kdo.stepV1} м³ вместо 1.6 / 5.0`);
+        // Откос с бровки верха: H=2, 1:1.5 → d=3.0, не от низа одежды.
+        if (!(Math.abs((kdo.meanExit || 0) - 3.0) < 0.2)) {
+            problems.push(`откосы: КДО откос с бровки d=${kdo.meanExit} вместо ≈3.0`);
         }
     }
 
