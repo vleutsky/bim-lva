@@ -225,7 +225,7 @@ try {
     // 12.071°, и захардкоженное число уже один раз соврало про поломку.
     const siteRefDir = [0.97789, 0.20913];
     const wantHeading = Math.atan2(siteRefDir[1], siteRefDir[0]) * 180 / Math.PI;
-    const siteHeading = /Итог — поворот вокруг Z:\s*(-?[\d.]+)°/.exec(siteSection);
+    const siteHeading = /Итог — поворот цепочки вокруг Z:\s*(-?[\d.]+)°/.exec(siteSection);
     check(siteHeading && Math.abs(Number(siteHeading[1]) - wantHeading) < 0.001,
         `поворот цепочки IfcSite посчитан и напечатан ` +
         `(${siteHeading ? siteHeading[1] : 'СТРОКИ НЕТ'}°, ждали ${wantHeading.toFixed(3)})`);
@@ -235,6 +235,60 @@ try {
     // это та же ошибка, что уже правили для WorldCoordinateSystem.
     check(/поворот не задан \(\$\)/.test(productSection),
         'у элемента без Axis/RefDirection честно написано «не задан», а не «0°»');
+
+    // Файл в духе Tekla: пространственная структура НЕ повёрнута, а сам элемент
+    // развёрнут своим размещением (Axis = (1,0,0)) — так стоит любая вертикальная
+    // пластина. Первая версия проверки складывала это с цепочкой и кричала
+    // «модель наклонена» на каждой нормальной пластине. Тревога должна молчать.
+    await page.evaluate(() => document.getElementById('ifcdReset').click());
+    const plateIfc = [
+        'ISO-10303-21;',
+        'HEADER;',
+        "FILE_SCHEMA(('IFC2X3'));",
+        'ENDSEC;',
+        'DATA;',
+        '#1=IFCCARTESIANPOINT((0.,0.,0.));',
+        '#2=IFCDIRECTION((0.,0.,1.));',
+        '#3=IFCDIRECTION((1.,0.,0.));',
+        '#4=IFCAXIS2PLACEMENT3D(#1,#2,#3);',
+        '#5=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
+        "#10=IFCPROJECT('proj',$,'P',$,$,$,$,$,$);",
+        '#11=IFCLOCALPLACEMENT($,#4);',
+        "#12=IFCSITE('site',$,'Site',$,$,#11,$,$,.ELEMENT.,$,$,$,$,$);",
+        '#13=IFCLOCALPLACEMENT(#11,#4);',
+        "#14=IFCBUILDING('bld',$,'Building',$,$,#13,$,$,.ELEMENT.,$,$,$);",
+        '#15=IFCLOCALPLACEMENT(#13,#4);',
+        "#16=IFCBUILDINGSTOREY('storey',$,'Level0',$,$,#15,$,$,.ELEMENT.,0.);",
+        // Пластина стоит вертикально: её локальная Z смотрит вдоль мирового X.
+        '#30=IFCCARTESIANPOINT((3.,4.,5.));',
+        '#31=IFCDIRECTION((1.,0.,0.));',
+        '#32=IFCAXIS2PLACEMENT3D(#30,#31,$);',
+        '#33=IFCLOCALPLACEMENT(#15,#32);',
+        "#34=IFCPLATE('plate',$,'Гусок',$,$,#33,$,$);",
+        'ENDSEC;',
+        'END-ISO-10303-21;'
+    ].join('\n');
+    await page.setInputFiles('#ifcdFile', {
+        name: 'plate-tekla.ifc', mimeType: 'application/octet-stream', buffer: Buffer.from(plateIfc, 'latin1')
+    });
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('Мировой габарит'),
+        null, { timeout: 30000 }
+    );
+    await page.evaluate(() => document.getElementById('cabMain')?.classList.remove('hidden'));
+    await page.evaluate(() => document.getElementById('ifcdChain').click());
+    await page.waitForFunction(
+        () => document.getElementById('ifcdOut')?.textContent?.includes('Итог — мировая точка'),
+        null, { timeout: 30000 }
+    );
+    const plateReport = await page.textContent('#ifcdOut');
+    const plateSection = plateReport.slice(plateReport.indexOf('типовой элемент'));
+    check(/Итог — поворот структуры над элементом вокруг Z:\s*0\.000°/.test(plateSection),
+        'структура над пластиной не повёрнута — 0°');
+    check(!/⚠/.test(plateSection),
+        'вертикальная пластина НЕ поднимает тревогу «модель наклонена» (это была ложная тревога)');
+    check(/Собственный разворот элемента: 90\.000° вокруг Z, ось Z под 90\.000° к вертикали/.test(plateSection),
+        'собственный разворот пластины показан отдельно и без тревоги');
 
     // Четвёртый файл: находка с реального объекта. IfcSite и элемент стоят на
     // ИДЕНТИЧНЫХ (нулевых) размещениях — цепочка IfcLocalPlacement целиком в

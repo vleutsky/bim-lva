@@ -517,12 +517,13 @@
                 origin[2] + basis.x[2] * lvl.location[0] + basis.y[2] * lvl.location[1] + basis.z[2] * lvl.location[2]
             ];
             const localBasis = lvl.missing ? null : buildBasis(lvl.axis, lvl.refDirection);
+            const basisBefore = basis;
             trace.push({
                 id: lvl.id, local: lvl.location, world: worldLoc,
                 missing: lvl.missing, hasAxis: lvl.hasAxis, locStatus: lvl.locStatus,
                 axis: lvl.axis, refDirection: lvl.refDirection,
                 axisStatus: lvl.axisStatus, refStatus: lvl.refStatus,
-                localBasis
+                localBasis, basisBefore
             });
             if (lvl.missing) break;
             basis = composeBasis(basis, localBasis);
@@ -558,7 +559,7 @@
         return ' · ' + bits.join(', ');
     }
 
-    function formatChainTrace(label, startId, idx, k) {
+    function formatChainTrace(label, startId, idx, k, opts = {}) {
         const L = [`--- ${label} ---`];
         if (startId == null) {
             L.push('  ObjectPlacement = $ (нет размещения — сущность в абсолютном нуле).');
@@ -579,19 +580,40 @@
         });
         L.push(`  Итог — мировая точка: ${worldOrigin.map((v) => (v * k).toFixed(3)).join(' / ')} м`);
 
-        // Итоговая ориентация. Без неё отчёт отвечал только на вопрос «где», а
-        // «как повёрнуто» оставлял без ответа — хотя базис считался всю дорогу.
-        const head = basisHeadingDeg(worldBasis);
-        const tilt = basisTiltDeg(worldBasis);
+        // Ориентацию надо делить надвое, иначе отчёт поднимает ложную тревогу.
+        // Последний уровень цепочки элемента — это СОБСТВЕННОЕ размещение
+        // элемента, и у стальной пластины, стоящей вертикально, локальная ось Z
+        // обязана лежать горизонтально. Это норма, а не «модель наклонена».
+        // Модель разворачивает только то, что ВЫШЕ элемента: site → building →
+        // storey. Первая версия этой проверки складывала всё вместе и честно
+        // кричала о наклоне на каждой нормальной пластине из Tekla.
+        const last = trace[trace.length - 1];
+        const spatialBasis = opts.leafIsElement && last && last.basisBefore
+            ? last.basisBefore
+            : worldBasis;
+        const head = basisHeadingDeg(spatialBasis);
+        const tilt = basisTiltDeg(spatialBasis);
+        const what = opts.leafIsElement ? 'структуры над элементом' : 'цепочки';
         L.push(
-            `  Итог — поворот вокруг Z: ${head.toFixed(3)}° ` +
-            `(ось X смотрит в ${worldBasis.x.map((v) => v.toFixed(5)).join(', ')})`
+            `  Итог — поворот ${what} вокруг Z: ${head.toFixed(3)}° ` +
+            `(ось X смотрит в ${spatialBasis.x.map((v) => v.toFixed(5)).join(', ')})`
         );
         if (tilt >= 0.0005) {
             L.push(
-                `  ⚠ Ось Z цепочки отклонена от вертикали на ${tilt.toFixed(3)}° ` +
-                `(${worldBasis.z.map((v) => v.toFixed(5)).join(', ')})` +
+                `  ⚠ Ось Z ${what} отклонена от вертикали на ${tilt.toFixed(3)}° ` +
+                `(${spatialBasis.z.map((v) => v.toFixed(5)).join(', ')})` +
                 (tilt > 150 ? ' — модель фактически перевёрнута.' : ' — модель наклонена.')
+            );
+        }
+        if (opts.leafIsElement && last && last.localBasis) {
+            // Печатаем, но БЕЗ тревоги: собственный разворот элемента — это его
+            // геометрия, а не ориентация модели.
+            const ownHead = basisHeadingDeg(last.localBasis);
+            const ownTilt = basisTiltDeg(last.localBasis);
+            L.push(
+                `  Собственный разворот элемента: ${ownHead.toFixed(3)}° вокруг Z` +
+                (ownTilt >= 0.0005 ? `, ось Z под ${ownTilt.toFixed(3)}° к вертикали` : '') +
+                ' — это нормально для пластин, балок и связей, на посадку модели не влияет.'
             );
         }
         return L;
@@ -648,7 +670,7 @@
             }
             L.push('');
             if (idx.product) {
-                L.push(...formatChainTrace(`${idx.product.type} #${idx.product.id} (типовой элемент)`, idx.product.placementRef, idx, k));
+                L.push(...formatChainTrace(`${idx.product.type} #${idx.product.id} (типовой элемент)`, idx.product.placementRef, idx, k, { leafIsElement: true }));
             } else {
                 L.push('--- Типовой элемент ---', '  Ни одного распознанного IfcProduct не найдено.');
             }
