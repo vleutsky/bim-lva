@@ -7164,7 +7164,9 @@
             slopeGroup.updateMatrixWorld(true);
             const targets = [];
             slopeGroup.traverse((o) => {
-                if (o.isMesh && o.visible && o.userData?.isSlopeSurface) targets.push(o);
+                if (o.isMesh && o.visible && o.userData?.isSlopeSurface && !o.userData?.isSlopePadOverlay) {
+                    targets.push(o);
+                }
             });
             return targets;
         }
@@ -7177,12 +7179,19 @@
          */
         function makeSlopeGroundSampler(ownPadTris) {
             const design = collectSlopeDesignTargets();
+            const otherPads = slopeModels
+                .map((sm) => sm.padTriangles)
+                .filter((t) => t && t.length);
             const raycaster = new THREE.Raycaster();
             const down = new THREE.Vector3(0, 0, -1);
             const from = new THREE.Vector3();
             return (x, y, fallback) => {
                 const ownZ = sampleTrianglesZ(ownPadTris, x, y);
                 if (ownZ != null) return ownZ;
+                for (let i = 0; i < otherPads.length; i++) {
+                    const pz = sampleTrianglesZ(otherPads[i], x, y);
+                    if (pz != null) return pz;
+                }
                 if (design.length) {
                     from.set(x, y, 1e7);
                     raycaster.set(from, down);
@@ -7375,6 +7384,7 @@
             mesh.renderOrder = 50;
             mesh.frustumCulled = false;
             mesh.userData.isSlopeSurface = true;
+            mesh.userData.isSlopePadOverlay = true;
             slopeGroup.add(mesh);
             return mesh;
         }

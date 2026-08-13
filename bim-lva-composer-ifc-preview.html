@@ -2767,7 +2767,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 7dada13</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · cff3621</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -7183,7 +7183,9 @@
             slopeGroup.updateMatrixWorld(true);
             const targets = [];
             slopeGroup.traverse((o) => {
-                if (o.isMesh && o.visible && o.userData?.isSlopeSurface) targets.push(o);
+                if (o.isMesh && o.visible && o.userData?.isSlopeSurface && !o.userData?.isSlopePadOverlay) {
+                    targets.push(o);
+                }
             });
             return targets;
         }
@@ -7196,12 +7198,19 @@
          */
         function makeSlopeGroundSampler(ownPadTris) {
             const design = collectSlopeDesignTargets();
+            const otherPads = slopeModels
+                .map((sm) => sm.padTriangles)
+                .filter((t) => t && t.length);
             const raycaster = new THREE.Raycaster();
             const down = new THREE.Vector3(0, 0, -1);
             const from = new THREE.Vector3();
             return (x, y, fallback) => {
                 const ownZ = sampleTrianglesZ(ownPadTris, x, y);
                 if (ownZ != null) return ownZ;
+                for (let i = 0; i < otherPads.length; i++) {
+                    const pz = sampleTrianglesZ(otherPads[i], x, y);
+                    if (pz != null) return pz;
+                }
                 if (design.length) {
                     from.set(x, y, 1e7);
                     raycaster.set(from, down);
@@ -7394,6 +7403,7 @@
             mesh.renderOrder = 50;
             mesh.frustumCulled = false;
             mesh.userData.isSlopeSurface = true;
+            mesh.userData.isSlopePadOverlay = true;
             slopeGroup.add(mesh);
             return mesh;
         }
@@ -27398,7 +27408,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.12',
-            buildId: '7dada13-preview',
+            buildId: 'cff3621-preview',
             released: '2026-08-12',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
