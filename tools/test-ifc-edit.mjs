@@ -62,6 +62,13 @@ try {
     );
     await page.waitForTimeout(400);
 
+    // Индекс ленивый: сразу после загрузки его быть НЕ должно, иначе экономия
+    // памяти потеряна (а тест бы этого не заметил — правка всё равно работает).
+    const lazy = await page.evaluate(() => window.BimLvaDebug.ifcIndexState('edit-grid'));
+    check(lazy && lazy.canEdit, 'модель считается редактируемой сразу после загрузки');
+    check(lazy && !lazy.built, 'текстовый индекс при загрузке НЕ построен (ленивый)');
+    check(lazy && lazy.hasFile, 'ссылка на файл сохранена — есть откуда прочитать');
+
     // Берём реальный номер сущности из дерева, а не выдумываем
     const target = await page.evaluate(() => {
         const row = document.querySelector('#tree .trow[data-eid]');
