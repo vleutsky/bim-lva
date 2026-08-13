@@ -1418,14 +1418,15 @@
         }
         .pad-kdo-tools { display: flex; gap: 4px; margin-top: 4px; align-items: center; }
         .pad-kdo-hint { margin: 4px 0 2px; font-size: 10px; opacity: .75; line-height: 1.35; }
-        .pad-holes { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--line, #d8dee6); }
+        .pad-holes { margin: 0 6px 8px 10px; padding-top: 4px; border-top: 1px solid var(--line, #d8dee6); }
+        .pad-holes-title { font-size: 10.5px; color: var(--txt-dim, #6b7280); margin-bottom: 2px; }
         .pad-holes-list { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
         .pad-hole-chip {
             display: inline-flex; align-items: center; gap: 3px;
             background: color-mix(in srgb, var(--txt) 6%, transparent);
             border-radius: 4px; padding: 0 4px; font-size: 10.5px;
         }
-        .pad-holes-add { display: flex; gap: 4px; align-items: center; }
+        .pad-holes-add { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
         .pad-holes-add select { flex: 1; min-width: 0; font-size: 10.5px; height: 20px; }
         .polyline-row.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
         .polyline-row .pin-xyz, .pad-row .pin-xyz {
@@ -1454,7 +1455,7 @@
             gap: 2px;
         }
         /* Кнопки в строке — с рамкой: без неё значки читались как просто текст */
-        .polyline-row .btn, .pad-row .btn, .polyline-point-row .btn, .pad-kdo .btn {
+        .polyline-row .btn, .pad-row .btn, .polyline-point-row .btn, .pad-kdo .btn, .pad-holes .btn {
             padding: 0 5px;
             height: 20px;
             font-size: 10.5px;
@@ -1468,7 +1469,7 @@
             padding: 0 7px;
             border-radius: 10px;
         }
-        .polyline-row .btn.on, .pad-row .btn.on {
+        .polyline-row .btn.on, .pad-row .btn.on, .pad-holes .btn.on {
             border-color: var(--accent);
             color: var(--accent);
             background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -3795,11 +3796,14 @@
                 <div class="bulk-note">
                     Каждая строка — одно построение откосов. Имя и цвет площадки
                     правятся в строке (цвет без пересчёта TIN). Площадь — в плане
-                    по бровке, объёмы — насыпь и выемка откосов. «КДО» — слои
-                    дорожной одежды вниз от верха площадки (толщина вертикальная,
-                    объём = площадь × толщина). Шаблоны — ориентир, не расчёт по
-                    ОДН. «⬇ DXF» и «⬇ XML» выгружают эту площадку, «✕» снимает
-                    её со сцены, бровку не трогает.
+                    по бровке, объёмы — насыпь и выемка откосов. Вырез (островок
+                    под здание) — кнопка «начертить вырез» в строке площадки:
+                    клик по модели ставит вершины, Esc замыкает контур и вырезает
+                    дыру. Уже нарисованную полилинию внутри можно «взять» — даже
+                    разомкнутую, её замкнём сами. «КДО» — слои дорожной одежды
+                    вниз от верха площадки (толщина вертикальная). Шаблоны —
+                    ориентир, не расчёт по ОДН. «⬇ DXF» и «⬇ XML» выгружают эту
+                    площадку, «✕» снимает её со сцены, бровку не трогает.
                 </div>
             </details>
             <div id="padsList" class="compact-table-list"></div>
@@ -5371,7 +5375,7 @@
                     || slopeModels[slopeModels.length - 1];
                 return sm ? applyKdoTemplate(sm, templateId) : null;
             },
-            /** Вырезы в площадке: id замкнутых полилиний внутри контура. */
+            /** Вырезы в площадке: id полилиний внутри контура. Разомкнутую замкнёт. */
             setPadHoles(id, holeIds) {
                 const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
                     .find((m) => id == null || id === 0 || m.id === id)
@@ -5379,6 +5383,22 @@
                 if (!sm) return null;
                 const next = applyPadHoles(sm, holeIds);
                 return next ? padKdoDebug(next) : null;
+            },
+            addPadHole(id, holeId) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                if (!sm) return null;
+                const next = addPadHole(sm, holeId);
+                return next ? padKdoDebug(next) : null;
+            },
+            startPadHoleDraw(id) {
+                const sm = (typeof slopeModels !== 'undefined' ? slopeModels : [])
+                    .find((m) => id == null || id === 0 || m.id === id)
+                    || slopeModels[slopeModels.length - 1];
+                if (!sm) return null;
+                startPadHoleDraw(sm);
+                return { pending: pendingPadHolePolylineId, drawMode: !!drawMode };
             },
             /** Отметка TIN площадки в плане, или null если дыра / мимо. */
             padHitAt(id, x, y) {
@@ -7266,6 +7286,8 @@
         let slopeSeq = 0;
         let kdoLayerSeq = 0;
         const padsKdoOpen = new Set();
+        /** Площадка, для которой сейчас чертим вырез (id модели откоса). */
+        let pendingPadHolePolylineId = null;
 
         /**
          * Шаблоны КДО — ориентиры по толщинам, не расчёт по ОДН.
@@ -8193,6 +8215,26 @@
             return rec ? rec.id : null;
         }
 
+        function padCandidateRing(rec) {
+            if (!rec) return null;
+            if (rec.closed) {
+                if (!rec.renderPts || rec.renderPts.length < 4) return null;
+                const ring = rec.renderPts.slice(0, -1);
+                return ring.length >= 3 ? ring : null;
+            }
+            const src = (rec.renderPts && rec.renderPts.length >= 3) ? rec.renderPts : rec.pts;
+            return src && src.length >= 3 ? src.slice() : null;
+        }
+
+        function ensurePolylineClosed(rec) {
+            if (!rec) return false;
+            if (rec.closed) return rec.pts.length >= 3;
+            if (rec.pts.length < 3) return false;
+            rec.closed = true;
+            rebuildPolylineGeometry(rec, { notifyClamp: true });
+            return true;
+        }
+
         function candidateHolePolylines(sm) {
             const rec = drawnPolylines.find((r) => r.id === sm?.polylineId);
             const outer = rec?.closed && rec.renderPts?.length >= 4
@@ -8203,18 +8245,22 @@
             const derived = slopeDerivedPolylineIds();
             const out = [];
             drawnPolylines.forEach((r) => {
-                if (!r.closed || r.id === sm.polylineId) return;
+                if (r.id === sm.polylineId) return;
                 if (used.has(r.id) || derived.has(r.id)) return;
-                if (!r.renderPts || r.renderPts.length < 4) return;
-                const hole = r.renderPts.slice(0, -1);
-                if (hole.length < 3) return;
+                const hole = padCandidateRing(r);
+                if (!hole) return;
                 let cx = 0, cy = 0;
                 hole.forEach((p) => { cx += p.x; cy += p.y; });
                 cx /= hole.length;
                 cy /= hole.length;
                 if (!pointInRingXY(outer, cx, cy)) return;
                 if (ringPlanArea(hole) >= ringPlanArea(outer) * 0.99) return;
-                out.push({ id: r.id, name: r.name || String(r.id) });
+                out.push({
+                    id: r.id,
+                    name: r.closed
+                        ? (r.name || String(r.id))
+                        : `${r.name || r.id} (замкнём)`
+                });
             });
             return out;
         }
@@ -8223,17 +8269,21 @@
             if (!sm?.padTriangles?.length) return null;
             const nid = resolveDrawnId(holeId);
             const rec = drawnPolylines.find((r) => r.id === nid);
-            if (!rec?.closed || !rec.renderPts || rec.renderPts.length < 4) {
-                notifyError('Для выреза нужна замкнутая полилиния.');
+            if (!rec) {
+                notifyError('Полилинию выреза не нашли.');
                 return null;
             }
             if (nid === sm.polylineId) {
                 notifyError('Вырезом не может быть сама бровка площадки.');
                 return null;
             }
+            if (!ensurePolylineClosed(rec)) {
+                notifyError('Для выреза нужна полилиния из 3+ вершин — начертите контур внутри площадки.');
+                return null;
+            }
             const outer = drawnPolylines.find((r) => r.id === sm.polylineId)?.renderPts?.slice(0, -1);
-            const hole = rec.renderPts.slice(0, -1);
-            if (!outer || hole.length < 3) return null;
+            const hole = padCandidateRing(rec);
+            if (!outer || !hole) return null;
             let cx = 0, cy = 0;
             hole.forEach((p) => { cx += p.x; cy += p.y; });
             cx /= hole.length;
@@ -8249,12 +8299,51 @@
             return restakePad(sm);
         }
 
+        function consumePendingPadHole(record) {
+            const polyId = pendingPadHolePolylineId;
+            pendingPadHolePolylineId = null;
+            if (polyId == null || !record) return;
+            const sm = slopeModels.find((m) => m.polylineId === polyId);
+            if (!sm) return;
+            if (!record.name || /^Полилиния /.test(record.name)) {
+                record.name = `Вырез · ${sm.name}`;
+            }
+            const next = addPadHole(sm, record.id);
+            if (next) {
+                notify(`Вырез добавлен в «${sm.name}». Клик по модели больше не чертит.`);
+                renderPadsList(true);
+                renderPolylinesList();
+            }
+        }
+
+        function startPadHoleDraw(sm) {
+            if (!sm?.padTriangles?.length) {
+                notifyError('Сначала постройте площадку (△ Откосы по замкнутой бровке).');
+                return false;
+            }
+            if (drawMode) {
+                pendingPadHolePolylineId = null;
+                setDrawMode(false);
+            }
+            pendingPadHolePolylineId = sm.polylineId;
+            setDrawMode(true);
+            notify(
+                `Начертите контур выреза внутри «${sm.name}»: клик — вершина, Esc — готово. ` +
+                `Контур замкнётся и вырежется сам.`
+            );
+            renderPadsList(true);
+            return true;
+        }
+
         function applyPadHoles(sm, holeIds) {
             if (!sm) return null;
             const ids = [];
             (holeIds || []).forEach((id) => {
                 const nid = resolveDrawnId(id);
-                if (nid != null && nid !== sm.polylineId && !ids.includes(nid)) ids.push(nid);
+                if (nid == null || nid === sm.polylineId || ids.includes(nid)) return;
+                const rec = drawnPolylines.find((r) => r.id === nid);
+                if (rec && !ensurePolylineClosed(rec)) return;
+                ids.push(nid);
             });
             sm.holePolylineIds = ids;
             return restakePad(sm);
@@ -9077,6 +9166,7 @@
 
         function deleteSlopeModel(sm) {
             if (!sm) return;
+            if (pendingPadHolePolylineId === sm.polylineId) pendingPadHolePolylineId = null;
             disposeSlopeModel(sm);
             slopeModels = slopeModels.filter((m) => m !== sm);
             updateDrawUi();
@@ -9139,7 +9229,7 @@
 
             const hint = document.createElement('p');
             hint.className = 'pad-kdo-hint';
-            hint.textContent = 'Слои внутри тела площадки. Бока КДО — те же лучи, что откос площадки (насыпь 1:m), в том числе на углах. Вырез — замкнутая полилиния внутри (островок под здание).';
+            hint.textContent = 'Слои внутри тела площадки. Бока КДО — те же лучи, что откос площадки (насыпь 1:m), в том числе на углах.';
             box.appendChild(hint);
 
             (sm.kdoLayers || []).forEach((layer, idx) => {
@@ -9217,9 +9307,22 @@
             });
             tools.appendChild(add);
             box.appendChild(tools);
+            return box;
+        }
 
+        function renderPadHolesEditor(sm) {
             const holes = document.createElement('div');
             holes.className = 'pad-holes';
+            const title = document.createElement('div');
+            title.className = 'pad-holes-title';
+            title.textContent = 'Вырез (островок под здание)';
+            holes.appendChild(title);
+            const hint = document.createElement('p');
+            hint.className = 'pad-kdo-hint';
+            hint.textContent = pendingPadHolePolylineId === sm.polylineId
+                ? 'Чертите контур на модели: клик — вершина, Esc — готово. Замкнётся и вырежется сам.'
+                : '«Начертить» — контур на модели. Или выберите уже нарисованную полилинию внутри площадки и «взять» (разомкнутую замкнём).';
+            holes.appendChild(hint);
             const list = document.createElement('div');
             list.className = 'pad-holes-list';
             const holeIds = sm.holePolylineIds || [];
@@ -9237,7 +9340,7 @@
                 const x = document.createElement('button');
                 x.className = 'btn';
                 x.textContent = '✕';
-                x.title = 'Убрать вырез';
+                x.title = 'Убрать вырез (полилинию не удаляет)';
                 x.addEventListener('click', () => {
                     applyPadHoles(sm, (sm.holePolylineIds || []).filter((id) => id !== hid));
                     renderPadsList(true);
@@ -9250,10 +9353,11 @@
             addRow.className = 'pad-holes-add';
             const pick = document.createElement('select');
             pick.className = 'editInput';
+            pick.title = 'Полилиния внутри площадки';
             const cands = candidateHolePolylines(sm);
             const ph = document.createElement('option');
             ph.value = '';
-            ph.textContent = cands.length ? 'полилиния-вырез…' : 'нет контуров внутри';
+            ph.textContent = cands.length ? 'полилиния внутри…' : 'нет полилинии внутри';
             pick.appendChild(ph);
             cands.forEach((c) => {
                 const o = document.createElement('option');
@@ -9264,18 +9368,33 @@
             if (!cands.length) pick.disabled = true;
             const addHole = document.createElement('button');
             addHole.className = 'btn';
-            addHole.textContent = '+ вырез';
+            addHole.textContent = '+ взять';
             addHole.disabled = !cands.length;
-            addHole.title = 'Вырезать островок по замкнутой полилинии внутри площадки';
+            addHole.title = 'Вырезать по выбранной полилинии (разомкнутую замкнём)';
             addHole.addEventListener('click', () => {
-                if (!pick.value) return;
+                if (!pick.value) {
+                    notifyError('Сначала выберите полилинию в списке или начертите вырез.');
+                    return;
+                }
                 addPadHole(sm, pick.value);
                 renderPadsList(true);
             });
-            addRow.append(pick, addHole);
+            const drawHole = document.createElement('button');
+            drawHole.className = 'btn';
+            drawHole.dataset.action = 'pad-hole-draw';
+            if (pendingPadHolePolylineId === sm.polylineId && drawMode) {
+                drawHole.classList.add('on');
+                drawHole.textContent = 'черчение… Esc';
+                drawHole.title = 'Завершить контур выреза (Esc)';
+                drawHole.addEventListener('click', () => setDrawMode(false));
+            } else {
+                drawHole.textContent = '✏ начертить вырез';
+                drawHole.title = 'Начертить контур на модели: клик — вершина, Esc — замкнуть и вырезать';
+                drawHole.addEventListener('click', () => startPadHoleDraw(sm));
+            }
+            addRow.append(pick, addHole, drawHole);
             holes.appendChild(addRow);
-            box.appendChild(holes);
-            return box;
+            return holes;
         }
 
         function renderPadsList(force) {
@@ -9283,7 +9402,7 @@
             if (count) count.textContent = String(slopeModels.length);
             const body = $('padsList');
             if (!body) return;
-            if (!force && body.contains(document.activeElement) && document.activeElement.closest('.pad-kdo')) return;
+            if (!force && body.contains(document.activeElement) && document.activeElement.closest('.pad-kdo, .pad-holes')) return;
             if (!slopeModels.length) {
                 body.innerHTML = '<div class="empty">Площадок пока нет. В списке полилиний нажмите «△ Откосы» и постройте.</div>';
                 return;
@@ -9351,7 +9470,10 @@
                 tools.append(plan, dxf, xml, del);
                 row.append(nameInput, info, colorInput, tools);
                 block.appendChild(row);
-                if (sm.padTriangles?.length) block.appendChild(renderPadKdoEditor(sm));
+                if (sm.padTriangles?.length) {
+                    block.appendChild(renderPadHolesEditor(sm));
+                    block.appendChild(renderPadKdoEditor(sm));
+                }
                 frag.appendChild(block);
             });
             body.replaceChildren(frag);
@@ -11316,7 +11438,10 @@
         }
 
         function setDrawMode(on) {
-            if (!on && drawMode) finishDrawPolyline();
+            if (!on && drawMode) {
+                const rec = finishDrawPolyline();
+                if (pendingPadHolePolylineId != null) consumePendingPadHole(rec);
+            }
             drawMode = !!on;
             $('btnDraw')?.classList.toggle('on', drawMode);
             if (drawMode) {
@@ -11530,7 +11655,10 @@
         }
 
         $('btnCoordPin')?.addEventListener('click', () => setCoordPinMode(!coordPinMode));
-        $('btnDraw')?.addEventListener('click', () => setDrawMode(!drawMode));
+        $('btnDraw')?.addEventListener('click', () => {
+            if (!drawMode) pendingPadHolePolylineId = null;
+            setDrawMode(!drawMode);
+        });
         const sweepPanel = createFloatingPanel({
             cardId: 'sweepModalCard', modalId: 'sweepModal',
             handleId: 'sweepModalDrag', defaultWidth: 480
@@ -29533,7 +29661,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: 'kdo-m',
+            buildId: 'pad-h',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -29543,7 +29671,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: КДО внутри площадки — бока по тем же лучам, что откос (и на углах); вырез островка; выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
+                '2026.08.13: КДО внутри площадки — бока по тем же лучам, что откос (и на углах); вырез островка: «начертить вырез» в таблице площадок (Esc замыкает контур); выемка видна поверх рельефа; площадка в DXF — одна 3D-сеть.',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
                 '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
@@ -29610,7 +29738,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=90').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=91').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

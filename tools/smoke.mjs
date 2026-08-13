@@ -1492,6 +1492,10 @@ async function checkSlopeToTerrain(page) {
             nameInput.dispatchEvent(new Event('change'));
         }
         const after = (window.BimLvaDebug.pads || []).find((p) => p.id === rec?.id);
+        const block = row?.closest('.pad-block');
+        const holes = block?.querySelector('.pad-holes');
+        const kdo = block?.querySelector('.pad-kdo');
+        const drawBtn = holes?.querySelector('[data-action="pad-hole-draw"]');
         return {
             shown: document.getElementById('padsModal')?.classList.contains('show'),
             count: Number(document.getElementById('padsCount')?.textContent),
@@ -1499,7 +1503,12 @@ async function checkSlopeToTerrain(page) {
             color: (row?.querySelector('input[type=color]')?.value || '').toLowerCase(),
             info: row?.querySelector('.pin-xyz')?.textContent || '',
             area: rec?.area,
-            renamed: after?.name || null
+            renamed: after?.name || null,
+            holesShown: !!holes,
+            holesInKdo: !!kdo?.querySelector('.pad-holes'),
+            kdoOpen: !!kdo?.open,
+            drawHole: (drawBtn?.textContent || '').trim(),
+            holeHint: holes?.querySelector('.pad-kdo-hint')?.textContent || ''
         };
     });
     if (!padsUi.shown || !padsUi.found) {
@@ -1520,6 +1529,14 @@ async function checkSlopeToTerrain(page) {
         if (!(padsUi.count >= 1)) {
             problems.push(`площадки: счётчик ${padsUi.count}`);
         }
+        if (!padsUi.holesShown || padsUi.holesInKdo || padsUi.kdoOpen) {
+            problems.push(
+                `площадки: вырез не на виду (shown=${padsUi.holesShown}, inKdo=${padsUi.holesInKdo}, kdoOpen=${padsUi.kdoOpen})`
+            );
+        }
+        if (!/начертить вырез/.test(padsUi.drawHole || '')) {
+            problems.push(`площадки: нет кнопки «начертить вырез» («${padsUi.drawHole}»)`);
+        }
     }
 
     // Вырез островка 2×2 в квадрате 4×4: площадь 12; в дыре TIN нет.
@@ -1533,9 +1550,9 @@ async function checkSlopeToTerrain(page) {
                 { x: 21, y: 16, z: g + 2 }, { x: 23, y: 16, z: g + 2 },
                 { x: 23, y: 18, z: g + 2 }, { x: 21, y: 18, z: g + 2 }
             ],
-            { name: 'Откос-тест-остров', closed: true }
+            { name: 'Откос-тест-остров', closed: false }
         );
-        const holed = D.setPadHoles(pad.id, [holeId]);
+        const holed = D.addPadHole(pad.id, holeId);
         return {
             ok: true,
             area: holed?.area,
