@@ -1581,6 +1581,63 @@ async function checkSlopeToTerrain(page) {
         problems.push(`откосы: на переходе ждали и насыпь и выемку (насыпь ${hinge.fill}, выемка ${hinge.cut})`);
     }
 
+    // Замкнутая площадка: вершина 0 — выемка. Шарнир на ребре «последняя→0»
+    // иначе выкидывался (группа из одной точки), и линия выемки начиналась
+    // с углового сечения, а не с пересечения бровки с землёй.
+    const hingeClosed = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 40, y: -8, z: g - 2 },
+                { x: 48, y: -8, z: g - 2 },
+                { x: 48, y: 0, z: g + 2 },
+                { x: 40, y: 0, z: g + 2 }
+            ],
+            { name: 'Откос-тест-шарнир-кольцо', closed: true }
+        );
+        const res = D.buildSlopeOnPolyline(id, { side: 'both', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const side = (res?.sides || []).find((s) => (s.hinges || []).length) || res?.sides?.[0];
+        const lines = (side?.exitPolylineIds || []).map((eid) => D.drawn.find((d) => d.id === eid)).filter(Boolean);
+        const cutLine = lines.find((d) => /выемка/.test(d.name));
+        const fillLine = lines.find((d) => /насыпь/.test(d.name));
+        const pts = cutLine?.vertsAbs || [];
+        const distPlan = (p, x, y) => Math.hypot(p.x - x, p.y - y);
+        return {
+            hinges: side?.hinges || [],
+            nLines: lines.length,
+            cutName: cutLine?.name || null,
+            fillName: fillLine?.name || null,
+            cutPts: pts,
+            nearHingeWrap: pts.filter((p) => distPlan(p, 40, -4) < 0.3).length,
+            nearHingeFar: pts.filter((p) => distPlan(p, 48, -4) < 0.3).length,
+            nearCorner0: pts.filter((p) => distPlan(p, 40, -8) < 0.25).length,
+            fill: side?.fill,
+            cut: side?.cut,
+            modes: (side?.exits || []).map((e) => e.mode || e.reason)
+        };
+    }, groundZ);
+    if ((hingeClosed.hinges || []).length < 2) {
+        problems.push(`откосы: на замкнутой площадке ждали 2 шарнира (${JSON.stringify(hingeClosed)})`);
+    }
+    if (hingeClosed.nearHingeWrap < 1) {
+        problems.push(
+            `откосы: линия выемки замкнутой площадки не идёт от шарнира на ребре к вершине 0 (${JSON.stringify(hingeClosed.cutPts)})`
+        );
+    }
+    if (hingeClosed.nearHingeFar < 1) {
+        problems.push(
+            `откосы: линия выемки замкнутой площадки не дошла до второго шарнира (${JSON.stringify(hingeClosed.cutPts)})`
+        );
+    }
+    if (hingeClosed.nearCorner0) {
+        problems.push(
+            `откосы: линия выемки замкнутой площадки сидит на угле, а не на пересечении с землёй (${JSON.stringify(hingeClosed.cutPts)})`
+        );
+    }
+    if (!(hingeClosed.fill > 0) || !(hingeClosed.cut > 0)) {
+        problems.push(`откосы: на замкнутом переходе ждали и насыпь и выемку (насыпь ${hingeClosed.fill}, выемка ${hingeClosed.cut})`);
+    }
+
     // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
     // проверяем, что кнопка в строке списка находит СВОЮ полилинию, поля
     // читаются с формы (а не остались значением по умолчанию из прошлого

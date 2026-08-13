@@ -2767,7 +2767,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 0c95e42</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 203c98d</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -7386,6 +7386,15 @@
                 if (!curMode) curMode = t.mode;
                 cur.push(t.pt);
             });
+            // Замкнутое кольцо: шарнир на ребре «последняя→нулевая» остаётся
+            // в cur одним концом. flush требует две точки и выкидывал его —
+            // линия выемки тогда начиналась с углового сечения (вершина 0),
+            // а не с пересечения бровки с землёй.
+            if (closedRing && cur.length && groups.length && curMode && curMode === groups[0].mode) {
+                groups[0] = { pts: cur.concat(groups[0].pts), mode: curMode, closed: false };
+                cur = [];
+                curMode = null;
+            }
             const allExits = tokens.length > 0 && tokens.every((t) => t.kind === 'exit');
             const wrapClosed = !!closedRing && allExits && tokens.length === sectionCount && cur.length >= 2;
             flush(wrapClosed);
@@ -27546,7 +27555,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.12',
-            buildId: '0c95e42-preview',
+            buildId: '203c98d-preview',
             released: '2026-08-12',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
