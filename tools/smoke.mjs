@@ -36,6 +36,62 @@ let dxfEntities = null;
 let sweep = null;
 let slope = null;
 
+/** Обратное к шифру ACIS в DXF (как ezdxf.tools.crypt.decode). */
+function dxfSatDecrypt(s) {
+    let out = '';
+    let skipSpace = false;
+    for (const ch of s) {
+        if (skipSpace && ch === ' ') { skipSpace = false; continue; }
+        skipSpace = false;
+        const c = ch.charCodeAt(0);
+        if (c === 0x20) out += ' ';
+        else if (c === 0x40) out += '_';
+        else if (c === 0x5F) out += '@';
+        else if (c >= 0x41 && c <= 0x5E) {
+            const dec = String.fromCharCode(0x41 + (0x5E - c));
+            out += dec;
+            if (dec === 'A') skipSpace = true;
+        } else out += String.fromCharCode(c ^ 0x5F);
+    }
+    return out;
+}
+
+/** Склеить группы 1/3 внутри 3DSOLID и расшифровать SAT. */
+function dxfSatPayload(dxf) {
+    const lines = String(dxf).split(/\r?\n/);
+    const chunks = [];
+    let buf = '';
+    let inSolid = false;
+    for (let i = 0; i < lines.length; i++) {
+        const code = lines[i].trim();
+        const val = lines[i + 1] ?? '';
+        if (code === '0' && val.trim() === '3DSOLID') {
+            if (buf) { chunks.push(dxfSatDecrypt(buf)); buf = ''; }
+            inSolid = true;
+            i++;
+            continue;
+        }
+        if (inSolid && code === '0') {
+            if (buf) { chunks.push(dxfSatDecrypt(buf)); buf = ''; }
+            inSolid = false;
+            continue;
+        }
+        if (inSolid && code === '1') {
+            if (buf) chunks.push(dxfSatDecrypt(buf));
+            buf = val;
+            i++;
+            continue;
+        }
+        if (inSolid && code === '3') {
+            buf += val;
+            i++;
+            continue;
+        }
+    }
+    if (buf) chunks.push(dxfSatDecrypt(buf));
+    return chunks.join('\n');
+}
+
 /**
  * Готовый Chromium окружения (PLAYWRIGHT_BROWSERS_PATH) может не совпадать по
  * ревизии с версией playwright из package.json — тогда берём бинарь напрямую.
@@ -425,7 +481,8 @@ async function checkVerticalTransition(page, cx, cy, box) {
 /**
  * Черчение полилиний и выгрузка в DXF. Проверяем содержимое файла: координаты
  * обязаны быть мировыми (иначе чертёж ляжет у нуля, а не на площадке), 2D —
- * с одной отметкой на всю линию, и структура R12 (POLYLINE/VERTEX/SEQEND).
+ * с одной отметкой на всю линию, и POLYLINE/VERTEX/SEQEND (не LWPOLYLINE).
+ * Файл — R2000 (AC1015): без этой версии 3DSOLID нелегален.
  */
 async function checkDrawDxf(page) {
     const box = await page.locator('#stage canvas').boundingBox();
@@ -610,7 +667,7 @@ async function checkDrawDxf(page) {
 
     const dxf = await page.evaluate(() => window.BimLvaDebug.dxfPreview());
     const has = (t) => dxf.includes(t);
-    if (!has('AC1009')) problems.push('в DXF нет версии AC1009 (R12)');
+    if (!has('AC1015')) problems.push('в DXF нет версии AC1015 (R2000, 3DSOLID)');
     if (!has('$INSUNITS')) problems.push('в DXF не указаны единицы');
     if (!has('LVA_3D') || !has('LVA_2D')) problems.push('в DXF нет слоёв LVA_2D/LVA_3D');
     if (!has('SEQEND')) problems.push('в DXF полилиния не закрыта SEQEND');
@@ -1319,8 +1376,8 @@ async function checkSlopeToTerrain(page) {
 
     // Площадка: замкнутый квадрат 4×4 м. Середина обязана заполниться
     // (2 треугольника), иначе в TIN дыра до исходного рельефа. LandXML —
-    // northing easting elev; DXF площадки — одна POLYFACE MESH (70=64) на
-    // слое LVA_SLOPE, без 3D-полилиний по рёбрам. Оба в абсолютных метрах.
+    // northing easting elev; DXF площадки — один 3DSOLID (SAT 700) на
+    // слое LVA_SLOPE, без POLYFACE и без 3D-полилиний по рёбрам. Оба в абсолютных метрах.
     await page.evaluate(() => window.BimLvaDebug.clearSlopes());
     const pad = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
@@ -1349,12 +1406,16 @@ async function checkSlopeToTerrain(page) {
             xmlPnts: (xml.match(/<P id="/g) || []).length,
             xmlHasSurface: /<Surface /i.test(xml) && /surfType="TIN"/i.test(xml),
             dxfFaces: (dxf.match(/\r\n3DFACE\r\n/g) || []).length,
+            dxfSolids: (dxf.match(/\r\n3DSOLID\r\n/g) || []).length,
+            dxfAcadver: /AC1015/.test(dxf),
             dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length,
             dxfMeshVerts: (dxf.match(/\r\n70\r\n192\r\n/g) || []).length,
             dxfMeshFaces: (dxf.match(/\r\n70\r\n128\r\n/g) || []).length,
             dxfLineVerts: (dxf.match(/\r\n70\r\n32\r\n/g) || []).length,
             dxfPolylines: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
             dxfSlopeLayer: /LVA_SLOPE/.test(dxf),
+            dxfRawHasBody: /body\s+\$-1/.test(dxf),
+            dxf,
             p1: xyz,
             tin0: tin?.points?.[0] || null,
             exitClosed: !!exit?.closed,
@@ -1401,15 +1462,26 @@ async function checkSlopeToTerrain(page) {
         } else {
             problems.push('откосы: в LandXML нет точки id=1');
         }
-        if (!pad.dxfSlopeLayer || pad.dxfPolyface !== 1 || pad.dxfMeshFaces !== pad.res.tin.faces
-            || pad.dxfMeshVerts !== pad.res.tin.points || pad.dxfPolylines !== 1 || pad.dxfLineVerts
-            || pad.dxfFaces) {
+        if (!pad.dxfSlopeLayer || !pad.dxfAcadver || pad.dxfSolids !== 1 || pad.dxfPolyface
+            || pad.dxfPolylines || pad.dxfLineVerts || pad.dxfFaces || pad.dxfRawHasBody) {
             problems.push(
-                `откосы: DXF площадки — сеть ${pad.dxfPolyface} (70=64), граней ${pad.dxfMeshFaces}/` +
-                `${pad.res.tin.faces}, вершин ${pad.dxfMeshVerts}/${pad.res.tin.points}, ` +
-                `POLYLINE ${pad.dxfPolylines}, рёбер-линий ${pad.dxfLineVerts}, 3DFACE ${pad.dxfFaces}, ` +
-                `слой LVA_SLOPE ${pad.dxfSlopeLayer}`
+                `откосы: DXF площадки — 3DSOLID ${pad.dxfSolids}, AC1015 ${pad.dxfAcadver}, ` +
+                `POLYFACE ${pad.dxfPolyface}, POLYLINE ${pad.dxfPolylines}, ` +
+                `рёбер-линий ${pad.dxfLineVerts}, 3DFACE ${pad.dxfFaces}, ` +
+                `слой LVA_SLOPE ${pad.dxfSlopeLayer}, сырой SAT ${pad.dxfRawHasBody}`
             );
+        } else {
+            const sat = dxfSatPayload(pad.dxf);
+            if (!sat.includes('700 0 1 0') || !/\bbody\b/.test(sat) || !/\bface\b/.test(sat)) {
+                problems.push('откосы: DXF 3DSOLID без SAT 700 / body / face (шифр или разбор)');
+            } else if (pad.tin0) {
+                const needle = ` ${String(pad.tin0.x)} ${String(pad.tin0.y)} ${String(pad.tin0.z)}`;
+                if (!sat.includes(needle)) {
+                    problems.push(
+                        `откосы: в SAT нет точки TIN ${needle.trim()} — солид ушёл не в абсолютных`
+                    );
+                }
+            }
         }
         if (!pad.exitClosed) {
             problems.push('откосы: линия выхода площадки не замкнута — контур на сцене должен быть кольцом');
@@ -1445,6 +1517,7 @@ async function checkSlopeToTerrain(page) {
                 south10: southY(D.kdoRing(applied?.id || id, 0.10)),
                 south30: southY(D.kdoRing(applied?.id || id, 0.30)),
                 dxfKdo: /LVA_KDO/.test(dxf),
+                dxfSolids: (dxf.match(/\r\n3DSOLID\r\n/g) || []).length,
                 dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length
             };
         }, pad.res.id);
@@ -1470,8 +1543,8 @@ async function checkSlopeToTerrain(page) {
         if (!(kdo.faces0 > 0)) {
             problems.push(`откосы: слой КДО без граней (${kdo.faces0})`);
         }
-        if (!kdo.dxfKdo || kdo.dxfPolyface !== 3) {
-            problems.push(`откосы: DXF КДО слой ${kdo.dxfKdo}, сетей ${kdo.dxfPolyface} (ждали 1 TIN + 2 слоя)`);
+        if (!kdo.dxfKdo || kdo.dxfSolids !== 3 || kdo.dxfPolyface) {
+            problems.push(`откосы: DXF КДО слой ${kdo.dxfKdo}, 3DSOLID ${kdo.dxfSolids} (ждали 1 TIN + 2 слоя), POLYFACE ${kdo.dxfPolyface}`);
         }
         // Откос с бровки верха: H=2, 1:1.5 → d=3.0.
         if (!(Math.abs((kdo.meanExit || 0) - 3.0) < 0.2)) {
