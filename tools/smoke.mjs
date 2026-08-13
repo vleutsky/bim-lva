@@ -1479,6 +1479,10 @@ async function checkSlopeToTerrain(page) {
                 }
             }
         }
+        const appendN = await page.evaluate(() => window.BimLvaDebug.dxfAppendStress(200000));
+        if (appendN !== 200000) {
+            problems.push(`откосы: склейка DXF без spread вернула ${appendN} вместо 200000`);
+        }
         if (!pad.exitClosed) {
             problems.push('откосы: линия выхода площадки не замкнута — контур на сцене должен быть кольцом');
         }
@@ -2000,6 +2004,34 @@ async function checkSlopeToTerrain(page) {
     }
     if (uiOpened.mFill !== '1.5' || uiOpened.mCut !== '1') {
         problems.push(`откосы: умолчания в окне 1:m — насыпь «${uiOpened.mFill}», выемка «${uiOpened.mCut}» (ждали 1.5 и 1)`);
+    }
+    const modalBox = await page.evaluate(() => window.BimLvaDebug.slopeModalBox());
+    if (!modalBox?.shown) {
+        problems.push('откосы: после открытия окна slopeModalBox пуст');
+    } else {
+        if (modalBox.left < -1) {
+            problems.push(`откосы: окно уехало влево (${modalBox.left.toFixed(1)}px)`);
+        }
+        if (modalBox.right > modalBox.vw + 1) {
+            problems.push(`откосы: окно уехало вправо (${modalBox.right.toFixed(1)} > ${modalBox.vw})`);
+        }
+        if (!modalBox.btns.length) {
+            problems.push('откосы: в окне нет кнопок действий');
+        }
+        for (const b of modalBox.btns) {
+            if (b.w < 4 || b.h < 4) {
+                problems.push(`откосы: кнопка «${b.t}» почти не видна (${b.w.toFixed(0)}×${b.h.toFixed(0)})`);
+            }
+            if (b.left < -1) {
+                problems.push(`откосы: кнопка «${b.t}» за левым краем экрана (${b.left.toFixed(1)})`);
+            }
+            if (b.right > modalBox.vw + 1) {
+                problems.push(`откосы: кнопка «${b.t}» за правым краем экрана (${b.right.toFixed(1)})`);
+            }
+            if (b.left + 1 < modalBox.left || b.right - 1 > modalBox.right) {
+                problems.push(`откосы: кнопка «${b.t}» вылезла из карточки`);
+            }
+        }
     }
     await page.evaluate(() => { document.getElementById('slopeSide').value = 'both'; });
     await page.evaluate(() => document.getElementById('slopeApply')?.click());
