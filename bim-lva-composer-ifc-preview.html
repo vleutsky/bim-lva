@@ -2816,7 +2816,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 52d8c6a</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · a300c48</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -17335,7 +17335,12 @@ uniform vec3 uBatchSelColor;
 
         function countIfcBooleanOps(text) {
             if (!text) return 0;
-            const m = String(text).match(/IFCBOOLEANRESULT\s*\(/gi);
+            // IFCBOOLEANCLIPPINGRESULT — ОТДЕЛЬНЫЙ тип, под /IFCBOOLEANRESULT/ он
+            // не подходит. А у Tekla именно он и составляет почти все вырезы
+            // (в разобранном файле АС: 1613 clipping из 1997 булевых). Пока его
+            // не считали, счёт занижался в разы, и от него зависят И выбор
+            // USE_FAST_BOOLS, И решение о сбросе координат в ноль.
+            const m = String(text).match(/IFCBOOLEAN(?:CLIPPING)?RESULT\s*\(/gi);
             return m ? m.length : 0;
         }
 
@@ -17577,7 +17582,16 @@ uniform vec3 uBatchSelColor;
     // Tekla IFC2X3 CoordinationView often keeps a huge site origin and many CSG
     // DIFFERENCE ops. web-ifc float tessellation then yields empty fragments while
     // the spatial tree still lists products — zoom/focus silently no-ops.
-    if (isTekla && isIfc2x3 && booleans >= 8 && worldMeters >= 50) {
+    //
+    // Порог тут был 50 м, и это ломало заводскую сетку: файлы Tekla с
+    // координатами ~1200 м (а такими бывают ВСЕ выгрузки промплощадки) открывались
+    // со сбросом координат в ноль и садились друг на друга. Замерено: разлёт
+    // 1699 м при настоящих 116 м. На 1200 м шаг float32 — 0.14 мм, то есть
+    // ради точности CSG жертвовать координатами не за чем; ради этого порог
+    // и поднят до геодезического. Если геометрия всё-таки выйдет пустой,
+    // загрузка сама переоткроет файл с COORDINATE_TO_ORIGIN (повтор ниже по
+    // коду) — но уже по факту, а не по догадке, и с предупреждением.
+    if (isTekla && isIfc2x3 && booleans >= 8 && worldMeters >= LARGE_COORD_THRESHOLD) {
       return true;
     }
     return false;
@@ -31237,7 +31251,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: '52d8c6a-preview',
+            buildId: 'a300c48-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
