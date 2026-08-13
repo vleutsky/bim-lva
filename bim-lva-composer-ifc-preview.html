@@ -2816,7 +2816,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · f6322d1</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 52d8c6a</div>
     <header class="top">
         <div class="brand">
             <div class="dot"></div>
@@ -5748,7 +5748,15 @@
                 const out = [];
                 for (const mod of (typeof loadedModels !== 'undefined' ? loadedModels.values() : [])) {
                     if (!mod.absExtents) continue;
-                    out.push({ file: mod.filename || '', rebase: mod.coordRebase || '', ...mod.absExtents });
+                    // cto — открыт ли файл со сбросом координат в ноль. Он
+                    // необратимо теряет абсолютное положение, поэтому в тестах
+                    // это надо ВИДЕТЬ, а не догадываться по симптомам.
+                    out.push({
+                        file: mod.filename || '',
+                        rebase: mod.coordRebase || '',
+                        cto: !!mod.coordinateToOrigin,
+                        ...mod.absExtents
+                    });
                 }
                 return out;
             }
@@ -18473,11 +18481,16 @@ uniform vec3 uBatchSelColor;
 
                 // CTO пришлось включить (плотный CSG) — координаты этого файла уже не
                 // абсолютные, и в сводке он встанет не на своё место. Честно говорим.
-                if (modData.coordinateToOrigin && coordExtents.maxAbs * lengthToMetersEstimate >= LARGE_COORD_THRESHOLD) {
+                // Порог тут был LARGE_COORD_THRESHOLD (5000 м), и на заводской
+                // сетке (~1200 м) вьювер о сбросе координат МОЛЧАЛ — файл терял
+                // абсолютное положение без единого слова. Предупреждать надо
+                // всюду, где координаты вообще что-то значили.
+                if (modData.coordinateToOrigin && coordExtents.maxAbs * lengthToMetersEstimate >= SELF_CENTER_MAX_COORD) {
                     notify(
-                        `${file.name}: файл геопривязан, но из-за плотной CSG-геометрии (${booleanOps}+ вырезов) ` +
-                        `открыт со сбросом координат в ноль — иначе геометрия теряется. ` +
-                        `В сводке поставьте его на место: «Выравнивание» → координаты точки вставки.`,
+                        `${file.name}: файл нёс координаты (≈ ${Math.round(coordExtents.maxAbs * lengthToMetersEstimate)} м), ` +
+                        `но из-за плотной CSG-геометрии (${booleanOps}+ вырезов) открыт со СБРОСОМ КООРДИНАТ В НОЛЬ — ` +
+                        `иначе геометрия теряется. Абсолютное положение потеряно: в сводке этот файл встанет не на место, ` +
+                        `а рядом с нулём. Поставьте его: «Выравнивание» → координаты точки вставки.`,
                         'error'
                     );
                 }
@@ -31224,7 +31237,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.13',
-            buildId: 'f6322d1-preview',
+            buildId: '52d8c6a-preview',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

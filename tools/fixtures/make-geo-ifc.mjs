@@ -25,7 +25,7 @@ function guid(seed) {
  *        выгрузок Renga/nanoCAD через ODA): величины в файле пишутся в его
  *        единицах, а IFCSIUNIT получает приставку .MILLI.
  */
-export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, seed = 0, name = 'geo.ifc', lengthToMetres = 1 } = {}) {
+export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, seed = 0, name = 'geo.ifc', lengthToMetres = 1, application = 'test', booleanOps = 0 } = {}) {
     // Коэффициент «метр → единица файла»
     const k = 1 / lengthToMetres;
     const isMm = Math.abs(lengthToMetres - 0.001) < 1e-12;
@@ -34,7 +34,7 @@ export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4'
         'ISO-10303-21;',
         'HEADER;',
         "FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');",
-        `FILE_NAME('${name}','2026-01-01T00:00:00',('BIM.LVA'),('BIM.LVA'),'geo-fixture','test','');`,
+        `FILE_NAME('${name}','2026-01-01T00:00:00',('BIM.LVA'),('BIM.LVA'),'geo-fixture','${application}','');`,
         `FILE_SCHEMA(('${schema}'));`,
         'ENDSEC;',
         'DATA;',
@@ -79,6 +79,13 @@ export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4'
             `#${wall}=IFCWALL('${guid(seed + 10 + i)}',$,'Wall ${i + 1}',$,$,#${placement},#${product},$,$);`
         );
         walls.push(`#${wall}`);
+    }
+
+    // Пустышки-вырезы: вьювер считает их (sampleIfcBooleanOps) и по количеству
+    // решает, открывать ли файл со сбросом координат. Геометрию не трогают —
+    // нужен именно СЧЁТ, как у настоящей выгрузки Tekla с вырезами.
+    for (let i = 0; i < booleanOps; i++) {
+        body.push(`#${id++}=IFCBOOLEANCLIPPINGRESULT(.DIFFERENCE.,#19,#19);`);
     }
 
     const rels = [

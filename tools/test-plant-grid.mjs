@@ -42,10 +42,17 @@ async function resolveChromium() {
     return undefined;
 }
 
-// Числа сняты с реальных файлов: IfcSite АС (1242.000, 1148.500),
-// КМ (1194.600, 1055.500). Оба ниже порога 5000 м — в этом и была суть.
-const AS = { x: 1242.0, y: 1148.5, z: 0, cols: 6, count: 60, step: 5 };
-const KM = { x: 1194.6, y: 1055.5, z: 0, cols: 5, count: 25, step: 5 };
+// Числа сняты с реальных файлов. Центры моделей по Navisworks:
+// АС 1231.43 / 1171.43 / 61.80, КМ 1203.60 / 1061.50 / 63.29 — от них и
+// пляшем, подбирая начало сетки так, чтобы центр фикстуры совпал.
+// Оба ниже порога 5000 м — в этом и была суть.
+//
+// Файлы ВОСПРОИЗВОДЯТ выгрузку Tekla: IFC2X3, миллиметры, много вырезов.
+// Без этого правило «Tekla + IFC2X3 + вырезы + > 50 м → сбросить координаты
+// в ноль» не сработает, и тест пройдёт мимо настоящей причины.
+const TEKLA = { schema: 'IFC2X3', application: 'Tekla Structures 2021', lengthToMetres: 0.001 };
+const AS = { x: 1219.0, y: 1146.4, z: 60.3, cols: 6, count: 60, step: 5 };
+const KM = { x: 1193.6, y: 1046.5, z: 61.8, cols: 5, count: 25, step: 5 };
 
 /** Центр сетки коробок фикстуры в абсолютных координатах. */
 function gridCentre(f) {
@@ -60,12 +67,14 @@ function gridCentre(f) {
 const asFile = path.join(ROOT, 'tools', 'fixtures', 'plant-as.ifc');
 const kmFile = path.join(ROOT, 'tools', 'fixtures', 'plant-km.ifc');
 await fs.writeFile(asFile, makeGeoIfc({
-    worldX: AS.x, worldY: AS.y, worldZ: AS.z,
-    count: AS.count, cols: AS.cols, step: AS.step, seed: 71, name: 'plant-as.ifc'
+    ...TEKLA, worldX: AS.x, worldY: AS.y, worldZ: AS.z,
+    count: AS.count, cols: AS.cols, step: AS.step, seed: 71, name: 'plant-as.ifc',
+    booleanOps: 1997          // столько же, сколько в настоящем АС
 }));
 await fs.writeFile(kmFile, makeGeoIfc({
-    worldX: KM.x, worldY: KM.y, worldZ: KM.z,
-    count: KM.count, cols: KM.cols, step: KM.step, seed: 72, name: 'plant-km.ifc'
+    ...TEKLA, worldX: KM.x, worldY: KM.y, worldZ: KM.z,
+    count: KM.count, cols: KM.cols, step: KM.step, seed: 72, name: 'plant-km.ifc',
+    booleanOps: 294           // столько же, сколько в настоящем КМ
 }));
 
 // Ожидаемый разнос центров — считаем из чисел фикстур, а не «на глаз»:
@@ -116,11 +125,15 @@ try {
     // Ни один файл не должен садиться в свой центр: координаты общие.
     // Именно 'self' и уничтожал сводку.
     const rebases = await page.evaluate(() =>
-        window.BimLvaDebug.modelAbsExtents.map((m) => ({ file: m.file, rebase: m.rebase })));
+        window.BimLvaDebug.modelAbsExtents.map((m) => ({ file: m.file, rebase: m.rebase, cto: m.cto })));
     rebases.forEach((r) => {
-        console.log(`  ${r.file}: ${r.rebase}`);
+        console.log(`  ${r.file}: rebase=${r.rebase}, COORDINATE_TO_ORIGIN=${r.cto}`);
         check(r.rebase !== 'self',
             `${r.file} не посажен в свой центр (${r.rebase})`);
+        // CTO необратимо теряет абсолютные координаты и не сообщает, на сколько
+        // сдвинул. На заводской сетке он не нужен: float32 тут даёт 0.14 мм.
+        check(!r.cto,
+            `${r.file} открыт БЕЗ сброса координат в ноль`);
     });
 
     // И абсолютные координаты должны остаться настоящими — заводская сетка
