@@ -3755,6 +3755,9 @@
                 налезать друг на друга — это не вычищается. Где поверхность не
                 найдена или откос не дотянулся за максимальный вылет — участок
                 пропускается.
+                На выпуклом угле бровки по умолчанию два луча — нормали двух
+                рёбер; между ними веер, внизу дуга. «Угол внизу → острый» ставит
+                один луч по биссектрисе, и смещения рёбер сходятся в точке.
                 Готовый TIN уходит в Civil 3D как DXF (один 3D-солид на площадку,
                 без контурных линий) или LandXML (Surface).
             </div>
@@ -3771,6 +3774,13 @@
             <div class="prop small"><div class="k">Выемка, 1 : m</div><input class="editInput" id="slopeMCut" type="number" min="0.1" step="0.1" value="1"></div>
             <div class="prop small"><div class="k">Шаг поиска, м</div><input class="editInput" id="slopeStep" type="number" min="0.05" step="0.05" value="0.5"></div>
             <div class="prop small"><div class="k">Макс. вылет, м</div><input class="editInput" id="slopeMaxReach" type="number" min="0.5" step="0.5" value="30"></div>
+            <div class="prop small">
+                <div class="k">Угол внизу</div>
+                <select class="editInput" id="slopeCorner" title="Скругление: у вершины два луча — нормали двух рёбер, между ними веер, внизу дуга. Острый: один луч по биссектрисе, внизу точка, где сходятся смещения рёбер.">
+                    <option value="fillet">Скругление (дуга)</option>
+                    <option value="miter">Острый (точка)</option>
+                </select>
+            </div>
             <div class="prop small"><div class="k">Цвет откоса</div><input type="color" class="polyline-color" id="slopeColor" value="#c9793a" title="Насыпь. Выемка остаётся синей"></div>
             <div class="prop small"><div class="k">Цвет площадки</div><input type="color" class="polyline-color" id="slopePadColor" value="#d4a05a" title="Заливка середины замкнутого контура — видна сверху поверх рельефа"></div>
             <div class="bulk-note" id="slopeStatus">—</div>
@@ -5256,9 +5266,16 @@
                             (s.cutMesh && s.cutMesh !== s.mesh ? s.cutMesh.geometry.attributes.position.count / 3 : 0),
                         cutTriangles: s.cutMesh ? s.cutMesh.geometry.attributes.position.count / 3 : 0,
                         cutOverlay: !!(s.cutMesh && s.cutMesh.material.depthTest === false),
-                        exits: s.sections.map((sec) => sec.valid
-                            ? { d: sec.distance, mode: sec.mode, x: sec.exit.x, y: sec.exit.y, z: sec.exit.z }
-                            : { valid: false, reason: sec.reason }),
+                        exits: s.sections.map((sec, i) => {
+                            const b = s.brows?.[i];
+                            return sec.valid
+                                ? {
+                                    d: sec.distance, mode: sec.mode,
+                                    x: sec.exit.x, y: sec.exit.y, z: sec.exit.z,
+                                    bx: b?.x, by: b?.y, kind: s.kinds?.[i] || null
+                                }
+                                : { valid: false, reason: sec.reason };
+                        }),
                         hinges: (s.hinges || []).map((h) => ({ x: h.x, y: h.y, z: h.z, t: h.t }))
                     })),
                     tin: model.tin ? {
@@ -5275,7 +5292,8 @@
                         opacity: model.padMesh.material.opacity,
                         depthTest: !!model.padMesh.material.depthTest
                     } : null,
-                    kdo: padKdoSummary(model)
+                    kdo: padKdoSummary(model),
+                    cornerMode: model.cornerMode || 'fillet'
                 };
             },
             /** Все текущие построения откосов — сводка (без геометрии). */
@@ -5297,7 +5315,8 @@
                     } : null,
                     contourPolylineId: sm.contourPolylineId || null,
                     name: sm.name,
-                    padColor: sm.padColor || null
+                    padColor: sm.padColor || null,
+                    cornerMode: sm.cornerMode || 'fillet'
                 }));
             },
             /** Убрать все построенные откосы (то же, что «Убрать откосы»). */
@@ -7298,12 +7317,15 @@
          * По каждому ребру бровки идём наружу по нормали ребра (не биссектрисе
          * угла) с шагом slopeStep, пока отметка откоса (постоянный уклон 1:m)
          * не сойдётся с целевой поверхностью: сначала уже построенные откосы
-         * и площадки, иначе sampleTerrainZ. На выпуклом углу — веер нормалей
-         * между двумя рёбрами, плюс вершины чужой площадки, которые попали в
-         * этот сектор: иначе линия выхода режет соседнюю площадку по диагонали
-         * и не описывает её угол. Своя середина замкнутого контура — тоже
-         * поверхность: внутрь контура откос не идёт. Выше земли на
-         * бровке — насыпь (вниз по 1:mFill), ниже — выемка (вверх по 1:mCut).
+         * и площадки, иначе sampleTerrainZ. На выпуклом углу по умолчанию —
+         * веер нормалей между двумя рёбрами (скругление низа: дуга радиуса
+         * вылета). «Острый угол» вместо веера ставит один луч по биссектрисе
+         * с удлинением d / cos(α/2), чтобы смещения двух рёбер сошлись в точке.
+         * Плюс вершины чужой площадки, которые попали в этот сектор: иначе
+         * линия выхода режет соседнюю площадку по диагонали и не описывает
+         * её угол. Своя середина замкнутого контура — тоже поверхность: внутрь
+         * контура откос не идёт. Выше земли на бровке — насыпь (вниз по 1:mFill),
+         * ниже — выемка (вверх по 1:mCut).
          * Профиль откоса ЛИНЕЕН по построению (постоянный уклон), поэтому саму
          * поверхность можно тянуть прямой от бровки до найденной точки выхода —
          * промежуточные шаги нужны только чтобы найти пересечение с (неровным)
@@ -7473,13 +7495,14 @@
             };
         }
 
-        function computeSlopeCrossSection(edge, normal, mFill, mCut, step, maxReach, sampleZ) {
+        function computeSlopeCrossSection(edge, normal, mFill, mCut, step, maxReach, sampleZ, runCos) {
             const MISS = Number.NEGATIVE_INFINITY;
             const sample = sampleZ || ((x, y, fb) => sampleTerrainZ(x, y, fb));
+            const k = Number.isFinite(runCos) && runCos > 1e-6 ? runCos : 1;
             let mode = null, m = null, area = 0;
             let prevD = 0, prevDiff = 0, havePrev = false;
             const diffAt = (d, groundZ) => {
-                const zSlope = mode === 'fill' ? edge.z - d / m : edge.z + d / m;
+                const zSlope = mode === 'fill' ? edge.z - (d * k) / m : edge.z + (d * k) / m;
                 return mode === 'fill' ? zSlope - groundZ : groundZ - zSlope;
             };
             const n = Math.max(1, Math.round(maxReach / step));
@@ -8137,7 +8160,8 @@
             const len = Math.hypot(n.x, n.y);
             if (!(len > 1e-9)) return { x: brow.x, y: brow.y, z };
             const m = Math.max(0.05, Number(mFill) || 1.5);
-            let d = m * depth;
+            const cos = (Number.isFinite(sec.miterCos) && sec.miterCos > 1e-6) ? sec.miterCos : 1;
+            let d = (m * depth) / cos;
             if (sec.valid && Number.isFinite(sec.distance) && sec.distance >= 0) {
                 d = Math.min(d, sec.distance);
             }
@@ -8250,6 +8274,7 @@
                 mCut: sm.mCut,
                 step: sm.step,
                 maxReach: sm.maxReach,
+                cornerMode: sm.cornerMode,
                 padColor: sm.padColor,
                 fillColor: sm.fillColor
             }) || sm;
@@ -8561,11 +8586,17 @@
             return da > 0 ? (c0 >= -1e-9 && c1 >= -1e-9) : (c0 <= 1e-9 && c1 <= 1e-9);
         }
 
+        function slopeIsConvexFan(n0, n1) {
+            const da = slopeSignedAngle(n0, n1);
+            return da > 0.08 && da < Math.PI - 0.02;
+        }
+
         /**
-         * Станции откоса: вдоль каждого ребра по его нормали, на выпуклом
-         * угле — веер, плюс вершины чужих площадок в этом веере.
+         * Станции откоса: вдоль каждого ребра по его нормали. На выпуклом
+         * угле — веер (скругление низа) либо один луч по биссектрисе (острый
+         * угол), плюс вершины чужих площадок в этом секторе.
          */
-        function buildSlopeStationLoop(ring, closed, side, step, maxReach, pads) {
+        function buildSlopeStationLoop(ring, closed, side, step, maxReach, pads, cornerMode) {
             const n = ring.length;
             const last = closed ? n : n - 1;
             const edges = [];
@@ -8578,23 +8609,9 @@
                 edges.push({ i, j, A, B, dir, nrm: slopeSideNormal(dir, side), len });
             }
             const stations = [];
-            const pushFanAt = (P, n0, n1, edgeIdx) => {
-                if (slopeLooksInward(ring, P, n0, 0.05) && slopeLooksInward(ring, P, n1, 0.05)) return;
+            const collectPadItems = (P, n0, n1) => {
                 const da = slopeSignedAngle(n0, n1);
-                if (da <= 0.08 || da >= Math.PI - 0.02) return;
-                const a0 = Math.atan2(n0.y, n0.x);
                 const items = [];
-                const nFan = Math.max(1, Math.ceil(da / (Math.PI / 12)));
-                for (let k = 1; k <= nFan; k++) {
-                    const a = a0 + da * (k / (nFan + 1));
-                    items.push({
-                        ang: da * (k / (nFan + 1)),
-                        brow: { x: P.x, y: P.y, z: P.z },
-                        normal: { x: Math.cos(a), y: Math.sin(a) },
-                        kind: 'fan',
-                        padVert: null
-                    });
-                }
                 (pads || []).forEach((pad) => {
                     pad.ring.forEach((V) => {
                         const wx = V.x - P.x, wy = V.y - P.y;
@@ -8617,14 +8634,15 @@
                         });
                     });
                 });
+                return items;
+            };
+            const flushCornerItems = (items, edgeIdx) => {
                 items.sort((a, b) => a.ang - b.ang);
                 const dedup = [];
                 items.forEach((it) => {
                     const prev = dedup[dedup.length - 1];
                     if (prev && Math.abs(it.ang - prev.ang) < 0.03) {
-                        if (it.kind === 'pad' && prev.kind !== 'pad') {
-                            dedup[dedup.length - 1] = it;
-                        }
+                        if (it.kind === 'pad' && prev.kind !== 'pad') dedup[dedup.length - 1] = it;
                         return;
                     }
                     dedup.push(it);
@@ -8637,15 +8655,49 @@
                         edge: edgeIdx,
                         padVert: it.padVert || null,
                         padDist: it.padDist,
-                        padTris: it.padTris
+                        padTris: it.padTris,
+                        miterCos: it.miterCos
                     });
                 });
+            };
+            const pushFanAt = (P, n0, n1, edgeIdx) => {
+                if (slopeLooksInward(ring, P, n0, 0.05) && slopeLooksInward(ring, P, n1, 0.05)) return;
+                if (!slopeIsConvexFan(n0, n1)) return;
+                const da = slopeSignedAngle(n0, n1);
+                const a0 = Math.atan2(n0.y, n0.x);
+                const items = [];
+                const nFan = Math.max(1, Math.ceil(da / (Math.PI / 12)));
+                for (let k = 1; k <= nFan; k++) {
+                    const a = a0 + da * (k / (nFan + 1));
+                    items.push({
+                        ang: da * (k / (nFan + 1)),
+                        brow: { x: P.x, y: P.y, z: P.z },
+                        normal: { x: Math.cos(a), y: Math.sin(a) },
+                        kind: 'fan'
+                    });
+                }
+                flushCornerItems(items.concat(collectPadItems(P, n0, n1)), edgeIdx);
+            };
+            const miter = cornerMode === 'miter';
+            const convexAt = (e) => {
+                const hasNext = closed || e < edges.length - 1;
+                if (!hasNext) return false;
+                return slopeIsConvexFan(edges[e].nrm, edges[(e + 1) % edges.length].nrm);
+            };
+            const convexBefore = (e) => {
+                if (!(closed || e > 0)) return false;
+                const prev = (e - 1 + edges.length) % edges.length;
+                return slopeIsConvexFan(edges[prev].nrm, edges[e].nrm);
             };
             for (let e = 0; e < edges.length; e++) {
                 const ed = edges[e];
                 const nSt = Math.max(2, Math.ceil(ed.len / Math.max(0.25, step)) + 1);
+                const skipStart = miter && convexBefore(e);
+                const skipEnd = miter && convexAt(e);
                 for (let k = 0; k < nSt; k++) {
                     const t = k / (nSt - 1);
+                    if (skipStart && t < 1e-9) continue;
+                    if (skipEnd && t > 1 - 1e-9) continue;
                     stations.push({
                         brow: slopeLerpPt(ed.A, ed.B, t),
                         normal: ed.nrm,
@@ -8657,7 +8709,26 @@
                 const hasNext = closed || e < edges.length - 1;
                 if (!hasNext) continue;
                 const next = edges[(e + 1) % edges.length];
-                pushFanAt(ed.B, ed.nrm, next.nrm, e);
+                const P = { x: ed.B.x, y: ed.B.y, z: ed.B.z };
+                if (miter && convexAt(e)) {
+                    if (!(slopeLooksInward(ring, P, ed.nrm, 0.05) && slopeLooksInward(ring, P, next.nrm, 0.05))) {
+                        const da = slopeSignedAngle(ed.nrm, next.nrm);
+                        const bx = ed.nrm.x + next.nrm.x, by = ed.nrm.y + next.nrm.y;
+                        const bl = Math.hypot(bx, by) || 1;
+                        const items = [{
+                            ang: da / 2,
+                            brow: P,
+                            normal: { x: bx / bl, y: by / bl },
+                            kind: 'miter',
+                            miterCos: Math.max(0.05, Math.cos(da / 2))
+                        }];
+                        flushCornerItems(items.concat(collectPadItems(P, ed.nrm, next.nrm)), e);
+                    } else {
+                        flushCornerItems(collectPadItems(P, ed.nrm, next.nrm), e);
+                    }
+                } else {
+                    pushFanAt(P, ed.nrm, next.nrm, e);
+                }
             }
             return stations;
         }
@@ -8672,7 +8743,7 @@
             const pads = collectOtherPadRings(record.id);
             const look = 0.05;
             const raw = buildSlopeStationLoop(
-                ring, closed, side, opts.step, opts.maxReach, pads
+                ring, closed, side, opts.step, opts.maxReach, pads, opts.cornerMode
             );
             const stations = [];
             raw.forEach((st) => {
@@ -8689,7 +8760,7 @@
                     return;
                 }
                 let sec = computeSlopeCrossSection(
-                    brow, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach, sampleZ
+                    brow, normal, opts.mFill, opts.mCut, opts.step, opts.maxReach, sampleZ, st.miterCos
                 );
                 if (st.kind === 'pad' && st.padVert) {
                     const V = st.padVert;
@@ -8711,11 +8782,12 @@
                         };
                     }
                 }
-                if (st.kind === 'fan' && !sec.valid) return;
+                if ((st.kind === 'fan' || st.kind === 'miter') && !sec.valid) return;
                 // Нормаль сечения — та же, по которой шагает откос (d / m).
                 // КДО берёт её, а не хорду до точки выхода: иначе заложение
                 // 1:m плывёт, когда выход сел на соседнюю площадку или рельеф.
                 if (normal) sec.n = { x: normal.x, y: normal.y };
+                if (Number.isFinite(st.miterCos)) sec.miterCos = st.miterCos;
                 stations.push({ ...st, section: sec });
             });
 
@@ -8811,6 +8883,7 @@
             return {
                 side, mesh, cutMesh, fill, cut, sections,
                 brows: stations.map((s) => ({ x: s.brow.x, y: s.brow.y, z: s.brow.z })),
+                kinds: stations.map((s) => s.kind || 'edge'),
                 exitPolylineIds: exitLines.filter(Boolean).map((r) => r.id),
                 skippedNoGround, skippedNotReached,
                 hinges,
@@ -8901,6 +8974,7 @@
                 name: keepName || record.name,
                 side: opts.side,
                 mFill: opts.mFill, mCut: opts.mCut, step: opts.step, maxReach: opts.maxReach,
+                cornerMode: opts.cornerMode === 'miter' ? 'miter' : 'fillet',
                 padColor,
                 fillColor: opts.fillColor || keepFill,
                 holePolylineIds: keepHoles.slice(),
@@ -13017,6 +13091,7 @@
                 mCut: num('slopeMCut', 1, 0.1),
                 step: num('slopeStep', 0.5, 0.05),
                 maxReach: num('slopeMaxReach', 30, 0.5),
+                cornerMode: $('slopeCorner')?.value === 'miter' ? 'miter' : 'fillet',
                 fillColor: $('slopeColor')?.value || '#c9793a',
                 padColor: $('slopePadColor')?.value || '#d4a05a'
             };
@@ -30006,7 +30081,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: 'mrg-a',
+            buildId: 'cor-1',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -30016,7 +30091,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос (d = m·Δz по нормали сечения); вырез островка: «начертить вырез» в таблице площадок (Esc замыкает контур); выемка видна поверх рельефа; площадка в DXF — один 3D-солид (R2010).',
+                '2026.08.13: КДО внутри площадки — бока с тем же заложением 1:m, что откос; вырез островка: «начертить вырез» в таблице; угол откоса внизу — скругление (два луча + веер) или острый (биссектриса); площадка в DXF — один 3D-солид (R2010).',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
                 '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
@@ -30083,7 +30158,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=93').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=94').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
