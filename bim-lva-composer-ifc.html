@@ -3774,7 +3774,7 @@
             <div class="prop small"><div class="k">Цвет площадки</div><input type="color" class="polyline-color" id="slopePadColor" value="#d4a05a" title="Заливка середины замкнутого контура — видна сверху поверх рельефа"></div>
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
-                <button class="btn" id="slopeExportDxf" title="Площадка и откосы одним 3D-солидом (3DSOLID, DXF R2000), координаты абсолютные, единицы — метры. Civil 2022+ и nanoCAD открывают">⬇ DXF</button>
+                <button class="btn" id="slopeExportDxf" title="Площадка и откосы одним 3D-солидом (3DSOLID, DXF R2010), координаты абсолютные, единицы — метры. Civil 2018+ и nanoCAD открывают">⬇ DXF</button>
                 <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
                 <button class="btn" id="slopeOpenTable" title="Таблица всех построенных площадок">▣ Таблица</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
@@ -8985,7 +8985,7 @@
 
         /**
          * Площадка / слой КДО / тело по оси — один 3DSOLID (SAT 700), не POLYFACE.
-         * Файл DXF R2000: Civil 2022+ и nanoCAD открывают; R12 тел не умеет.
+         * Файл DXF R2010: Civil 2018+ / nanoCAD открывают; R2013+ телам нужен SAB.
          */
         function tinToSolidDxf(g, tin, layer, allocHandle, ownerHandle) {
             if (!tin?.faces?.length || !tin.points?.length) return 0;
@@ -11362,9 +11362,10 @@
         }
 
         /**
-         * ASCII DXF R2000 (AC1015): без этой версии 3DSOLID в файле нелегален.
-         * Полилинии остаются POLYLINE (не LWPOLYLINE) — вершины с Z как раньше,
-         * старые Civil/nanoCAD их читают. Координаты абсолютные.
+         * ASCII DXF R2010 (AC1024) — самая новая версия, где 3DSOLID ещё SAT.
+         * R2013+ (AC1027) кладёт тела бинарным SAB в ACDSDATA; этого не пишем.
+         * DWG не пишем: формат закрытый, dwgdxf только DWG→DXF.
+         * Полилинии — POLYLINE (не LWPOLYLINE), координаты абсолютные, метры.
          */
         function buildDxf(polylines, pins, onlySlope) {
             const out = [];
@@ -11385,6 +11386,10 @@
             const blockModel = allocHandle();
             const blockPaper = allocHandle();
             const dictH = allocHandle();
+            const dictGroupH = allocHandle();
+            const dictLayoutH = allocHandle();
+            const layoutModelH = allocHandle();
+            const layoutPaperH = allocHandle();
             const tblVport = allocHandle();
             const tblLtype = allocHandle();
             const tblLayer = allocHandle();
@@ -11446,7 +11451,9 @@
 
             const handseed = (nextHandle + 8).toString(16).toUpperCase();
             g(0, 'SECTION'); g(2, 'HEADER');
-            g(9, '$ACADVER'); g(1, 'AC1015');
+            g(9, '$ACADVER'); g(1, 'AC1024');
+            g(9, '$ACADMAINTVER'); g(70, 6);
+            g(9, '$DWGCODEPAGE'); g(3, 'ANSI_1251');
             g(9, '$HANDSEED'); g(5, handseed);
             g(9, '$INSUNITS'); g(70, 6);
             g(9, '$MEASUREMENT'); g(70, 1);
@@ -11496,9 +11503,9 @@
             g(0, 'ENDTAB');
             g(0, 'TABLE'); g(2, 'BLOCK_RECORD'); g(5, tblBlockRec); g(100, 'AcDbSymbolTable'); g(70, 2);
             g(0, 'BLOCK_RECORD'); g(5, blockRecModel); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
-            g(2, '*MODEL_SPACE');
+            g(2, '*MODEL_SPACE'); g(340, layoutModelH);
             g(0, 'BLOCK_RECORD'); g(5, blockRecPaper); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
-            g(2, '*PAPER_SPACE');
+            g(2, '*PAPER_SPACE'); g(340, layoutPaperH);
             g(0, 'ENDTAB');
             g(0, 'ENDSEC');
 
@@ -11517,6 +11524,34 @@
 
             g(0, 'SECTION'); g(2, 'OBJECTS');
             g(0, 'DICTIONARY'); g(5, dictH); g(330, 0); g(100, 'AcDbDictionary'); g(281, 1);
+            g(3, 'ACAD_GROUP'); g(350, dictGroupH);
+            g(3, 'ACAD_LAYOUT'); g(350, dictLayoutH);
+            g(0, 'DICTIONARY'); g(5, dictGroupH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
+            g(0, 'DICTIONARY'); g(5, dictLayoutH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
+            g(3, 'Model'); g(350, layoutModelH);
+            g(3, 'Layout1'); g(350, layoutPaperH);
+            const writeLayout = (handle, name, tab, blockRec) => {
+                g(0, 'LAYOUT'); g(5, handle); g(330, dictLayoutH);
+                g(100, 'AcDbPlotSettings');
+                g(1, ''); g(2, 'none'); g(4, ''); g(6, '');
+                g(40, 0); g(41, 0); g(42, 0); g(43, 0); g(44, 0); g(45, 0);
+                g(70, 688); g(72, 0); g(73, 0); g(74, 5); g(7, '');
+                g(75, 0); g(76, 0); g(77, 0); g(78, 0); g(147, 1); g(148, 0); g(149, 0);
+                g(100, 'AcDbLayout');
+                g(1, name); g(70, 1); g(71, tab);
+                g(10, 0); g(20, 0); g(11, 12); g(21, 9);
+                g(12, 0); g(22, 0); g(32, 0);
+                g(14, 0); g(24, 0); g(34, 0);
+                g(15, 0); g(25, 0); g(35, 0);
+                g(146, 0);
+                g(13, 0); g(23, 0); g(33, 0);
+                g(16, 1); g(26, 0); g(36, 0);
+                g(17, 0); g(27, 1); g(37, 0);
+                g(76, 0);
+                g(330, blockRec);
+            };
+            writeLayout(layoutModelH, 'Model', 1, blockRecModel);
+            writeLayout(layoutPaperH, 'Layout1', 2, blockRecPaper);
             g(0, 'ENDSEC');
             g(0, 'EOF');
             return out.join('\r\n') + '\r\n';
@@ -29764,7 +29799,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.13',
-            buildId: 'sol-3',
+            buildId: 'dxf-a',
             released: '2026-08-13',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -29774,7 +29809,7 @@ ${componentXml || '    '}
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.13: КДО внутри площадки — бока по тем же лучам, что откос (и на углах); вырез островка; выемка видна поверх рельефа; площадка в DXF — один 3D-солид (R2000).',
+                '2026.08.13: КДО внутри площадки — бока по тем же лучам, что откос (и на углах); вырез островка; выемка видна поверх рельефа; площадка в DXF — один 3D-солид (R2010).',
                 '2026.08.13: повторное открытие того же IFC не тесселируется заново — геометрия берётся из кэша браузера (меню ⋯ → «Кэш геометрии»).',
                 '2026.08.13: текстовый индекс IFC строится только когда нужен — просмотр крупной модели больше не держит его в памяти.',
                 '2026.08.08: карта-подложка под модель — OpenStreetMap и космоснимок ESRI, привязка одной точкой.',
@@ -29841,7 +29876,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=91').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=92').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

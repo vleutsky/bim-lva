@@ -478,7 +478,7 @@ async function checkVerticalTransition(page, cx, cy, box) {
  * Черчение полилиний и выгрузка в DXF. Проверяем содержимое файла: координаты
  * обязаны быть мировыми (иначе чертёж ляжет у нуля, а не на площадке), 2D —
  * с одной отметкой на всю линию, и POLYLINE/VERTEX/SEQEND (не LWPOLYLINE).
- * Файл — R2000 (AC1015): без этой версии 3DSOLID нелегален.
+ * Файл — R2010 (AC1024): самая новая версия с 3DSOLID в SAT.
  */
 async function checkDrawDxf(page) {
     const box = await page.locator('#stage canvas').boundingBox();
@@ -663,7 +663,7 @@ async function checkDrawDxf(page) {
 
     const dxf = await page.evaluate(() => window.BimLvaDebug.dxfPreview());
     const has = (t) => dxf.includes(t);
-    if (!has('AC1015')) problems.push('в DXF нет версии AC1015 (R2000, 3DSOLID)');
+    if (!has('AC1024')) problems.push('в DXF нет версии AC1024 (R2010, 3DSOLID)');
     if (!has('$INSUNITS')) problems.push('в DXF не указаны единицы');
     if (!has('LVA_3D') || !has('LVA_2D')) problems.push('в DXF нет слоёв LVA_2D/LVA_3D');
     if (!has('SEQEND')) problems.push('в DXF полилиния не закрыта SEQEND');
@@ -1403,7 +1403,7 @@ async function checkSlopeToTerrain(page) {
             xmlHasSurface: /<Surface /i.test(xml) && /surfType="TIN"/i.test(xml),
             dxfFaces: (dxf.match(/\r\n3DFACE\r\n/g) || []).length,
             dxfSolids: (dxf.match(/\r\n3DSOLID\r\n/g) || []).length,
-            dxfAcadver: /AC1015/.test(dxf),
+            dxfAcadver: /AC1024/.test(dxf),
             dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length,
             dxfMeshVerts: (dxf.match(/\r\n70\r\n192\r\n/g) || []).length,
             dxfMeshFaces: (dxf.match(/\r\n70\r\n128\r\n/g) || []).length,
@@ -1461,7 +1461,7 @@ async function checkSlopeToTerrain(page) {
         if (!pad.dxfSlopeLayer || !pad.dxfAcadver || pad.dxfSolids !== 1 || pad.dxfPolyface
             || pad.dxfPolylines || pad.dxfLineVerts || pad.dxfFaces || pad.dxfRawHasBody) {
             problems.push(
-                `откосы: DXF площадки — 3DSOLID ${pad.dxfSolids}, AC1015 ${pad.dxfAcadver}, ` +
+                `откосы: DXF площадки — 3DSOLID ${pad.dxfSolids}, AC1024 ${pad.dxfAcadver}, ` +
                 `POLYFACE ${pad.dxfPolyface}, POLYLINE ${pad.dxfPolylines}, ` +
                 `рёбер-линий ${pad.dxfLineVerts}, 3DFACE ${pad.dxfFaces}, ` +
                 `слой LVA_SLOPE ${pad.dxfSlopeLayer}, сырой SAT ${pad.dxfRawHasBody}`
