@@ -2203,8 +2203,41 @@ async function checkRoadCrossSections(page) {
         document.getElementById('btnRoadAxis')?.click();
         return edges;
     }, groundZ);
-    if (!draft || draft.left < 2 || draft.right < 2 || !draft.dashed) {
-        problems.push(`ось трассы: при черчении нет белого пунктира кромок (${JSON.stringify(draft)})`);
+    if (!draft || draft.left < 2 || draft.right < 2 || !draft.axisDashed || draft.edgeDashed) {
+        problems.push(`ось трассы: ждали пунктир оси и сплошные кромки (${JSON.stringify(draft)})`);
+    }
+    if (draft?.edgeColor && draft.edgeColor !== '#f4f7fb') {
+        problems.push(`ось трассы: кромки в черновике ${draft.edgeColor} вместо #f4f7fb`);
+    }
+    const finished = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const rec = [...D.drawn].reverse().find((d) => d.role === 'road-axis') || D.drawn[D.drawn.length - 1];
+        if (!rec) return null;
+        D.stylePolyline(rec.id, {
+            color: '#22cc88', width: 4, layer: 'LVA_AXIS',
+            edgeColor: '#ffeecc', edgeWidth: 3, edgeLayer: 'LVA_ROAD'
+        });
+        const st = D.polylineStyle(rec.id);
+        const dxf = D.roadXsDxfPreview() || '';
+        return { st, dxfAxis: /LVA_AXIS/.test(dxf), dxfRoad: /LVA_ROAD/.test(dxf) };
+    });
+    if (!finished?.st?.dashed) {
+        problems.push(`ось трассы: готовая ось не пунктир (${JSON.stringify(finished?.st)})`);
+    }
+    if (finished?.st?.edgeDashed) {
+        problems.push(`ось трассы: кромки готовой оси пунктирные, должны быть сплошные`);
+    }
+    if (finished?.st?.edgeMaterialColor !== '#ffeecc') {
+        problems.push(`ось трассы: цвет кромок ${finished?.st?.edgeMaterialColor} вместо #ffeecc`);
+    }
+    if (finished?.st?.edgeMaterialWidth !== 3) {
+        problems.push(`ось трассы: толщина кромок ${finished?.st?.edgeMaterialWidth} вместо 3`);
+    }
+    if (finished?.st?.layer !== 'LVA_AXIS' || finished?.st?.edgeLayer !== 'LVA_ROAD') {
+        problems.push(`ось трассы: слои ${finished?.st?.layer}/${finished?.st?.edgeLayer}`);
+    }
+    if (finished && (!finished.dxfAxis || !finished.dxfRoad)) {
+        problems.push(`ось трассы: DXF без слоёв оси/кромок (AXIS ${finished.dxfAxis}, ROAD ${finished.dxfRoad})`);
     }
     await page.evaluate(() => {
         window.BimLvaDebug.clearRoadXs();
