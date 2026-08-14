@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BIM.LVA — прототип стиля</title>
+<link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
+<style>
+/*
+ * Прототип стиля BIM.LVA Composer. НЕ рабочий вьювер — только оболочка,
+ * чтобы посмотреть глазами до того, как трогать файл на 900 КБ.
+ *
+ * Вся суть в токенах ниже: смена темы и перекраска — правка одного блока,
+ * а не 244 кнопок. В рабочем вьювере токенов сейчас 11 и роли у цветов
+ * перепутаны (оранжевый значит и «акцент», и «активно», и «выделено»).
+ */
+:root {
+    /* поверхности: сцена темнее панелей — модель читается лучше */
+    --bg:        #e8ecf2;
+    --surface:   #ffffff;
+    --surface-2: #f5f7fa;
+    --surface-3: #eef1f6;
+    --line:      #e0e5ec;
+    --line-soft: #eef1f5;
+
+    --txt:      #1b2430;
+    --txt-dim:  #77839a;
+    --txt-mute: #9aa5b8;
+
+    /* ОДИН акцент интерфейса — синий. Активные состояния, фокус, вкладки. */
+    --accent:      #2f6fd0;
+    --accent-weak: #eaf1fc;
+    --accent-line: #bcd3f2;
+
+    /* Оранжевый оставлен ТОЛЬКО за выделением в сцене — чтобы он снова
+       что-то значил. Сейчас во вьювере им покрашено всё подряд. */
+    --select:      #f06424;
+    --select-weak: #fdeee5;
+
+    --ok:  #168c63;
+    --warn:#b4761a;
+    --err: #d43c59;
+
+    --rail:   48px;
+    --topbar: 46px;
+    --status: 26px;
+    --panel-w: 320px;
+
+    --r-sm: 6px;
+    --r-md: 9px;
+    --r-lg: 12px;
+    --shadow-1: 0 1px 2px rgba(20,32,50,.06), 0 2px 8px rgba(20,32,50,.06);
+    --shadow-2: 0 6px 28px rgba(20,32,50,.14), 0 1px 3px rgba(20,32,50,.10);
+}
+
+/* Тёмная тема — не украшение: серо-белая геометрия IFC на тёмном фоне
+   читается заметно лучше, а Civil и Navis у проектировщика тоже тёмные. */
+:root[data-theme="dark"] {
+    --bg:        #0f1319;
+    --surface:   #181d25;
+    --surface-2: #1f252f;
+    --surface-3: #252c37;
+    --line:      #2b323d;
+    --line-soft: #232935;
+
+    --txt:      #e7ecf3;
+    --txt-dim:  #97a3b6;
+    --txt-mute: #6f7b8e;
+
+    --accent:      #5590e6;
+    --accent-weak: #16233a;
+    --accent-line: #2d4570;
+
+    --select:      #ff7c3d;
+    --select-weak: #35210f;
+
+    --ok:  #35b184;
+    --warn:#d19a3c;
+    --err: #f2647f;
+
+    --shadow-1: 0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
+    --shadow-2: 0 6px 28px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+    margin: 0;
+    font-family: 'Archivo', system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--txt);
+    background: var(--bg);
+    overflow: hidden;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+
+/* ---------- шапка ---------- */
+.topbar {
+    position: fixed; inset: 0 0 auto 0; height: var(--topbar);
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    z-index: 40;
+}
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -.01em; }
+.brand .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--accent), #7fb0f5);
+    display: grid; place-items: center; color: #fff;
+}
+.brand .sub {
+    font-weight: 500; font-size: 11px; color: var(--txt-mute);
+    padding-left: 9px; margin-left: 3px; border-left: 1px solid var(--line);
+}
+.topbar .spacer { flex: 1; }
+.icon-btn {
+    width: 32px; height: 32px; border: 0; border-radius: var(--r-sm);
+    background: transparent; color: var(--txt-dim);
+    display: grid; place-items: center;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--txt); }
+.icon-btn.on { background: var(--accent-weak); color: var(--accent); }
+
+/* ---------- рейка ---------- */
+.rail {
+    position: fixed; top: var(--topbar); bottom: 0; left: 0; width: var(--rail);
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 8px 0; gap: 2px; z-index: 35;
+}
+.rail .sep { width: 22px; height: 1px; background: var(--line); margin: 6px 0; }
+.rail .grow { flex: 1; }
+.rail button {
+    position: relative;
+    width: 36px; height: 36px; border: 0; border-radius: var(--r-sm);
+    background: transparent; color: var(--txt-dim);
+    display: grid; place-items: center;
+}
+.rail button:hover { background: var(--surface-2); color: var(--txt); }
+.rail button.on { background: var(--accent-weak); color: var(--accent); }
+/* Тонкая полоска слева вместо заливки всей кнопки — активное состояние
+   видно, но не кричит. */
+.rail button.on::before {
+    content: ''; position: absolute; left: -6px; top: 7px; bottom: 7px;
+    width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+.rail button[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute; left: 44px; top: 50%; transform: translateY(-50%);
+    background: var(--txt); color: var(--surface);
+    padding: 4px 8px; border-radius: var(--r-sm);
+    font-size: 11px; white-space: nowrap; pointer-events: none; z-index: 60;
+}
+
+/* ---------- выезжающая панель ---------- */
+.drawer {
+    position: fixed; top: var(--topbar); bottom: var(--status); left: var(--rail);
+    width: var(--panel-w);
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    transform: translateX(0); transition: transform .18s ease, opacity .18s ease;
+    z-index: 30;
+}
+.drawer[hidden] { display: none; }
+.drawer.closed { transform: translateX(calc(-1 * (var(--panel-w) + var(--rail)))); }
+.drawer-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 12px 10px 14px;
+    border-bottom: 1px solid var(--line-soft);
+}
+.drawer-head h2 {
+    margin: 0; font-size: 11px; font-weight: 700;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--txt-dim);
+}
+.drawer-body { flex: 1; overflow: auto; padding: 10px 10px 14px; }
+.section-label {
+    font-size: 10px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--txt-mute);
+    padding: 14px 4px 6px;
+}
+
+.row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 8px; border-radius: var(--r-sm);
+    color: var(--txt);
+}
+.row:hover { background: var(--surface-2); }
+.row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.row .act { opacity: 0; display: flex; gap: 2px; }
+.row:hover .act { opacity: 1; }
+.row .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.row .dot.b { background: #7a5cd8; }
+
+.btn-wide {
+    width: 100%; display: flex; align-items: center; gap: 8px;
+    padding: 9px 10px; border: 1px dashed var(--line);
+    border-radius: var(--r-md); background: var(--surface-2);
+    color: var(--txt-dim); font-weight: 600; font-size: 12.5px;
+}
+.btn-wide:hover { border-color: var(--accent-line); background: var(--accent-weak); color: var(--accent); }
+
+.prop { display: flex; gap: 10px; padding: 6px 6px; border-radius: var(--r-sm); font-size: 12.5px; }
+.prop:nth-child(odd) { background: var(--surface-2); }
+.prop .k { width: 44%; color: var(--txt-dim); }
+.prop .v { flex: 1; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; }
+
+/* ---------- сцена ---------- */
+.stage {
+    position: fixed; top: var(--topbar); bottom: var(--status);
+    left: calc(var(--rail) + var(--panel-w)); right: 0;
+    background: var(--bg);
+    transition: left .18s ease;
+    overflow: hidden;
+}
+.stage.wide { left: var(--rail); }
+/* Накладки сцены (тулбар, куб) обязаны знать про панель свойств, иначе куб
+   уезжает ПОД неё — ровно та же беда, что видна на скриншоте icBIM, где их
+   панель инструментов обрезана выехавшей панелью. */
+.stage { --insp: 300px; }
+.stage.insp-closed { --insp: 0px; }
+.grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+        linear-gradient(to right, color-mix(in srgb, var(--txt) 6%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in srgb, var(--txt) 6%, transparent) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(85% 75% at 50% 50%, #000 40%, transparent 100%);
+}
+
+/* Плавающая панель инструментов — ПОВЕРХ сцены, но внутри её границ:
+   у icBIM она уезжает под выехавшую панель и обрезается. Здесь она
+   живёт в системе координат сцены, поэтому перекрыть её нечем. */
+.toolbar {
+    position: absolute; top: 12px;
+    left: calc(50% - var(--insp) / 2); transform: translateX(-50%);
+    transition: left .18s ease;
+    display: flex; align-items: stretch; gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-2);
+    padding: 5px;
+    max-width: calc(100% - 24px);
+    overflow: hidden;
+}
+.tool {
+    border: 0; background: transparent; border-radius: var(--r-sm);
+    padding: 6px 11px 5px; min-width: 60px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    color: var(--txt-dim);
+}
+.tool span { font-size: 10.5px; font-weight: 600; letter-spacing: .01em; }
+.tool:hover { background: var(--surface-2); color: var(--txt); }
+.tool.on { background: var(--accent-weak); color: var(--accent); }
+.tool-sep { width: 1px; background: var(--line); margin: 5px 4px; flex: none; }
+
+/* Видовой куб — оставлен как есть, он работает */
+.viewcube {
+    position: absolute; top: 14px; right: calc(var(--insp) + 14px);
+    transition: right .18s ease;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r-md); box-shadow: var(--shadow-1);
+    padding: 6px; display: grid; grid-template-columns: repeat(3, 26px); gap: 3px;
+}
+.viewcube button {
+    height: 24px; border: 0; border-radius: 5px; background: transparent;
+    color: var(--txt-dim); font-size: 10.5px; font-weight: 700;
+}
+.viewcube button:hover { background: var(--surface-2); color: var(--txt); }
+.viewcube button.on { background: var(--accent-weak); color: var(--accent); }
+
+/* Правая панель — тоже выезжающая, а не вечные 200 px пустоты,
+   как «IFC» у icBIM на скриншоте. */
+.inspector {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 300px;
+    background: var(--surface); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    box-shadow: var(--shadow-2);
+    transform: translateX(0); transition: transform .18s ease;
+}
+.inspector.closed { transform: translateX(100%); }
+.tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line-soft); }
+.tab {
+    border: 0; background: transparent; padding: 7px 10px 8px;
+    color: var(--txt-dim); font-size: 12px; font-weight: 600;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+
+.selected-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--select-weak); color: var(--select);
+    border: 1px solid color-mix(in srgb, var(--select) 30%, transparent);
+    padding: 3px 8px; border-radius: 20px; font-size: 11px; font-weight: 700;
+}
+
+/* ---------- статус-бар: ваше преимущество, у icBIM его нет ---------- */
+.status {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--status);
+    display: flex; align-items: center; gap: 16px; padding: 0 12px;
+    background: var(--surface); border-top: 1px solid var(--line);
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px; color: var(--txt-dim); z-index: 40;
+}
+.status .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.status .right { margin-left: auto; display: flex; gap: 14px; }
+.status b { color: var(--txt); font-weight: 600; }
+
+/* ---------- уведомление ---------- */
+.toast {
+    position: fixed; right: 16px; bottom: 36px; z-index: 50;
+    display: flex; gap: 10px; align-items: flex-start;
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--ok);
+    border-radius: var(--r-md); box-shadow: var(--shadow-2);
+    padding: 11px 12px; max-width: 380px;
+}
+.toast .t { font-weight: 700; font-size: 12.5px; }
+.toast .d { color: var(--txt-dim); font-size: 12px; margin-top: 2px; }
+
+/* Без color-mix и backdrop-filter: в тёмной теме эта пара давала пустой
+   светлый прямоугольник вместо подсказки. Обычный токен поверхности надёжнее. */
+.hint {
+    position: absolute; left: calc(50% - var(--insp) / 2); bottom: 16px;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--line); border-radius: 20px;
+    box-shadow: var(--shadow-1);
+    padding: 5px 14px; font-size: 11.5px; color: var(--txt-dim);
+    transition: left .18s ease;
+}
+svg { display: block; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="mark">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 16 9 5 9-5"/><path d="m3 12 9 5 9-5"/></svg>
+        </span>
+        BIM.LVA<span class="sub">Composer IFC</span>
+    </div>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="themeBtn" title="Светлая / тёмная тема">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+    <button class="icon-btn" title="Настройки">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.9 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4 14.6H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 4V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1.3Z"/></svg>
+    </button>
+    <button class="icon-btn" title="Кабинет">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
+    </button>
+</header>
+
+<nav class="rail" id="rail">
+    <button class="on" data-panel="files" data-tip="Файлы и модели">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+    </button>
+    <button data-panel="tree" data-tip="Структура модели">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    </button>
+    <button data-panel="filter" data-tip="Фильтр классов">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 5h18l-7 8v5l-4 2v-7Z"/></svg>
+    </button>
+    <div class="sep"></div>
+    <button data-panel="draw" data-tip="Черчение и полилинии">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 21l4-1 11-11a2.1 2.1 0 0 0-3-3L4 17Z"/><path d="M14 5l3 3"/></svg>
+    </button>
+    <button data-panel="terrain" data-tip="Откосы, площадки, картограмма">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 19h20"/><path d="m4 19 6-10 4 6 3-4 5 8"/></svg>
+    </button>
+    <button data-panel="measure" data-tip="Замеры и координаты">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 15 6-6 6 6-6 6Z"/><path d="M13 5h8v8"/></svg>
+    </button>
+    <button data-panel="clash" data-tip="Коллизии">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="9" r="6"/><circle cx="15" cy="15" r="6"/></svg>
+    </button>
+    <div class="grow"></div>
+    <button data-panel="about" data-tip="О продукте">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+    </button>
+</nav>
+
+<aside class="drawer" id="drawer">
+    <div class="drawer-head">
+        <h2 id="drawerTitle">Файлы</h2>
+        <div style="flex:1"></div>
+        <button class="icon-btn" id="drawerClose" title="Свернуть панель">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 6-6 6 6 6"/></svg>
+        </button>
+    </div>
+    <div class="drawer-body">
+        <button class="btn-wide">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
+            Загрузить IFC / DWG / LandXML
+        </button>
+
+        <div class="section-label">Загруженные модели</div>
+        <div class="row">
+            <span class="dot"></span>
+            <span class="name">СП1291…0077_200_АС.ifc</span>
+            <span class="act">
+                <button class="icon-btn" title="Скрыть"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                <button class="icon-btn" title="Выгрузить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+            </span>
+        </div>
+        <div class="row">
+            <span class="dot b"></span>
+            <span class="name">СП1552…4909.467а-КМ.ifc</span>
+            <span class="act">
+                <button class="icon-btn" title="Скрыть"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                <button class="icon-btn" title="Выгрузить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+            </span>
+        </div>
+
+        <div class="section-label">Система координат</div>
+        <div class="prop"><span class="k">Ноль сцены</span><span class="v">1231.4 / 1171.4</span></div>
+        <div class="prop"><span class="k">Единицы</span><span class="v">мм → м</span></div>
+        <div class="prop"><span class="k">Привязка</span><span class="v">общая</span></div>
+    </div>
+</aside>
+
+<main class="stage" id="stage">
+    <div class="grid-bg"></div>
+
+    <div class="toolbar">
+        <button class="tool on"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5"/></svg><span>Вписать</span></button>
+        <button class="tool"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 15 6-6 6 6-6 6Z"/><path d="M13 5h8v8"/></svg><span>Замер</span></button>
+        <button class="tool"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h18"/><path d="M7 5v14M17 5v14"/></svg><span>Сечение</span></button>
+        <div class="tool-sep"></div>
+        <button class="tool"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 16 9 5 9-5"/></svg><span>Слои</span></button>
+        <button class="tool"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>Классы</span></button>
+        <button class="tool"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 5h18l-7 8v5l-4 2v-7Z"/></svg><span>Фильтр</span></button>
+        <div class="tool-sep"></div>
+        <button class="tool"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7h3l2-2h8l2 2h3v12H3Z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Снимок</span></button>
+    </div>
+
+    <div class="viewcube">
+        <button></button><button class="on">С</button><button></button>
+        <button>З</button><button>Верх</button><button>В</button>
+        <button></button><button>Ю</button><button>Изо</button>
+    </div>
+
+    <aside class="inspector" id="inspector">
+        <div class="tabs">
+            <button class="tab on">Свойства</button>
+            <button class="tab">Pset</button>
+            <button class="tab">Материал</button>
+            <div style="flex:1"></div>
+            <button class="icon-btn" id="inspClose" title="Свернуть">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+        </div>
+        <div class="drawer-body">
+            <span class="selected-chip">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m5 12 5 5 9-11"/></svg>
+                Выделено: IFCPLATE #847
+            </span>
+            <div class="section-label">Атрибуты</div>
+            <div class="prop"><span class="k">Имя</span><span class="v">PL-12×300</span></div>
+            <div class="prop"><span class="k">Класс</span><span class="v">IFCPLATE</span></div>
+            <div class="prop"><span class="k">GlobalId</span><span class="v">35vLDmK$LB…</span></div>
+            <div class="prop"><span class="k">Этаж</span><span class="v">Level 0</span></div>
+            <div class="section-label">Координаты, м</div>
+            <div class="prop"><span class="k">X (восток)</span><span class="v">1209.184</span></div>
+            <div class="prop"><span class="k">Y (север)</span><span class="v">1064.494</span></div>
+            <div class="prop"><span class="k">Z (отметка)</span><span class="v">65.667</span></div>
+        </div>
+    </aside>
+
+    <div class="hint">ЛКМ — вращение · Колесо — зум · F — вписать</div>
+</main>
+
+<footer class="status">
+    <span class="pip"></span> движок готов
+    <span><b>1209.184</b> / <b>1064.494</b> / <b>65.667</b> м курсор</span>
+    <span class="right">
+        <span>60 FPS</span>
+        <span>ОЗУ <b>612</b> МБ · модели <b>190</b> МБ</span>
+    </span>
+</footer>
+
+<div class="toast">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2" style="margin-top:1px"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <div>
+        <div class="t">Сводка собрана</div>
+        <div class="d">2 модели · заводская сетка 1200 м · координаты сохранены</div>
+    </div>
+</div>
+
+<script>
+/* Минимум логики — только чтобы можно было пощёлкать и оценить поведение. */
+const root = document.documentElement;
+const drawer = document.getElementById('drawer');
+const stage = document.getElementById('stage');
+const inspector = document.getElementById('inspector');
+const title = document.getElementById('drawerTitle');
+
+const TITLES = {
+    files: 'Файлы', tree: 'Структура', filter: 'Фильтр классов',
+    draw: 'Черчение', terrain: 'Рельеф и откосы', measure: 'Замеры',
+    clash: 'Коллизии', about: 'О продукте'
+};
+
+function setDrawer(open) {
+    drawer.classList.toggle('closed', !open);
+    stage.classList.toggle('wide', !open);
+}
+
+document.querySelectorAll('#rail button').forEach((b) => {
+    b.addEventListener('click', () => {
+        const wasOn = b.classList.contains('on');
+        const open = !drawer.classList.contains('closed');
+        document.querySelectorAll('#rail button').forEach((x) => x.classList.remove('on'));
+        // Повторный клик по активной иконке сворачивает панель — сцена
+        // разворачивается на всю ширину без отдельной кнопки.
+        if (wasOn && open) { setDrawer(false); return; }
+        b.classList.add('on');
+        title.textContent = TITLES[b.dataset.panel] || '';
+        setDrawer(true);
+    });
+});
+
+document.getElementById('drawerClose').addEventListener('click', () => {
+    document.querySelectorAll('#rail button').forEach((x) => x.classList.remove('on'));
+    setDrawer(false);
+});
+document.getElementById('inspClose').addEventListener('click', () => {
+    const closed = inspector.classList.toggle('closed');
+    stage.classList.toggle('insp-closed', closed);
+});
+
+document.getElementById('themeBtn').addEventListener('click', () => {
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+});
+
+document.querySelectorAll('.toolbar .tool').forEach((t) => {
+    t.addEventListener('click', () => {
+        document.querySelectorAll('.toolbar .tool').forEach((x) => x.classList.remove('on'));
+        t.classList.add('on');
+    });
+});
+document.querySelectorAll('.viewcube button').forEach((t) => {
+    t.addEventListener('click', () => {
+        if (!t.textContent.trim()) return;
+        document.querySelectorAll('.viewcube button').forEach((x) => x.classList.remove('on'));
+        t.classList.add('on');
+    });
+});
+document.querySelectorAll('.tabs .tab').forEach((t) => {
+    t.addEventListener('click', () => {
+        document.querySelectorAll('.tabs .tab').forEach((x) => x.classList.remove('on'));
+        t.classList.add('on');
+    });
+});
+</script>
+</body>
+</html>
