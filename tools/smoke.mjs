@@ -2562,10 +2562,20 @@ async function checkNotifications(page) {
         .catch(() => false);
     if (!shown) problems.push('уведомление через BimLvaNotify не появилось');
 
-    // Реальный путь: экспорт ведомости без выделения. Кнопка живёт в свёрнутой
-    // панели, поэтому дёргаем обработчик напрямую, а не мышью.
-    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
-    await page.evaluate(() => document.getElementById('btnSchedule').click());
+    // Реальный путь: экспорт ведомости без выделения. Кнопка на вкладке «Анализ».
+    // Дерево появляется до конца loadFilesSequentially — кнопка ещё disabled.
+    await page.evaluate(() => {
+        document.querySelector('.rtab[data-rp="analysis"]')?.click();
+        document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
+    });
+    await page.waitForFunction(
+        () => {
+            const b = document.getElementById('btnSchedule');
+            return !!b && !b.disabled;
+        },
+        { timeout: 15_000 }
+    ).catch(() => {});
+    await page.evaluate(() => document.getElementById('btnSchedule')?.click());
     const fromUi = await page
         .waitForFunction(
             () => [...document.querySelectorAll('.toast .toast-text')]
@@ -2577,6 +2587,71 @@ async function checkNotifications(page) {
     if (!fromUi) problems.push('кнопка «Ведомость» без выделения не показала уведомление');
 
     return { api: true, shown, fromUi };
+}
+
+/**
+ * Вкладки боковых панелей: Структура/Файлы/Классы и Свойства/Pset/Ведомость.
+ * Не заглушки — список файлов совпадает с loadedModels, классы из IFC,
+ * ведомость по текущему выделению. В конце возвращаем вкладки по умолчанию.
+ */
+async function checkPanelTabs(page) {
+    const defaults = await page.evaluate(() => {
+        const vis = (panel, pane) => {
+            const body = document.querySelector(`#${panel} > .pane-body[data-pane="${pane}"]`);
+            return !!(body && !body.hidden);
+        };
+        return {
+            tree: vis('treePanel', 'tree'),
+            props: vis('sidePanel', 'props'),
+            leftTabs: [...document.querySelectorAll('#treePanel > .panel-head .ptab')].map((t) => t.dataset.pane),
+            rightTabs: [...document.querySelectorAll('#sidePanel > .panel-head .ptab')].map((t) => t.dataset.pane)
+        };
+    });
+    if (JSON.stringify(defaults.leftTabs) !== JSON.stringify(['tree', 'files', 'classes'])) {
+        problems.push(`левые вкладки панелей: ${defaults.leftTabs.join(',')} вместо tree,files,classes`);
+    }
+    if (JSON.stringify(defaults.rightTabs) !== JSON.stringify(['props', 'pset', 'schedule'])) {
+        problems.push(`правые вкладки панелей: ${defaults.rightTabs.join(',')} вместо props,pset,schedule`);
+    }
+    if (!defaults.tree) problems.push('вкладка «Структура» должна быть открыта по умолчанию');
+    if (!defaults.props) problems.push('вкладка «Свойства» должна быть открыта по умолчанию');
+
+    await page.evaluate(() => document.querySelector('#treePanel .ptab[data-pane="files"]')?.click());
+    const files = await page.waitForFunction(() => {
+        const body = document.querySelector('#treePanel > .pane-body[data-pane="files"]');
+        const tree = document.querySelector('#treePanel > .pane-body[data-pane="tree"]');
+        const rows = document.querySelectorAll('#filesList .frow').length;
+        return body && !body.hidden && tree?.hidden && rows > 0 ? rows : false;
+    }, { timeout: 5000 }).catch(() => 0);
+    if (!files) problems.push('вкладка «Файлы»: список моделей пуст или панель не открылась');
+
+    await page.evaluate(() => document.querySelector('#treePanel .ptab[data-pane="classes"]')?.click());
+    const classes = await page.waitForFunction(() => {
+        const body = document.querySelector('#treePanel > .pane-body[data-pane="classes"]');
+        const rows = document.querySelectorAll('#classesList .cls-row').length;
+        return body && !body.hidden && rows > 0 ? rows : false;
+    }, { timeout: 30_000 }).catch(() => 0);
+    if (!classes) problems.push('вкладка «Классы»: список IFC-классов пуст (индекс не собрался?)');
+
+    await page.evaluate(() => document.querySelector('#treePanel .ptab[data-pane="tree"]')?.click());
+
+    await page.evaluate(() => document.querySelector('#sidePanel .ptab[data-pane="pset"]')?.click());
+    const psetOpen = await page.evaluate(() => {
+        const body = document.querySelector('#sidePanel > .pane-body[data-pane="pset"]');
+        return !!(body && !body.hidden);
+    });
+    if (!psetOpen) problems.push('вкладка «Pset» не открылась');
+
+    await page.evaluate(() => document.querySelector('#sidePanel .ptab[data-pane="schedule"]')?.click());
+    const sched = await page.waitForFunction(() => {
+        const body = document.querySelector('#sidePanel > .pane-body[data-pane="schedule"]');
+        const rows = document.querySelectorAll('#scheduleList .sched-table tbody tr').length;
+        return body && !body.hidden && rows > 0 ? rows : false;
+    }, { timeout: 5000 }).catch(() => 0);
+    if (!sched) problems.push('вкладка «Ведомость»: таблица пуста при ненулевом выделении');
+
+    await page.evaluate(() => document.querySelector('#sidePanel .ptab[data-pane="props"]')?.click());
+    return { files: Number(files) || 0, classes: Number(classes) || 0, schedule: Number(sched) || 0 };
 }
 
 /**
@@ -2929,6 +3004,12 @@ async function main() {
                 // поэтому уведомления идут первыми, коллизии последними.
                 toast = await checkNotifications(page);
                 pick = await checkPicking(page);
+                const panelTabs = await checkPanelTabs(page);
+                if (panelTabs) {
+                    console.log(
+                        `панели:    файлов ${panelTabs.files}, классов ${panelTabs.classes}, строк ведомости ${panelTabs.schedule}`
+                    );
+                }
                 selectSimilar = await checkSelectSimilar(page);
                 if (selectSimilar?.ok && selectSimilar.after !== 2100) {
                     problems.push(

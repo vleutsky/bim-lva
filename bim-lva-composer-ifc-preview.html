@@ -108,6 +108,16 @@
             --panel-font: 13px;
             --panel-font-sm: 12px;
             --panel-label: 12px;
+
+            --rtabs: 28px;
+            --rbody: 88px;
+            --r: 3px;
+            --tabs: 30px;
+            /* Зазор палитры до ленты/статуса/края и ширина разделителя.
+               6 px на полном окне не читался — панели снова выглядели плитами.
+               У конкурента — глухие 0 px на всю высоту; у нас окна на хроме. */
+            --palette-gap: 10px;
+            --split: 8px;
         }
 
         /*
@@ -118,7 +128,7 @@
         :root[data-theme="dark"] {
             color-scheme: dark;
 
-            --bg: #0f1319;
+            --bg: #0b0e13;
             --panel: #181d25;
             --panel-2: #1f252f;
             --panel-3: #252c37;
@@ -171,14 +181,15 @@
             color-scheme: light;
             font-family: 'Archivo', sans-serif;
             display: grid;
-            grid-template-columns: var(--w-left) 4px 1fr 4px var(--w-right);
+            grid-template-columns: var(--w-left) var(--split) 1fr var(--split) var(--w-right);
             grid-template-rows: auto 1fr 28px;
             grid-template-areas:
                 "top top top top top"
                 "tree resL stage resR side"
                 "status status status status status";
             height: 100vh;
-            --top-bar-h: 58px;
+            --top-bar-h: calc(var(--rtabs) + var(--rbody));
+            font-variant-numeric: tabular-nums;
         }
 
         body.panels-swapped {
@@ -205,7 +216,7 @@
             opacity: 0;
             pointer-events: none;
             border: 2px dashed transparent;
-            border-radius: 10px;
+            border-radius: var(--r);
             transition: opacity .15s, background .15s, border-color .15s;
         }
         .dock-zone.left { left: 8px; }
@@ -217,23 +228,25 @@
 
         /* ---- top bar (unified rails) ---- */
         .top {
-            --tb-h: 34px;
-            --tb-radius: 8px;
+            --tb-h: 24px;
+            --tb-radius: 3px;
             --tb-pad: 3px;
             --tb-gap: 2px;
-            /* значения переехали в :root — иначе тёмная тема сюда не доходила */
             grid-area: top;
             display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px 8px 14px;
-            background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0;
+            padding: 0;
+            background: var(--panel);
             border-bottom: 1px solid var(--line);
             z-index: 40;
             min-width: 0;
-            min-height: 52px;
+            min-height: 0;
             overflow: visible;
         }
+        html.ribbon-min { --rbody: 0px; }
+        html.ribbon-min .rbody { display: none; }
 
         .brand {
             display: flex;
@@ -263,10 +276,201 @@
             display: block;
             font-size: 9px;
             font-weight: 600;
-            color: var(--txt-dim);
+            color: var(--txt-mute);
             letter-spacing: .1em;
             text-transform: uppercase;
-            margin-top: 2px;
+            margin-top: 0;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding-right: 12px;
+            margin-right: 6px;
+            border-right: 1px solid var(--line);
+            flex: none;
+        }
+        .brand .dot {
+            width: 10px;
+            height: 10px;
+            background: var(--accent);
+            transform: rotate(45deg);
+            flex: 0 0 auto;
+            box-shadow: none;
+        }
+        .brand b {
+            font-weight: 700;
+            font-size: 13px;
+            white-space: nowrap;
+            line-height: 1.1;
+            letter-spacing: -.01em;
+        }
+
+        /* Двухрядная лента: вкладки + именованные панели, как в Civil 3D. */
+        .rtabs {
+            display: flex;
+            align-items: stretch;
+            height: var(--rtabs);
+            border-bottom: 1px solid var(--line);
+            background: var(--panel-2);
+            padding-left: 8px;
+            min-width: 0;
+        }
+        .rtab {
+            border: 0;
+            background: transparent;
+            padding: 0 13px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--txt-dim);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            white-space: nowrap;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .rtab:hover { color: var(--txt); background: var(--panel-3); }
+        .rtab.on { color: var(--ui); border-bottom-color: var(--ui); background: var(--panel); }
+        .rtabs .fill { flex: 1; min-width: 8px; }
+        .rtabs .util {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 0 4px 0 8px;
+            border-left: 1px solid var(--line);
+            flex: none;
+        }
+        .rbody {
+            display: flex;
+            align-items: stretch;
+            height: var(--rbody);
+            padding: 0 6px;
+            min-width: 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: none;
+            background: var(--panel);
+        }
+        .rbody::-webkit-scrollbar { height: 0; }
+        .rpage { display: none; align-items: stretch; }
+        .rpage.on { display: flex; }
+        .rpanel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 4px 8px 0;
+            flex: none;
+            border-right: 1px solid var(--line-soft);
+        }
+        .rpanel .items { display: flex; align-items: flex-start; gap: 2px; flex: 1; }
+        .rpanel .cap {
+            font-size: 9.5px;
+            color: var(--txt-mute);
+            letter-spacing: .04em;
+            padding: 1px 0 3px;
+            white-space: nowrap;
+        }
+        .rpanel .col { display: flex; flex-direction: column; gap: 1px; }
+        .rpanel .row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; }
+        .top .rpanel .btn,
+        .top .rpanel label.btn {
+            height: auto;
+            min-height: 0;
+            border-radius: var(--r);
+            box-shadow: none;
+            font-weight: 500;
+            letter-spacing: 0;
+        }
+        .rbtn-big {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 3px;
+            width: 68px;
+            padding: 5px 2px 4px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--txt-dim);
+            font-size: 11px;
+            line-height: 1.15;
+            text-align: center;
+            white-space: normal;
+        }
+        .rbtn-big .tb-ico { font-size: 18px; width: auto; }
+        .rbtn-big .tb-txt { white-space: normal; }
+        .rbtn-sm {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 21px !important;
+            min-height: 21px !important;
+            padding: 0 7px;
+            min-width: 108px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--txt-dim);
+            font-size: 11.5px;
+            white-space: nowrap;
+            text-align: left;
+            justify-content: flex-start;
+        }
+        .top .rpanel .btn:hover,
+        .top .rpanel label.btn:hover {
+            background: var(--panel-2);
+            color: var(--txt);
+            border-color: var(--line);
+        }
+        .top .rpanel .btn.on,
+        .top .rpanel label.btn.on {
+            background: var(--ui-weak);
+            color: var(--ui);
+            border-color: var(--ui-line);
+            font-weight: 600;
+        }
+        .top .rpanel .btn:disabled { opacity: .4; }
+        .rpanel .tool-select,
+        .rpanel .near-input,
+        .rpanel .editInput {
+            height: 21px;
+            min-height: 21px;
+            font-size: 11px;
+            border-radius: var(--r);
+            max-width: 140px;
+        }
+        .rpanel .snap-types {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            font-size: 10.5px;
+            color: var(--txt-dim);
+            padding: 0 4px;
+        }
+        .rhint {
+            font-size: 10px;
+            color: var(--txt-mute);
+            padding: 2px 4px;
+            max-width: 160px;
+            line-height: 1.25;
+        }
+
+        .rtabs .util .btn,
+        .rtabs .util .tb-menu-btn,
+        .rtabs .util .bimlva-auth-btn {
+            height: 24px;
+            min-height: 24px;
+            min-width: 28px;
+            padding: 0 7px;
+            border: 0;
+            background: transparent;
+            color: var(--txt-dim);
+            border-radius: var(--r);
+            box-shadow: none;
+        }
+        .rtabs .util .btn:hover,
+        .rtabs .util .tb-menu-btn:hover {
+            background: var(--panel-3);
+            color: var(--txt);
         }
 
         .tb-main {
@@ -719,7 +923,7 @@
             color: var(--txt-dim);
             background: var(--panel);
             border: 1px solid transparent;
-            border-radius: 7px;
+            border-radius: var(--r);
             padding: 7px 10px;
             cursor: pointer;
             letter-spacing: 0;
@@ -808,7 +1012,7 @@
             border-radius: 8px;
         }
 
-        .btn-group .btn { border-radius: 6px; }
+        .btn-group .btn { border-radius: var(--r); }
 
         .tool-select {
             appearance: none;
@@ -1054,37 +1258,167 @@
 
         .panel-head {
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 11px 12px 9px;
-            border-bottom: 1px solid var(--line);
+            align-items: stretch;
+            justify-content: flex-start;
+            padding: 0 4px 0 0;
+            height: var(--tabs, 30px);
+            border-bottom: 1px solid var(--line-soft);
             flex: 0 0 auto;
+            background: var(--panel);
         }
 
-        .panel-head h3 {
-            font-family: 'IBM Plex Mono';
-            font-size: var(--panel-label);
-            letter-spacing: 1.2px;
-            color: var(--blue);
+        .panel-head h3,
+        .panel-head .ptab {
+            font-family: 'Archivo', sans-serif;
+            font-size: 11px;
+            letter-spacing: .05em;
+            color: var(--txt-mute);
             text-transform: uppercase;
-            font-weight: 600;
+            font-weight: 700;
+            border: 0;
+            background: transparent;
+            padding: 0 11px;
+            height: 100%;
+            display: inline-flex;
+            align-items: center;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            cursor: pointer;
         }
+        .panel-head h3,
+        .panel-head .ptab.on {
+            color: var(--ui);
+            border-bottom-color: var(--ui);
+            background: var(--panel);
+            cursor: default;
+        }
+        .panel > .pane-body {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .panel > .pane-body[hidden] { display: none !important; }
+        .pane-body .empty {
+            color: var(--txt-dim);
+            line-height: 1.7;
+            padding: 8px 10px;
+            font-size: var(--panel-font);
+        }
+        .pane-body[data-pane="files"] .sect,
+        .pane-body[data-pane="files"] .kv { flex: none; }
+        .frow {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--line-soft);
+        }
+        .frow:hover { background: var(--panel-2); }
+        .frow .sw {
+            width: 3px;
+            height: 22px;
+            flex: none;
+            background: var(--ui);
+            border-radius: 1px;
+        }
+        .frow .nm {
+            flex: 1;
+            min-width: 0;
+            font-size: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .frow .meta { font-size: 10.5px; color: var(--txt-mute); flex: none; }
+        .frow .x {
+            border: 0;
+            background: transparent;
+            color: var(--txt-mute);
+            padding: 2px 4px;
+            cursor: pointer;
+            font: inherit;
+        }
+        .frow .x:hover { color: var(--err); }
+        .kv { width: 100%; border-collapse: collapse; }
+        .kv td {
+            padding: 4px 10px;
+            border-bottom: 1px solid var(--line-soft);
+            font-size: 12.5px;
+            vertical-align: top;
+        }
+        .kv td.k { color: var(--txt-dim); width: 46%; }
+        .kv td.v {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 11.5px;
+            font-variant-numeric: tabular-nums;
+        }
+        .sect {
+            padding: 10px 10px 4px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+            color: var(--txt-mute);
+        }
+        .toolstrip {
+            display: flex;
+            gap: 4px;
+            padding: 6px 8px;
+            border-bottom: 1px solid var(--line-soft);
+            flex: none;
+        }
+        .cls-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 10px;
+            border-bottom: 1px solid var(--line-soft);
+            font-size: 12.5px;
+            cursor: pointer;
+        }
+        .cls-row:hover { background: var(--panel-2); }
+        .cls-row .n {
+            margin-left: auto;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-variant-numeric: tabular-nums;
+            color: var(--txt-mute);
+            font-size: 11.5px;
+        }
+        .sched-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .sched-table th, .sched-table td {
+            text-align: left;
+            padding: 4px 8px;
+            border-bottom: 1px solid var(--line-soft);
+            vertical-align: top;
+        }
+        .sched-table th {
+            font-size: 10px;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: var(--txt-mute);
+            font-weight: 700;
+        }
+        .sched-table .num { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
         .panel-head .pop {
             cursor: pointer;
-            color: var(--txt-dim);
-            background: var(--panel-2);
-            border: 1px solid var(--line);
-            padding: 3px 8px;
+            color: var(--txt-mute);
+            background: transparent;
+            border: 0;
+            padding: 0 8px;
             font-size: 12px;
             line-height: 1;
-            font-family: 'IBM Plex Mono';
-            transition: .15s;
+            font-family: inherit;
+            height: 100%;
+            border-radius: 0;
         }
 
         .panel-head .pop:hover {
-            color: var(--accent);
-            border-color: var(--accent-dim);
+            color: var(--txt);
+            background: var(--panel-3);
+            border-color: transparent;
         }
 
         .head-actions {
@@ -1098,24 +1432,19 @@
             accent-color: var(--accent);
         }
 
+        .tree-panel,
+        .side {
+            margin: var(--palette-gap);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+        }
+
         .tree-panel {
             grid-area: tree;
-            border-right: 1px solid var(--line);
         }
 
         .side {
             grid-area: side;
-            border-left: 1px solid var(--line);
-        }
-
-        body.panels-swapped .tree-panel {
-            border-right: none;
-            border-left: 1px solid var(--line);
-        }
-
-        body.panels-swapped .side {
-            border-left: none;
-            border-right: 1px solid var(--line);
         }
 
         .panel.floating {
@@ -1123,10 +1452,11 @@
             z-index: 60;
             width: 300px;
             height: 460px;
-            border: 1px solid var(--accent-dim);
-            box-shadow: 0 18px 55px rgba(31, 43, 56, .22);
+            margin: 0;
+            border: 1px solid var(--line);
+            box-shadow: none;
             resize: both;
-            border-radius: 6px;
+            border-radius: var(--r);
         }
 
         .panel .panel-head {
@@ -1144,14 +1474,29 @@
 
         /* ---- resizers ---- */
         .resizer {
-            background: var(--line);
+            background: transparent;
             z-index: 20;
             cursor: col-resize;
-            transition: background 0.2s;
+            position: relative;
         }
-
-        .resizer:hover, .resizer.dragging {
-            background: var(--accent);
+        .resizer::after {
+            content: '';
+            position: absolute;
+            inset: 0 -3px;
+        }
+        .resizer::before {
+            content: '';
+            position: absolute;
+            top: var(--palette-gap);
+            bottom: var(--palette-gap);
+            left: 50%;
+            width: 1px;
+            transform: translateX(-50%);
+            background: transparent;
+        }
+        .resizer:hover::before,
+        .resizer.dragging::before {
+            background: var(--ui);
         }
 
         #dragLeft { grid-area: resL; }
@@ -1164,6 +1509,10 @@
             overflow: hidden;
             min-width: 0;
             min-height: 0;
+            /* Тот же зазор, что у палитр: сцена — лист, не проём между стенами. */
+            margin: var(--palette-gap) 0;
+            border: 1px solid var(--line);
+            border-radius: var(--r);
         }
 
         .stage canvas {
@@ -2021,32 +2370,45 @@
 
         /* ---- tree ---- */
         .search-box {
-            padding: 8px 12px;
-            background: #f7f8fa;
-            border-bottom: 1px solid var(--line);
+            padding: 8px 10px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line-soft);
         }
 
         .search-box input {
             width: 100%;
-            padding: 6px 10px;
-            background: var(--accent-weak);
-            border: 1px solid var(--accent-line);
-            box-shadow: inset 3px 0 0 var(--accent);
+            padding: 5px 8px;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
             color: var(--txt);
             font-family: 'IBM Plex Mono';
             font-size: var(--panel-font-sm);
             outline: none;
-            transition: border 0.2s;
         }
 
         .search-box input:focus {
-            border-color: var(--accent);
-            background: var(--accent-weak);
+            border-color: var(--ui);
+            background: var(--panel);
         }
 
         #openPropSearch {
             width: 100%;
             text-align: center;
+            margin-top: 6px;
+            height: 26px;
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            background: var(--panel-2);
+            color: var(--txt-dim);
+            font-family: inherit;
+            font-size: 11.5px;
+            cursor: pointer;
+        }
+        #openPropSearch:hover {
+            color: var(--ui);
+            border-color: var(--ui-line);
+            background: var(--ui-weak);
         }
 
         .tree {
@@ -2087,29 +2449,29 @@
         .file-root > .trow.sel,
         .custom-branch > .trow.sel,
         .trow.trow-group.sel {
-            background: #dceefc;
-            color: #135f9a;
-            box-shadow: inset 3px 0 0 var(--blue);
+            background: var(--ui-weak);
+            color: var(--ui);
+            box-shadow: inset 2px 0 0 var(--ui);
             font-weight: 600;
         }
 
         .trow.sel .tlabel {
-            color: #0f5f9c;
+            color: var(--ui);
             font-weight: 700;
         }
 
         .trow.sel .ttype {
-            color: #2a7ab8;
+            color: var(--ui-dim);
         }
 
         .trow.sel .caret {
-            color: var(--blue);
+            color: var(--ui);
         }
 
         .trow.drag-target {
-            outline: 2px solid var(--blue);
-            outline-offset: -2px;
-            background: #cfe6f8;
+            outline: 1px solid var(--ui);
+            outline-offset: -1px;
+            background: var(--ui-weak);
         }
 
         .caret {
@@ -2174,7 +2536,7 @@
 
         .stats {
             padding: 10px 16px 14px;
-            border-bottom: 1px solid var(--line);
+            border-bottom: 1px solid var(--line-soft);
         }
 
         .stat-row {
@@ -2939,187 +3301,308 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 5c15d19</div>
-    <header class="top">
-        <div class="brand">
-            <div class="dot"></div>
-            <div>
-                <b>BIM.LVA</b>
-                <small id="brandVersionLabel">Composer IFC · v…</small>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 68ca313</div>
+    <header class="top" id="appRibbon">
+        <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
+            <div class="brand">
+                <div class="dot"></div>
+                <div>
+                    <b>BIM.LVA</b>
+                    <small id="brandVersionLabel">Composer IFC · v…</small>
+                </div>
+            </div>
+            <button type="button" class="rtab on" data-rp="file">Файл</button>
+            <button type="button" class="rtab" data-rp="view">Вид</button>
+            <button type="button" class="rtab" data-rp="measure">Измерения</button>
+            <button type="button" class="rtab" data-rp="draw">Черчение</button>
+            <button type="button" class="rtab" data-rp="relief">Рельеф</button>
+            <button type="button" class="rtab" data-rp="analysis">Анализ</button>
+            <button type="button" class="rtab" data-rp="ifc">IFC</button>
+            <span class="fill"></span>
+            <div class="util">
+                <a class="btn btn-donate" id="btnDonate" href="https://pay.cloudtips.ru/p/0265eeea" target="_blank" rel="noopener" title="Просмотрщик бесплатный. Если он выручает в работе — поддержите разработку">♥</a>
+                <button type="button" class="btn" id="btnTheme" title="Светлая / тёмная тема. Серая геометрия IFC на тёмном фоне читается лучше; выбор запоминается.">🌓</button>
+                <button type="button" class="btn" id="btnNotifyLog" title="Журнал уведомлений: все сообщения этой сессии, включая уже закрывшиеся">🔔<span class="notify-badge" id="notifyLogBadge" hidden></span></button>
+                <button type="button" class="btn" id="btnAbout" title="О продукте, разработчик и версия сборки">ℹ</button>
+                <div class="tb-auth" data-bimlva-auth-slot></div>
+                <div class="tb-menu" id="menuMore">
+                    <button type="button" class="tb-menu-btn tb-more-btn" aria-haspopup="true" aria-expanded="false" title="Другие источники и действия">⋯</button>
+                    <div class="tb-menu-panel right">
+                        <div class="tb-menu-label">Открыть</div>
+                        <button class="btn" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ Яндекс.Диск</button>
+                        <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 Растр (ECW / GeoTIFF)</button>
+                        <button class="btn" id="btnBaseMap" title="Онлайн-карта или космоснимок подложкой под модель">🌍 Карта-подложка (онлайн)</button>
+                            <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT / Tekla / Plant</button>
+                            <div class="tb-menu-label">Кэш геометрии</div>
+                        <label class="btn" title="Тесселяция — около 80% времени открытия IFC, и для одного и того же файла она всегда даёт один и тот же результат. С кэшем повторное открытие пропускает её целиком: меши читаются с диска. Кэш лежит в браузере (IndexedDB), на сервер ничего не уходит.">
+                            <input type="checkbox" id="geomCacheToggle" checked> Ускорять повторное открытие
+                        </label>
+                            <button class="btn" id="geomCacheClear" title="Удалить сохранённую геометрию всех файлов. Нужно, если место на диске важнее скорости — модели после этого откроются как в первый раз.">🗑 Очистить кэш <span id="geomCacheSize" class="small"></span></button>
+                            <div class="tb-menu-label" id="tbOverflowLabel" hidden>Инструменты</div>
+                        <div id="tbOverflowHost"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div class="tb-main" id="tbMain">
-            <div class="tb-rail" id="tbRailMain">
-                <div class="tb-seg" id="tbSegTools" data-tb-overflow="3">
-                    <button class="btn" id="btnMeasure" disabled title="Инструмент замеров"><span class="tb-ico">📏</span><span class="tb-txt">Замер</span></button>
-                    <select id="measureModeSelect" class="tool-select" disabled title="Режим замера. «2D/3D/i» — линейка: наклонное и горизонтальное расстояние, превышение и уклон">
-                        <option value="distance">м</option>
-                        <option value="ruler">2D/3D/i</option>
-                        <option value="chain">∑</option>
-                        <option value="height">ΔZ</option>
-                        <option value="angle">∠</option>
-                        <option value="area">м²</option>
-                    </select>
-                    <button class="btn" id="btnClip" disabled title="Секущая плоскость или коробка сечения"><span class="tb-ico">✂</span><span class="tb-txt">Разрез</span></button>
-                    <select id="clipModeSelect" class="tool-select" disabled title="Ось плоскости или коробка сечения">
-                        <option value="z">Z</option>
-                        <option value="x">X</option>
-                        <option value="y">Y</option>
-                        <option value="box">BOX</option>
-                    </select>
-                    <button class="btn" id="btnClipGizmo" disabled title="Для коробки: сдвиг (↔) или масштаб (⤢) ручки">↔</button>
-                    <button class="btn" id="btnBoxSelect" disabled title="Выделение рамкой: перетащите мышью по сцене, чтобы выбрать все элементы в прямоугольнике"><span class="tb-ico">▭</span><span class="tb-txt">Рамка</span></button>
-                </div>
+        <div class="rbody" id="tbMain">
+            <div id="tbRailMain" hidden></div>
 
-                <div class="tb-sep" data-tb-with="tbSegVis" aria-hidden="true"></div>
-                <div class="tb-seg" id="tbSegVis" data-tb-overflow="2">
-                    <button class="btn" id="btnHide" disabled title="Скрыть выделенные элементы (Ctrl+H)"><span class="tb-ico">👁</span><span class="tb-txt">Скрыть</span></button>
-                    <button class="btn" id="btnIsolate" disabled title="Изолировать выделение: скрыть всё остальное (I)"><span class="tb-ico">◎</span><span class="tb-txt">Isolate</span></button>
-                    <button class="btn" id="btnShowAll" disabled title="Сбросить скрытие и изоляцию (Shift+I)"><span class="tb-ico">◉</span><span class="tb-txt">Показать</span></button>
-                    <button class="btn" id="btnClearSelection" disabled title="Снять выделение (C)"><span class="tb-ico">∅</span><span class="tb-txt">Очистить</span></button>
+            <div class="rpage on" data-rp="file">
+                <div class="rpanel">
+                    <div class="items">
+                        <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.dwg,.xml,.glb,.obj,.stl" multiple>
+                        <label class="btn load-btn rbtn-big" for="localFileInput" id="btnOpenLocal" title="IFC (IFC2X3 / IFC4 / IFC4X3), ASCII DXF, LandXML/Civil XML, FBX, GLB, OBJ, STL. RVT/Tekla/Plant — только через экспорт в IFC"><span class="tb-ico">⬆</span><span class="tb-txt">Локально</span></label>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnYaLoadRibbon" title="Открыть модели с Яндекс.Диска">☁ Яндекс.Диск</button>
+                            <button class="btn rbtn-sm" id="btnGeoRasterRibbon" title="ECW / GeoTIFF с геопривязкой">🗺 Растр</button>
+                            <button class="btn rbtn-sm" id="btnBaseMapRibbon" title="Онлайн-карта подложкой под модель">🌍 Карта</button>
+                        </div>
+                    </div>
+                    <div class="cap">Открыть</div>
                 </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <div class="col">
+                            <select class="editInput" id="loadPresetSelect" title="Какие IFC-классы тянуть в сцену при загрузке"></select>
+                            <button class="btn rbtn-sm" id="clear" disabled title="Удалить все модели">✕ Очистить</button>
+                        </div>
+                    </div>
+                    <div class="cap">Сцена</div>
+                </div>
+            </div>
 
-                <div class="tb-sep" aria-hidden="true"></div>
-                <div class="tb-seg tb-seg-nav" id="tbSegNav">
-                    <div class="tb-menu" id="menuView">
-                        <button type="button" class="tb-menu-btn" aria-haspopup="true" aria-expanded="false">Вид</button>
-                        <div class="tb-menu-panel">
-                            <div class="tb-menu-label">Камера и сцена</div>
-                            <button class="btn on" id="btnZoomCursor" title="Зум к точке под курсором (как в Navisworks / BIMvision). Выкл — зум к центру орбиты">🎯 Зум к курсору</button>
-                            <button class="btn" id="btnPivotLock" disabled title="Фиксировать центр вращения/зума на выделенных элементах. Вкл после выделения — орбита крутится вокруг них">📌 На выделении</button>
-                            <button class="btn" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ Сохранённые виды</button>
-                            <button class="btn" id="btnShareView" disabled title="Пакет экспертизы: камера + CRS + разрез + BCF + фильтры + легенда в одной ссылке">🔗 Пакет экспертизы</button>
-                            <button class="btn" id="btnQrView" disabled title="QR-код якоря вида для телефона (камера + геопривязка)">▣ QR / якорь</button>
-                            <button class="btn" id="fit" disabled title="Вписать все загруженные модели в окно просмотра">⤢ Вписать в кадр</button>
-                            <button class="btn" id="btnTour" disabled title="Проезд по маршруту или свободная езда WASD">🚗 Проезд / облёт</button>
-                            <button class="btn on" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
-                            <button class="btn" id="btnSelectionContour" title="Контур рёбер (опционально). Подсветка по умолчанию — на самой геометрии, без отдельной «коробки»">◇ Контур выделения</button>
-                            <button class="btn" id="btnPerfMode" title="Быстрый режим: меньше нагрузки на GPU при больших моделях (рекомендуется для больших IFC)">⚡ Быстрый режим</button>
-                            <div class="tb-menu-label">Ближнее отсечение</div>
-                            <div class="tb-menu-row" title="Near plane камеры: при приближении слишком большое значение «съедает» близкую геометрию. Выключите Авто и поставьте 0.01–0.05">
+            <div class="rpage" data-rp="view">
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="fit" disabled title="Вписать все загруженные модели в окно просмотра"><span class="tb-ico">⤢</span><span class="tb-txt">Вписать</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnViews" disabled title="Сохранённые виды: камера, скрытия, разрез">⧉ Виды</button>
+                            <button class="btn rbtn-sm" id="btnShareView" disabled title="Пакет экспертизы в одной ссылке">🔗 Пакет</button>
+                            <button class="btn rbtn-sm" id="btnQrView" disabled title="QR-код якоря вида">▣ QR / якорь</button>
+                        </div>
+                    </div>
+                    <div class="cap">Камера</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <div class="col">
+                            <button class="btn on rbtn-sm" id="btnZoomCursor" title="Зум к точке под курсором">🎯 К курсору</button>
+                            <button class="btn rbtn-sm" id="btnPivotLock" disabled title="Центр вращения на выделении">📌 На выделении</button>
+                            <button class="btn rbtn-sm" id="btnTour" disabled title="Проезд по маршруту или WASD">🚗 Проезд</button>
+                        </div>
+                        <div class="col">
+                            <button class="btn on rbtn-sm" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
+                            <button class="btn rbtn-sm" id="btnSelectionContour" title="Контур рёбер выделения">◇ Контур</button>
+                            <button class="btn rbtn-sm" id="btnPerfMode" title="Быстрый режим для больших IFC">⚡ Быстрый</button>
+                        </div>
+                    </div>
+                    <div class="cap">Сцена</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnHide" disabled title="Скрыть выделенные (Ctrl+H)">👁 Скрыть</button>
+                            <button class="btn rbtn-sm" id="btnIsolate" disabled title="Изолировать выделение (I)">◎ Isolate</button>
+                            <button class="btn rbtn-sm" id="btnShowAll" disabled title="Показать всё (Shift+I)">◉ Показать</button>
+                        </div>
+                        <button class="btn rbtn-big" id="btnClearSelection" disabled title="Снять выделение (C)"><span class="tb-ico">∅</span><span class="tb-txt">Снять</span></button>
+                    </div>
+                    <div class="cap">Выделение</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <div class="col">
+                            <div class="row" title="Near plane камеры">
                                 <input class="near-input" id="cameraNearInput" type="number" min="0.001" max="50" step="0.01" value="0.05" aria-label="Near clip">
-                                <button type="button" class="btn on" id="cameraNearAuto" title="Считать near по дистанции до модели (при зуме уменьшается сам)">Авто</button>
+                                <button type="button" class="btn on rbtn-sm" id="cameraNearAuto" title="Считать near по дистанции" style="min-width:auto">Авто</button>
                             </div>
-                            <div class="tb-menu-hint" id="cameraNearHint">сейчас: 0.10 · меньше = ближе без обрезания</div>
+                            <div class="rhint" id="cameraNearHint">сейчас: 0.10</div>
                         </div>
                     </div>
+                    <div class="cap">Отсечение</div>
+                </div>
+            </div>
 
-                    <div class="tb-menu" id="menuAnalyze">
-                        <button type="button" class="tb-menu-btn" aria-haspopup="true" aria-expanded="false">Анализ</button>
-                        <div class="tb-menu-panel">
-                            <div class="tb-menu-label">Инструменты</div>
-                            <button class="btn" id="btnColorBy" disabled title="Раскрасить элементы по IFC-классу или значению Pset">🎨 Цвет по классу / Pset</button>
-                            <button class="btn" id="btnBcf" disabled title="BCF-заметки: точка + комментарий + камера">💬 BCF-заметки</button>
-                            <button class="btn" id="btnAlign" disabled title="Сдвиг / поворот выбранной модели в сводке">✥ Сдвиг / поворот</button>
-                            <button class="btn" id="btnClash" disabled title="Умные коллизии AABB: пары классов, допуск, изоляция + BCF">⚡ Коллизии 2.0</button>
-                            <button class="btn" id="btnClassFilter" disabled title="Фильтр видимости по IFC-классам">☰ Фильтр классов</button>
-                            <button class="btn" id="btnCompare" disabled title="Сравнить два IFC: добавлено / удалено">⇄ Сравнение IFC</button>
-                            <button class="btn" id="btn4d" disabled title="Простая 4D-лента: скрытие/цвет по дате или фазе из Pset">⏱ 4D-лента</button>
-                            <button class="btn" id="btnAlignProfile" disabled title="Продольный профиль трассы LandXML: план + station/elev">〰 Профиль трассы</button>
-                            <button class="btn" id="btnRoadAxisAnalyze" disabled title="Начертить ось дороги: клики — вершины, Esc — закончить и открыть поперечники">🛣 Ось трассы</button>
-                            <button class="btn" id="btnSchedule" disabled title="Ведомость выделенного → CSV">▦ Ведомость CSV</button>
-                            <button class="btn" id="btnCrs" disabled title="Смещение модели / northing (CRS offset)">🌐 CRS / смещение</button>
+            <div class="rpage" data-rp="measure">
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnMeasure" disabled title="Инструмент замеров"><span class="tb-ico">📏</span><span class="tb-txt">Замер</span></button>
+                        <select id="measureModeSelect" class="tool-select" disabled title="Режим замера. «2D/3D/i» — линейка">
+                            <option value="distance">м</option>
+                            <option value="ruler">2D/3D/i</option>
+                            <option value="chain">∑</option>
+                            <option value="height">ΔZ</option>
+                            <option value="angle">∠</option>
+                            <option value="area">м²</option>
+                        </select>
+                    </div>
+                    <div class="cap">Линейка</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnClip" disabled title="Секущая плоскость или коробка сечения"><span class="tb-ico">✂</span><span class="tb-txt">Разрез</span></button>
+                        <div class="col">
+                            <select id="clipModeSelect" class="tool-select" disabled title="Ось плоскости или коробка">
+                                <option value="z">Z</option>
+                                <option value="x">X</option>
+                                <option value="y">Y</option>
+                                <option value="box">BOX</option>
+                            </select>
+                            <button class="btn rbtn-sm" id="btnClipGizmo" disabled title="Для коробки: сдвиг или масштаб ручки" style="min-width:auto">↔ Ручка</button>
                         </div>
                     </div>
+                    <div class="cap">Сечение</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnBoxSelect" disabled title="Выделение рамкой"><span class="tb-ico">▭</span><span class="tb-txt">Рамка</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnCoordPin" disabled title="Метка координат XYZ">📍 Метка XYZ</button>
+                            <button class="btn rbtn-sm" id="btnCoordPinList" disabled title="Список меток">📋 Метки: <span id="pinsCount">0</span></button>
+                        </div>
+                    </div>
+                    <div class="cap">Точки</div>
+                </div>
+            </div>
 
-                    <div class="tb-menu" id="menuCreate">
-                        <button type="button" class="tb-menu-btn" aria-haspopup="true" aria-expanded="false">Создать 2Д/3Д</button>
-                        <div class="tb-menu-panel">
-                            <div class="tb-menu-label">Метки</div>
-                            <button class="btn" id="btnCoordPin" disabled title="Метка координат: клик по модели ставит подпись с X, Y, Z (абсолютные, в метрах). Точку можно перетащить">📍 Метка XYZ</button>
-                            <button class="btn" id="btnCoordPinList" disabled title="Список меток: перелёт к метке, копирование, удаление">📋 Метки: <span id="pinsCount" style="margin-left:2px">0</span></button>
-                            <div class="tb-menu-label">Построения</div>
-                            <button class="btn" id="btnDraw" disabled title="Черчение полилинии по модели. Клик — точка, Esc или повторное нажатие кнопки — завершить">✏ Полилиния</button>
-                            <button class="btn" id="btnRoadAxis" disabled title="Начертить ось дороги: клики — вершины, Esc — закончить и открыть поперечники">🛣 Ось трассы</button>
-                            <button class="btn" id="btnPolylineList" disabled title="Список полилиний: переименование, точки, радиусы сопряжения в углах, приближение, удаление">📐 Полилинии: <span id="polylinesCount" style="margin-left:2px">0</span></button>
-                            <button class="btn" id="btnPadList" disabled title="Таблица площадок: имя, цвет, площадь, объёмы насыпи/выемки, выгрузка DXF/LandXML, удаление">▣ Площадки: <span id="padsCount" style="margin-left:2px">0</span></button>
-                            <div class="tb-menu-row" title="2D — все точки на отметке первой (как LWPOLYLINE), 3D — с настоящими отметками">
-                                <select id="drawModeSelect" class="tool-select" disabled>
-                                    <option value="3d">3D</option>
-                                    <option value="2d">2D</option>
-                                </select>
-                            </div>
-                            <button class="btn" id="btnSweep" disabled title="Выдавить сечение вдоль оси: осью служит выбранная линия чертежа или последняя начерченная полилиния">⬒ Тело по оси</button>
-                            <button class="btn on" id="btnSnap" title="Объектная привязка: вершины, середины и рёбра элементов. Работает для черчения и замеров">⊹ Привязка к элементам</button>
-                            <div class="tb-menu-row snap-types" title="К чему привязываться. Вершина важнее середины, середина — ребра">
+            <div class="rpage" data-rp="draw">
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnDraw" disabled title="Черчение полилинии. Клик — точка, Esc — завершить"><span class="tb-ico">✏</span><span class="tb-txt">Полилиния</span></button>
+                        <div class="col">
+                            <select id="drawModeSelect" class="tool-select" disabled title="2D — отметка первой точки, 3D — настоящие отметки">
+                                <option value="3d">3D</option>
+                                <option value="2d">2D</option>
+                            </select>
+                            <button class="btn on rbtn-sm" id="btnSnap" title="Объектная привязка">⊹ Привязка</button>
+                            <div class="snap-types" title="К чему привязываться">
                                 <label><input type="checkbox" id="snapTypeVertex" checked> вершина</label>
                                 <label><input type="checkbox" id="snapTypeMid" checked> середина</label>
                                 <label><input type="checkbox" id="snapTypeEdge" checked> ребро</label>
                             </div>
-                            <div class="tb-menu-label">Экспорт</div>
-                            <button class="btn" id="btnDrawExport" disabled title="Выгрузить начерченное и метки в DXF в мировых координатах">⤓ Экспорт в DXF</button>
                         </div>
                     </div>
+                    <div class="cap">Линия</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnRoadAxis" disabled title="Ось дороги: клики — вершины, Esc — поперечники"><span class="tb-ico">🛣</span><span class="tb-txt">Ось трассы</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
+                            <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
+                        </div>
+                    </div>
+                    <div class="cap">Ось</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnSweep" disabled title="Выдавить сечение вдоль оси"><span class="tb-ico">⬒</span><span class="tb-txt">Тело по оси</span></button>
+                    </div>
+                    <div class="cap">Тело</div>
+                </div>
+            </div>
 
-                    <div class="tb-menu" id="menuIfc">
-                        <button type="button" class="tb-menu-btn" aria-haspopup="true" aria-expanded="false">IFC</button>
-                        <div class="tb-menu-panel">
-                            <div class="tb-menu-label">Файл</div>
-                            <button class="btn" id="btnExportIFC" disabled title="Скачать изменённые IFC-файлы">⬇ Экспорт IFC</button>
-                            <button class="btn" id="btnNormalizeIFC" disabled title="Создать структуру Project → Site → Building → Storey и перенести в неё элементы">⌘ Структура IFC</button>
-                            <button class="btn" id="btnMergeIFC" disabled title="Объединить все загруженные IFC-файлы в один: ExpressID пересчитываются без коллизий, все пространственные структуры собираются под одним общим IfcProject. Внешние 3D/CAD-форматы (FBX/DXF/OBJ и т.д.) в объединение не входят.">🧩 Объединить IFC</button>
+            <div class="rpage" data-rp="relief">
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnPadList" disabled title="Таблица площадок"><span class="tb-ico">▣</span><span class="tb-txt">Площадки: <span id="padsCount">0</span></span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnAlignProfile" disabled title="Продольный профиль трассы LandXML">〰 Профиль</button>
+                            <button class="btn rbtn-sm" id="btnRoadAxisAnalyze" disabled title="Начертить ось дороги и открыть поперечники">🛣 Ось трассы</button>
                         </div>
                     </div>
+                    <div class="cap">План</div>
+                </div>
+            </div>
+
+            <div class="rpage" data-rp="analysis">
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnClash" disabled title="Коллизии AABB"><span class="tb-ico">⚡</span><span class="tb-txt">Коллизии</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnCompare" disabled title="Сравнить два IFC">⇄ Сравнить</button>
+                            <button class="btn rbtn-sm" id="btnBcf" disabled title="BCF-заметки">💬 BCF</button>
+                            <button class="btn rbtn-sm" id="btnSchedule" disabled title="Ведомость выделенного → CSV">▦ Ведомость</button>
+                        </div>
+                    </div>
+                    <div class="cap">Проверки</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnClassFilter" disabled title="Фильтр видимости по IFC-классам"><span class="tb-ico">☰</span><span class="tb-txt">Классы</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnColorBy" disabled title="Раскрасить по классу или Pset">🎨 Цвет по классу</button>
+                            <button class="btn rbtn-sm" id="btn4d" disabled title="4D-лента по дате или фазе">⏱ 4D-лента</button>
+                        </div>
+                    </div>
+                    <div class="cap">Отбор</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnCrs" disabled title="CRS / смещение">🌐 CRS</button>
+                            <button class="btn rbtn-sm" id="btnAlign" disabled title="Сдвиг / поворот модели">✥ Выравнивание</button>
+                        </div>
+                    </div>
+                    <div class="cap">Координаты</div>
+                </div>
+            </div>
+
+            <div class="rpage" data-rp="ifc">
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnNormalizeIFC" disabled title="Структура Project → Site → Building → Storey"><span class="tb-ico">⌘</span><span class="tb-txt">Структура</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnMergeIFC" disabled title="Объединить все IFC в один">🧩 Объединить</button>
+                            <button class="btn rbtn-sm" id="btnExportIFC" disabled title="Скачать изменённые IFC">⬇ Экспорт IFC</button>
+                        </div>
+                    </div>
+                    <div class="cap">Файл</div>
                 </div>
             </div>
         </div>
-
-        <div class="tb-aside">
-            <div class="tb-rail tb-rail-end">
-                <div class="tb-seg">
-                    <a class="btn btn-donate" id="btnDonate" href="https://pay.cloudtips.ru/p/0265eeea" target="_blank" rel="noopener" title="Просмотрщик бесплатный. Если он выручает в работе — поддержите разработку"><span class="tb-ico">♥</span><span class="tb-txt">Поддержать</span></a>
-                    <button type="button" class="btn" id="btnTheme" title="Светлая / тёмная тема. Серая геометрия IFC на тёмном фоне читается лучше; выбор запоминается.">🌓</button>
-                    <button type="button" class="btn" id="btnNotifyLog" title="Журнал уведомлений: все сообщения этой сессии, включая уже закрывшиеся">🔔<span class="notify-badge" id="notifyLogBadge" hidden></span></button>
-                    <button type="button" class="btn" id="btnAbout" title="О продукте, разработчик и версия сборки">ℹ</button>
-                </div>
-                <div class="tb-sep" aria-hidden="true"></div>
-                <div class="tb-seg tb-auth" data-bimlva-auth-slot></div>
-                <div class="tb-sep" aria-hidden="true"></div>
-                <div class="tb-seg">
-                    <input type="file" id="localFileInput" class="file-input-sr" accept=".ifc,.fbx,.dxf,.dwg,.xml,.glb,.obj,.stl" multiple>
-                    <label class="btn load-btn" for="localFileInput" id="btnOpenLocal" title="IFC (IFC2X3 / IFC4 / IFC4X3), ASCII DXF, LandXML/Civil XML, FBX, GLB, OBJ, STL. RVT/Tekla/Plant — только через экспорт в IFC"><span class="tb-ico">⬆</span><span class="tb-txt">Локально</span></label>
-                    <div class="tb-menu" id="menuMore">
-                        <button type="button" class="tb-menu-btn tb-more-btn" aria-haspopup="true" aria-expanded="false" title="Другие источники и действия">⋯</button>
-                        <div class="tb-menu-panel right">
-                            <div class="tb-menu-label">Открыть</div>
-                            <button class="btn" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ Яндекс.Диск</button>
-                            <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 Растр (ECW / GeoTIFF)</button>
-                            <button class="btn" id="btnBaseMap" title="Онлайн-карта или космоснимок подложкой под модель">🌍 Карта-подложка (онлайн)</button>
-                            <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT / Tekla / Plant</button>
-                            <div class="tb-menu-label">Фильтр при загрузке IFC</div>
-                            <select class="editInput" id="loadPresetSelect" title="Какие IFC-классы тянуть в сцену при загрузке. Пресет экономит память на больших моделях: арматура, метизы и мебель не загружаются. Применяется к следующим загружаемым файлам."></select>
-                            <div class="tb-menu-label">Кэш геометрии</div>
-                            <label class="btn" title="Тесселяция — около 80% времени открытия IFC, и для одного и того же файла она всегда даёт один и тот же результат. С кэшем повторное открытие пропускает её целиком: меши читаются с диска. Кэш лежит в браузере (IndexedDB), на сервер ничего не уходит.">
-                                <input type="checkbox" id="geomCacheToggle" checked> Ускорять повторное открытие
-                            </label>
-                            <button class="btn" id="geomCacheClear" title="Удалить сохранённую геометрию всех файлов. Нужно, если место на диске важнее скорости — модели после этого откроются как в первый раз.">🗑 Очистить кэш <span id="geomCacheSize" class="small"></span></button>
-                            <div class="tb-menu-label">Сцена</div>
-                            <button class="btn" id="clear" disabled title="Удалить все модели и несохранённые изменения из просмотрщика">✕ Очистить модели</button>
-                            <div class="tb-menu-label" id="tbOverflowLabel" hidden>Инструменты</div>
-                            <div id="tbOverflowHost"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+        <div id="menuView" hidden></div>
+        <div id="menuAnalyze" hidden></div>
+        <div id="menuCreate" hidden></div>
+        <div id="menuIfc" hidden></div>
     </header>
 
     <aside class="panel tree-panel" id="treePanel">
         <div class="panel-head" id="treeHead">
-            <h3>Структура</h3>
+            <button type="button" class="ptab on" data-pane="tree">Структура</button>
+            <button type="button" class="ptab" data-pane="files">Файлы</button>
+            <button type="button" class="ptab" data-pane="classes">Классы</button>
+            <span class="fill" style="flex:1"></span>
             <div class="head-actions">
                 <button class="pop" id="treeSelectAll" title="Выделить все элементы всех загруженных моделей">ВСЕ</button>
                 <button class="pop panel-swap" id="treeSwap" title="Поменять панели местами (слева ↔ справа)">⇄</button>
                 <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
             </div>
         </div>
-        <div class="search-box">
-            <input type="text" id="searchInput" placeholder="Поиск (Enter)..." title="Введите часть имени или IFC-класса и нажмите Enter">
-            <button class="pop" id="openPropSearch" title="Найти все элементы, у которых есть указанный параметр/Pset (и, при необходимости, значение), и выделить их для массового редактирования">🔎 Поиск по параметру</button>
+        <div class="pane-body" data-pane="tree">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Поиск (Enter)..." title="Введите часть имени или IFC-класса и нажмите Enter">
+                <button class="pop" id="openPropSearch" title="Найти все элементы, у которых есть указанный параметр/Pset (и, при необходимости, значение), и выделить их для массового редактирования">🔎 Поиск по параметру</button>
+            </div>
+            <div class="tree" id="tree">
+                <div class="empty">Добавьте IFC, DXF, LandXML, FBX, GLB, OBJ или STL</div>
+            </div>
         </div>
-        <div class="tree" id="tree">
-            <div class="empty">Добавьте IFC, DXF, LandXML, FBX, GLB, OBJ или STL</div>
+        <div class="pane-body" data-pane="files" hidden>
+            <div class="toolstrip">
+                <button type="button" class="btn" id="filesAddBtn" title="Открыть локальные файлы">＋ Добавить модель</button>
+            </div>
+            <div id="filesList" class="scroll"><div class="empty">Нет загруженных файлов.</div></div>
+            <div class="sect">Система координат</div>
+            <table class="kv" id="filesCrsKv"></table>
+        </div>
+        <div class="pane-body" data-pane="classes" hidden>
+            <div class="toolstrip">
+                <button type="button" class="btn" id="classesAllBtn" title="Показать все классы">Все</button>
+                <button type="button" class="btn" id="classesNoneBtn" title="Скрыть все классы">Ничего</button>
+            </div>
+            <div id="classesList" class="scroll"><div class="empty">Нет моделей.</div></div>
         </div>
     </aside>
 
@@ -3186,13 +3669,16 @@
 
     <aside class="panel side" id="sidePanel">
         <div class="panel-head" id="sideHead">
-            <h3>Свойства</h3>
+            <button type="button" class="ptab on" data-pane="props">Свойства</button>
+            <button type="button" class="ptab" data-pane="pset">Pset</button>
+            <button type="button" class="ptab" data-pane="schedule">Ведомость</button>
+            <span class="fill" style="flex:1"></span>
             <div class="head-actions">
                 <button class="pop panel-swap" id="sideSwap" title="Поменять панели местами (слева ↔ справа)">⇄</button>
                 <button class="pop" id="sidePop" title="Открепить или вернуть панель свойств">⧉</button>
             </div>
         </div>
-        <div class="scroll">
+        <div class="pane-body scroll" data-pane="props">
             <div class="stats">
                 <div class="stat-row">Всего файлов <b id="sFile">0</b></div>
                 <div class="stat-row" title="Элементы с геометрией в сцене (уникальные ExpressID), не строки файла">Всего элементов <b id="sElems">0</b></div>
@@ -3206,6 +3692,19 @@
             </div>
             <div class="props" id="props">
                 <div class="empty">Выделите элемент для просмотра.</div>
+            </div>
+        </div>
+        <div class="pane-body scroll" data-pane="pset" hidden>
+            <div class="props" id="psetBox">
+                <div class="empty">Выделите элемент — здесь будут Pset.</div>
+            </div>
+        </div>
+        <div class="pane-body" data-pane="schedule" hidden>
+            <div class="toolstrip">
+                <button type="button" class="btn" id="btnSchedulePane" disabled title="Ведомость выделенного → CSV">⤓ CSV</button>
+            </div>
+            <div id="scheduleList" class="scroll">
+                <div class="empty">Выделите элементы в сцене или дереве — ведомость соберётся по ним.</div>
             </div>
         </div>
     </aside>
@@ -4365,6 +4864,7 @@
         const loader = document.getElementById('loader');
         const treeBox = document.getElementById('tree');
         const propsBox = document.getElementById('props');
+        const psetBox = document.getElementById('psetBox');
         const labelsContainer = document.getElementById('labels-container');
         const coordPinsContainer = document.getElementById('coord-pins-container');
         const coordPinLeaders = document.getElementById('coord-pin-leaders');
@@ -4571,80 +5071,45 @@
 
         (function initToolbarLayout() {
             const topEl = document.querySelector('header.top');
-            const main = document.getElementById('tbMain');
-            const rail = document.getElementById('tbRailMain');
-            const host = document.getElementById('tbOverflowHost');
-            const overflowLabel = document.getElementById('tbOverflowLabel');
-            if (!topEl || !main || !rail || !host) return;
-
             const syncHeight = () => {
-                const h = Math.ceil(topEl.getBoundingClientRect().height) || 58;
+                if (!topEl) return;
+                const h = Math.ceil(topEl.getBoundingClientRect().height) || 116;
                 document.body.style.setProperty('--top-bar-h', `${h}px`);
             };
-
-            const overflowables = [...rail.querySelectorAll('[data-tb-overflow]')]
-                .sort((a, b) => Number(b.dataset.tbOverflow || 0) - Number(a.dataset.tbOverflow || 0));
-
-            overflowables.forEach(el => {
-                const sep = rail.querySelector(`.tb-sep[data-tb-with="${el.id}"]`);
-                el._tbHome = {
-                    parent: el.parentElement,
-                    next: el.nextSibling,
-                    sep
-                };
-            });
-
-            const fits = () => {
-                // clientWidth остаётся ограниченным flex+min-width:0 даже при overflow:visible
-                return rail.scrollWidth <= main.clientWidth + 1;
-            };
-
-            const restoreAll = () => {
-                overflowables.forEach(el => {
-                    const home = el._tbHome;
-                    if (!home?.parent) return;
-                    if (el.parentElement !== home.parent) {
-                        home.parent.insertBefore(el, home.next);
-                    }
-                    if (home.sep) home.sep.hidden = false;
+            const showPage = (id) => {
+                document.querySelectorAll('.rtab').forEach((t) => {
+                    t.classList.toggle('on', t.dataset.rp === id);
                 });
-                host.replaceChildren();
-                if (overflowLabel) overflowLabel.hidden = true;
-            };
-
-            let ticking = false;
-            const layout = () => {
-                ticking = false;
-                restoreAll();
-                document.body.classList.remove('tb-compact');
-
-                if (!fits()) {
-                    document.body.classList.add('tb-compact');
-                }
-
-                for (const el of overflowables) {
-                    if (fits()) break;
-                    const home = el._tbHome;
-                    if (home?.sep) home.sep.hidden = true;
-                    host.appendChild(el);
-                    if (overflowLabel) overflowLabel.hidden = false;
-                }
-
+                document.querySelectorAll('.rpage').forEach((p) => {
+                    p.classList.toggle('on', p.dataset.rp === id);
+                });
                 syncHeight();
             };
-
-            const schedule = () => {
-                if (ticking) return;
-                ticking = true;
-                requestAnimationFrame(layout);
+            document.querySelectorAll('.rtab').forEach((t) => {
+                t.addEventListener('click', () => showPage(t.dataset.rp));
+            });
+            document.getElementById('ribbonTabs')?.addEventListener('dblclick', (e) => {
+                if (e.target.closest('.rtab, .util, .brand, a, button')) return;
+                document.documentElement.classList.toggle('ribbon-min');
+                syncHeight();
+            });
+            const alias = (from, to) => {
+                const a = document.getElementById(from);
+                const b = document.getElementById(to);
+                if (!a || !b) return;
+                a.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    b.click();
+                });
             };
-
-            schedule();
-            if (typeof ResizeObserver !== 'undefined') {
-                new ResizeObserver(schedule).observe(main);
+            alias('btnYaLoadRibbon', 'btnYaLoad');
+            alias('btnGeoRasterRibbon', 'btnGeoRaster');
+            alias('btnBaseMapRibbon', 'btnBaseMap');
+            syncHeight();
+            if (typeof ResizeObserver !== 'undefined' && topEl) {
                 new ResizeObserver(syncHeight).observe(topEl);
             }
-            window.addEventListener('resize', schedule);
+            window.addEventListener('resize', syncHeight);
         })();
 
         const ACTION_TOOLTIPS = {
@@ -16755,6 +17220,8 @@
 
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+            if (typeof refreshFilesPane === 'function') refreshFilesPane();
+            if (typeof refreshClassesPane === 'function') refreshClassesPane();
 
             ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
@@ -23320,6 +23787,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (items.length === 0) {
                 treeSelectionAnchor = null;
                 propsBox.innerHTML = '<div class="empty">Ничего не выбрано.</div>';
+                if (psetBox) psetBox.innerHTML = '<div class="empty">Выделите элемент — здесь будут Pset.</div>';
+                if (typeof refreshSchedulePane === 'function') refreshSchedulePane();
                 markNeedsRender();
                 return;
             }
@@ -23340,6 +23809,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             
             const revealed = syncTreeSelectionHighlight({ reveal: true });
             if (revealed && !treeSelectionAnchor) treeSelectionAnchor = revealed;
+
+            if (typeof refreshSchedulePane === 'function') refreshSchedulePane();
 
             if (pivotLockToSelection && items.length) {
                 setOrbitPivotToSelection(false);
@@ -26229,12 +26700,12 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         });
 
         $('btnSchedule').addEventListener('click', async () => {
-            await ensureIfcIndexes(loadedModels.values());
             const items = selectedItems.length ? selectedItems : [];
             if (!items.length) {
                 notifyError('Выделите элементы для ведомости.');
                 return;
             }
+            await ensureIfcIndexes(loadedModels.values());
             const rows = [['model', 'expressID', 'class', 'name', 'file']];
             items.forEach(item => {
                 const mod = loadedModels.get(item.modelID);
@@ -28069,10 +28540,12 @@ ${componentXml || '    '}
                     psetHtml += `<div class="pgroup" data-pset-id="${pid}"><div class="pgroup-head"><span class="ar">▾</span>Pset · ${esc(pname)}</div><div class="pgroup-body">${renameControl}${items || '<div class="empty">В наборе нет отображаемых свойств.</div>'}</div></div>`;
                 }
             }
-            infoHtml += psetHtml || `<div class="empty">Доп. свойства / Pset не найдены.</div>`;
+            if (psetBox) {
+                psetBox.innerHTML = tag + (psetHtml || `<div class="empty">Доп. свойства / Pset не найдены.</div>`);
+            }
 
             propsBox.innerHTML = tag + renderPropsTabs({
-                info: infoHtml,
+                info: infoHtml + (psetHtml ? `<div class="empty" style="padding-top:8px">Pset — на вкладке «Pset» этой панели.</div>` : `<div class="empty">Доп. свойства / Pset не найдены.</div>`),
                 material: materialHtml,
                 edit: editHtml || null
             });
@@ -28382,9 +28855,10 @@ ${componentXml || '    '}
             }
             const psetFilter = button.dataset.pset ? String(button.dataset.pset) : null;
             const infoPane = propsBox.querySelector('[data-props-pane="info"]') || propsBox;
+            const psetRoot = psetBox || infoPane;
             const scope = psetFilter
-                ? (infoPane.querySelector(`.pgroup[data-pset-id="${psetFilter}"]`) || infoPane)
-                : infoPane;
+                ? (psetRoot.querySelector(`.pgroup[data-pset-id="${psetFilter}"]`) || psetRoot)
+                : psetRoot;
 
             const batch = createIfcEditBatch(modData);
             let renamedProps = 0;
@@ -28393,7 +28867,7 @@ ${componentXml || '    '}
             let renamedEntity = 0;
             const errors = [];
 
-            const entityInput = !psetFilter ? scope.querySelector('[data-entity-name]') : null;
+            const entityInput = !psetFilter ? infoPane.querySelector('[data-entity-name]') : null;
             if (entityInput) {
                 const expressID = parseInt(entityInput.getAttribute('data-entity-name'), 10);
                 const newName = entityInput.value.trim();
@@ -28450,7 +28924,7 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const psetId = parseInt(button.dataset.pset, 10);
             const modData = loadedModels.get(modelID);
-            const input = propsBox.querySelector(`[data-pset-name="${psetId}"]`);
+            const input = (psetBox || propsBox).querySelector(`[data-pset-name="${psetId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
                 notifyError('Имя Pset не может быть пустым.');
@@ -28495,7 +28969,8 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const propId = parseInt(button.dataset.prop, 10);
             const modData = loadedModels.get(modelID);
-            const input = propsBox.querySelector(`[data-property-name="${propId}"]`);
+            const input = (psetBox || propsBox).querySelector(`[data-property-name="${propId}"]`)
+                || propsBox.querySelector(`[data-property-name="${propId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
                 notifyError('Имя параметра не может быть пустым.');
@@ -28516,7 +28991,8 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const propId = parseInt(button.dataset.prop, 10);
             const modData = loadedModels.get(modelID);
-            const input = propsBox.querySelector(`[data-property-value="${propId}"]`);
+            const input = (psetBox || propsBox).querySelector(`[data-property-value="${propId}"]`)
+                || propsBox.querySelector(`[data-property-value="${propId}"]`);
             const property = modData && getEntityParts(modData, propId);
             if (!property || property.className !== 'IFCPROPERTYSINGLEVALUE' || !input) {
                 notifyError('Это значение параметра нельзя изменить в текущем формате.');
@@ -28684,6 +29160,22 @@ ${componentXml || '    '}
             }
         });
 
+        if (psetBox) {
+            psetBox.addEventListener('click', e => {
+                const gh = e.target.closest('.pgroup-head');
+                if (gh) { gh.parentElement.classList.toggle('collapsed'); return; }
+                const action = e.target.closest('[data-act]');
+                if (!action) return;
+                if (action.dataset.act === 'saveAllProperties') saveAllPropertyEdits(action);
+                if (action.dataset.act === 'renamePset') renameSinglePset(action);
+                if (action.dataset.act === 'renameProperty') renameSingleProperty(action);
+                if (action.dataset.act === 'savePropertyValue') {
+                    saveSinglePropertyValue(action);
+                    trackUsage('ifc_edit_property');
+                }
+            });
+        }
+
         propsBox.addEventListener('change', e => {
             if (e.target.id === 'materialPreset') applyPresetToPanel(e.target.value);
             if (e.target.id === 'matTextureFile') loadAppearanceTextureFile(e.target.files[0]);
@@ -28707,6 +29199,7 @@ ${componentXml || '    '}
         });
 
         function showFBXProps(modelID, expressID, countTotal) {
+            if (psetBox) psetBox.innerHTML = '<div class="empty">Pset есть только у IFC. Этот элемент — внешний формат.</div>';
             const modData = loadedModels.get(modelID);
             const dxfEntry = modData?.dxfEntities?.get(expressID);
             const meshes = modData ? modData.meshesByID.get(expressID) : null;
@@ -28831,6 +29324,8 @@ ${componentXml || '    '}
             selectMultiple(selectedItems.filter(item => String(item.modelID) !== String(modelID)));
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+            if (typeof refreshFilesPane === 'function') refreshFilesPane();
+            if (typeof refreshClassesPane === 'function') refreshClassesPane();
             updateIfcToolButtons();
 
             if (loadedModels.size === 0) {
@@ -32380,10 +32875,11 @@ ${componentXml || '    '}
                 document.body.style.gridTemplateColumns = '';
                 return;
             }
+            const split = getComputedStyle(document.documentElement).getPropertyValue('--split').trim() || '8px';
             const colL = leftDockPanel().classList.contains('floating') ? '0px' : 'var(--w-left)';
             const colR = rightDockPanel().classList.contains('floating') ? '0px' : 'var(--w-right)';
             document.body.style.gridTemplateColumns =
-                `${colL} ${colL === '0px' ? '0px' : '4px'} 1fr ${colR === '0px' ? '0px' : '4px'} ${colR}`;
+                `${colL} ${colL === '0px' ? '0px' : split} 1fr ${colR === '0px' ? '0px' : split} ${colR}`;
         }
 
         function applyPanelLayout() {
@@ -32448,7 +32944,7 @@ ${componentXml || '    '}
             let ptrId = null;
 
             head.addEventListener('pointerdown', e => {
-                if (e.button !== 0 || e.target.closest('.pop')) return;
+                if (e.button !== 0 || e.target.closest('.pop, .ptab')) return;
                 drag = true;
                 moved = false;
                 startedFloating = panel.classList.contains('floating');
@@ -32520,11 +33016,176 @@ ${componentXml || '    '}
             head.addEventListener('pointercancel', stop);
         }
 
+        function bindPanelTabs(panel, onActivate) {
+            if (!panel) return;
+            const head = panel.querySelector(':scope > .panel-head');
+            if (!head) return;
+            head.addEventListener('click', e => {
+                const tab = e.target.closest('.ptab');
+                if (!tab || !head.contains(tab)) return;
+                const pane = tab.dataset.pane;
+                if (!pane) return;
+                head.querySelectorAll('.ptab').forEach(t => t.classList.toggle('on', t === tab));
+                panel.querySelectorAll(':scope > .pane-body').forEach(body => {
+                    body.hidden = body.dataset.pane !== pane;
+                });
+                if (typeof onActivate === 'function') onActivate(pane);
+            });
+        }
+
+        function modelFormatLabel(mod) {
+            if (!mod) return '';
+            if (mod.isFBX) return mod.format || 'FBX';
+            return mod.ifcSchema || 'IFC';
+        }
+
+        function refreshFilesPane() {
+            const list = $('filesList');
+            const kv = $('filesCrsKv');
+            if (!list) return;
+            if (!loadedModels.size) {
+                list.innerHTML = '<div class="empty">Нет загруженных файлов.</div>';
+            } else {
+                list.innerHTML = [...loadedModels].map(([id, mod]) => {
+                    const n = mod.meshesByID ? mod.meshesByID.size : 0;
+                    const bytes = mod.ifcFile && mod.ifcFile.size;
+                    const sizeLabel = bytes >= 1048576
+                        ? `${(bytes / 1048576).toFixed(1)} МБ`
+                        : bytes > 0
+                            ? `${Math.max(1, Math.round(bytes / 1024))} КБ`
+                            : `${n.toLocaleString('ru-RU')} эл.`;
+                    return `<div class="frow" data-mid="${escAttr(String(id))}">
+                        <span class="sw"></span>
+                        <span class="nm" title="${escAttr(mod.filename || '')}">${esc(mod.filename || String(id))}</span>
+                        <span class="meta">${esc(modelFormatLabel(mod))} · ${esc(sizeLabel)}</span>
+                        <button type="button" class="x" data-remove-model="${escAttr(String(id))}" title="Убрать файл из сцены">✕</button>
+                    </div>`;
+                }).join('');
+            }
+            if (kv) {
+                const o = ifcWorldOrigin;
+                const origin = o
+                    ? `${o.x.toFixed(3)}, ${o.y.toFixed(3)}, ${o.z.toFixed(3)}`
+                    : 'не задан';
+                const src = worldOriginSource?.filename || '—';
+                kv.innerHTML =
+                    `<tr><td class="k">Ноль сцены</td><td class="v">${esc(origin)}</td></tr>` +
+                    `<tr><td class="k">Источник нуля</td><td class="v">${esc(src)}</td></tr>` +
+                    `<tr><td class="k">Моделей</td><td class="v">${loadedModels.size}</td></tr>`;
+            }
+        }
+
+        async function fillClassesPane() {
+            const list = $('classesList');
+            if (!list) return;
+            if (!loadedModels.size) {
+                list.innerHTML = '<div class="empty">Нет моделей.</div>';
+                return;
+            }
+            await ensureIfcIndexes(loadedModels.values());
+            const classes = collectIfcClasses();
+            const extMap = new Map();
+            for (const mod of loadedModels.values()) {
+                if (canEditIfc(mod)) continue;
+                const fmt = mod.format || 'EXTERNAL';
+                extMap.set(fmt, (extMap.get(fmt) || 0) + (mod.meshesByID ? mod.meshesByID.size : 0));
+            }
+            if (!classes.length && !extMap.size) {
+                list.innerHTML = '<div class="empty">Классы появятся после загрузки IFC.</div>';
+                return;
+            }
+            let html = classes.map(([cls, n]) => {
+                const on = !classFilterAllowed || classFilterAllowed.has(cls);
+                return `<label class="cls-row"><input type="checkbox" data-cls="${escAttr(cls)}"${on ? ' checked' : ''}><span>${esc(cls)}</span><span class="n">${n}</span></label>`;
+            }).join('');
+            for (const [fmt, n] of extMap) {
+                html += `<div class="cls-row" style="cursor:default"><span>${esc(fmt)} · без фильтра</span><span class="n">${n}</span></div>`;
+            }
+            list.innerHTML = html || '<div class="empty">Нет IFC-классов.</div>';
+        }
+
+        function refreshClassesPane() {
+            const list = $('classesList');
+            if (!list) return;
+            const pane = list.closest('.pane-body');
+            if (pane && pane.hidden) return;
+            void fillClassesPane();
+        }
+
+        const SCHEDULE_PANE_MAX = 200;
+        function refreshSchedulePane() {
+            const box = $('scheduleList');
+            const btn = $('btnSchedulePane');
+            if (btn) btn.disabled = !selectedItems.length;
+            if (!box) return;
+            if (!selectedItems.length) {
+                box.innerHTML = '<div class="empty">Выделите элементы в сцене или дереве — ведомость соберётся по ним.</div>';
+                return;
+            }
+            const items = selectedItems.slice(0, SCHEDULE_PANE_MAX);
+            const more = selectedItems.length - items.length;
+            const rows = items.map(item => {
+                const mod = loadedModels.get(item.modelID);
+                let cls = '';
+                let name = '';
+                if (mod && canEditIfc(mod) && hasIfcIndex(mod)) {
+                    const ent = getEntityParts(mod, item.expressID);
+                    cls = (ent?.className || '').replace(/^IFC/, '');
+                    name = ent ? unquoteStepString(ent.args?.[2] || '') : '';
+                } else if (mod) {
+                    cls = mod.format || (mod.isFBX ? 'FBX' : 'IFC');
+                    const mesh = mod.meshesByID.get(item.expressID)?.[0];
+                    name = mesh?.name || '';
+                }
+                return `<tr><td>${esc(cls || '—')}</td><td>${esc(name || '#' + item.expressID)}</td><td class="num">${esc(mod?.filename || '')}</td></tr>`;
+            }).join('');
+            box.innerHTML = `<table class="sched-table"><thead><tr><th>Класс</th><th>Имя</th><th>Файл</th></tr></thead><tbody>${rows}</tbody></table>` +
+                (more > 0 ? `<div class="empty">Показаны ${items.length} из ${selectedItems.length}. CSV выгрузит все.</div>` : '');
+        }
+
         applyPanelLayout();
         $('treeSwap')?.addEventListener('click', e => { e.stopPropagation(); swapPanelSides(); });
         $('sideSwap')?.addEventListener('click', e => { e.stopPropagation(); swapPanelSides(); });
         setupDockable($('treePanel'), $('treeHead'), $('treePop'));
         setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
+        bindPanelTabs($('treePanel'), pane => {
+            if (pane === 'files') refreshFilesPane();
+            if (pane === 'classes') refreshClassesPane();
+        });
+        bindPanelTabs($('sidePanel'), pane => {
+            if (pane === 'schedule') refreshSchedulePane();
+        });
+        $('filesAddBtn')?.addEventListener('click', () => $('localFileInput')?.click());
+        $('filesList')?.addEventListener('click', e => {
+            const btn = e.target.closest('[data-remove-model]');
+            if (!btn) return;
+            const raw = btn.dataset.removeModel;
+            const modelID = isNaN(raw) ? raw : parseInt(raw, 10);
+            removeLoadedModel(modelID);
+        });
+        $('classesList')?.addEventListener('change', e => {
+            const cb = e.target.closest('input[data-cls]');
+            if (!cb) return;
+            const allowed = new Set();
+            $('classesList').querySelectorAll('input[data-cls]').forEach(el => {
+                if (el.checked) allowed.add(el.dataset.cls);
+            });
+            applyClassFilterSet(allowed);
+            trackUsage('ifc_class_filter', { classes: allowed.size, from: 'pane' });
+        });
+        $('classesAllBtn')?.addEventListener('click', () => {
+            $('classesList')?.querySelectorAll('input[data-cls]').forEach(c => { c.checked = true; });
+            applyClassFilterSet(null);
+            trackUsage('ifc_class_filter', { classes: 'all', from: 'pane' });
+        });
+        $('classesNoneBtn')?.addEventListener('click', () => {
+            $('classesList')?.querySelectorAll('input[data-cls]').forEach(c => { c.checked = false; });
+            applyClassFilterSet(new Set());
+            trackUsage('ifc_class_filter', { classes: 0, from: 'pane' });
+        });
+        $('btnSchedulePane')?.addEventListener('click', () => $('btnSchedule')?.click());
+        refreshFilesPane();
+        refreshSchedulePane();
         window.addEventListener('resize', updateDockColumns);
 
         // Стартовый кадр: сетка в центре viewport (до #view= только если нет моделей)
@@ -32550,9 +33211,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.13',
-            buildId: '5c15d19-preview',
-            released: '2026-08-13',
+            version: '2026.08.14',
+            buildId: '68ca313-preview',
+            released: '2026-08-14',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -32560,6 +33221,9 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.14: вкладки боковых панелей — слева Структура / Файлы / Классы, справа Свойства / Pset / Ведомость.',
+                '2026.08.14: боковые панели — палитры Civil 3D (рамка 3 px, зазор до сцены), не плиты конкурента на всю высоту.',
+                '2026.08.14: лента как в Civil 3D — вкладки Файл / Вид / Измерения / Черчение / Рельеф / Анализ / IFC и именованные панели; кнопки на виду, без выпадающих меню.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
                 '2026.08.13: Tekla на заводской сетке (~1200 м) больше не садится в ноль из-за вырезов: старый кэш со сбросом отбрасывается, после CSG положение возвращается по координатам файла.',
                 '2026.08.13: «Построить» протягивает шаблон поперечника вдоль оси (полотно); шаблон живой — точки, связи, формы; продольный профиль оси — кнопка 〰.',

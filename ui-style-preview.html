@@ -16,8 +16,10 @@
  * и вкладки на панелях вместо рейки.
  *
  * Язык формы — чертёжный, а не «приложенческий»:
- *   · волосяные линии вместо мягких теней (панели стыкуются, а не парят);
+ *   · волосяные линии вместо мягких теней;
  *   · скругления 3 px, а не 12 — инструмент, а не карточка;
+ *   · боковые панели — палитры Civil 3D (рамка, зазор до сцены), не плиты
+ *     конкурента на всю высоту и не окна поверх модели;
  *   · все числа моноширинные: координаты, отметки, объёмы читаются столбиком;
  *   · инструменты всегда на виду в ленте — «без лишних движений».
  *
@@ -57,6 +59,8 @@
     --tabs:   30px;
 
     --r: 3px;                     /* инструмент, а не карточка */
+    --palette-gap: 10px;
+    --split: 8px;
     --glass: rgba(255,255,255,.86);
     --scene: #eef1f6;
     --scene-line: #d9dfe8;
@@ -64,7 +68,7 @@
 
 :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg:        #0f1319;
+    --bg:        #0b0e13;
     --panel:     #181d25;
     --panel-2:   #1f252f;
     --panel-3:   #252c37;
@@ -206,27 +210,42 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ============ РАБОЧАЯ ОБЛАСТЬ ============ */
 .work {
     display: grid;
-    grid-template-columns: var(--w-left, 268px) 1px 1fr 1px var(--w-right, 300px);
+    grid-template-columns: var(--w-left, 268px) var(--split) 1fr var(--split) var(--w-right, 300px);
     min-height: 0;
-    background: var(--line);
+    background: var(--bg);
 }
-.work.no-left  { grid-template-columns: 0 1px 1fr 1px var(--w-right, 300px); }
-.work.no-right { grid-template-columns: var(--w-left, 268px) 1px 1fr 1px 0; }
-.work.no-left.no-right { grid-template-columns: 0 1px 1fr 1px 0; }
+.work.no-left  { grid-template-columns: 0 var(--split) 1fr var(--split) var(--w-right, 300px); }
+.work.no-right { grid-template-columns: var(--w-left, 268px) var(--split) 1fr var(--split) 0; }
+.work.no-left.no-right { grid-template-columns: 0 var(--split) 1fr var(--split) 0; }
 
-.pane { background: var(--panel); display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.pane {
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    margin: var(--palette-gap);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+}
 
-/* Разделитель — тонкая линия, которую можно тянуть. Двойной клик прячет
-   панель: без отдельной кнопки и без анимации на пол-экрана. */
-.split { background: var(--line); cursor: col-resize; position: relative; }
+/* Разделитель — зазор, не окрашенный брус. Двойной клик прячет панель. */
+.split { background: transparent; cursor: col-resize; position: relative; }
 .split::after { content: ''; position: absolute; inset: 0 -3px; }
-.split:hover { background: var(--ui); }
+.split::before {
+    content: ''; position: absolute;
+    top: var(--palette-gap); bottom: var(--palette-gap);
+    left: 50%; width: 1px; transform: translateX(-50%);
+    background: transparent;
+}
+.split:hover::before { background: var(--ui); }
 
 /* ---- вкладки: то, что владелец просил оставить ---- */
 .tabs {
     display: flex; align-items: stretch; height: var(--tabs);
-    border-bottom: 1px solid var(--line);
-    background: var(--panel-2);
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--panel);
     flex: none;
 }
 .tab {
@@ -305,7 +324,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .empty { padding: 22px 14px; color: var(--txt-mute); font-size: 12.5px; text-align: center; }
 
 /* ============ СЦЕНА ============ */
-.scene { position: relative; background: var(--scene); min-width: 0; overflow: hidden; }
+.scene {
+    position: relative;
+    background: var(--scene);
+    min-width: 0;
+    overflow: hidden;
+    margin: var(--palette-gap) 0;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+}
 /* Миллиметровка — фактура чертёжной доски, а не декоративный градиент. */
 .paper {
     position: absolute; inset: 0;
