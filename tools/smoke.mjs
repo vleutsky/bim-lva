@@ -2563,11 +2563,19 @@ async function checkNotifications(page) {
     if (!shown) problems.push('уведомление через BimLvaNotify не появилось');
 
     // Реальный путь: экспорт ведомости без выделения. Кнопка на вкладке «Анализ».
+    // Дерево появляется до конца loadFilesSequentially — кнопка ещё disabled.
     await page.evaluate(() => {
         document.querySelector('.rtab[data-rp="analysis"]')?.click();
         document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
     });
-    await page.evaluate(() => document.getElementById('btnSchedule').click());
+    await page.waitForFunction(
+        () => {
+            const b = document.getElementById('btnSchedule');
+            return !!b && !b.disabled;
+        },
+        { timeout: 15_000 }
+    ).catch(() => {});
+    await page.evaluate(() => document.getElementById('btnSchedule')?.click());
     const fromUi = await page
         .waitForFunction(
             () => [...document.querySelectorAll('.toast .toast-text')]
