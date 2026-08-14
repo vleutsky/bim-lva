@@ -51,7 +51,8 @@
     --warn:#b4761a;
     --err: #d43c59;
 
-    --ribbon: 44px;
+    --rtabs: 28px;
+    --rbody: 88px;
     --status: 24px;
     --tabs:   30px;
 
@@ -101,67 +102,106 @@ body {
     background: var(--bg);
     overflow: hidden;
     display: grid;
-    grid-template-rows: var(--ribbon) 1fr var(--status);
+    grid-template-rows: calc(var(--rtabs) + var(--rbody)) 1fr var(--status);
     height: 100vh;
 }
 button { font: inherit; color: inherit; cursor: pointer; }
 /* Все числа — моноширинные. На них смотрят чаще, чем на подписи. */
 .num, .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
-/* ============ ЛЕНТА ============ */
-.ribbon {
-    display: flex; align-items: stretch; gap: 0;
-    background: var(--panel);
-    border-bottom: 1px solid var(--line);
-    padding: 0 8px;
-    min-width: 0;
+/* ============ ЛЕНТА (двухрядная, как в Civil 3D) ============ */
+/*
+ * Строка 1 — вкладки, строка 2 — именованные панели с кнопками. Это идиома
+ * AutoCAD/Civil, и она же у владельца в собственном плагине (9 вкладок:
+ * Генплан, НВК, Свойства, BIM/IFC…). То есть здесь мы не перенимаем чужое,
+ * а переносим в браузер свой уже сложившийся язык.
+ *
+ * Побочно решается переполнение: в один ряд инструменты не влезали и правая
+ * группа уезжала за край.
+ */
+.ribbon { display: flex; flex-direction: column; background: var(--panel);
+          border-bottom: 1px solid var(--line); min-width: 0; }
+
+/* --- строка вкладок --- */
+.rtabs {
+    display: flex; align-items: stretch; height: var(--rtabs);
+    border-bottom: 1px solid var(--line); background: var(--panel-2);
+    padding-left: 8px; min-width: 0;
 }
-/* Прокручивается ТОЛЬКО середина: правая группа (тема, кабинет) обязана
-   оставаться на экране при любой ширине окна — иначе на ноутбуке она уезжает
-   за край, что и случилось в первой версии. */
-.ribbon-scroll {
-    display: flex; align-items: stretch; flex: 1 1 auto;
-    min-width: 0; overflow-x: auto; overflow-y: hidden;
+.brand {
+    display: flex; align-items: center; gap: 7px;
+    padding-right: 12px; margin-right: 6px;
+    border-right: 1px solid var(--line); flex: none;
+}
+.brand .mark { width: 18px; height: 18px; flex: none; display: grid; place-items: center; color: var(--accent); }
+.brand b { font-size: 13px; letter-spacing: -.01em; }
+.brand i { font-style: normal; font-size: 9.5px; color: var(--txt-mute); letter-spacing: .06em; text-transform: uppercase; }
+
+.rtab {
+    border: 0; background: transparent; padding: 0 13px;
+    font-size: 12px; font-weight: 600; color: var(--txt-dim);
+    border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+}
+.rtab:hover { color: var(--txt); background: var(--panel-3); }
+.rtab.on { color: var(--ui); border-bottom-color: var(--ui); background: var(--panel); }
+.rtabs .fill { flex: 1; min-width: 8px; }
+.rtabs .util {
+    display: flex; align-items: center; gap: 2px; padding: 0 4px 0 8px;
+    border-left: 1px solid var(--line); flex: none;
+}
+.icon-btn {
+    width: 28px; height: 24px; border: 0; border-radius: var(--r);
+    background: transparent; color: var(--txt-dim); display: grid; place-items: center;
+}
+.icon-btn:hover { background: var(--panel-3); color: var(--txt); }
+
+/* --- строка панелей --- */
+.rbody {
+    display: flex; align-items: stretch; height: var(--rbody);
+    padding: 0 6px; min-width: 0; overflow-x: auto; overflow-y: hidden;
     scrollbar-width: none;
 }
-.ribbon-scroll::-webkit-scrollbar { height: 0; }
-/* На узком окне лента прокручивается; обрыв на полуслове читается как поломка,
-   поэтому правый край растворяется. */
-.ribbon-scroll { mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); }
+.rbody::-webkit-scrollbar { height: 0; }
+.rpage { display: none; align-items: stretch; }
+.rpage.on { display: flex; }
+:root.ribbon-min .rbody { display: none; }
+:root.ribbon-min { --rbody: 0px; }
 
-.brand {
-    display: flex; align-items: center; gap: 8px;
-    padding-right: 12px; margin-right: 4px;
-    border-right: 1px solid var(--line);
-    flex: none;
+/* Панель = кнопки + подпись снизу, как в Civil */
+.rpanel {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 4px 8px 0; flex: none;
+    border-right: 1px solid var(--line-soft);
 }
-.brand .mark {
-    width: 22px; height: 22px; flex: none;
-    display: grid; place-items: center;
-    color: var(--accent);
-}
-.brand b { font-size: 14px; letter-spacing: -.01em; }
-.brand i {
-    font-style: normal; font-size: 10px; color: var(--txt-mute);
-    letter-spacing: .06em; text-transform: uppercase;
+.rpanel .items { display: flex; align-items: flex-start; gap: 2px; flex: 1; }
+.rpanel .cap {
+    font-size: 9.5px; color: var(--txt-mute); letter-spacing: .04em;
+    padding: 1px 0 3px; white-space: nowrap;
 }
 
-.grp { display: flex; align-items: center; gap: 1px; padding: 0 7px; flex: none; }
-.grp + .grp { border-left: 1px solid var(--line-soft); }
-.grp.right { flex: none; border-left: 1px solid var(--line); }
-
-.tool {
-    display: inline-flex; align-items: center; gap: 6px;
-    height: 30px; padding: 0 9px;
+/* Крупная кнопка группы: иконка над подписью */
+.big {
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    gap: 3px; width: 62px; padding: 5px 2px 4px;
     border: 1px solid transparent; border-radius: var(--r);
     background: transparent; color: var(--txt-dim);
-    white-space: nowrap; font-size: 12.5px; font-weight: 500;
+    font-size: 11px; line-height: 1.15; text-align: center;
 }
-.tool:hover { background: var(--panel-2); color: var(--txt); border-color: var(--line); }
-.tool.on { background: var(--ui-weak); color: var(--ui); border-color: var(--ui-line); font-weight: 600; }
-.tool.icon-only { padding: 0 7px; }
-.tool svg { flex: none; }
-.tool .cap { font-size: 9.5px; color: var(--txt-mute); }
+.big:hover { background: var(--panel-2); color: var(--txt); border-color: var(--line); }
+.big.on { background: var(--ui-weak); color: var(--ui); border-color: var(--ui-line); font-weight: 600; }
+
+/* Мелкие кнопки — столбиком справа от крупной */
+.col { display: flex; flex-direction: column; gap: 1px; }
+.small {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 21px; padding: 0 7px; min-width: 104px;
+    border: 1px solid transparent; border-radius: var(--r);
+    background: transparent; color: var(--txt-dim);
+    font-size: 11.5px; white-space: nowrap; text-align: left;
+}
+.small:hover { background: var(--panel-2); color: var(--txt); border-color: var(--line); }
+.small.on { background: var(--ui-weak); color: var(--ui); border-color: var(--ui-line); font-weight: 600; }
+.small svg, .big svg { flex: none; }
 
 /* ============ РАБОЧАЯ ОБЛАСТЬ ============ */
 .work {
@@ -325,56 +365,13 @@ svg { display: block; }
 
 <!-- ЛЕНТА: инструменты всегда на виду. Ничего не выезжает, ничего не парит. -->
 <header class="ribbon">
-    <div class="brand">
-        <span class="mark">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 16 9 5 9-5"/></svg>
-        </span>
-        <span><b>BIM.LVA</b> <i>Composer</i></span>
+    <div class="rtabs">
+        <div class="brand"><span class="mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 16 9 5 9-5"/></svg></span><span><b>BIM.LVA</b> <i>Composer</i></span></div>
+        <button class="rtab on" data-r="file">Файл</button><button class="rtab" data-r="view">Вид</button><button class="rtab" data-r="measure">Измерения</button><button class="rtab" data-r="draw">Черчение</button><button class="rtab" data-r="terrain">Рельеф</button><button class="rtab" data-r="analysis">Анализ</button><button class="rtab" data-r="ifc">IFC</button>
+        <span class="fill"></span>
+        <div class="util"><button class="icon-btn" id="themeBtn" title="Светлая / тёмная тема"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg></button><button class="icon-btn" title="Уведомления"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/><path d="M10 20h4"/></svg></button><button class="icon-btn" title="Кабинет"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c.6-3.6 3.8-5.4 7.5-5.4s6.9 1.8 7.5 5.4"/></svg></button><button class="icon-btn" id="ribbonMin" title="Свернуть ленту (или двойной клик по вкладке)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 15 6-6 6 6"/></svg></button></div>
     </div>
-
-    <div class="ribbon-scroll">
-    <div class="grp">
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Открыть</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Экспорт</button>
-    </div>
-
-    <div class="grp">
-        <button class="tool on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5"/></svg>Вписать</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10h16M10 4v16"/></svg>План</button>
-        <button class="tool">Орто</button>
-    </div>
-
-    <div class="grp">
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 15 6-6 6 6-6 6Z"/><path d="M13 5h8v8"/></svg>Замер</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>Координаты</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h18M7 5v14M17 5v14"/></svg>Сечение</button>
-    </div>
-
-    <div class="grp">
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 20 8 9l5 6 3-4 5 9Z"/></svg>Полилиния</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 19h20"/><path d="m4 19 6-10 4 6 3-4 5 8"/></svg>Откосы</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 17c4 0 4-8 8-8s4 8 9 8"/><path d="M3 21h18"/></svg>Профиль</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>Картограмма</button>
-    </div>
-
-    <div class="grp">
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="9" r="6"/><circle cx="15" cy="15" r="6"/></svg>Коллизии</button>
-        <button class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 5h18l-7 8v5l-4 2v-7Z"/></svg>Фильтр</button>
-    </div>
-
-    </div>
-
-    <div class="grp right">
-        <button class="tool icon-only" id="themeBtn" title="Светлая / тёмная тема">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>
-        </button>
-        <button class="tool icon-only" title="Уведомления">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/><path d="M10 20h4"/></svg>
-        </button>
-        <button class="tool icon-only" title="Кабинет">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c.6-3.6 3.8-5.4 7.5-5.4s6.9 1.8 7.5 5.4"/></svg>
-        </button>
-    </div>
+    <div class="rbody"><div class="rpage on" data-rp="file"><div class="rpanel"><div class="items"><button class="big on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg><span>Открыть</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h11a4 4 0 0 0 0-8 6 6 0 0 0-11.7 1.6A3.5 3.5 0 0 0 6 18Z"/></svg>Яндекс.Диск</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 4v4h-4"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 20v-4h4"/></svg>Обновить</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>Объединить IFC</button></div></div><div class="cap">Модели</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg><span>Экспорт</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>IFC</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>DXF R2010</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>LandXML</button></div></div><div class="cap">Выгрузка</div></div></div><div class="rpage" data-rp="view"><div class="rpanel"><div class="items"><button class="big on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5"/></svg><span>Вписать</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10h16M10 4v16"/></svg>В плане</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>Изометрия</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>К выделению</button></div></div><div class="cap">Кадр</div></div><div class="rpanel"><div class="items"><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10h16M10 4v16"/></svg>Орто</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>Перспектива</button></div></div><div class="cap">Проекция</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18M7 5v14M17 5v14"/></svg><span>Сечение</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Изолировать</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Скрыть</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Показать всё</button></div></div><div class="cap">Видимость</div></div></div><div class="rpage" data-rp="measure"><div class="rpanel"><div class="items"><button class="big on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3 15 6-6 6 6-6 6Z"/><path d="M13 5h8v8"/></svg><span>Замер</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3 15 6-6 6 6-6 6Z"/><path d="M13 5h8v8"/></svg>2D / 3D / уклон</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3 15 6-6 6 6-6 6Z"/><path d="M13 5h8v8"/></svg>Площадь</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3 15 6-6 6 6-6 6Z"/><path d="M13 5h8v8"/></svg>Угол</button></div></div><div class="cap">Замеры</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg><span>Метка XYZ</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>Список меток</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>Ввод числами</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>Привязки</button></div></div><div class="cap">Координаты</div></div></div><div class="rpage" data-rp="draw"><div class="rpanel"><div class="items"><button class="big on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20 8 9l5 6 3-4 5 9"/></svg><span>Начертить</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20 8 9l5 6 3-4 5 9"/></svg>По координатам</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20 8 9l5 6 3-4 5 9"/></svg>Сопряжение</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20 8 9l5 6 3-4 5 9"/></svg>Замкнуть</button></div></div><div class="cap">Полилинии</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg><span>Тело по оси</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Таблица линий</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 10-10a2 2 0 0 0-3-3L5 16Z"/></svg>Свойства линии</button></div></div><div class="cap">Тела</div></div></div><div class="rpage" data-rp="terrain"><div class="rpanel"><div class="items"><button class="big on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 19h20"/><path d="m4 19 6-10 4 6 3-4 5 8"/></svg><span>Откосы</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>Площадки</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Таблица площадок</button></div></div><div class="cap">Откосы</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c4 0 4-8 8-8s4 8 9 8"/><path d="M3 21h18"/></svg><span>Профиль по оси</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c4 0 4-8 8-8s4 8 9 8"/><path d="M3 21h18"/></svg>Поперечники</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20 8 9l5 6 3-4 5 9"/></svg>Полотно</button></div></div><div class="cap">Профиль</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg><span>Картограмма</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Ведомость объёмов</button></div></div><div class="cap">Объёмы</div></div></div><div class="rpage" data-rp="analysis"><div class="rpanel"><div class="items"><button class="big on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6"/><circle cx="15" cy="15" r="6"/></svg><span>Коллизии</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 4v4h-4"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 20v-4h4"/></svg>Сравнить версии</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Отчёт</button></div></div><div class="cap">Проверки</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7Z"/></svg><span>Фильтр классов</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Ведомость</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Цвет по классу</button></div></div><div class="cap">Отбор</div></div><div class="rpanel"><div class="items"><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>CRS и габариты</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>Выравнивание</button></div></div><div class="cap">Координаты</div></div></div><div class="rpage" data-rp="ifc"><div class="rpanel"><div class="items"><button class="big on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 10-10a2 2 0 0 0-3-3L5 16Z"/></svg><span>Правка</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Pset</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Excel</button></div></div><div class="cap">Свойства</div></div><div class="rpanel"><div class="items"><button class="big"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v6a5 5 0 0 0 5 5h5"/><path d="M17 3v18"/></svg><span>Нормализация</span></button><div class="col"><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>Объединить</button><button class="small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Экспорт IFC</button></div></div><div class="cap">Структура</div></div></div></div>
 </header>
 
 <div class="work" id="work">
@@ -577,11 +574,29 @@ document.getElementById('themeBtn').addEventListener('click', () => {
     root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
 });
 
-document.querySelectorAll('.ribbon .grp:not(.right) .tool').forEach((t) => {
-    t.addEventListener('click', () => {
-        const grp = t.closest('.grp');
-        grp.querySelectorAll('.tool').forEach((x) => x.classList.remove('on'));
-        t.classList.add('on');
+// Вкладки ленты. Двойной клик по активной вкладке сворачивает ленту —
+// как в AutoCAD; отдельная кнопка тоже есть, но привычка важнее.
+document.querySelectorAll('.rtab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+        if (tab.classList.contains('on')) return;
+        document.querySelectorAll('.rtab').forEach((t) => t.classList.remove('on'));
+        tab.classList.add('on');
+        document.querySelectorAll('.rpage').forEach((pg) => {
+            pg.classList.toggle('on', pg.dataset.rp === tab.dataset.r);
+        });
+        root.classList.remove('ribbon-min');
+    });
+    tab.addEventListener('dblclick', () => root.classList.toggle('ribbon-min'));
+});
+document.getElementById('ribbonMin').addEventListener('click', () => root.classList.toggle('ribbon-min'));
+
+// Кнопки внутри панели: активной остаётся одна на панель
+document.querySelectorAll('.rpanel').forEach((pn) => {
+    pn.querySelectorAll('.big, .small').forEach((b) => {
+        b.addEventListener('click', () => {
+            pn.querySelectorAll('.big, .small').forEach((x) => x.classList.remove('on'));
+            b.classList.add('on');
+        });
     });
 });
 document.querySelectorAll('.viewcube button:not(.void)').forEach((b) => {
