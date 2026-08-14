@@ -666,7 +666,7 @@ async function checkDrawDxf(page) {
     const has = (t) => dxf.includes(t);
     if (!has('AC1024')) problems.push('в DXF нет версии AC1024 (R2010, 3DSOLID)');
     if (!has('$INSUNITS')) problems.push('в DXF не указаны единицы');
-    if (!has('LVA_3D') || !has('LVA_2D')) problems.push('в DXF нет слоёв LVA_2D/LVA_3D');
+    if (!has('2Д') || !has('3Д')) problems.push('в DXF нет слоёв 2Д/3Д');
     if (!has('SEQEND')) problems.push('в DXF полилиния не закрыта SEQEND');
     if (!has('EOF')) problems.push('DXF без EOF');
 
@@ -1374,7 +1374,7 @@ async function checkSlopeToTerrain(page) {
     // Площадка: замкнутый квадрат 4×4 м. Середина обязана заполниться
     // (2 треугольника), иначе в TIN дыра до исходного рельефа. LandXML —
     // northing easting elev; DXF площадки — один 3DSOLID (SAT 700) на
-    // слое LVA_SLOPE, без POLYFACE и без 3D-полилиний по рёбрам. Оба в абсолютных метрах.
+    // слое «Откос», без POLYFACE и без 3D-полилиний по рёбрам. Оба в абсолютных метрах.
     await page.evaluate(() => window.BimLvaDebug.clearSlopes());
     const pad = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
@@ -1410,7 +1410,7 @@ async function checkSlopeToTerrain(page) {
             dxfMeshFaces: (dxf.match(/\r\n70\r\n128\r\n/g) || []).length,
             dxfLineVerts: (dxf.match(/\r\n70\r\n32\r\n/g) || []).length,
             dxfPolylines: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
-            dxfSlopeLayer: /LVA_SLOPE/.test(dxf),
+            dxfSlopeLayer: /Откос/.test(dxf),
             dxfRawHasBody: /body\s+\$-1/.test(dxf),
             dxf,
             p1: xyz,
@@ -1465,7 +1465,7 @@ async function checkSlopeToTerrain(page) {
                 `откосы: DXF площадки — 3DSOLID ${pad.dxfSolids}, AC1024 ${pad.dxfAcadver}, ` +
                 `POLYFACE ${pad.dxfPolyface}, POLYLINE ${pad.dxfPolylines}, ` +
                 `рёбер-линий ${pad.dxfLineVerts}, 3DFACE ${pad.dxfFaces}, ` +
-                `слой LVA_SLOPE ${pad.dxfSlopeLayer}, сырой SAT ${pad.dxfRawHasBody}`
+                `слой Откос ${pad.dxfSlopeLayer}, сырой SAT ${pad.dxfRawHasBody}`
             );
         } else {
             const sat = dxfSatPayload(pad.dxf);
@@ -1536,7 +1536,7 @@ async function checkSlopeToTerrain(page) {
                     ? meshRatios.reduce((a, b) => a + b, 0) / meshRatios.length
                     : null,
                 meshN: meshRatios.length,
-                dxfKdo: /LVA_KDO/.test(dxf),
+                dxfKdo: /КДО/.test(dxf),
                 dxfSolids: (dxf.match(/\r\n3DSOLID\r\n/g) || []).length,
                 dxfPolyface: (dxf.match(/\r\n70\r\n64\r\n/g) || []).length
             };
@@ -2004,8 +2004,8 @@ async function checkRoadCrossSections(page) {
         const dxf = D.roadXsDxfPreview() || '';
         return {
             res,
-            dxfXs: /LVA_XS/.test(dxf),
-            dxfRoad: /LVA_ROAD/.test(dxf),
+            dxfXs: /Поперечник/.test(dxf),
+            dxfRoad: /Кромка/.test(dxf),
             dxfPolys: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
             dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length
         };
@@ -2064,7 +2064,7 @@ async function checkRoadCrossSections(page) {
     }
     if (!got.dxfXs || !got.dxfRoad || got.dxfPolys < 3) {
         problems.push(
-            `поперечники: DXF LVA_XS ${got.dxfXs}, LVA_ROAD ${got.dxfRoad}, POLYLINE ${got.dxfPolys} (ждали оба слоя и ≥3)`
+            `поперечники: DXF Поперечник ${got.dxfXs}, Кромка ${got.dxfRoad}, POLYLINE ${got.dxfPolys} (ждали оба слоя и ≥3)`
         );
     }
 
@@ -2263,6 +2263,28 @@ async function checkRoadCrossSections(page) {
 
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
 
+    const menuXs = await page.evaluate(() => {
+        document.getElementById('roadXsClose')?.click();
+        const closed = !document.getElementById('roadXsModal')?.classList.contains('show');
+        document.getElementById('btnRoadXs')?.click();
+        const card = document.getElementById('roadXsCard');
+        const cr = card?.getBoundingClientRect();
+        return {
+            closed,
+            btn: !!document.getElementById('btnRoadXs'),
+            analyze: !!document.getElementById('btnRoadXsAnalyze'),
+            shown: !!document.getElementById('roadXsModal')?.classList.contains('show'),
+            w: Math.round(cr?.width || 0),
+            h: Math.round(cr?.height || 0)
+        };
+    });
+    if (!menuXs.btn || !menuXs.analyze) {
+        problems.push('поперечники: нет кнопки «Поперечники» в меню Создать/Анализ');
+    }
+    if (!menuXs.closed || !menuXs.shown || menuXs.w < 200 || menuXs.h < 120) {
+        problems.push(`поперечники: кнопка меню не открыла окно (${JSON.stringify(menuXs)})`);
+    }
+
     await page.evaluate(() => {
         window.BimLvaDebug.clearRoadXs();
         document.getElementById('roadXsClose')?.click();
@@ -2324,13 +2346,19 @@ async function checkRoadCrossSections(page) {
         const D = window.BimLvaDebug;
         const rec = [...D.drawn].reverse().find((d) => d.role === 'road-axis') || D.drawn[D.drawn.length - 1];
         if (!rec) return null;
+        const defaults = { layer: rec.layer, edgeLayer: rec.edgeLayer };
         D.stylePolyline(rec.id, {
-            color: '#22cc88', width: 4, layer: 'LVA_AXIS',
-            edgeColor: '#ffeecc', edgeWidth: 3, edgeLayer: 'LVA_ROAD'
+            color: '#22cc88', width: 4, layer: 'МояОсь',
+            edgeColor: '#ffeecc', edgeWidth: 3, edgeLayer: 'МояКромка'
         });
         const st = D.polylineStyle(rec.id);
-        const dxf = D.roadXsDxfPreview() || '';
-        return { st, dxfAxis: /LVA_AXIS/.test(dxf), dxfRoad: /LVA_ROAD/.test(dxf) };
+        const dxf = D.dxfPreview() || '';
+        return {
+            st,
+            defaults,
+            dxfAxis: /МояОсь/.test(dxf),
+            dxfRoad: /МояКромка/.test(dxf)
+        };
     });
     if (!finished?.st?.dashed) {
         problems.push(`ось трассы: готовая ось не пунктир (${JSON.stringify(finished?.st)})`);
@@ -2344,7 +2372,10 @@ async function checkRoadCrossSections(page) {
     if (finished?.st?.edgeMaterialWidth !== 3) {
         problems.push(`ось трассы: толщина кромок ${finished?.st?.edgeMaterialWidth} вместо 3`);
     }
-    if (finished?.st?.layer !== 'LVA_AXIS' || finished?.st?.edgeLayer !== 'LVA_ROAD') {
+    if (finished?.defaults?.layer !== 'Ось' || finished?.defaults?.edgeLayer !== 'Кромка') {
+        problems.push(`ось трассы: слои по умолчанию ${finished?.defaults?.layer}/${finished?.defaults?.edgeLayer} вместо Ось/Кромка`);
+    }
+    if (finished?.st?.layer !== 'МояОсь' || finished?.st?.edgeLayer !== 'МояКромка') {
         problems.push(`ось трассы: слои ${finished?.st?.layer}/${finished?.st?.edgeLayer}`);
     }
     if (finished && (!finished.dxfAxis || !finished.dxfRoad)) {
