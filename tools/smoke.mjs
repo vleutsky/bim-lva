@@ -2346,7 +2346,8 @@ async function checkRoadCrossSections(page) {
         const D = window.BimLvaDebug;
         const rec = [...D.drawn].reverse().find((d) => d.role === 'road-axis') || D.drawn[D.drawn.length - 1];
         if (!rec) return null;
-        const defaults = { layer: rec.layer, edgeLayer: rec.edgeLayer };
+        const st0 = D.polylineStyle(rec.id);
+        const defaults = { layer: st0?.layer, edgeLayer: st0?.edgeLayer };
         D.stylePolyline(rec.id, {
             color: '#22cc88', width: 4, layer: 'МояОсь',
             edgeColor: '#ffeecc', edgeWidth: 3, edgeLayer: 'МояКромка'
