@@ -1292,6 +1292,115 @@
             background: var(--panel);
             cursor: default;
         }
+        .panel > .pane-body {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .panel > .pane-body[hidden] { display: none !important; }
+        .pane-body .empty {
+            color: var(--txt-dim);
+            line-height: 1.7;
+            padding: 8px 10px;
+            font-size: var(--panel-font);
+        }
+        .pane-body[data-pane="files"] .sect,
+        .pane-body[data-pane="files"] .kv { flex: none; }
+        .frow {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--line-soft);
+        }
+        .frow:hover { background: var(--panel-2); }
+        .frow .sw {
+            width: 3px;
+            height: 22px;
+            flex: none;
+            background: var(--ui);
+            border-radius: 1px;
+        }
+        .frow .nm {
+            flex: 1;
+            min-width: 0;
+            font-size: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .frow .meta { font-size: 10.5px; color: var(--txt-mute); flex: none; }
+        .frow .x {
+            border: 0;
+            background: transparent;
+            color: var(--txt-mute);
+            padding: 2px 4px;
+            cursor: pointer;
+            font: inherit;
+        }
+        .frow .x:hover { color: var(--err); }
+        .kv { width: 100%; border-collapse: collapse; }
+        .kv td {
+            padding: 4px 10px;
+            border-bottom: 1px solid var(--line-soft);
+            font-size: 12.5px;
+            vertical-align: top;
+        }
+        .kv td.k { color: var(--txt-dim); width: 46%; }
+        .kv td.v {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 11.5px;
+            font-variant-numeric: tabular-nums;
+        }
+        .sect {
+            padding: 10px 10px 4px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+            color: var(--txt-mute);
+        }
+        .toolstrip {
+            display: flex;
+            gap: 4px;
+            padding: 6px 8px;
+            border-bottom: 1px solid var(--line-soft);
+            flex: none;
+        }
+        .cls-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 10px;
+            border-bottom: 1px solid var(--line-soft);
+            font-size: 12.5px;
+            cursor: pointer;
+        }
+        .cls-row:hover { background: var(--panel-2); }
+        .cls-row .n {
+            margin-left: auto;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-variant-numeric: tabular-nums;
+            color: var(--txt-mute);
+            font-size: 11.5px;
+        }
+        .sched-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .sched-table th, .sched-table td {
+            text-align: left;
+            padding: 4px 8px;
+            border-bottom: 1px solid var(--line-soft);
+            vertical-align: top;
+        }
+        .sched-table th {
+            font-size: 10px;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: var(--txt-mute);
+            font-weight: 700;
+        }
+        .sched-table .num { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
         .panel-head .pop {
             cursor: pointer;
@@ -3442,7 +3551,9 @@
 
     <aside class="panel tree-panel" id="treePanel">
         <div class="panel-head" id="treeHead">
-            <button type="button" class="ptab on">Структура</button>
+            <button type="button" class="ptab on" data-pane="tree">Структура</button>
+            <button type="button" class="ptab" data-pane="files">Файлы</button>
+            <button type="button" class="ptab" data-pane="classes">Классы</button>
             <span class="fill" style="flex:1"></span>
             <div class="head-actions">
                 <button class="pop" id="treeSelectAll" title="Выделить все элементы всех загруженных моделей">ВСЕ</button>
@@ -3450,12 +3561,29 @@
                 <button class="pop" id="treePop" title="Открепить или вернуть панель структуры">⧉</button>
             </div>
         </div>
-        <div class="search-box">
-            <input type="text" id="searchInput" placeholder="Поиск (Enter)..." title="Введите часть имени или IFC-класса и нажмите Enter">
-            <button class="pop" id="openPropSearch" title="Найти все элементы, у которых есть указанный параметр/Pset (и, при необходимости, значение), и выделить их для массового редактирования">🔎 Поиск по параметру</button>
+        <div class="pane-body" data-pane="tree">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Поиск (Enter)..." title="Введите часть имени или IFC-класса и нажмите Enter">
+                <button class="pop" id="openPropSearch" title="Найти все элементы, у которых есть указанный параметр/Pset (и, при необходимости, значение), и выделить их для массового редактирования">🔎 Поиск по параметру</button>
+            </div>
+            <div class="tree" id="tree">
+                <div class="empty">Добавьте IFC, DXF, LandXML, FBX, GLB, OBJ или STL</div>
+            </div>
         </div>
-        <div class="tree" id="tree">
-            <div class="empty">Добавьте IFC, DXF, LandXML, FBX, GLB, OBJ или STL</div>
+        <div class="pane-body" data-pane="files" hidden>
+            <div class="toolstrip">
+                <button type="button" class="btn" id="filesAddBtn" title="Открыть локальные файлы">＋ Добавить модель</button>
+            </div>
+            <div id="filesList" class="scroll"><div class="empty">Нет загруженных файлов.</div></div>
+            <div class="sect">Система координат</div>
+            <table class="kv" id="filesCrsKv"></table>
+        </div>
+        <div class="pane-body" data-pane="classes" hidden>
+            <div class="toolstrip">
+                <button type="button" class="btn" id="classesAllBtn" title="Показать все классы">Все</button>
+                <button type="button" class="btn" id="classesNoneBtn" title="Скрыть все классы">Ничего</button>
+            </div>
+            <div id="classesList" class="scroll"><div class="empty">Нет моделей.</div></div>
         </div>
     </aside>
 
@@ -3522,14 +3650,16 @@
 
     <aside class="panel side" id="sidePanel">
         <div class="panel-head" id="sideHead">
-            <button type="button" class="ptab on">Свойства</button>
+            <button type="button" class="ptab on" data-pane="props">Свойства</button>
+            <button type="button" class="ptab" data-pane="pset">Pset</button>
+            <button type="button" class="ptab" data-pane="schedule">Ведомость</button>
             <span class="fill" style="flex:1"></span>
             <div class="head-actions">
                 <button class="pop panel-swap" id="sideSwap" title="Поменять панели местами (слева ↔ справа)">⇄</button>
                 <button class="pop" id="sidePop" title="Открепить или вернуть панель свойств">⧉</button>
             </div>
         </div>
-        <div class="scroll">
+        <div class="pane-body scroll" data-pane="props">
             <div class="stats">
                 <div class="stat-row">Всего файлов <b id="sFile">0</b></div>
                 <div class="stat-row" title="Элементы с геометрией в сцене (уникальные ExpressID), не строки файла">Всего элементов <b id="sElems">0</b></div>
@@ -3543,6 +3673,19 @@
             </div>
             <div class="props" id="props">
                 <div class="empty">Выделите элемент для просмотра.</div>
+            </div>
+        </div>
+        <div class="pane-body scroll" data-pane="pset" hidden>
+            <div class="props" id="psetBox">
+                <div class="empty">Выделите элемент — здесь будут Pset.</div>
+            </div>
+        </div>
+        <div class="pane-body" data-pane="schedule" hidden>
+            <div class="toolstrip">
+                <button type="button" class="btn" id="btnSchedulePane" disabled title="Ведомость выделенного → CSV">⤓ CSV</button>
+            </div>
+            <div id="scheduleList" class="scroll">
+                <div class="empty">Выделите элементы в сцене или дереве — ведомость соберётся по ним.</div>
             </div>
         </div>
     </aside>
@@ -4702,6 +4845,7 @@
         const loader = document.getElementById('loader');
         const treeBox = document.getElementById('tree');
         const propsBox = document.getElementById('props');
+        const psetBox = document.getElementById('psetBox');
         const labelsContainer = document.getElementById('labels-container');
         const coordPinsContainer = document.getElementById('coord-pins-container');
         const coordPinLeaders = document.getElementById('coord-pin-leaders');
@@ -17057,6 +17201,8 @@
 
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+            if (typeof refreshFilesPane === 'function') refreshFilesPane();
+            if (typeof refreshClassesPane === 'function') refreshClassesPane();
 
             ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
@@ -23622,6 +23768,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (items.length === 0) {
                 treeSelectionAnchor = null;
                 propsBox.innerHTML = '<div class="empty">Ничего не выбрано.</div>';
+                if (psetBox) psetBox.innerHTML = '<div class="empty">Выделите элемент — здесь будут Pset.</div>';
+                if (typeof refreshSchedulePane === 'function') refreshSchedulePane();
                 markNeedsRender();
                 return;
             }
@@ -23642,6 +23790,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             
             const revealed = syncTreeSelectionHighlight({ reveal: true });
             if (revealed && !treeSelectionAnchor) treeSelectionAnchor = revealed;
+
+            if (typeof refreshSchedulePane === 'function') refreshSchedulePane();
 
             if (pivotLockToSelection && items.length) {
                 setOrbitPivotToSelection(false);
@@ -28371,10 +28521,12 @@ ${componentXml || '    '}
                     psetHtml += `<div class="pgroup" data-pset-id="${pid}"><div class="pgroup-head"><span class="ar">▾</span>Pset · ${esc(pname)}</div><div class="pgroup-body">${renameControl}${items || '<div class="empty">В наборе нет отображаемых свойств.</div>'}</div></div>`;
                 }
             }
-            infoHtml += psetHtml || `<div class="empty">Доп. свойства / Pset не найдены.</div>`;
+            if (psetBox) {
+                psetBox.innerHTML = tag + (psetHtml || `<div class="empty">Доп. свойства / Pset не найдены.</div>`);
+            }
 
             propsBox.innerHTML = tag + renderPropsTabs({
-                info: infoHtml,
+                info: infoHtml + (psetHtml ? `<div class="empty" style="padding-top:8px">Pset — на вкладке «Pset» этой панели.</div>` : `<div class="empty">Доп. свойства / Pset не найдены.</div>`),
                 material: materialHtml,
                 edit: editHtml || null
             });
@@ -28684,9 +28836,10 @@ ${componentXml || '    '}
             }
             const psetFilter = button.dataset.pset ? String(button.dataset.pset) : null;
             const infoPane = propsBox.querySelector('[data-props-pane="info"]') || propsBox;
+            const psetRoot = psetBox || infoPane;
             const scope = psetFilter
-                ? (infoPane.querySelector(`.pgroup[data-pset-id="${psetFilter}"]`) || infoPane)
-                : infoPane;
+                ? (psetRoot.querySelector(`.pgroup[data-pset-id="${psetFilter}"]`) || psetRoot)
+                : psetRoot;
 
             const batch = createIfcEditBatch(modData);
             let renamedProps = 0;
@@ -28695,7 +28848,7 @@ ${componentXml || '    '}
             let renamedEntity = 0;
             const errors = [];
 
-            const entityInput = !psetFilter ? scope.querySelector('[data-entity-name]') : null;
+            const entityInput = !psetFilter ? infoPane.querySelector('[data-entity-name]') : null;
             if (entityInput) {
                 const expressID = parseInt(entityInput.getAttribute('data-entity-name'), 10);
                 const newName = entityInput.value.trim();
@@ -28752,7 +28905,7 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const psetId = parseInt(button.dataset.pset, 10);
             const modData = loadedModels.get(modelID);
-            const input = propsBox.querySelector(`[data-pset-name="${psetId}"]`);
+            const input = (psetBox || propsBox).querySelector(`[data-pset-name="${psetId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
                 notifyError('Имя Pset не может быть пустым.');
@@ -28797,7 +28950,8 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const propId = parseInt(button.dataset.prop, 10);
             const modData = loadedModels.get(modelID);
-            const input = propsBox.querySelector(`[data-property-name="${propId}"]`);
+            const input = (psetBox || propsBox).querySelector(`[data-property-name="${propId}"]`)
+                || propsBox.querySelector(`[data-property-name="${propId}"]`);
             const newName = input ? input.value.trim() : '';
             if (!modData || !newName) {
                 notifyError('Имя параметра не может быть пустым.');
@@ -28818,7 +28972,8 @@ ${componentXml || '    '}
             const modelID = isNaN(rawModelID) ? rawModelID : parseInt(rawModelID, 10);
             const propId = parseInt(button.dataset.prop, 10);
             const modData = loadedModels.get(modelID);
-            const input = propsBox.querySelector(`[data-property-value="${propId}"]`);
+            const input = (psetBox || propsBox).querySelector(`[data-property-value="${propId}"]`)
+                || propsBox.querySelector(`[data-property-value="${propId}"]`);
             const property = modData && getEntityParts(modData, propId);
             if (!property || property.className !== 'IFCPROPERTYSINGLEVALUE' || !input) {
                 notifyError('Это значение параметра нельзя изменить в текущем формате.');
@@ -28986,6 +29141,22 @@ ${componentXml || '    '}
             }
         });
 
+        if (psetBox) {
+            psetBox.addEventListener('click', e => {
+                const gh = e.target.closest('.pgroup-head');
+                if (gh) { gh.parentElement.classList.toggle('collapsed'); return; }
+                const action = e.target.closest('[data-act]');
+                if (!action) return;
+                if (action.dataset.act === 'saveAllProperties') saveAllPropertyEdits(action);
+                if (action.dataset.act === 'renamePset') renameSinglePset(action);
+                if (action.dataset.act === 'renameProperty') renameSingleProperty(action);
+                if (action.dataset.act === 'savePropertyValue') {
+                    saveSinglePropertyValue(action);
+                    trackUsage('ifc_edit_property');
+                }
+            });
+        }
+
         propsBox.addEventListener('change', e => {
             if (e.target.id === 'materialPreset') applyPresetToPanel(e.target.value);
             if (e.target.id === 'matTextureFile') loadAppearanceTextureFile(e.target.files[0]);
@@ -29009,6 +29180,7 @@ ${componentXml || '    '}
         });
 
         function showFBXProps(modelID, expressID, countTotal) {
+            if (psetBox) psetBox.innerHTML = '<div class="empty">Pset есть только у IFC. Этот элемент — внешний формат.</div>';
             const modData = loadedModels.get(modelID);
             const dxfEntry = modData?.dxfEntities?.get(expressID);
             const meshes = modData ? modData.meshesByID.get(expressID) : null;
@@ -29133,6 +29305,8 @@ ${componentXml || '    '}
             selectMultiple(selectedItems.filter(item => String(item.modelID) !== String(modelID)));
             $('sFile').textContent = loadedModels.size;
             $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+            if (typeof refreshFilesPane === 'function') refreshFilesPane();
+            if (typeof refreshClassesPane === 'function') refreshClassesPane();
             updateIfcToolButtons();
 
             if (loadedModels.size === 0) {
@@ -32751,7 +32925,7 @@ ${componentXml || '    '}
             let ptrId = null;
 
             head.addEventListener('pointerdown', e => {
-                if (e.button !== 0 || e.target.closest('.pop')) return;
+                if (e.button !== 0 || e.target.closest('.pop, .ptab')) return;
                 drag = true;
                 moved = false;
                 startedFloating = panel.classList.contains('floating');
@@ -32823,11 +32997,173 @@ ${componentXml || '    '}
             head.addEventListener('pointercancel', stop);
         }
 
+        function bindPanelTabs(panel, onActivate) {
+            if (!panel) return;
+            const head = panel.querySelector(':scope > .panel-head');
+            if (!head) return;
+            head.addEventListener('click', e => {
+                const tab = e.target.closest('.ptab');
+                if (!tab || !head.contains(tab)) return;
+                const pane = tab.dataset.pane;
+                if (!pane) return;
+                head.querySelectorAll('.ptab').forEach(t => t.classList.toggle('on', t === tab));
+                panel.querySelectorAll(':scope > .pane-body').forEach(body => {
+                    body.hidden = body.dataset.pane !== pane;
+                });
+                if (typeof onActivate === 'function') onActivate(pane);
+            });
+        }
+
+        function modelFormatLabel(mod) {
+            if (!mod) return '';
+            if (mod.isFBX) return mod.format || 'FBX';
+            return mod.ifcSchema || 'IFC';
+        }
+
+        function refreshFilesPane() {
+            const list = $('filesList');
+            const kv = $('filesCrsKv');
+            if (!list) return;
+            if (!loadedModels.size) {
+                list.innerHTML = '<div class="empty">Нет загруженных файлов.</div>';
+            } else {
+                list.innerHTML = [...loadedModels].map(([id, mod]) => {
+                    const n = mod.meshesByID ? mod.meshesByID.size : 0;
+                    const mb = mod.ifcFile && mod.ifcFile.size
+                        ? `${(mod.ifcFile.size / 1048576).toFixed(1)} МБ`
+                        : `${n.toLocaleString('ru-RU')} эл.`;
+                    return `<div class="frow" data-mid="${escAttr(String(id))}">
+                        <span class="sw"></span>
+                        <span class="nm" title="${escAttr(mod.filename || '')}">${esc(mod.filename || String(id))}</span>
+                        <span class="meta">${esc(modelFormatLabel(mod))} · ${esc(mb)}</span>
+                        <button type="button" class="x" data-remove-model="${escAttr(String(id))}" title="Убрать файл из сцены">✕</button>
+                    </div>`;
+                }).join('');
+            }
+            if (kv) {
+                const o = ifcWorldOrigin;
+                const origin = o
+                    ? `${o.x.toFixed(3)}, ${o.y.toFixed(3)}, ${o.z.toFixed(3)}`
+                    : 'не задан';
+                const src = worldOriginSource?.filename || '—';
+                kv.innerHTML =
+                    `<tr><td class="k">Ноль сцены</td><td class="v">${esc(origin)}</td></tr>` +
+                    `<tr><td class="k">Источник нуля</td><td class="v">${esc(src)}</td></tr>` +
+                    `<tr><td class="k">Моделей</td><td class="v">${loadedModels.size}</td></tr>`;
+            }
+        }
+
+        async function fillClassesPane() {
+            const list = $('classesList');
+            if (!list) return;
+            if (!loadedModels.size) {
+                list.innerHTML = '<div class="empty">Нет моделей.</div>';
+                return;
+            }
+            await ensureIfcIndexes(loadedModels.values());
+            const classes = collectIfcClasses();
+            const extMap = new Map();
+            for (const mod of loadedModels.values()) {
+                if (canEditIfc(mod)) continue;
+                const fmt = mod.format || 'EXTERNAL';
+                extMap.set(fmt, (extMap.get(fmt) || 0) + (mod.meshesByID ? mod.meshesByID.size : 0));
+            }
+            if (!classes.length && !extMap.size) {
+                list.innerHTML = '<div class="empty">Классы появятся после загрузки IFC.</div>';
+                return;
+            }
+            let html = classes.map(([cls, n]) => {
+                const on = !classFilterAllowed || classFilterAllowed.has(cls);
+                return `<label class="cls-row"><input type="checkbox" data-cls="${escAttr(cls)}"${on ? ' checked' : ''}><span>${esc(cls)}</span><span class="n">${n}</span></label>`;
+            }).join('');
+            for (const [fmt, n] of extMap) {
+                html += `<div class="cls-row" style="cursor:default"><span>${esc(fmt)} · без фильтра</span><span class="n">${n}</span></div>`;
+            }
+            list.innerHTML = html || '<div class="empty">Нет IFC-классов.</div>';
+        }
+
+        function refreshClassesPane() {
+            const list = $('classesList');
+            if (!list) return;
+            const pane = list.closest('.pane-body');
+            if (pane && pane.hidden) return;
+            void fillClassesPane();
+        }
+
+        const SCHEDULE_PANE_MAX = 200;
+        function refreshSchedulePane() {
+            const box = $('scheduleList');
+            const btn = $('btnSchedulePane');
+            if (btn) btn.disabled = !selectedItems.length;
+            if (!box) return;
+            if (!selectedItems.length) {
+                box.innerHTML = '<div class="empty">Выделите элементы в сцене или дереве — ведомость соберётся по ним.</div>';
+                return;
+            }
+            const items = selectedItems.slice(0, SCHEDULE_PANE_MAX);
+            const more = selectedItems.length - items.length;
+            const rows = items.map(item => {
+                const mod = loadedModels.get(item.modelID);
+                let cls = '';
+                let name = '';
+                if (mod && canEditIfc(mod) && hasIfcIndex(mod)) {
+                    const ent = getEntityParts(mod, item.expressID);
+                    cls = (ent?.className || '').replace(/^IFC/, '');
+                    name = ent ? unquoteStepString(ent.args?.[2] || '') : '';
+                } else if (mod) {
+                    cls = mod.format || (mod.isFBX ? 'FBX' : 'IFC');
+                    const mesh = mod.meshesByID.get(item.expressID)?.[0];
+                    name = mesh?.name || '';
+                }
+                return `<tr><td>${esc(cls || '—')}</td><td>${esc(name || '#' + item.expressID)}</td><td class="num">${esc(mod?.filename || '')}</td></tr>`;
+            }).join('');
+            box.innerHTML = `<table class="sched-table"><thead><tr><th>Класс</th><th>Имя</th><th>Файл</th></tr></thead><tbody>${rows}</tbody></table>` +
+                (more > 0 ? `<div class="empty">Показаны ${items.length} из ${selectedItems.length}. CSV выгрузит все.</div>` : '');
+        }
+
         applyPanelLayout();
         $('treeSwap')?.addEventListener('click', e => { e.stopPropagation(); swapPanelSides(); });
         $('sideSwap')?.addEventListener('click', e => { e.stopPropagation(); swapPanelSides(); });
         setupDockable($('treePanel'), $('treeHead'), $('treePop'));
         setupDockable($('sidePanel'), $('sideHead'), $('sidePop'));
+        bindPanelTabs($('treePanel'), pane => {
+            if (pane === 'files') refreshFilesPane();
+            if (pane === 'classes') refreshClassesPane();
+        });
+        bindPanelTabs($('sidePanel'), pane => {
+            if (pane === 'schedule') refreshSchedulePane();
+        });
+        $('filesAddBtn')?.addEventListener('click', () => $('localFileInput')?.click());
+        $('filesList')?.addEventListener('click', e => {
+            const btn = e.target.closest('[data-remove-model]');
+            if (!btn) return;
+            const raw = btn.dataset.removeModel;
+            const modelID = isNaN(raw) ? raw : parseInt(raw, 10);
+            removeLoadedModel(modelID);
+        });
+        $('classesList')?.addEventListener('change', e => {
+            const cb = e.target.closest('input[data-cls]');
+            if (!cb) return;
+            const allowed = new Set();
+            $('classesList').querySelectorAll('input[data-cls]').forEach(el => {
+                if (el.checked) allowed.add(el.dataset.cls);
+            });
+            applyClassFilterSet(allowed);
+            trackUsage('ifc_class_filter', { classes: allowed.size, from: 'pane' });
+        });
+        $('classesAllBtn')?.addEventListener('click', () => {
+            $('classesList')?.querySelectorAll('input[data-cls]').forEach(c => { c.checked = true; });
+            applyClassFilterSet(null);
+            trackUsage('ifc_class_filter', { classes: 'all', from: 'pane' });
+        });
+        $('classesNoneBtn')?.addEventListener('click', () => {
+            $('classesList')?.querySelectorAll('input[data-cls]').forEach(c => { c.checked = false; });
+            applyClassFilterSet(new Set());
+            trackUsage('ifc_class_filter', { classes: 0, from: 'pane' });
+        });
+        $('btnSchedulePane')?.addEventListener('click', () => $('btnSchedule')?.click());
+        refreshFilesPane();
+        refreshSchedulePane();
         window.addEventListener('resize', updateDockColumns);
 
         // Стартовый кадр: сетка в центре viewport (до #view= только если нет моделей)
@@ -32854,7 +33190,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.14',
-            buildId: 'palette-dock',
+            buildId: 'panel-tabs',
             released: '2026-08-14',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -32863,6 +33199,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.14: вкладки боковых панелей — слева Структура / Файлы / Классы, справа Свойства / Pset / Ведомость.',
                 '2026.08.14: боковые панели — палитры Civil 3D (рамка 3 px, зазор до сцены), не плиты конкурента на всю высоту.',
                 '2026.08.14: лента как в Civil 3D — вкладки Файл / Вид / Измерения / Черчение / Рельеф / Анализ / IFC и именованные панели; кнопки на виду, без выпадающих меню.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
@@ -32938,7 +33275,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=105').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=106').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
