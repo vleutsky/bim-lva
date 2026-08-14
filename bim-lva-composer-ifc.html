@@ -23,25 +23,135 @@
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
+    <!-- Тема ставится ДО отрисовки: иначе при тёмной теме страница успевает
+         мигнуть светлой. Скрипт намеренно крошечный и ни от чего не зависит. -->
+    <script>
+    (function () {
+        try {
+            var saved = localStorage.getItem('bimlva_theme_v1');
+            if (saved !== 'dark' && saved !== 'light') {
+                saved = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+                    ? 'dark' : 'light';
+            }
+            document.documentElement.dataset.theme = saved;
+        } catch (e) {
+            document.documentElement.dataset.theme = 'light';
+        }
+    })();
+    </script>
     <script src="./assets/vendor/supabase-js/supabase.js"></script>
     <style>
+        /*
+         * ---- Токены оформления ----
+         *
+         * Роли цветов разведены сознательно. Раньше `--accent` (оранжевый) значил
+         * сразу три разных вещи: фирменный акцент, «активное состояние» и
+         * «выделено в сцене». Когда акцентом покрашено всё, акцента нет.
+         * Теперь: `--ui` — интерфейс (активные кнопки, вкладки, фокус),
+         * `--accent` — ТОЛЬКО выделение в сцене и фирменные места.
+         *
+         * Имена старых токенов сохранены: на них завязано 264 обращения в CSS,
+         * и переименование ради красоты обошлось бы дороже, чем стоит.
+         */
         :root {
-            --bg: #edf1f5;
+            color-scheme: light;
+
+            --bg: #e8ecf2;
             --panel: #ffffff;
-            --panel-2: #f2f4f7;
-            --line: #d2d9e2;
-            --txt: #1c2733;
-            --txt-dim: #6b7684;
+            --panel-2: #f5f7fa;
+            --panel-3: #eef1f6;
+            --line: #e0e5ec;
+            --line-soft: #eef1f5;
+
+            --txt: #1b2430;
+            --txt-dim: #77839a;
+            --txt-mute: #9aa5b8;
+            /* Текст на залитой цветом кнопке. В тёмной теме он тоже светлый —
+               кнопка остаётся цветной, поэтому токен НЕ инвертируется. */
+            --on-fill: #ffffff;
+
+            /* Интерфейсный акцент */
+            --ui: #2f6fd0;
+            --ui-dim: #245ba9;
+            --ui-weak: #eaf1fc;
+            --ui-line: #bcd3f2;
+
+            /* Фирменный оранжевый — выделение в сцене */
             --accent: #f06424;
             --accent-dim: #c94a12;
+            --accent-weak: #fdeee5;
+            --accent-line: #f0c2a8;
+
             --blue: #2478b5;
+            --blue-weak: #eef5fb;
             --ok: #168c63;
+            --ok-weak: #e7f5ef;
+            --warn: #b4761a;
             --err: #d43c59;
+            --err-weak: #fdecef;
+
+            --tb-rail-bg: var(--panel-2);
+            --tb-rail-line: var(--line);
+
+            --shadow-1: 0 1px 2px rgba(20,32,50,.06), 0 2px 8px rgba(20,32,50,.06);
+            --shadow-2: 0 6px 28px rgba(20,32,50,.14), 0 1px 3px rgba(20,32,50,.10);
+            /* Фон 3D-сцены. Дублируется в JS (renderer.setClearColor) — там
+               значение читается отсюда, чтобы не разъезжалось. */
+            --scene-bg: #eef1f6;
+            /* Полупрозрачные накладки поверх 3D-холста (видовой куб и т.п.).
+               Раньше были жёстким rgba(255,255,255,…) и в тёмной теме светились. */
+            --glass: rgba(255, 255, 255, .82);
+            --glass-solid: rgba(255, 255, 255, .94);
+
             --w-left: 280px;
             --w-right: 320px;
             --panel-font: 13px;
             --panel-font-sm: 12px;
             --panel-label: 12px;
+        }
+
+        /*
+         * Тёмная тема — не украшение: серо-белая геометрия IFC на тёмном фоне
+         * читается заметно лучше, а Civil и Navis у проектировщика тоже тёмные.
+         * Переопределяются ТОЛЬКО токены, ни одного правила ниже это не трогает.
+         */
+        :root[data-theme="dark"] {
+            color-scheme: dark;
+
+            --bg: #0f1319;
+            --panel: #181d25;
+            --panel-2: #1f252f;
+            --panel-3: #252c37;
+            --line: #2b323d;
+            --line-soft: #232935;
+
+            --txt: #e7ecf3;
+            --txt-dim: #97a3b6;
+            --txt-mute: #6f7b8e;
+
+            --ui: #5590e6;
+            --ui-dim: #7cabee;
+            --ui-weak: #16233a;
+            --ui-line: #2d4570;
+
+            --accent: #ff7c3d;
+            --accent-dim: #ff9663;
+            --accent-weak: #35210f;
+            --accent-line: #6b3d1c;
+
+            --blue: #4d9ad8;
+            --blue-weak: #16283a;
+            --ok: #35b184;
+            --ok-weak: #10291f;
+            --warn: #d19a3c;
+            --err: #f2647f;
+            --err-weak: #2e151b;
+
+            --shadow-1: 0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
+            --shadow-2: 0 6px 28px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+            --scene-bg: #11161d;
+            --glass: rgba(24, 29, 37, .82);
+            --glass-solid: rgba(24, 29, 37, .95);
         }
 
         * {
@@ -111,14 +221,13 @@
             --tb-radius: 8px;
             --tb-pad: 3px;
             --tb-gap: 2px;
-            --tb-rail-bg: #eef2f6;
-            --tb-rail-line: #d8dee6;
+            /* значения переехали в :root — иначе тёмная тема сюда не доходила */
             grid-area: top;
             display: flex;
             align-items: center;
             gap: 10px;
             padding: 8px 12px 8px 14px;
-            background: linear-gradient(180deg, #ffffff 0%, #f6f8fb 100%);
+            background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
             border-bottom: 1px solid var(--line);
             z-index: 40;
             min-width: 0;
@@ -273,7 +382,7 @@
         .tb-rail .bimlva-auth-btn:hover,
         .tb-rail .bimlva-auth-btn.light:hover {
             color: var(--txt);
-            background: #fff;
+            background: var(--panel);
             border-color: rgba(28, 39, 51, 0.08);
             box-shadow: 0 1px 2px rgba(28, 39, 51, 0.06);
             filter: none;
@@ -295,8 +404,8 @@
         .tb-rail .btn.on,
         .tb-rail .tb-menu.open .tb-menu-btn {
             color: var(--accent-dim);
-            background: #fff7f2;
-            border-color: #f0c2a8;
+            background: var(--accent-weak);
+            border-color: var(--accent-line);
             box-shadow: none;
         }
 
@@ -315,14 +424,14 @@
             min-width: 42px;
             padding: 0 8px;
             color: var(--txt-dim);
-            background: rgba(255, 255, 255, 0.72);
+            background: var(--glass);
             border: 1px solid transparent;
         }
         .tb-rail .tool-select:hover,
         .tb-rail .tool-select:focus {
             outline: none;
             color: var(--txt);
-            background: #fff;
+            background: var(--panel);
             border-color: rgba(28, 39, 51, 0.08);
         }
         .tb-rail .tool-select:disabled {
@@ -331,7 +440,7 @@
         }
 
         .tb-rail .load-btn {
-            color: #fff;
+            color: var(--on-fill);
             background: var(--accent);
             border-color: var(--accent);
             font-weight: 700;
@@ -340,21 +449,21 @@
         }
         .tb-rail .load-btn:hover {
             filter: brightness(1.05);
-            color: #fff;
+            color: var(--on-fill);
             background: var(--accent);
             border-color: var(--accent);
             box-shadow: 0 2px 6px rgba(201, 74, 18, 0.28);
         }
 
         .tb-rail .btn-cloud {
-            color: #fff;
+            color: var(--on-fill);
             background: var(--blue);
             border-color: var(--blue);
             font-weight: 700;
         }
         .tb-rail .btn-cloud:hover {
             filter: brightness(1.06);
-            color: #fff;
+            color: var(--on-fill);
             background: var(--blue);
             border-color: var(--blue);
         }
@@ -399,7 +508,7 @@
             left: 0;
             min-width: 248px;
             padding: 6px;
-            background: #fff;
+            background: var(--panel);
             border: 1px solid var(--line);
             border-radius: 10px;
             box-shadow: 0 14px 36px rgba(28, 39, 51, 0.14);
@@ -450,7 +559,7 @@
             filter: none;
         }
         .tb-menu-panel .btn.on {
-            background: #fff0e7;
+            background: var(--accent-weak);
             color: var(--accent-dim);
             border-color: transparent;
         }
@@ -541,8 +650,8 @@
 
         .cloud-input {
             width: 180px;
-            background: #fff0e7;
-            border: 1px solid #ef9a6f;
+            background: var(--accent-weak);
+            border: 1px solid var(--accent-line);
             box-shadow: inset 3px 0 0 var(--accent);
             color: var(--txt);
             font-family: 'IBM Plex Mono';
@@ -554,7 +663,7 @@
 
         .cloud-input:focus {
             border-color: var(--accent);
-            background: #fffaf7;
+            background: var(--accent-weak);
         }
 
         .ya-file-list {
@@ -608,7 +717,7 @@
             font-size: 12px;
             font-weight: 600;
             color: var(--txt-dim);
-            background: #fff;
+            background: var(--panel);
             border: 1px solid transparent;
             border-radius: 7px;
             padding: 7px 10px;
@@ -623,14 +732,14 @@
 
         button.btn:hover {
             color: var(--txt);
-            background: #fff;
+            background: var(--panel);
             border-color: var(--line);
         }
 
         button.btn.on {
             color: var(--accent-dim);
-            border-color: #f0c2a8;
-            background: #fff0e7;
+            border-color: var(--accent-line);
+            background: var(--accent-weak);
         }
 
         button.btn:disabled {
@@ -639,7 +748,7 @@
         }
 
         .load-btn {
-            color: #ffffff;
+            color: var(--on-fill);
             background: var(--accent);
             border-color: var(--accent);
             font-weight: 700;
@@ -647,12 +756,12 @@
 
         .load-btn:hover {
             filter: brightness(1.06);
-            color: #ffffff;
+            color: var(--on-fill);
             border-color: var(--accent);
         }
 
         .btn-cloud {
-            color: #ffffff;
+            color: var(--on-fill);
             background: var(--blue);
             border-color: var(--blue);
             font-weight: 700;
@@ -660,7 +769,7 @@
         }
         .btn-cloud:hover {
             filter: brightness(1.08);
-            color: #ffffff;
+            color: var(--on-fill);
             border-color: var(--blue);
         }
 
@@ -703,7 +812,7 @@
 
         .tool-select {
             appearance: none;
-            background: #fff;
+            background: var(--panel);
             color: var(--txt);
             border: 1px solid transparent;
             border-radius: 6px;
@@ -784,7 +893,7 @@
         .align-profile-svg {
             width: 100%;
             height: 160px;
-            background: #f7f9fb;
+            background: var(--panel-2);
             border: 1px solid var(--line);
             margin-top: 8px;
         }
@@ -799,7 +908,7 @@
            точки на прямой между вершинами ничего не сообщают, а список
            раздувают. */
         #polyProfileChart { height: 260px; }
-        #roadXsChart { height: 240px; background: #f7f9fb; }
+        #roadXsChart { height: 240px; background: var(--panel-2); }
         .road-xs-nav {
             display: flex;
             align-items: center;
@@ -828,7 +937,7 @@
             position: sticky;
             top: 0;
             z-index: 1;
-            background: var(--panel, #eef2f6);
+            background: var(--panel, var(--panel-2));
             color: var(--txt-dim);
             font-weight: 600;
             text-align: right;
@@ -862,7 +971,7 @@
         table.profile-grid input:hover { border-color: var(--line); }
         table.profile-grid input:focus {
             border-color: var(--accent, #e8442a);
-            background: var(--panel, #fff);
+            background: var(--panel, var(--panel));
             outline: none;
         }
         table.profile-grid button.prow-del {
@@ -874,7 +983,7 @@
             font-size: 12px;
             line-height: 1;
         }
-        table.profile-grid button.prow-del:hover { color: #d43c59; }
+        table.profile-grid button.prow-del:hover { color: var(--err); }
         .profile-empty { padding: 8px; color: var(--txt-dim); font-size: 11px; }
         .timeline-4d-row {
             display: flex;
@@ -889,7 +998,7 @@
             display: flex;
             justify-content: center;
             padding: 12px;
-            background: #fff;
+            background: var(--panel);
             border: 1px solid var(--line);
             margin-top: 8px;
         }
@@ -916,7 +1025,7 @@
         .clash-progress-track {
             height: 10px;
             border-radius: 999px;
-            background: color-mix(in srgb, var(--panel-2) 88%, #fff);
+            background: color-mix(in srgb, var(--panel-2) 88%, var(--panel));
             border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
             overflow: hidden;
         }
@@ -1119,14 +1228,14 @@
             gap: 3px;
             padding: 5px;
             border-radius: 9px;
-            background: rgba(255, 255, 255, .88);
-            border: 1px solid var(--line, #c9d4e0);
+            background: var(--glass);
+            border: 1px solid var(--line, var(--line));
             box-shadow: 0 6px 18px rgba(15, 26, 40, .14);
             backdrop-filter: blur(3px);
         }
         #viewCube .vc-btn {
-            border: 1px solid var(--line, #c9d4e0);
-            background: #fff;
+            border: 1px solid var(--line, var(--line));
+            background: var(--panel);
             border-radius: 6px;
             font-size: 11px;
             font-weight: 700;
@@ -1136,7 +1245,7 @@
             line-height: 1;
         }
         #viewCube .vc-btn:hover { border-color: var(--accent, #1f6f8b); color: var(--accent, #1f6f8b); }
-        #viewCube .vc-btn.on { background: var(--accent, #1f6f8b); border-color: var(--accent, #1f6f8b); color: #fff; }
+        #viewCube .vc-btn.on { background: var(--accent, #1f6f8b); border-color: var(--accent, #1f6f8b); color: var(--panel); }
         /* Стороны света читаются как на плане: С сверху, Ю снизу, З слева, В
            справа. Верх и низ занимают свободные углы, чтобы не спорить с ними. */
         #viewCube .vc-top { grid-column: 1; grid-row: 1; }
@@ -1181,7 +1290,7 @@
             gap: 10px;
             padding: 10px 14px;
             background: rgba(28, 39, 51, 0.9);
-            color: #fff;
+            color: var(--on-fill);
             border-radius: 10px;
             box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
             font-family: 'Archivo', sans-serif;
@@ -1191,7 +1300,7 @@
         .tour-hud[hidden] { display: none !important; }
         .tour-hud [hidden] { display: none !important; }
         .tour-hud .btn {
-            background: #fff;
+            background: var(--panel);
             color: var(--txt);
             border-color: transparent;
             font-weight: 700;
@@ -1218,7 +1327,7 @@
             margin: -6.5px 0 0 -6.5px;
             border-radius: 50%;
             background: #ff8f3f;
-            border: 2px solid #fff;
+            border: 2px solid var(--panel);
             box-shadow: 0 0 0 1px #b45f22, 0 2px 6px rgba(10, 20, 32, .45);
             pointer-events: auto;
             cursor: grab;
@@ -1243,8 +1352,8 @@
             width: 11px;
             height: 11px;
             margin: -5.5px 0 0 -5.5px;
-            background: #fff;
-            border: 2px solid #1f8f5f;
+            background: var(--panel);
+            border: 2px solid var(--ok);
             box-shadow: 0 1px 4px rgba(10, 20, 32, .45);
             pointer-events: auto;
             cursor: grab;
@@ -1287,14 +1396,14 @@
             transform: translate(-50%, calc(-100% - 6px));
         }
         .poly-seg-label {
-            background: rgba(255, 255, 255, .94);
-            border: 1px solid #1f8f5f;
+            background: var(--glass-solid);
+            border: 1px solid var(--ok);
             color: #10321f;
         }
         .poly-vz-label {
             background: rgba(31, 111, 139, .94);
             border: 1px solid #16556c;
-            color: #fff;
+            color: var(--on-fill);
             pointer-events: auto;
             cursor: text;
             transform: translate(-50%, 8px);
@@ -1315,21 +1424,21 @@
             box-shadow: 0 1px 4px rgba(10, 20, 32, .35);
             background: rgba(240, 100, 36, .94);
             border: 1px solid #c24d17;
-            color: #fff;
+            color: var(--on-fill);
             pointer-events: auto;
             cursor: text;
             transform: translate(-50%, calc(-100% - 8px));
         }
         .poly-r-label:hover { background: rgba(214, 86, 28, .97); }
-        .poly-r-label.is-editing { padding: 0; border-color: #1f8f5f; }
+        .poly-r-label.is-editing { padding: 0; border-color: var(--ok); }
         .poly-r-label input {
             width: 72px;
             font: inherit;
             padding: 2px 5px;
             border: 0;
             border-radius: 3px;
-            background: #fff;
-            color: #10202c;
+            background: var(--panel);
+            color: var(--txt);
         }
         .poly-vz-label.is-editing { padding: 0; border-color: #f06424; }
         .poly-vz-label input {
@@ -1338,8 +1447,8 @@
             padding: 2px 5px;
             border: 0;
             border-radius: 3px;
-            background: #fff;
-            color: #10202c;
+            background: var(--panel);
+            color: var(--txt);
         }
 
         .pin-row {
@@ -1348,7 +1457,7 @@
             align-items: center;
             gap: 6px;
             padding: 5px 4px;
-            border-bottom: 1px solid var(--line, #d8dee6);
+            border-bottom: 1px solid var(--line, var(--line));
         }
         .pin-row .pin-xyz {
             font-family: 'IBM Plex Mono';
@@ -1365,7 +1474,7 @@
             cursor: pointer;
             list-style: none;
             font-size: 10.5px;
-            color: var(--txt-dim, #6b7280);
+            color: var(--txt-dim, var(--txt-dim));
             padding: 2px 0 4px;
             user-select: none;
         }
@@ -1377,13 +1486,13 @@
             max-height: 240px;
             overflow: auto;
             margin-top: 6px;
-            border: 1px solid var(--line, #d8dee6);
+            border: 1px solid var(--line, var(--line));
             border-radius: 8px;
-            background: color-mix(in srgb, var(--panel-2, #fff) 86%, #f4f6f8);
+            background: color-mix(in srgb, var(--panel-2, var(--panel)) 86%, var(--panel-2));
         }
         .compact-table-list .empty {
             padding: 8px 10px;
-            color: var(--txt-dim, #6b7280);
+            color: var(--txt-dim, var(--txt-dim));
         }
         #polylinePointsList.compact-table-list { max-height: 200px; margin-top: 0; }
         #polylinesList, #polylinePointsList, #padsList { font-size: 10.5px; }
@@ -1393,9 +1502,9 @@
             gap: 3px 5px;
             padding: 2px 6px;
             min-height: 24px;
-            border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent);
+            border-bottom: 1px solid color-mix(in srgb, var(--line, var(--line)) 75%, transparent);
         }
-        .polyline-block { border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent); }
+        .polyline-block { border-bottom: 1px solid color-mix(in srgb, var(--line, var(--line)) 75%, transparent); }
         .polyline-block:last-child { border-bottom: none; }
         .polyline-block:nth-child(even) {
             background: color-mix(in srgb, var(--txt) 3%, transparent);
@@ -1408,11 +1517,11 @@
             gap: 3px 5px;
             padding: 0 6px 4px 10px;
             font-size: 10px;
-            color: var(--txt-dim, #6b7280);
+            color: var(--txt-dim, var(--txt-dim));
         }
         .polyline-layer { width: 72px; padding-left: 3px !important; padding-right: 3px !important; font-size: 10px !important; }
         .pad-row { grid-template-columns: 96px minmax(0, 1fr) 16px auto; border-bottom: none; }
-        .pad-block { border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent); }
+        .pad-block { border-bottom: 1px solid color-mix(in srgb, var(--line, var(--line)) 75%, transparent); }
         .pad-block:last-child { border-bottom: none; }
         .pad-block:nth-child(even) {
             background: color-mix(in srgb, var(--txt) 3%, transparent);
@@ -1426,7 +1535,7 @@
         }
         .pad-kdo summary {
             cursor: pointer;
-            color: var(--txt-dim, #6b7280);
+            color: var(--txt-dim, var(--txt-dim));
             list-style: none;
         }
         .pad-kdo summary::-webkit-details-marker { display: none; }
@@ -1439,8 +1548,8 @@
         }
         .pad-kdo-tools { display: flex; gap: 4px; margin-top: 4px; align-items: center; }
         .pad-kdo-hint { margin: 4px 0 2px; font-size: 10px; opacity: .75; line-height: 1.35; }
-        .pad-holes { margin: 0 6px 8px 10px; padding-top: 4px; border-top: 1px solid var(--line, #d8dee6); }
-        .pad-holes-title { font-size: 10.5px; color: var(--txt-dim, #6b7280); margin-bottom: 2px; }
+        .pad-holes { margin: 0 6px 8px 10px; padding-top: 4px; border-top: 1px solid var(--line, var(--line)); }
+        .pad-holes-title { font-size: 10.5px; color: var(--txt-dim, var(--txt-dim)); margin-bottom: 2px; }
         .pad-holes-list { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
         .pad-hole-chip {
             display: inline-flex; align-items: center; gap: 3px;
@@ -1481,7 +1590,7 @@
             height: 20px;
             font-size: 10.5px;
             line-height: 18px;
-            border: 1px solid var(--line, #d8dee6);
+            border: 1px solid var(--line, var(--line));
             border-radius: 4px;
             white-space: nowrap;
         }
@@ -1499,7 +1608,7 @@
             width: 28px;
             height: 22px;
             padding: 0;
-            border: 1px solid var(--line, #d8dee6);
+            border: 1px solid var(--line, var(--line));
             border-radius: 4px;
             background: none;
             cursor: pointer;
@@ -1516,7 +1625,7 @@
             gap: 2px 4px;
             padding: 1px 6px;
             min-height: 22px;
-            border-bottom: 1px solid color-mix(in srgb, var(--line, #d8dee6) 75%, transparent);
+            border-bottom: 1px solid color-mix(in srgb, var(--line, var(--line)) 75%, transparent);
             font-family: 'IBM Plex Mono', monospace;
             font-variant-numeric: tabular-nums;
         }
@@ -1555,7 +1664,7 @@
             font-family: 'IBM Plex Mono';
             border: 1px solid var(--line);
             border-radius: 6px;
-            background: var(--panel-2, #fff);
+            background: var(--panel-2, var(--panel));
             color: var(--txt);
         }
         #drawInput .di-hint { flex-basis: 100%; font-size: 11px; color: var(--dim); }
@@ -1617,7 +1726,7 @@
             position: absolute;
             top: 0;
             left: 0;
-            background: rgba(255, 255, 255, .94);
+            background: var(--glass-solid);
             color: var(--accent);
             border: 1px solid var(--accent-dim);
             padding: 4px 8px;
@@ -1681,7 +1790,7 @@
             align-items: center;
             justify-content: center;
             gap: 14px;
-            background: rgba(241, 244, 247, .92);
+            background: var(--glass);
             backdrop-filter: blur(3px);
             z-index: 10050;
             padding: 24px;
@@ -1737,8 +1846,8 @@
 
         .load-file-row.is-active .lf-name { color: var(--txt); font-weight: 500; }
         .load-file-row.is-ok .lf-ico { color: #2e9e5b; opacity: 1; }
-        .load-file-row.is-fail .lf-ico { color: #d9433b; opacity: 1; }
-        .load-file-row.is-fail .lf-name { color: #d9433b; }
+        .load-file-row.is-fail .lf-ico { color: var(--err); opacity: 1; }
+        .load-file-row.is-fail .lf-name { color: var(--err); }
         .load-file-row.is-skip .lf-ico { color: #b8860b; opacity: 1; }
 
         .load-files-actions {
@@ -1764,7 +1873,7 @@
             position: relative;
             height: 10px;
             border-radius: 999px;
-            background: color-mix(in srgb, var(--panel-2) 88%, #fff);
+            background: color-mix(in srgb, var(--panel-2) 88%, var(--panel));
             border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
             overflow: visible;
         }
@@ -1920,8 +2029,8 @@
         .search-box input {
             width: 100%;
             padding: 6px 10px;
-            background: #fff0e7;
-            border: 1px solid #ef9a6f;
+            background: var(--accent-weak);
+            border: 1px solid var(--accent-line);
             box-shadow: inset 3px 0 0 var(--accent);
             color: var(--txt);
             font-family: 'IBM Plex Mono';
@@ -1932,7 +2041,7 @@
 
         .search-box input:focus {
             border-color: var(--accent);
-            background: #fffaf7;
+            background: var(--accent-weak);
         }
 
         #openPropSearch {
@@ -2049,7 +2158,7 @@
         }
 
         .custom-branch > .trow {
-            background: #fff4ed;
+            background: var(--accent-weak);
             border-left: 3px solid var(--accent);
         }
 
@@ -2129,9 +2238,9 @@
             cursor: pointer;
             margin-bottom: -1px;
         }
-        .props-tab:hover { background: #fff; }
+        .props-tab:hover { background: var(--panel); }
         .props-tab.on {
-            color: #fff;
+            color: var(--on-fill);
             background: linear-gradient(180deg, #2f86c7 0%, #2478b5 100%);
             border-color: #1f6aa3;
         }
@@ -2201,8 +2310,8 @@
             font-family: 'IBM Plex Mono';
             font-size: 14px;
             color: var(--txt);
-            background: #eef5fb;
-            border: 1px solid #c5d8ea;
+            background: var(--blue-weak);
+            border: 1px solid var(--ui-line);
             border-left: 3px solid var(--blue);
             padding: 6px 8px;
             word-break: break-word;
@@ -2210,19 +2319,19 @@
 
         .props .bulk-note {
             border-left-color: var(--blue);
-            background: #eef5fb;
-            color: #35556e;
+            background: var(--blue-weak);
+            color: var(--txt-dim);
         }
 
         .props .editInput,
         .props select.editInput {
-            border-color: #c5d8ea;
+            border-color: var(--ui-line);
             background: #f7fbfe;
         }
 
         .props .range-row {
             font-size: 11px;
-            color: #35556e;
+            color: var(--txt-dim);
         }
 
         .props .range-row input[type="range"] {
@@ -2257,12 +2366,12 @@
 
         .aci-swatch.on {
             box-shadow: 0 0 0 2px var(--blue);
-            outline: 1px solid #fff;
+            outline: 1px solid var(--panel);
             z-index: 1;
         }
 
         .aci-swatch.reset {
-            background: repeating-linear-gradient(45deg, #eef1f4, #eef1f4 3px, #fff 3px, #fff 6px);
+            background: repeating-linear-gradient(45deg, var(--panel-2), var(--panel-2) 3px, var(--panel) 3px, var(--panel) 6px);
             font-family: 'IBM Plex Mono';
             font-size: 7px;
             color: var(--txt-dim);
@@ -2272,10 +2381,10 @@
         .mat-preview {
             width: 100%;
             height: 36px;
-            border: 1px solid #c5d8ea;
+            border: 1px solid var(--ui-line);
             border-radius: 4px;
             margin: 6px 0;
-            background: #eef1f4;
+            background: var(--panel-2);
         }
 
         .tag {
@@ -2283,7 +2392,7 @@
             font-family: 'IBM Plex Mono';
             font-size: 10px;
             padding: 2px 8px;
-            background: #fff0e7;
+            background: var(--accent-weak);
             color: var(--accent);
             border: 1px solid var(--accent-dim);
             margin-bottom: 10px;
@@ -2302,8 +2411,8 @@
         .editInput {
             width: 100%;
             padding: 7px 9px;
-            background: #fff0e7;
-            border: 1px solid #ef9a6f;
+            background: var(--accent-weak);
+            border: 1px solid var(--accent-line);
             box-shadow: inset 3px 0 0 var(--accent);
             color: var(--txt);
             font-family: 'IBM Plex Mono';
@@ -2319,7 +2428,7 @@
 
         .editInput:focus {
             border-color: var(--accent);
-            background: #fffaf7;
+            background: var(--accent-weak);
             box-shadow: inset 3px 0 0 var(--accent), 0 0 0 1px rgba(255, 107, 53, .15);
         }
 
@@ -2330,9 +2439,9 @@
         .edit-legend {
             margin: 0 0 10px;
             padding: 7px 9px;
-            border: 1px solid #ef9a6f;
+            border: 1px solid var(--accent-line);
             border-left: 3px solid var(--accent);
-            background: #fff4ed;
+            background: var(--accent-weak);
             color: #87401f;
             font-family: 'IBM Plex Mono';
             font-size: 10px;
@@ -2343,7 +2452,7 @@
             margin-top: 10px;
             padding: 8px 10px;
             border-left: 2px solid var(--accent);
-            background: #f4f6f8;
+            background: var(--panel-2);
             color: var(--txt-dim);
             font-family: 'IBM Plex Mono';
             font-size: 10px;
@@ -2451,7 +2560,7 @@
             margin: -6px -6px 8px;
             padding: 8px 10px;
             border: 1px solid var(--line);
-            background: color-mix(in srgb, var(--panel-2) 70%, #fff);
+            background: color-mix(in srgb, var(--panel-2) 70%, var(--panel));
         }
         .modal-card .modal-drag-handle:active { cursor: grabbing; }
         .modal-card .modal-drag-handle h3 {
@@ -2475,7 +2584,7 @@
             font-size: 13px;
             font-weight: 800;
             letter-spacing: .03em;
-            color: #fff;
+            color: var(--on-fill);
             text-transform: none;
             border: 1px solid #1f6aa3;
             border-radius: 8px;
@@ -2491,13 +2600,13 @@
         }
 
         .pgroup-head:hover {
-            color: #fff;
+            color: var(--on-fill);
             border-color: var(--accent-dim);
             background: linear-gradient(180deg, #f07838 0%, #e45a1a 100%);
         }
 
         .pgroup:not(.collapsed) .pgroup-head {
-            color: #fff;
+            color: var(--on-fill);
             border-color: #1f6aa3;
             background: linear-gradient(180deg, #2f86c7 0%, #2478b5 100%);
         }
@@ -2527,7 +2636,7 @@
         /* ---- context menus ---- */
         .ctx-menu {
             position: fixed;
-            background: #ffffff;
+            background: var(--panel);
             border: 1px solid var(--accent-dim);
             box-shadow: 0 8px 30px rgba(31, 43, 56, .2);
             border-radius: 4px;
@@ -2564,11 +2673,11 @@
         }
 
         .btn.btn-donate .tb-ico {
-            color: #e85d4c;
+            color: var(--err);
         }
 
         .btn.btn-donate:hover {
-            border-color: #e85d4c;
+            border-color: var(--err);
         }
 
         #btnNotifyLog { position: relative; }
@@ -2576,8 +2685,8 @@
             position: absolute;
             top: -5px;
             right: -5px;
-            background: #d9433b;
-            color: #fff;
+            background: var(--err);
+            color: var(--on-fill);
             border-radius: 10px;
             font-size: 10px;
             line-height: 1;
@@ -2627,7 +2736,7 @@
 
         .ctx-item.danger:hover {
             background: var(--err);
-            color: #ffffff;
+            color: var(--on-fill);
         }
 
         .ctx-item.disabled {
@@ -2941,6 +3050,7 @@
             <div class="tb-rail tb-rail-end">
                 <div class="tb-seg">
                     <a class="btn btn-donate" id="btnDonate" href="https://pay.cloudtips.ru/p/0265eeea" target="_blank" rel="noopener" title="Просмотрщик бесплатный. Если он выручает в работе — поддержите разработку"><span class="tb-ico">♥</span><span class="tb-txt">Поддержать</span></a>
+                    <button type="button" class="btn" id="btnTheme" title="Светлая / тёмная тема. Серая геометрия IFC на тёмном фоне читается лучше; выбор запоминается.">🌓</button>
                     <button type="button" class="btn" id="btnNotifyLog" title="Журнал уведомлений: все сообщения этой сессии, включая уже закрывшиеся">🔔<span class="notify-badge" id="notifyLogBadge" hidden></span></button>
                     <button type="button" class="btn" id="btnAbout" title="О продукте, разработчик и версия сборки">ℹ</button>
                 </div>
@@ -5860,7 +5970,38 @@
         });
         renderer.setPixelRatio(basePixelRatio);
         renderer.setClearColor(0xf3f5f7, 1);
-        
+
+        /*
+         * ---- Тема оформления ----
+         * Выбор хранится в localStorage; если пользователь не выбирал — берём
+         * системный. Тема живёт ТОЛЬКО в атрибуте data-theme на <html>: весь CSS
+         * ниже читает токены, поэтому переключение не трогает ни одного правила.
+         * Фон 3D-холста в токенах не участвует (это WebGL, а не CSS) — его
+         * перекрашивает applySceneBackground().
+         */
+        const THEME_KEY = 'bimlva_theme_v1';
+        function preferredTheme() {
+            try {
+                const saved = localStorage.getItem(THEME_KEY);
+                if (saved === 'dark' || saved === 'light') return saved;
+            } catch (_) {}
+            return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light';
+        }
+        /**
+         * Переключение темы. Фон холста здесь НЕ трогаем: `bgThemes` и `grid`
+         * объявлены ниже по модулю, и обращение к ним отсюда — TDZ, который
+         * роняет весь скрипт (на этом уже горели с esc/escAttr). Холст
+         * перекрашивает обработчик кнопки, он регистрируется после объявлений.
+         */
+        let onThemeChanged = null;
+        function applyTheme(name, { persist = true } = {}) {
+            const theme = name === 'dark' ? 'dark' : 'light';
+            document.documentElement.dataset.theme = theme;
+            if (persist) { try { localStorage.setItem(THEME_KEY, theme); } catch (_) {} }
+            if (typeof onThemeChanged === 'function') onThemeChanged();
+            return theme;
+        }
+
         // ВАЖНО: Включаем поддержку плоскостей сечения
         renderer.localClippingEnabled = false;
         stage.appendChild(renderer.domElement);
@@ -30902,13 +31043,49 @@ ${componentXml || '    '}
             { hex: 0xffffff, grid: 0xd8dde2 },
             { hex: 0xf5eee8, grid: 0xd7c8bb }
         ];
+        const bgThemesDark = [
+            { hex: 0x11161d, grid: 0x2d3441 },
+            { hex: 0x0b0e13, grid: 0x272d38 },
+            { hex: 0x1a1410, grid: 0x3a2f26 }
+        ];
         let currentBgIndex = 0;
-        
+
+        /** Фоны сцены своим набором на каждую тему: светлый холст в тёмной теме слепит. */
+        function sceneBgTheme() {
+            const list = document.documentElement.dataset.theme === 'dark' ? bgThemesDark : bgThemes;
+            return list[currentBgIndex % list.length];
+        }
+
+        function applySceneBackground() {
+            const theme = sceneBgTheme();
+            renderer.setClearColor(theme.hex, 1);
+            scene.remove(grid);
+            grid = new THREE.GridHelper(120, 120, theme.grid, theme.grid);
+            grid.rotation.x = Math.PI / 2;
+            grid.position.set(0, 0, 0);
+            grid.visible = $('gridBtn').classList.contains('on');
+            scene.add(grid);
+            markNeedsRender();
+        }
+
+        // Здесь bgThemes и grid уже объявлены — только теперь можно связывать
+        // тему с холстом (см. комментарий у applyTheme про TDZ).
+        onThemeChanged = applySceneBackground;
+        applySceneBackground();
+        $('btnTheme').addEventListener('click', () => {
+            const now = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+            applyTheme(now);
+            notifyOk(now === 'dark'
+                ? 'Тёмная тема включена. Серая геометрия IFC на тёмном фоне читается лучше.'
+                : 'Светлая тема включена.');
+            trackUsage('theme_toggle', { theme: now });
+        });
+
         $('ctxBg').addEventListener('click', () => {
-            currentBgIndex = (currentBgIndex + 1) % bgThemes.length; 
-            const theme = bgThemes[currentBgIndex];
-            
-            renderer.setClearColor(theme.hex, 1); 
+            currentBgIndex = (currentBgIndex + 1) % bgThemes.length;
+            const theme = sceneBgTheme();
+
+            renderer.setClearColor(theme.hex, 1);
             scene.remove(grid);
             
             grid = new THREE.GridHelper(120, 120, theme.grid, theme.grid);

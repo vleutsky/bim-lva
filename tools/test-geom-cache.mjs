@@ -83,6 +83,13 @@ async function openOnce(label, { disableCache = false } = {}) {
     const ms = Date.now() - t0;
     // Фоновая запись кэша не должна попасть в следующий шаг недописанной.
     await page.evaluate(() => window.BimLvaDebug.geomCache.idle());
+    // Счётчик памяти обновляется раз в ~500 мс в цикле отрисовки, а не по
+    // окончании загрузки. С кэшем открытие стало быстрее, и проверка начала
+    // успевать прочитать его ДО первого обновления — ждём явно.
+    await page.waitForFunction(
+        () => /\d/.test(document.getElementById('memReadout')?.textContent || ''),
+        null, { timeout: 15_000 }
+    ).catch(() => {});
 
     const snap = await page.evaluate(() => {
         const dbg = window.BimLvaDebug;
