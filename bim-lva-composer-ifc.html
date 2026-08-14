@@ -113,6 +113,11 @@
             --rbody: 88px;
             --r: 3px;
             --tabs: 30px;
+            /* Зазор палитры до ленты/статуса/края и ширина разделителя.
+               У конкурента панели — глухие плиты 0 px на всю высоту; у нас
+               это окна инструментов, а не стены вокруг сцены. */
+            --palette-gap: 6px;
+            --split: 6px;
         }
 
         /*
@@ -176,7 +181,7 @@
             color-scheme: light;
             font-family: 'Archivo', sans-serif;
             display: grid;
-            grid-template-columns: var(--w-left) 4px 1fr 4px var(--w-right);
+            grid-template-columns: var(--w-left) var(--split) 1fr var(--split) var(--w-right);
             grid-template-rows: auto 1fr 28px;
             grid-template-areas:
                 "top top top top top"
@@ -1257,9 +1262,9 @@
             justify-content: flex-start;
             padding: 0 4px 0 0;
             height: var(--tabs, 30px);
-            border-bottom: 1px solid var(--line);
+            border-bottom: 1px solid var(--line-soft);
             flex: 0 0 auto;
-            background: var(--panel-2);
+            background: var(--panel);
         }
 
         .panel-head h3,
@@ -1318,24 +1323,19 @@
             accent-color: var(--accent);
         }
 
+        .tree-panel,
+        .side {
+            margin: var(--palette-gap);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+        }
+
         .tree-panel {
             grid-area: tree;
-            border-right: 1px solid var(--line);
         }
 
         .side {
             grid-area: side;
-            border-left: 1px solid var(--line);
-        }
-
-        body.panels-swapped .tree-panel {
-            border-right: none;
-            border-left: 1px solid var(--line);
-        }
-
-        body.panels-swapped .side {
-            border-left: none;
-            border-right: 1px solid var(--line);
         }
 
         .panel.floating {
@@ -1343,10 +1343,11 @@
             z-index: 60;
             width: 300px;
             height: 460px;
-            border: 1px solid var(--accent-dim);
-            box-shadow: 0 18px 55px rgba(31, 43, 56, .22);
+            margin: 0;
+            border: 1px solid var(--line);
+            box-shadow: none;
             resize: both;
-            border-radius: 6px;
+            border-radius: var(--r);
         }
 
         .panel .panel-head {
@@ -1364,14 +1365,29 @@
 
         /* ---- resizers ---- */
         .resizer {
-            background: var(--line);
+            background: transparent;
             z-index: 20;
             cursor: col-resize;
-            transition: background 0.2s;
+            position: relative;
         }
-
-        .resizer:hover, .resizer.dragging {
-            background: var(--accent);
+        .resizer::after {
+            content: '';
+            position: absolute;
+            inset: 0 -3px;
+        }
+        .resizer::before {
+            content: '';
+            position: absolute;
+            top: var(--palette-gap);
+            bottom: var(--palette-gap);
+            left: 50%;
+            width: 1px;
+            transform: translateX(-50%);
+            background: transparent;
+        }
+        .resizer:hover::before,
+        .resizer.dragging::before {
+            background: var(--ui);
         }
 
         #dragLeft { grid-area: resL; }
@@ -2241,27 +2257,26 @@
 
         /* ---- tree ---- */
         .search-box {
-            padding: 8px 12px;
-            background: #f7f8fa;
-            border-bottom: 1px solid var(--line);
+            padding: 8px 10px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line-soft);
         }
 
         .search-box input {
             width: 100%;
-            padding: 6px 10px;
-            background: var(--accent-weak);
-            border: 1px solid var(--accent-line);
-            box-shadow: inset 3px 0 0 var(--accent);
+            padding: 5px 8px;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
             color: var(--txt);
             font-family: 'IBM Plex Mono';
             font-size: var(--panel-font-sm);
             outline: none;
-            transition: border 0.2s;
         }
 
         .search-box input:focus {
-            border-color: var(--accent);
-            background: var(--accent-weak);
+            border-color: var(--ui);
+            background: var(--panel);
         }
 
         #openPropSearch {
@@ -2307,29 +2322,29 @@
         .file-root > .trow.sel,
         .custom-branch > .trow.sel,
         .trow.trow-group.sel {
-            background: #dceefc;
-            color: #135f9a;
-            box-shadow: inset 3px 0 0 var(--blue);
+            background: var(--ui-weak);
+            color: var(--ui);
+            box-shadow: inset 2px 0 0 var(--ui);
             font-weight: 600;
         }
 
         .trow.sel .tlabel {
-            color: #0f5f9c;
+            color: var(--ui);
             font-weight: 700;
         }
 
         .trow.sel .ttype {
-            color: #2a7ab8;
+            color: var(--ui-dim);
         }
 
         .trow.sel .caret {
-            color: var(--blue);
+            color: var(--ui);
         }
 
         .trow.drag-target {
-            outline: 2px solid var(--blue);
-            outline-offset: -2px;
-            background: #cfe6f8;
+            outline: 1px solid var(--ui);
+            outline-offset: -1px;
+            background: var(--ui-weak);
         }
 
         .caret {
@@ -2394,7 +2409,7 @@
 
         .stats {
             padding: 10px 16px 14px;
-            border-bottom: 1px solid var(--line);
+            border-bottom: 1px solid var(--line-soft);
         }
 
         .stat-row {
@@ -32649,10 +32664,11 @@ ${componentXml || '    '}
                 document.body.style.gridTemplateColumns = '';
                 return;
             }
+            const split = getComputedStyle(document.documentElement).getPropertyValue('--split').trim() || '6px';
             const colL = leftDockPanel().classList.contains('floating') ? '0px' : 'var(--w-left)';
             const colR = rightDockPanel().classList.contains('floating') ? '0px' : 'var(--w-right)';
             document.body.style.gridTemplateColumns =
-                `${colL} ${colL === '0px' ? '0px' : '4px'} 1fr ${colR === '0px' ? '0px' : '4px'} ${colR}`;
+                `${colL} ${colL === '0px' ? '0px' : split} 1fr ${colR === '0px' ? '0px' : split} ${colR}`;
         }
 
         function applyPanelLayout() {
@@ -32820,7 +32836,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.14',
-            buildId: 'ribbon-layout',
+            buildId: 'palette-dock',
             released: '2026-08-14',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -32829,6 +32845,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.14: боковые панели — палитры Civil 3D (рамка 3 px, зазор до сцены), не плиты конкурента на всю высоту.',
                 '2026.08.14: лента как в Civil 3D — вкладки Файл / Вид / Измерения / Черчение / Рельеф / Анализ / IFC и именованные панели; кнопки на виду, без выпадающих меню.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
                 '2026.08.13: Tekla на заводской сетке (~1200 м) больше не садится в ноль из-за вырезов: старый кэш со сбросом отбрасывается, после CSG положение возвращается по координатам файла.',
@@ -32903,7 +32920,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=103').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=104').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
