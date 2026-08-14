@@ -2562,9 +2562,11 @@ async function checkNotifications(page) {
         .catch(() => false);
     if (!shown) problems.push('уведомление через BimLvaNotify не появилось');
 
-    // Реальный путь: экспорт ведомости без выделения. Кнопка живёт в свёрнутой
-    // панели, поэтому дёргаем обработчик напрямую, а не мышью.
-    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
+    // Реальный путь: экспорт ведомости без выделения. Кнопка на вкладке «Анализ».
+    await page.evaluate(() => {
+        document.querySelector('.rtab[data-rp="analysis"]')?.click();
+        document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
+    });
     await page.evaluate(() => document.getElementById('btnSchedule').click());
     const fromUi = await page
         .waitForFunction(
