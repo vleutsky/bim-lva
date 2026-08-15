@@ -56,7 +56,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v161`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v162`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `ui-style-preview.html` — **прототип оформления**, отдельный файл, рабочий
   вьювер не трогает. Смотреть через Pages или открывать локально.
@@ -896,10 +896,12 @@ null` обычный пользователь не видит, а админ в�
   кадра (не через `roadXsClientToOffZ` на каждом move — иначе кадр уезжает),
   ⤢ сбрасывает `roadXsView`. Готовые фигуры (`addTemplateFigure`) — бордюр /
   обочина / кювет / прямоугольник / трапеция / треугольник — к якорю наружу
-  от оси, без `addTemplatePoint` (тот режет связи покрытия). На точке
-  `pt.rule`: `{ when, value, thenDz, thenOff, elseDz, elseOff }`;
-  `resolveTemplatePoint` на каждой станции (`work>`/`work<`/`gAbove`/`gBelow`/
-  `axis>`/`axis<`). Скрытая ветка (`thenHide`) не попадает в коридор.
+  от оси, без `addTemplatePoint` (тот режет связи покрытия). Новые точки
+  фигуры помнят родителя (`parent`, `relOff`/`relDz`): правило на якоре
+  двигает весь узел. На точке `pt.rule`: `{ when, value, thenDz, thenOff,
+  thenHide, elseDz, elseOff, elseHide }`; `resolveTemplatePoints` на каждой
+  станции (`work>`/`work<`/`gAbove`/`gBelow`/`axis>`/`axis<`). Скрытый
+  родитель прячет детей — коридор и заливка формы их не берут.
 
 - **Удаление полилинии не по старому индексу.** `deleteDrawnPolyline` сначала
   зовёт `removeSlopeModelsForPolyline`, а та через `dropPoly` уже вынимает

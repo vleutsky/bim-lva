@@ -2370,7 +2370,16 @@ async function checkRoadCrossSections(page) {
         const r = before?.points?.find((p) => p.code === 'R');
         const fig = D.addRoadXsFigure('curb', r?.id);
         const afterFig = D.roadXsTemplate();
-        const left = afterFig?.points?.find((p) => p.code === 'L');
+        const curbT = afterFig?.points?.find((p) => p.code === 'CURBT');
+        const curbO = afterFig?.points?.find((p) => p.code === 'CURBO');
+        D.setRoadXsPoint(r.id, { dz: 0.4 });
+        const evFollow = curbT ? D.evalRoadXsPoint(curbT.id, 0) : null;
+        D.setRoadXsPoint(r.id, { dz: 0 });
+        if (curbT) D.setRoadXsPointRule(curbT.id, { when: 'work>', value: 0, thenHide: true });
+        const evHide = curbT ? D.evalRoadXsPoint(curbT.id, 0) : null;
+        const evChild = curbO ? D.evalRoadXsPoint(curbO.id, 0) : null;
+        const evR = r ? D.evalRoadXsPoint(r.id, 0) : null;
+        const left = D.roadXsTemplate()?.points?.find((p) => p.code === 'L');
         if (left) {
             D.setRoadXsPoint(left.id, { dz: 0 });
             D.setRoadXsPointRule(left.id, { when: 'work>', value: 0, thenDz: 0.2 });
@@ -2384,6 +2393,14 @@ async function checkRoadCrossSections(page) {
             afterShapes: afterFig?.shapes?.length || 0,
             code: fig?.added?.code || '',
             hasCurb: (afterFig?.shapes || []).some((s) => s.code === 'CURB'),
+            parent: curbT?.parent,
+            relDz: curbT?.relDz,
+            childParent: curbO?.parent,
+            followDz: evFollow?.dz,
+            hide: evHide?.hide,
+            childHide: evChild?.hide,
+            rHide: evR?.hide,
+            hasHideChk: !!document.getElementById('roadXsRuleThenHide'),
             base: ev?.baseDz,
             dz: ev?.dz,
             applies: ev?.applies,
@@ -2395,6 +2412,15 @@ async function checkRoadCrossSections(page) {
     }
     if (extras.code !== 'CURB' || !extras.hasCurb) {
         problems.push(`поперечники: код фигуры «${extras.code}» вместо CURB`);
+    }
+    if (extras.parent == null || Math.abs((extras.relDz ?? 0) - 0.15) > 1e-6) {
+        problems.push(`поперечники: бордюр не привязан к якорю (${JSON.stringify(extras)})`);
+    }
+    if (Math.abs((extras.followDz ?? 0) - 0.55) > 1e-6) {
+        problems.push(`поперечники: бордюр не поехал за якорем (${JSON.stringify(extras)})`);
+    }
+    if (!extras.hasHideChk || extras.hide !== true || extras.childHide !== true || extras.rHide === true) {
+        problems.push(`поперечники: «скрыть» не спрятало детей бордюра (${JSON.stringify(extras)})`);
     }
     if (!extras.barShown) {
         problems.push('поперечники: панель условия точки не открылась');

@@ -4768,11 +4768,17 @@
                     <label>смещ.
                         <input class="editInput" id="roadXsRuleThenOff" type="number" step="0.1">
                     </label>
+                    <label data-tip="Не строить эту точку и её детей на пикете (бордюр пропадает, якорь покрытия остаётся).">скрыть
+                        <input type="checkbox" id="roadXsRuleThenHide">
+                    </label>
                     <label data-tip="Если условие нет.">иначе ΔZ
                         <input class="editInput" id="roadXsRuleElseDz" type="number" step="0.01">
                     </label>
                     <label>смещ.
                         <input class="editInput" id="roadXsRuleElseOff" type="number" step="0.1">
+                    </label>
+                    <label data-tip="Не строить, если условие не выполнилось.">скрыть
+                        <input type="checkbox" id="roadXsRuleElseHide">
                     </label>
                 </div>
                 <svg class="align-profile-svg" id="roadXsChart" viewBox="0 0 560 240"
@@ -6446,8 +6452,12 @@
                 const model = currentRoadXsModel();
                 const pt = model?.template?.points.find((p) => p.id === pointId);
                 if (!pt) return null;
-                if (patch && Number.isFinite(Number(patch.off))) pt.off = Number(patch.off);
-                if (patch && Number.isFinite(Number(patch.dz))) pt.dz = Number(patch.dz);
+                if (patch && Number.isFinite(Number(patch.off))) {
+                    writeTemplatePointAbs(model.template, pt, Number(patch.off), pt.dz);
+                }
+                if (patch && Number.isFinite(Number(patch.dz))) {
+                    writeTemplatePointAbs(model.template, pt, pt.off, Number(patch.dz));
+                }
                 if (patch?.code) pt.code = String(patch.code).slice(0, 12);
                 roadXsActive.pointId = pointId;
                 applyRoadTemplateChange(model, { relink: false });
@@ -6529,12 +6539,23 @@
                 const pt = model?.template?.points.find((p) => p.id === id);
                 if (!pt) return null;
                 const st = model.stations?.[stationIndex ?? roadXsActive.index] || model.stations?.[0];
-                const r = resolveTemplatePoint(pt, st);
+                const all = resolveTemplatePoints(model.template, st);
+                const r = all.find((x) => x.id === id);
+                const par = pt.parent != null ? all.find((x) => x.id === pt.parent) : null;
+                const baseOff = par
+                    ? par.off + (Number(pt.relOff) || 0)
+                    : pt.off;
+                const baseDz = par
+                    ? par.dz + (Number(pt.relDz) || 0)
+                    : pt.dz;
                 return {
                     ...r,
-                    baseOff: pt.off,
-                    baseDz: pt.dz,
-                    applies: pointRuleApplies(pt, st)
+                    baseOff,
+                    baseDz,
+                    parent: pt.parent ?? null,
+                    relOff: pt.relOff,
+                    relDz: pt.relDz,
+                    applies: pointRuleApplies({ ...pt, off: baseOff, dz: baseDz }, st)
                 };
             },
             setRoadXsLayerThickness(h) {
@@ -14676,6 +14697,21 @@
         }
 
         function removeTemplatePoint(tpl, id) {
+            const gone = templatePoint(tpl, id);
+            const parId = gone?.parent ?? null;
+            const par = parId != null ? templatePoint(tpl, parId) : null;
+            (tpl.points || []).forEach((p) => {
+                if (p.parent !== id) return;
+                if (par) {
+                    p.parent = par.id;
+                    p.relOff = p.off - par.off;
+                    p.relDz = p.dz - par.dz;
+                } else {
+                    p.parent = null;
+                    p.relOff = undefined;
+                    p.relDz = undefined;
+                }
+            });
             const neighbors = [];
             (tpl.links || []).forEach((ln) => {
                 if (ln.a === id) neighbors.push(ln.b);
@@ -14824,8 +14860,17 @@
                 }
                 return ids;
             };
-            const addPt = (id, code, off, dz) => {
+            const addPt = (id, code, off, dz, parentId) => {
                 const p = { id, code, off, dz };
+                if (parentId != null) {
+                    const par = tpl.points.find((q) => q.id === parentId)
+                        || (parentId === anchor.id ? anchor : null);
+                    if (par) {
+                        p.parent = par.id;
+                        p.relOff = off - par.off;
+                        p.relDz = dz - par.dz;
+                    }
+                }
                 tpl.points.push(p);
                 return p;
             };
@@ -14844,9 +14889,9 @@
             if (kind === 'curb' || kind === 'box' || kind === 'shoulder') {
                 const w = spec.w, h = spec.h;
                 const [i1, i2, i3] = nextIds(3);
-                addPt(i1, spec.code + 'T', aOff, aDz + h);
-                addPt(i2, spec.code + 'O', aOff + sign * w, aDz + h);
-                addPt(i3, spec.code + 'B', aOff + sign * w, aDz);
+                addPt(i1, spec.code + 'T', aOff, aDz + h, anchor.id);
+                addPt(i2, spec.code + 'O', aOff + sign * w, aDz + h, i1);
+                addPt(i3, spec.code + 'B', aOff + sign * w, aDz, i1);
                 link(anchor.id, i1, spec.code + 'F');
                 link(i1, i2, spec.code + 'TOP');
                 link(i2, i3, spec.code + 'S');
@@ -14855,9 +14900,9 @@
             } else if (kind === 'trap') {
                 const wTop = spec.w, wBot = spec.wBot, h = spec.h;
                 const [i1, i2, i3] = nextIds(3);
-                addPt(i1, spec.code + 'T', aOff + sign * wTop, aDz + h);
-                addPt(i2, spec.code + 'O', aOff + sign * wBot, aDz);
-                addPt(i3, spec.code + 'I', aOff, aDz + h);
+                addPt(i3, spec.code + 'I', aOff, aDz + h, anchor.id);
+                addPt(i1, spec.code + 'T', aOff + sign * wTop, aDz + h, i3);
+                addPt(i2, spec.code + 'O', aOff + sign * wBot, aDz, i3);
                 link(anchor.id, i3, spec.code + 'F');
                 link(i3, i1, spec.code + 'TOP');
                 link(i1, i2, spec.code + 'S');
@@ -14865,8 +14910,8 @@
                 sh = shape(spec.code, [anchor.id, i3, i1, i2]);
             } else if (kind === 'tri') {
                 const [i1, i2] = nextIds(2);
-                addPt(i1, spec.code + 'T', aOff + sign * spec.w / 2, aDz + spec.h);
-                addPt(i2, spec.code + 'B', aOff + sign * spec.w, aDz);
+                addPt(i1, spec.code + 'T', aOff + sign * spec.w / 2, aDz + spec.h, anchor.id);
+                addPt(i2, spec.code + 'B', aOff + sign * spec.w, aDz, i1);
                 link(anchor.id, i1, spec.code + 'L');
                 link(i1, i2, spec.code + 'R');
                 link(i2, anchor.id, spec.code + 'BOT');
@@ -14875,10 +14920,10 @@
                 const h = spec.h, w = spec.w, berm = spec.berm;
                 const run = h * 1; // 1:1 внутренний откос
                 const [i1, i2, i3, i4] = nextIds(4);
-                addPt(i1, 'DH', aOff + sign * berm, aDz);
-                addPt(i2, 'DBI', aOff + sign * (berm + run), aDz - h);
-                addPt(i3, 'DBO', aOff + sign * (berm + run + w), aDz - h);
-                addPt(i4, 'DO', aOff + sign * (berm + run + w + run), aDz);
+                addPt(i1, 'DH', aOff + sign * berm, aDz, anchor.id);
+                addPt(i2, 'DBI', aOff + sign * (berm + run), aDz - h, i1);
+                addPt(i3, 'DBO', aOff + sign * (berm + run + w), aDz - h, i2);
+                addPt(i4, 'DO', aOff + sign * (berm + run + w + run), aDz, i3);
                 link(anchor.id, i1, 'D1');
                 link(i1, i2, 'D2');
                 link(i2, i3, 'D3');
@@ -14923,18 +14968,110 @@
             }
         }
 
-        function resolveTemplatePoint(pt, st) {
-            const hit = st ? pointRuleApplies(pt, st) : null;
+        /**
+         * Поза точки на станции: сначала родитель (relOff/relDz), потом своё
+         * правило. Скрытый родитель прячет детей — бордюр пропадает целиком,
+         * якорь покрытия не обязан.
+         */
+        function applyPointRuleOnBase(pt, st, baseOff, baseDz, hideFromParent) {
+            const probe = { ...pt, off: baseOff, dz: baseDz };
+            const hit = st ? pointRuleApplies(probe, st) : null;
             const r = pt.rule;
             const branch = hit === true ? 'then' : hit === false ? 'else' : null;
-            let off = pt.off, dz = pt.dz, hide = false;
+            let off = baseOff, dz = baseDz, hide = !!hideFromParent;
             if (branch && r) {
                 const o = r[branch + 'Off'], z = r[branch + 'Dz'];
                 if (o !== '' && Number.isFinite(Number(o))) off = Number(o);
                 if (z !== '' && Number.isFinite(Number(z))) dz = Number(z);
                 if (r[branch + 'Hide']) hide = true;
             }
-            return { id: pt.id, code: pt.code, off, dz, hide };
+            return { id: pt.id, code: pt.code, off, dz, hide, parent: pt.parent ?? null };
+        }
+
+        function resolveTemplatePoints(tpl, st) {
+            const pts = tpl?.points || [];
+            const byId = new Map(pts.map((p) => [p.id, p]));
+            const out = new Map();
+            const stack = new Set();
+            const one = (id) => {
+                if (out.has(id)) return out.get(id);
+                const pt = byId.get(id);
+                if (!pt) return null;
+                if (stack.has(id)) {
+                    const r = applyPointRuleOnBase(pt, st, pt.off, pt.dz, false);
+                    out.set(id, r);
+                    return r;
+                }
+                stack.add(id);
+                let baseOff = pt.off, baseDz = pt.dz, hideFromParent = false;
+                if (pt.parent != null && byId.has(pt.parent)) {
+                    const par = one(pt.parent);
+                    if (par) {
+                        const ro = Number(pt.relOff), rz = Number(pt.relDz);
+                        baseOff = par.off + (Number.isFinite(ro) ? ro : 0);
+                        baseDz = par.dz + (Number.isFinite(rz) ? rz : 0);
+                        hideFromParent = !!par.hide;
+                    }
+                }
+                const r = applyPointRuleOnBase(pt, st, baseOff, baseDz, hideFromParent);
+                out.set(id, r);
+                stack.delete(id);
+                return r;
+            };
+            return pts.map((p) => one(p.id));
+        }
+
+        function resolveTemplatePoint(pt, st, tpl) {
+            if (tpl?.points) {
+                return resolveTemplatePoints(tpl, st).find((r) => r.id === pt.id)
+                    || applyPointRuleOnBase(pt, st, pt.off, pt.dz, false);
+            }
+            return applyPointRuleOnBase(pt, st, pt.off, pt.dz, false);
+        }
+
+        function refreshChildAbs(tpl, parentId) {
+            const par = templatePoint(tpl, parentId);
+            if (!par) return;
+            (tpl.points || []).forEach((p) => {
+                if (p.parent !== parentId) return;
+                p.off = par.off + (Number(p.relOff) || 0);
+                p.dz = par.dz + (Number(p.relDz) || 0);
+                refreshChildAbs(tpl, p.id);
+            });
+        }
+
+        /** Записать абсолют в покое: у дочерней точки ещё и rel к родителю. */
+        function writeTemplatePointAbs(tpl, pt, off, dz) {
+            if (Number.isFinite(off)) pt.off = off;
+            if (Number.isFinite(dz)) pt.dz = dz;
+            const par = pt.parent != null ? templatePoint(tpl, pt.parent) : null;
+            if (par) {
+                pt.relOff = pt.off - par.off;
+                pt.relDz = pt.dz - par.dz;
+            }
+            refreshChildAbs(tpl, pt.id);
+        }
+
+        /**
+         * Перетаскивание на чертеже — в осях разрешённой позы. У дочерней
+         * точки rel считается от разрешённого родителя, покой — от его off/dz.
+         */
+        function writeTemplatePointFromChart(tpl, pt, off, dz, st) {
+            if (pt.parent == null) {
+                writeTemplatePointAbs(tpl, pt, off, dz);
+                return;
+            }
+            const par = templatePoint(tpl, pt.parent);
+            if (!par) {
+                writeTemplatePointAbs(tpl, pt, off, dz);
+                return;
+            }
+            const parR = resolveTemplatePoint(par, st, tpl);
+            pt.relOff = off - parR.off;
+            pt.relDz = dz - parR.dz;
+            pt.off = par.off + pt.relOff;
+            pt.dz = par.dz + pt.relDz;
+            refreshChildAbs(tpl, pt.id);
         }
 
         function currentPaveThickness() {
@@ -14978,6 +15115,13 @@
             (tpl.points || []).forEach((p) => {
                 if (bottomIds.has(p.id)) return;
                 if (p.dz < zBot - 1e-9) p.dz += delta;
+            });
+            (tpl.points || []).forEach((p) => {
+                if (p.parent == null) return;
+                const par = templatePoint(tpl, p.parent);
+                if (!par) return;
+                p.relOff = p.off - par.off;
+                p.relDz = p.dz - par.dz;
             });
             return true;
         }
@@ -15024,6 +15168,8 @@
             return {
                 points: (tpl.points || []).map((p) => ({
                     id: p.id, code: p.code, off: p.off, dz: p.dz,
+                    parent: p.parent ?? null,
+                    relOff: p.relOff, relDz: p.relDz,
                     rule: p.rule ? { ...p.rule } : null
                 })),
                 links: (tpl.links || []).map((l) => ({ a: l.a, b: l.b, code: l.code })),
@@ -15382,10 +15528,9 @@
             if (!tpl?.links?.length || !stations || stations.length < 2) return null;
             const placed = stations.map((st) => {
                 const map = new Map();
-                tpl.points.forEach((pt) => {
-                    const r = resolveTemplatePoint(pt, st);
+                resolveTemplatePoints(tpl, st).forEach((r) => {
                     if (r.hide) return;
-                    map.set(pt.id, placeTemplateAtStation(st, r));
+                    map.set(r.id, placeTemplateAtStation(st, r));
                 });
                 return map;
             });
@@ -15753,12 +15898,13 @@
             };
             const prevBrows = (model.slopeBrowIds || []).slice();
             const built = [];
-            const addSide = (side, pt) => {
-                if (!pt) return;
+            const addSide = (side) => {
                 const pts = model.stations.map((st) => {
-                    const r = resolveTemplatePoint(pt, st);
-                    if (r.hide) return null;
-                    return placeTemplateAtStation(st, r);
+                    const vis = resolveTemplatePoints(tpl, st).filter((p) => !p.hide);
+                    const edges = templateEdgePoints({ points: vis });
+                    const pt = side === 'left' ? edges.left : edges.right;
+                    if (!pt) return null;
+                    return placeTemplateAtStation(st, pt);
                 }).filter(Boolean);
                 if (pts.length < 2) return;
                 const rec = ensureRoadSlopeBrow(model, side, pts);
@@ -15766,8 +15912,8 @@
                 const sm = buildSlopeToTerrain(rec, { ...full, side });
                 if (sm) built.push({ side, rec, sm });
             };
-            addSide('left', edges.left);
-            addSide('right', edges.right);
+            addSide('left');
+            addSide('right');
             model.slopeBrowIds = built.map((b) => b.rec.id);
             model.slopeModelIds = built.map((b) => b.sm.id);
             prevBrows.forEach((id) => {
@@ -15817,7 +15963,7 @@
             let zMin = zAxis, zMax = zAxis;
             zGround.forEach((z) => { zMin = Math.min(zMin, z); zMax = Math.max(zMax, z); });
             const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
-            const resolved = (tpl.points || []).map((p) => resolveTemplatePoint(p, st));
+            const resolved = resolveTemplatePoints(tpl, st);
             resolved.forEach((p) => {
                 zMin = Math.min(zMin, zAxis + p.dz);
                 zMax = Math.max(zMax, zAxis + p.dz);
@@ -15900,7 +16046,7 @@
             const ptById = new Map(resolved.map((p) => [p.id, p]));
             const xyOf = (p) => ({ x: px(p.off), y: py(zAxis + p.dz) });
             const shapeDraw = (tpl.shapes || []).map((sh) => {
-                const ring = (sh.pts || []).map((id) => ptById.get(id)).filter(Boolean);
+                const ring = (sh.pts || []).map((id) => ptById.get(id)).filter((p) => p && !p.hide);
                 if (ring.length < 3) return '';
                 const d = ring.map((p, i) => {
                     const q = xyOf(p);
@@ -16032,7 +16178,7 @@
                                 </tr>`).join('') || '<tr><td colspan="3">Нет форм — «＋ форма»</td></tr>'}
                         </tbody>
                     </table>
-                    <div class="bulk-note" style="margin:4px 0 0">Колесо — зум к курсору, Shift+колесо — по высоте, фон — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. «＋ фигура» к выбранной точке. Условие если/то — на выбранной точке, считается на каждом пикете.</div>`;
+                    <div class="bulk-note" style="margin:4px 0 0">Колесо — зум к курсору, Shift+колесо — по высоте, фон — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. «＋ фигура» к якорю: дети едут за ним. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
             }
             fillRoadXsRuleBar();
         }
@@ -16082,10 +16228,15 @@
                 writeEdge(rec?.edgeRightPts || model.edgeRightPts);
                 const tpl = model.template;
                 if (opts.edges !== false && tpl?.points?.length && model.stations?.length >= 2) {
+                    const maps = model.stations.map((st) => {
+                        const m = new Map();
+                        resolveTemplatePoints(tpl, st).forEach((r) => m.set(r.id, r));
+                        return m;
+                    });
                     tpl.points.forEach((pt) => {
-                        const pts = model.stations.map((st) => {
-                            const r = resolveTemplatePoint(pt, st);
-                            if (r.hide) return null;
+                        const pts = model.stations.map((st, i) => {
+                            const r = maps[i].get(pt.id);
+                            if (!r || r.hide) return null;
                             return placeTemplateAtStation(st, r);
                         }).filter(Boolean);
                         writeEdge(pts);
@@ -16424,7 +16575,7 @@
             trackUsage('road_xs_figure', { kind });
         });
         ['roadXsRuleWhen', 'roadXsRuleVal', 'roadXsRuleThenDz', 'roadXsRuleThenOff',
-            'roadXsRuleElseDz', 'roadXsRuleElseOff'].forEach((id) => {
+            'roadXsRuleThenHide', 'roadXsRuleElseDz', 'roadXsRuleElseOff', 'roadXsRuleElseHide'].forEach((id) => {
             $(id)?.addEventListener('change', () => applyRoadXsRuleFromForm());
         });
         $('roadXsChart')?.addEventListener('wheel', (ev) => {
@@ -16443,7 +16594,12 @@
             if (!pt) { bar.hidden = true; return; }
             bar.hidden = false;
             const label = $('roadXsRulePt');
-            if (label) label.textContent = pt.code || ('#' + pt.id);
+            if (label) {
+                const par = pt.parent != null ? templatePoint(model.template, pt.parent) : null;
+                label.textContent = par
+                    ? `${pt.code || ('#' + pt.id)} · от ${par.code || ('#' + par.id)}`
+                    : (pt.code || ('#' + pt.id));
+            }
             const r = pt.rule || {};
             const put = (id, v) => {
                 const el = $(id);
@@ -16458,6 +16614,13 @@
             put('roadXsRuleThenOff', r.thenOff);
             put('roadXsRuleElseDz', r.elseDz);
             put('roadXsRuleElseOff', r.elseOff);
+            const chk = (id, on) => {
+                const el = $(id);
+                if (!el || document.activeElement === el) return;
+                el.checked = !!on;
+            };
+            chk('roadXsRuleThenHide', r.thenHide);
+            chk('roadXsRuleElseHide', r.elseHide);
         }
 
         function applyRoadXsRuleFromForm() {
@@ -16476,8 +16639,10 @@
                 value: Number($('roadXsRuleVal')?.value) || 0,
                 thenDz: numOrEmpty('roadXsRuleThenDz'),
                 thenOff: numOrEmpty('roadXsRuleThenOff'),
+                thenHide: !!$('roadXsRuleThenHide')?.checked,
                 elseDz: numOrEmpty('roadXsRuleElseDz'),
-                elseOff: numOrEmpty('roadXsRuleElseOff')
+                elseOff: numOrEmpty('roadXsRuleElseOff'),
+                elseHide: !!$('roadXsRuleElseHide')?.checked
             } : null;
             applyRoadTemplateChange(model, { relink: false });
         }
@@ -16617,22 +16782,10 @@
             const move = (e) => {
                 const at = roadXsClientToOffZ(e);
                 if (!at) return;
-                pt.off = at.off;
-                pt.dz = at.dz;
+                const st = model.stations?.[roadXsActive.index];
+                writeTemplatePointFromChart(tpl, pt, at.off, at.dz, st);
                 applyRoadTemplateChange(model, { relink: false, preview: true });
-                const g = svg.querySelector(`.xs-pt[data-id="${id}"] circle`);
-                const t = svg.querySelector(`.xs-pt[data-id="${id}"] text`);
-                const f = roadXsChartFrame;
-                if (g && f) {
-                    const x = f.pad.l + ((pt.off - f.offMin) / Math.max(1e-6, f.offMax - f.offMin)) * (f.w - f.pad.l - f.pad.r);
-                    const y = f.h / 2 - ((f.zAxis + pt.dz - f.z0) / f.spanZ) * (f.h - f.pad.t - f.pad.b);
-                    g.setAttribute('cx', x.toFixed(1));
-                    g.setAttribute('cy', y.toFixed(1));
-                    if (t) {
-                        t.setAttribute('x', (x + 8).toFixed(1));
-                        t.setAttribute('y', (y - 8).toFixed(1));
-                    }
-                }
+                renderRoadXsView();
             };
             const up = () => {
                 window.removeEventListener('pointermove', move);
@@ -16669,10 +16822,10 @@
                 pt.code = (input.value || pt.code).trim().slice(0, 12) || pt.code;
             } else if (input.dataset.edit === 'off') {
                 const v = Number(input.value);
-                if (Number.isFinite(v)) pt.off = v;
+                if (Number.isFinite(v)) writeTemplatePointAbs(model.template, pt, v, pt.dz);
             } else if (input.dataset.edit === 'dz') {
                 const v = Number(input.value);
-                if (Number.isFinite(v)) pt.dz = v;
+                if (Number.isFinite(v)) writeTemplatePointAbs(model.template, pt, pt.off, v);
             }
             roadXsActive.pointId = id;
             applyRoadTemplateChange(model, { relink: false });
@@ -34541,7 +34694,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.15',
-            buildId: 'xs-zoom',
+            buildId: 'xs-parent',
             released: '2026-08-15',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -34550,6 +34703,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.15: точки фигуры едут за якорем; условие «скрыть» прячет точку и детей на пикете (бордюр в насыпи / нет в выемке).',
                 '2026.08.15: чертёж поперечника — зум колесом (как профиль), готовые фигуры (бордюр, кювет, …) и условие на точке: если рабочая/земля/ось, то другие ΔZ и смещение на этом пикете.',
                 '2026.08.15: палитра «Трасса» — план, профиль и поперечник вкладками; толщина слоя одежды правится полем; окна не модальные, их можно таскать, закреплять и сворачивать.',
                 '2026.08.15: поперечники — крупная кнопка на ленте Черчение и Рельеф; в окне «＋ слой» одежды и «△ Откосы до рельефа».',
@@ -34634,7 +34788,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=111').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=112').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
