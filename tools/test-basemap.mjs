@@ -1,7 +1,8 @@
 /**
- * Карта-подложка и рельеф с карты. Настоящие тайл-серверы из песочницы закрыты
- * прокси, поэтому перехватываем запросы и отдаём сгенерированный PNG: проверяем
- * не сеть, а математику — привязка, размер, UV по Меркатору, формула Terrarium
+ * Карта-подложка, рельеф с карты и окно-глобус (рамка/контур до 200 га).
+ * Настоящие тайл-серверы из песочницы закрыты прокси, поэтому перехватываем
+ * запросы и отдаём сгенерированный PNG: проверяем не сеть, а математику —
+ * привязка, размер, UV по Меркатору, формула Terrarium, лимит площади
  * и что sampleTerrainZ сверлит меш DEM, а не картинку подложки.
  */
 import { chromium } from 'playwright';
@@ -110,6 +111,14 @@ await page.route('**/elevation-tiles-prod/terrarium/**', (route) => {
     demUrls.push(route.request().url());
     route.fulfill({ status: 200, contentType: 'image/png', headers: CORS, body: PNG_TERRARIUM_60 });
 });
+await page.route('**/nominatim.openstreetmap.org/**', (route) => {
+    route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: CORS,
+        body: JSON.stringify([{ lat: '55.7', lon: '52.4', display_name: 'Набережные Челны' }])
+    });
+});
 
 const SITE = { lat: 55.7, lon: 52.4 };          // Набережные Челны: искажение Меркатора ~1.77
 const MODEL = { worldX: 456_000, worldY: 6_188_000, worldZ: 60 };
@@ -136,6 +145,8 @@ try {
         await new Promise((r) => setTimeout(r, 500));
         const readout = document.getElementById('coordSelection').textContent;
         document.getElementById('btnBaseMap').click();
+        await new Promise((r) => setTimeout(r, 300));
+        document.getElementById('mapBuilderBind').click();
         await new Promise((r) => setTimeout(r, 300));
         document.getElementById('baseMapAnchorSelection').click();
         const fromSelection = {
@@ -190,8 +201,19 @@ try {
     console.log(`A0. до привязки копируются плоские координаты: «${beforeBinding.clip}»`);
     await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
 
-    // A. Модалка: провайдеры, атрибуция, автоподстановка точки привязки
+    // A. Глобус (InfraWorks-style), оттуда — старый диалог привязки
     await page.evaluate(() => document.getElementById('btnBaseMap').click());
+    await page.waitForTimeout(400);
+    const globe = await page.evaluate(() => ({
+        shown: document.getElementById('mapBuilderModal').classList.contains('show'),
+        loadDisabled: document.getElementById('mapBuilderLoad').disabled,
+        title: document.getElementById('mapBuilderTitle')?.textContent || ''
+    }));
+    if (!globe.shown) problems.push('окно карты-глобуса не открылось по «Карта»');
+    if (!globe.loadDisabled) problems.push('«Загрузить» активно без рамки/контура');
+    if (!/Площадка с карты/.test(globe.title)) problems.push(`заголовок глобуса «${globe.title}»`);
+    console.log(`A-g. глобус: ${globe.shown ? 'открыт' : 'НЕТ'}, Загрузить ${globe.loadDisabled ? 'выкл' : 'вкл'}`);
+    await page.evaluate(() => document.getElementById('mapBuilderBind').click());
     await page.waitForTimeout(300);
     const opened = await page.evaluate(() => ({
         shown: document.getElementById('baseMapModal').classList.contains('show'),
@@ -434,6 +456,8 @@ try {
     const coverage = await page.evaluate(async () => {
         document.getElementById('btnBaseMap').click();
         await new Promise((r) => setTimeout(r, 300));
+        document.getElementById('mapBuilderBind').click();
+        await new Promise((r) => setTimeout(r, 300));
         const est = () => document.getElementById('baseMapEstimate').textContent;
         const radiusBefore = document.getElementById('baseMapRadius').value;
         document.getElementById('baseMapRadiusFit').click();
@@ -464,6 +488,8 @@ try {
     // крупными гранями — на километровой площадке шаг был 20 м.
     const drape = await page.evaluate(async () => {
         document.getElementById('btnBaseMap').click();
+        await new Promise((r) => setTimeout(r, 300));
+        document.getElementById('mapBuilderBind').click();
         await new Promise((r) => setTimeout(r, 300));
         document.getElementById('baseMapDrape').checked = true;
         document.getElementById('baseMapRadius').value = '800';
@@ -526,6 +552,8 @@ try {
 
     const rgbNeedTemplate = await page.evaluate(async () => {
         document.getElementById('btnBaseMap').click();
+        await new Promise((r) => setTimeout(r, 300));
+        document.getElementById('mapBuilderBind').click();
         await new Promise((r) => setTimeout(r, 300));
         document.getElementById('baseMapDemSource').value = 'terrainRgb';
         document.getElementById('baseMapDemTemplate').value = '';
@@ -596,6 +624,7 @@ try {
 
     const demRemoved = await page.evaluate(() => {
         document.getElementById('btnBaseMap').click();
+        document.getElementById('mapBuilderBind').click();
         document.getElementById('baseMapDemRemove').click();
         document.getElementById('baseMapCancel').click();
         return window.BimLvaDebug.mapTerrainLayer == null;
@@ -611,12 +640,101 @@ try {
     if (!removed) problems.push('подложка не убралась по кнопке');
     console.log(`F. удаление подложки: ${removed ? 'ок' : 'СБОЙ'}`);
 
+    // M. Model Builder: рамка / контур, лимит 200 га, «Загрузить»
+    const haAround = (site, sideM) => {
+        const mLat = 111320;
+        const mLon = 111320 * Math.cos((site.lat * Math.PI) / 180);
+        const dLat = (sideM / 2) / mLat;
+        const dLon = (sideM / 2) / mLon;
+        return [
+            { lat: site.lat - dLat, lon: site.lon - dLon },
+            { lat: site.lat + dLat, lon: site.lon + dLon }
+        ];
+    };
+    const mOk = await page.evaluate(async ([site, a, b]) => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 200));
+        window.BimLvaDebug.mapBuilderSetView(site.lat, site.lon, 14);
+        window.BimLvaDebug.mapBuilderDrawRect(a, b);
+        return window.BimLvaDebug.mapBuilderState;
+    }, [SITE, ...haAround(SITE, 1000)]);
+    if (!mOk.shown) problems.push('кнопка «Площадка с карты» не открыла глобус');
+    if (!(mOk.areaHa > 90 && mOk.areaHa < 110)) {
+        problems.push(`рамка 1×1 км дала ${mOk.areaHa?.toFixed?.(2)} га, ожидалось ~100`);
+    }
+    if (!mOk.loadEnabled) problems.push('«Загрузить» выкл на 100 га (лимит 200)');
+    console.log(`M1. рамка 1 км: ${mOk.areaHa?.toFixed?.(1)} га, Загрузить ${mOk.loadEnabled ? 'вкл' : 'выкл'}`);
+
+    const mOver = await page.evaluate(([a, b]) => {
+        window.BimLvaDebug.mapBuilderDrawRect(a, b);
+        return window.BimLvaDebug.mapBuilderState;
+    }, haAround(SITE, 1600));
+    if (!mOver.overLimit) problems.push(`рамка 1.6 км (${mOver.areaHa?.toFixed?.(1)} га) не помечена как сверх 200 га`);
+    if (mOver.loadEnabled) problems.push('«Загрузить» не блокируется сверх 200 га');
+    console.log(`M2. рамка 1.6 км: ${mOver.areaHa?.toFixed?.(1)} га, сверх лимита ${mOver.overLimit ? 'да' : 'НЕТ'}`);
+
+    const mPoly = await page.evaluate((site) => {
+        const mLat = 111320;
+        const mLon = 111320 * Math.cos((site.lat * Math.PI) / 180);
+        const pts = [
+            { lat: site.lat, lon: site.lon },
+            { lat: site.lat + 800 / mLat, lon: site.lon },
+            { lat: site.lat, lon: site.lon + 800 / mLon }
+        ];
+        window.BimLvaDebug.mapBuilderDrawPolygon(pts);
+        return window.BimLvaDebug.mapBuilderState;
+    }, SITE);
+    if (mPoly.type !== 'poly' || mPoly.points !== 3) {
+        problems.push(`контур: type=${mPoly.type} points=${mPoly.points}`);
+    }
+    if (!(mPoly.areaHa > 28 && mPoly.areaHa < 36)) {
+        problems.push(`треугольник 800×800 м дал ${mPoly.areaHa?.toFixed?.(2)} га, ожидалось ~32`);
+    }
+    if (!mPoly.loadEnabled) problems.push('контур ~32 га не даёт «Загрузить»');
+    console.log(`M3. контур: ${mPoly.areaHa?.toFixed?.(2)} га, ${mPoly.points} вершин`);
+
+    await page.evaluate(([a, b]) => {
+        window.BimLvaDebug.mapBuilderDrawRect(a, b);
+    }, haAround(SITE, 800));
+    await page.evaluate(() => document.getElementById('mapBuilderLoad').click());
+    const mLoaded = await page
+        .waitForFunction(
+            () => window.BimLvaDebug?.basemapLayer != null && window.BimLvaDebug?.mapTerrainLayer != null,
+            { timeout: 90_000 }
+        )
+        .then(() => true).catch(() => false);
+    if (!mLoaded) {
+        problems.push('«Загрузить» с глобуса не построило снимок и рельеф');
+    } else {
+        const layers = await page.evaluate(() => ({
+            bm: window.BimLvaDebug.basemapLayer,
+            dem: window.BimLvaDebug.mapTerrainLayer,
+            builderClosed: !document.getElementById('mapBuilderModal').classList.contains('show')
+        }));
+        if (!layers.builderClosed) problems.push('окно глобуса не закрылось после «Загрузить»');
+        if (!layers.dem?.isMapTerrain) problems.push('после «Загрузить» нет меша рельефа');
+        if (layers.dem?.isGeoRaster) problems.push('рельеф после «Загрузить» помечен как картинка');
+        const side = Math.min(layers.bm.sizeX, layers.bm.sizeY);
+        if (!(side > 700 && side < 1400)) {
+            problems.push(`охват после «Загрузить» ${layers.bm.sizeX.toFixed(0)}×${layers.bm.sizeY.toFixed(0)} м, ждали ~800–1130`);
+        }
+        console.log(
+            `M4. Загрузить: подложка ${layers.bm.sizeX.toFixed(0)}×${layers.bm.sizeY.toFixed(0)} м, ` +
+            `рельеф ${layers.dem.sizeX.toFixed(0)}×${layers.dem.sizeY.toFixed(0)} м`
+        );
+    }
+
     // G. Понятная ошибка, если тайлы не отдаются
     await page.route('**/tile.openstreetmap.org/**', (route) => route.abort());
-    await page.evaluate(() => {
+    await page.evaluate(([lat, lon]) => {
         document.getElementById('btnBaseMap').click();
+        document.getElementById('mapBuilderBind').click();
+        document.getElementById('baseMapProvider').value = 'osm';
+        document.getElementById('baseMapProvider').dispatchEvent(new Event('change', { bubbles: true }));
+        document.getElementById('baseMapLat').value = String(lat);
+        document.getElementById('baseMapLon').value = String(lon);
         document.getElementById('baseMapApply').click();
-    });
+    }, [SITE.lat, SITE.lon]);
     const errShown = await page
         .waitForFunction(
             () => [...document.querySelectorAll('.toast .toast-text')].some((t) => /тайл/i.test(t.textContent)),
