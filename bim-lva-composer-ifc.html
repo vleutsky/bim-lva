@@ -1100,6 +1100,8 @@
         #polyProfileChart { height: 260px; }
         #roadXsChart { height: 240px; background: var(--panel-2); }
         #roadXsChart .xs-slope { pointer-events: none; }
+        #roadXsChart .xs-shape { cursor: grab; pointer-events: fill; }
+        #roadXsChart .xs-shape.is-drag { cursor: grabbing; }
         .road-xs-nav {
             display: flex;
             align-items: center;
@@ -3004,7 +3006,7 @@
             left: var(--palette-gap) !important;
             top: calc(var(--top-bar-h) + var(--palette-gap)) !important;
             bottom: calc(var(--status) + var(--palette-gap)) !important;
-            width: 340px !important;
+            width: var(--pal-w, 340px) !important;
             right: auto !important;
             height: auto !important;
         }
@@ -3012,7 +3014,7 @@
             right: var(--palette-gap) !important;
             top: calc(var(--top-bar-h) + var(--palette-gap)) !important;
             bottom: calc(var(--status) + var(--palette-gap)) !important;
-            width: 340px !important;
+            width: var(--pal-w, 340px) !important;
             left: auto !important;
             height: auto !important;
         }
@@ -3026,9 +3028,55 @@
             max-height: min(420px, 48vh) !important;
         }
         .pal-card.dock-bottom {
-            height: min(340px, 42vh) !important;
+            height: var(--pal-h, min(340px, 42vh)) !important;
             max-height: none !important;
         }
+        .modal-backdrop.floating-panel .modal-card:not(.dock-left):not(.dock-right):not(.dock-bottom):not(.pal-min) {
+            min-width: 280px;
+            min-height: 160px;
+            width: var(--pal-w, min(460px, 94vw));
+            height: var(--pal-h, auto);
+            max-height: calc(100vh - 96px);
+        }
+        .pal-resize {
+            position: absolute;
+            z-index: 6;
+            background: transparent;
+        }
+        .pal-resize-e { top: 10px; right: 0; bottom: 10px; width: 8px; cursor: ew-resize; }
+        .pal-resize-s { left: 10px; right: 10px; bottom: 0; height: 8px; cursor: ns-resize; }
+        .pal-resize-n { left: 10px; right: 10px; top: 0; height: 8px; cursor: ns-resize; }
+        .pal-resize-w { top: 10px; left: 0; bottom: 10px; width: 8px; cursor: ew-resize; }
+        .pal-resize-se {
+            right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+        }
+        .pal-resize-se::after {
+            content: '';
+            position: absolute;
+            right: 3px; bottom: 3px;
+            width: 9px; height: 9px;
+            border-right: 2px solid var(--line);
+            border-bottom: 2px solid var(--line);
+            pointer-events: none;
+        }
+        .modal-card.dock-left .pal-resize-w,
+        .modal-card.dock-left .pal-resize-s,
+        .modal-card.dock-left .pal-resize-n,
+        .modal-card.dock-left .pal-resize-se,
+        .modal-card.dock-right .pal-resize-e,
+        .modal-card.dock-right .pal-resize-s,
+        .modal-card.dock-right .pal-resize-n,
+        .modal-card.dock-right .pal-resize-se,
+        .modal-card.dock-bottom .pal-resize-e,
+        .modal-card.dock-bottom .pal-resize-w,
+        .modal-card.dock-bottom .pal-resize-s,
+        .modal-card.dock-bottom .pal-resize-se,
+        .modal-card.pal-min .pal-resize { display: none; }
+        .modal-card.dock-bottom .pal-resize-n { display: block; }
+        .modal-card.dock-left .pal-resize-e { display: block; }
+        .modal-card.dock-right .pal-resize-w { display: block; }
+        .modal-card:not(.dock-left):not(.dock-right):not(.dock-bottom) .pal-resize-n,
+        .modal-card:not(.dock-left):not(.dock-right):not(.dock-bottom) .pal-resize-w { display: none; }
         .modal-card.pal-min,
         .pal-card.pal-min {
             height: auto !important;
@@ -3092,6 +3140,7 @@
         }
         .rs-bar select#roadXsSelect,
         .rs-bar select#polyProfileSelect { width: 132px; }
+        .rs-bar select#roadXsCategory { width: 148px; }
         .rs-bar select#roadXsFigure,
         .rs-bar select#roadXsRuleWhen { width: 118px; box-shadow: inset 2px 0 0 var(--ui); }
         .rs-bar .btn { height: 22px; min-height: 22px; padding: 0 8px; font-size: 11px; }
@@ -4593,15 +4642,16 @@
                 <h3>Откосы до рельефа</h3>
                 <span class="modal-drag-hint">⠿ перетащить</span>
             </div>
-            <div class="bulk-note">
+            <div class="bulk-note" id="slopeHelpNote">
                 От каждой точки линии откос идёт по нормали в плане до пересечения
                 с рельефом или с уже построенными откосами и площадками: выше
                 земли на бровке — насыпь, ниже — выемка. Линия
                 выхода добавляется отдельной полилинией (правится на сцене).
                 У замкнутого контура середина заполняется как
                 площадка (заливка поверх рельефа, цвет задаётся отдельно);
-                внутрь своей площадки откос не идёт. У разомкнутой линии
-                торцы закрываются откосом вдоль оси. На вогнутых
+                внутрь своей площадки откос не идёт. Торцы разомкнутой линии
+                откосом не закрываются — это для мостовых уступов, не для дороги.
+                На вогнутых
                 углах соседние откосы могут
                 налезать друг на друга — это не вычищается. Где поверхность не
                 найдена или откос не дотянулся за максимальный вылет — участок
@@ -4654,6 +4704,16 @@
                 <label data-tip="Шаг пикетов вдоль оси, м. Вершины оси всегда попадают в список.">шаг
                     <input class="editInput" id="roadXsStep" type="number" min="0.5" step="1" value="20">
                 </label>
+                <label data-tip="Категория дороги по СП 34: полосы, обочины и толщина одежды. «Построить» протянет шаблон вдоль оси.">кат.
+                    <select class="editInput" id="roadXsCategory">
+                        <option value="">шаблон…</option>
+                        <option value="I">I · 2×3.75 + обоч. 3.75</option>
+                        <option value="II">II · 3.75 + обоч. 2.50</option>
+                        <option value="III">III · 3.50 + обоч. 2.00</option>
+                        <option value="IV">IV · 3.00 + обоч. 1.75</option>
+                        <option value="V">V · 4.50 + обоч. 1.00</option>
+                    </select>
+                </label>
                 <label data-tip="Ширина шаблона влево от оси, м.">←
                     <input class="editInput" id="roadXsWidthL" type="number" min="0.5" step="0.5" value="15">
                 </label>
@@ -4670,10 +4730,13 @@
                 <label data-tip="Заложение откоса выемки: 1 : m.">1:m выем.
                     <input class="editInput" id="roadXsMCut" type="number" min="0.1" step="0.1" value="1">
                 </label>
-                <label class="chk" data-tip="Строить откосы от кромок до рельефа вместе с «Построить». Либо кнопка △.">
+                <label data-tip="Толщина откоса (одежда/растительный слой), м. Видна на сечении полосой и в TIN как тело, не лист.">откос
+                    <input class="editInput" id="roadXsSlopeThk" type="number" min="0" step="0.05" value="0.15">
+                </label>
+                <label class="chk" data-tip="Строить откосы от кромок до рельефа вместе с «Построить». Либо кнопка △. Торцы оси не закрываются.">
                     <input type="checkbox" id="roadXsSlopeOn"> откосы
                 </label>
-                <button type="button" class="btn load-btn" id="roadXsApply" data-tip="Протянуть шаблон вдоль оси: полотно в сцене и чертёж сечения.">Построить</button>
+                <button type="button" class="btn load-btn" id="roadXsApply" data-tip="Протянуть шаблон вдоль оси: полотно в сцене и чертёж сечения. После правки оси нажмите снова — живая перестройка выключена, чтобы не тормозить.">Построить</button>
                 <button type="button" class="tip" data-tip="План — ось, ширины, слои, откосы. Профиль — земля и ось по пикетажу, кружки тянутся по отметке. Поперечник — шаблон: кружки, двойной клик — точка, Shift+две точки — связь, Alt — удалить. Земля на чертеже — справка.">?</button>
             </div>
             <div class="rstab-pane" id="rstab-plan">
@@ -4684,7 +4747,7 @@
                         <div class="prop small"><div class="k">Сечения, цвет</div><input type="color" class="polyline-color" id="roadXsColor" value="#2a7de1" title="Цвет линий поперечников в сцене"></div>
                         <div class="prop small">
                             <div class="k">Связать с осью</div>
-                            <input type="checkbox" id="roadXsLive" checked title="Перестраивать поперечники при правке оси">
+                            <input type="checkbox" id="roadXsLive" title="Перестраивать коридор при каждом шаге правки оси. По умолчанию выкл. — жмите «Построить» / «Обновить», иначе тормозит.">
                         </div>
                         <div class="prop small"><div class="k">Вылет откоса, м</div><input class="editInput" id="roadXsSlopeReach" type="number" min="0.5" step="0.5" value="30" title="Максимальный вылет откоса от кромки, пока не встретит землю"></div>
                         <div class="prop small"><div class="k">Ось, цвет</div><input type="color" class="polyline-color" id="roadAxisColor" value="#1f8f5f" title="Цвет пунктирной оси трассы"></div>
@@ -4713,6 +4776,7 @@
                             <option value="50">50 : 1</option>
                         </select>
                     </label>
+                    <button class="btn load-btn" id="polyProfileRefresh" data-tip="Пересчитать землю по оси и чертёж. Во время перетаскивания вершины земля не переснимается — иначе окно задыхается.">Обновить</button>
                     <button class="btn" id="polyProfileFit" data-tip="Вписать весь профиль в окно">⤢</button>
                     <button class="btn" id="polyProfileCsv" data-tip="Вершина; пикет; земля; ось; рабочая; уклон">CSV</button>
                     <button class="btn" id="polyProfileDrape" data-tip="Посадить вершины оси на снятые отметки земли">⤓ на землю</button>
@@ -4732,7 +4796,7 @@
                             <span id="roadXsPk" class="pin-xyz">PK —</span>
                     </div>
                     <button class="btn" id="roadXsFit" data-tip="Вписать сечение целиком. Колесо — зум к курсору, Shift+колесо — только по высоте, перетаскивание фона — сдвиг.">⤢</button>
-                    <select class="editInput" id="roadXsFigure" data-tip="Добавить фигуру к выбранной точке (иначе к правой кромке). Точки можно править зумом и перетаскиванием.">
+                    <select class="editInput" id="roadXsFigure" data-tip="Добавить фигуру к выбранной точке (иначе к правой кромке). Форму можно таскать и примагничивать к точкам шаблона.">
                         <option value="">＋ фигура…</option>
                         <option value="curb">Бордюр</option>
                         <option value="shoulder">Обочина</option>
@@ -6525,6 +6589,37 @@
                     added: { code: added.shape.code, kind: added.kind, anchor: added.anchor.code }
                 };
             },
+            moveRoadXsShape(shapeId, dOff, dDz) {
+                const model = currentRoadXsModel();
+                const sh = model?.template?.shapes?.find((s) => s.id === shapeId);
+                if (!sh) return null;
+                const moved = moveTemplateShape(model.template, sh, Number(dOff) || 0, Number(dDz) || 0);
+                applyRoadTemplateChange(model, { relink: false });
+                return { ...snapshotRoadTemplate(model.template), moved };
+            },
+            attachRoadXsShape(shapeId, pointId) {
+                const model = currentRoadXsModel();
+                const sh = model?.template?.shapes?.find((s) => s.id === shapeId);
+                if (!sh) return null;
+                const att = attachShapeToPoint(model.template, sh, pointId);
+                applyRoadTemplateChange(model, { relink: false });
+                return { ...snapshotRoadTemplate(model.template), attached: att };
+            },
+            applyRoadCategory(cat) {
+                return applyRoadCategoryPreset(cat);
+            },
+            paletteResize() {
+                const card = $('roadXsCard') || document.querySelector('.modal-card');
+                return {
+                    se: !!card?.querySelector('.pal-resize-se'),
+                    e: !!card?.querySelector('.pal-resize-e'),
+                    n: !!card?.querySelector('.pal-resize-n'),
+                    liveDefault: !!$('roadXsLive')?.checked,
+                    hasRefresh: !!$('polyProfileRefresh'),
+                    hasCategory: !!$('roadXsCategory'),
+                    slopeThk: parseFloat($('roadXsSlopeThk')?.value)
+                };
+            },
             setRoadXsPointRule(id, rule) {
                 const model = currentRoadXsModel();
                 const pt = model?.template?.points.find((p) => p.id === id);
@@ -6579,7 +6674,7 @@
                 const model = currentRoadXsModel();
                 if (!model) return null;
                 const built = buildRoadTemplateSlopes(model, {
-                    mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30,
+                    ...readRoadXsSlopeOpts(),
                     ...(opts || {})
                 });
                 if (!built?.length) return null;
@@ -6589,9 +6684,12 @@
                         fill: b.sm.sides.reduce((n, s) => n + s.fill, 0),
                         cut: b.sm.sides.reduce((n, s) => n + s.cut, 0),
                         tinFaces: b.sm.tin?.faces?.length || 0,
+                        capFaces: b.sm.capFaces || 0,
                         polylineId: b.rec.id
                     })),
-                    tinFaces: built.reduce((n, b) => n + (b.sm.tin?.faces?.length || 0), 0)
+                    tinFaces: built.reduce((n, b) => n + (b.sm.tin?.faces?.length || 0), 0),
+                    capFaces: built.reduce((n, b) => n + (b.sm.capFaces || 0), 0),
+                    thickness: readRoadXsSlopeOpts().thickness
                 };
             },
             /**
@@ -9256,6 +9354,30 @@
             }
         }
 
+        /** Тело толщины t по нормали грани — чтобы откос был не листом. */
+        function slopePushSlab(positions, colors, a, b, c, col, t) {
+            if (!(t > 1e-4)) {
+                slopePushTri(positions, colors, a, b, c, col);
+                return;
+            }
+            const nx0 = (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y);
+            const ny0 = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
+            const nz0 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+            const len = Math.hypot(nx0, ny0, nz0) || 1;
+            const nx = nx0 / len * t, ny = ny0 / len * t, nz = nz0 / len * t;
+            const a2 = { x: a.x + nx, y: a.y + ny, z: a.z + nz };
+            const b2 = { x: b.x + nx, y: b.y + ny, z: b.z + nz };
+            const c2 = { x: c.x + nx, y: c.y + ny, z: c.z + nz };
+            slopePushTri(positions, colors, a, b, c, col);
+            slopePushTri(positions, colors, a2, c2, b2, col);
+            slopePushTri(positions, colors, a, b, b2, col);
+            slopePushTri(positions, colors, a, b2, a2, col);
+            slopePushTri(positions, colors, b, c, c2, col);
+            slopePushTri(positions, colors, b, c2, b2, col);
+            slopePushTri(positions, colors, c, a, a2, col);
+            slopePushTri(positions, colors, c, a2, c2, col);
+        }
+
         /** Склеить треугольники в TIN с общими вершинами — так Civil любит Surface. */
         function weldTin(tris) {
             const points = [];
@@ -10057,13 +10179,15 @@
             const fillPos = [], fillCol = [], cutPos = [], cutCol = [];
             const fillColor = new THREE.Color(opts.fillColor || '#c9793a');
             const cutColor = new THREE.Color(opts.cutColor || '#3a83c9');
+            const thk = Math.max(0, Number(opts.thickness) || 0);
             const pushMode = (mode, a, b, c) => {
                 const isCut = mode === 'cut';
-                slopePushTri(
+                slopePushSlab(
                     isCut ? cutPos : fillPos,
                     isCut ? cutCol : fillCol,
                     a, b, c,
-                    isCut ? cutColor : fillColor
+                    isCut ? cutColor : fillColor,
+                    thk
                 );
             };
             const last = closed ? stations.length : stations.length - 1;
@@ -10224,7 +10348,11 @@
             if (!results.length) return null;
             const padColor = opts.padColor || '#d4a05a';
             const pad = buildSlopePadInterior(record, padColor, holeRings);
-            const caps = buildSlopeEndCaps(record, results, opts, sampleZ);
+            // Торцы откосом — только если явно попросили (мостовой уступ).
+            // У дороги и обычной разомкнутой бровки торец открытый.
+            const caps = opts.endCaps
+                ? buildSlopeEndCaps(record, results, opts, sampleZ)
+                : { meshes: [], triangles: [], fill: 0, cut: 0, capExits: [null, null] };
             const contour = buildSlopeOuterContour(record, results, caps.capExits, opts);
             const model = {
                 id: ++slopeSeq,
@@ -11681,7 +11809,7 @@
         }
 
         /** Перестроить геометрию/длины/абсолютные координаты после правки точек или радиусов. */
-        function rebuildPolylineGeometry(record, { notifyClamp = false } = {}) {
+        function rebuildPolylineGeometry(record, { notifyClamp = false, skipLive = false } = {}) {
             const { points, clamped, guides } = buildFilletedPoints(
                 record.pts, record.radii, 20, !!record.closed
             );
@@ -11708,7 +11836,7 @@
             if (notifyClamp && clamped) {
                 notify(`«${record.name}»: радиус сопряжения уменьшен — не хватает длины отрезка.`);
             }
-            scheduleRoadXsRebuild(record.id);
+            if (!skipLive && !polylineHandleDrag) scheduleRoadXsRebuild(record.id);
             markNeedsRender();
         }
 
@@ -12596,6 +12724,7 @@
                     el.classList.remove('is-z');
                     renderPolylinePointsEditor(record);
                     renderPolylinesList();
+                    scheduleRoadXsRebuild(record.id);
                     trackUsage('polyline_vertex_drag', { mode: zMode ? 'z' : 'plan' });
                 };
                 window.addEventListener('pointermove', move);
@@ -13461,7 +13590,7 @@
                     widthR: Number($('roadXsWidthR')?.value) || 15,
                     sampleStep: Number($('roadXsSample')?.value) || 1,
                     color: $('roadXsColor')?.value || '#2a7de1',
-                    live: $('roadXsLive') ? !!$('roadXsLive').checked : true
+                    live: $('roadXsLive') ? !!$('roadXsLive').checked : false
                 });
                 if (model) {
                     notify(
@@ -13983,7 +14112,7 @@
          * полилинии. Пикет при этом меряется вдоль отрисованной линии
          * (с дугами), иначе он не сойдётся с длиной, которую показывает панель.
          */
-        function polylineProfileVertices(record) {
+        function polylineProfileVertices(record, prevRows) {
             const pts = record.pts;
             if (!pts || pts.length < 2) return null;
 
@@ -14006,18 +14135,26 @@
 
             const MISS = Number.NEGATIVE_INFINITY;
             const rows = pts.map((p, i) => {
-                const gz = sampleTerrainZ(p.x, p.y, MISS);
                 const axisAbs = worldPointToAbsoluteXYZ(p) || p;
-                const groundAbs = gz === MISS
-                    ? null
-                    : (worldPointToAbsoluteXYZ(new THREE.Vector3(p.x, p.y, gz)) || { z: gz });
+                const old = prevRows?.[i];
+                const reuse = old && Math.hypot((old.x || 0) - p.x, (old.y || 0) - p.y) < 1e-6
+                    && old.ground !== undefined;
+                let ground = null;
+                if (reuse) ground = old.ground;
+                else {
+                    const gz = sampleTerrainZ(p.x, p.y, MISS);
+                    const groundAbs = gz === MISS
+                        ? null
+                        : (worldPointToAbsoluteXYZ(new THREE.Vector3(p.x, p.y, gz)) || { z: gz });
+                    ground = groundAbs ? groundAbs.z : null;
+                }
                 return {
                     idx: i,
                     sta: staOf(p),
                     x: p.x, y: p.y,
                     axis: axisAbs.z,
-                    ground: groundAbs ? groundAbs.z : null,
-                    work: groundAbs ? axisAbs.z - groundAbs.z : null,
+                    ground,
+                    work: ground != null ? axisAbs.z - ground : null,
                     slope: null
                 };
             });
@@ -14124,7 +14261,7 @@
             return (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * p;
         }
 
-        function renderPolylineProfile() {
+        function renderPolylineProfile({ resample = true } = {}) {
             const svg = $('polyProfileChart');
             const meta = $('polyProfileMeta');
             const table = $('polyProfileTable');
@@ -14137,10 +14274,15 @@
             // не выносим, пользователю он ничего не решает.
             // Длину в плане уже посчитал rebuildPolylineGeometry — второй раз
             // стрелять лучами только ради неё незачем.
+            // Во время перетаскивания вершины землю не переснимаем: 400 лучей
+            // на кадр душат окно. Кнопка «Обновить» или конец правки — полный пересчёт.
             const total = rec.length2d || 0;
             const step = total > 0 ? Math.max(0.25, total / 400) : 1;
-            const data = samplePolylineProfile(rec, step);
-            const rows = polylineProfileVertices(rec);
+            const reuse = !resample && polyProfileData && polyProfileRecordId === rec.id;
+            const rows = polylineProfileVertices(rec, reuse ? polyProfileData.vertices : null);
+            const data = reuse && polyProfileData.samples
+                ? { total, samples: polyProfileData.samples, missed: polyProfileData.missed }
+                : samplePolylineProfile(rec, step);
             polyProfileData = data && rows ? { ...data, vertices: rows } : null;
 
             if (!data || !rows) {
@@ -14401,7 +14543,7 @@
                 polyProfileView.to = to;
                 if (polyProfileView.zCentre == null) polyProfileView.zCentre = (f.zMin + f.zMax) / 2;
             }
-            renderPolylineProfile();
+            renderPolylineProfile({ resample: false });
         }, { passive: false });
 
         // Перетаскивание: за кружок — отметка вершины, за фон — сдвиг окна.
@@ -14436,12 +14578,13 @@
                 const move = (e) => {
                     if (rec.kind === '2d') return;
                     rec.pts[idx].z = startZ + (startY - e.clientY) * mPerPx;
-                    rebuildPolylineGeometry(rec);
-                    renderPolylineProfile();
+                    rebuildPolylineGeometry(rec, { skipLive: true });
+                    renderPolylineProfile({ resample: false });
                 };
                 const up = () => {
                     window.removeEventListener('pointermove', move);
                     window.removeEventListener('pointerup', up);
+                    rebuildPolylineGeometry(rec);
                     renderPolylinePointsEditor(rec);
                     renderPolylinesList();
                     trackUsage('profile_vertex_drag', {});
@@ -14466,7 +14609,7 @@
                 polyProfileView.from = from0 - ds;
                 polyProfileView.to = to0 - ds;
                 polyProfileView.zCentre = z0 + (p.y - start.y) * f.mPerPxY;
-                renderPolylineProfile();
+                renderPolylineProfile({ resample: false });
             };
             const up = () => {
                 window.removeEventListener('pointermove', move);
@@ -14536,6 +14679,22 @@
             renderPolylineProfile();
         });
         $('polyProfileFit')?.addEventListener('click', profileFitAll);
+        $('polyProfileRefresh')?.addEventListener('click', () => {
+            const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
+            renderPolylineProfile({ resample: true });
+            if (rec) {
+                const model = roadXsModels.find((m) => m.polylineId === rec.id);
+                if (model) {
+                    buildRoadCrossSections(rec, {
+                        step: model.step, widthL: model.widthL, widthR: model.widthR,
+                        sampleStep: model.sampleStep, color: model.color, live: !!model.live
+                    });
+                    notify(`Профиль и полотно «${rec.name}» обновлены.`);
+                } else {
+                    notify(`Профиль «${rec.name}» пересчитан.`);
+                }
+            }
+        });
 
         $('polyProfileSelect')?.addEventListener('change', () => {
             polyProfileRecordId = Number($('polyProfileSelect').value);
@@ -14580,6 +14739,109 @@
         const ROAD_XS_MITER_CAP = 8;
         const ROAD_DECK_COLOR = '#8a7344';
         const ROAD_PAVE_THICK = 0.20;
+
+        /** Категории СП 34 (упрощённо): полосы + обочины, толщина одежды. */
+        const ROAD_CATEGORY_PRESETS = {
+            I:   { cat: 'I',   lanes: 2, lane: 3.75, shld: 3.75, thk: 0.24 },
+            II:  { cat: 'II',  lanes: 2, lane: 3.75, shld: 2.50, thk: 0.22 },
+            III: { cat: 'III', lanes: 2, lane: 3.50, shld: 2.00, thk: 0.20 },
+            IV:  { cat: 'IV',  lanes: 2, lane: 3.00, shld: 1.75, thk: 0.18 },
+            V:   { cat: 'V',   lanes: 1, lane: 4.50, shld: 1.00, thk: 0.16 }
+        };
+
+        function roadCategoryDims(p) {
+            const cw = (p.lanes * p.lane) / 2;
+            const widthL = cw + p.shld;
+            const widthR = cw + p.shld;
+            return { ...p, cw, widthL, widthR };
+        }
+
+        /**
+         * Шаблон категории: покрытие между кромками проезжей части + обочины
+         * той же толщины (чтобы слой был виден), ось CL.
+         */
+        function roadCategoryTemplate(preset) {
+            const p = roadCategoryDims(preset);
+            const L = p.widthL, R = p.widthR, cw = p.cw, t = p.thk;
+            return {
+                seq: 9,
+                shapeSeq: 3,
+                category: p.cat,
+                points: [
+                    { id: 1, code: 'LS', off: -L, dz: 0 },
+                    { id: 2, code: 'LE', off: -cw, dz: 0 },
+                    { id: 3, code: 'CL', off: 0, dz: 0 },
+                    { id: 4, code: 'RE', off: cw, dz: 0 },
+                    { id: 5, code: 'RS', off: R, dz: 0 },
+                    { id: 6, code: 'REB', off: cw, dz: -t },
+                    { id: 7, code: 'LEB', off: -cw, dz: -t },
+                    { id: 8, code: 'RSB', off: R, dz: -t },
+                    { id: 9, code: 'LSB', off: -L, dz: -t }
+                ],
+                links: [
+                    { a: 1, b: 2, code: 'LSH' },
+                    { a: 2, b: 3, code: 'LT' },
+                    { a: 3, b: 4, code: 'RT' },
+                    { a: 4, b: 5, code: 'RSH' },
+                    { a: 4, b: 6, code: 'RS' },
+                    { a: 6, b: 7, code: 'BOT' },
+                    { a: 7, b: 2, code: 'LS' },
+                    { a: 5, b: 8, code: 'RSO' },
+                    { a: 8, b: 6, code: 'RSB' },
+                    { a: 1, b: 9, code: 'LSO' },
+                    { a: 9, b: 7, code: 'LSB' }
+                ],
+                shapes: [
+                    { id: 1, code: 'PVMT', pts: [2, 3, 4, 6, 7] },
+                    { id: 2, code: 'LSHLD', pts: [1, 2, 7, 9] },
+                    { id: 3, code: 'RSHLD', pts: [4, 5, 8, 6] }
+                ]
+            };
+        }
+
+        function applyRoadCategoryPreset(cat) {
+            const raw = ROAD_CATEGORY_PRESETS[cat];
+            if (!raw) return null;
+            const p = roadCategoryDims(raw);
+            const set = (id, v) => { const el = $(id); if (el) el.value = String(v); };
+            set('roadXsCategory', cat);
+            set('roadXsWidthL', p.widthL);
+            set('roadXsWidthR', p.widthR);
+            set('roadXsLayerThk', p.thk);
+            const tpl = roadCategoryTemplate(p);
+            const id = Number($('roadXsSelect')?.value);
+            const rec = drawnPolylines.find((r) => r.id === id);
+            let model = currentRoadXsModel();
+            if (rec && allMeshes.length) {
+                model = buildRoadCrossSections(rec, {
+                    step: Number($('roadXsStep')?.value) || 20,
+                    widthL: p.widthL,
+                    widthR: p.widthR,
+                    sampleStep: Number($('roadXsSample')?.value) || 1,
+                    color: $('roadXsColor')?.value || '#2a7de1',
+                    live: !!$('roadXsLive')?.checked
+                });
+                if (model) {
+                    model.template = tpl;
+                    model.category = cat;
+                    applyRoadTemplateChange(model, { relink: false });
+                    if ($('roadXsSlopeOn')?.checked) {
+                        buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                    }
+                }
+            }
+            return {
+                cat,
+                widthL: p.widthL,
+                widthR: p.widthR,
+                thk: p.thk,
+                lanes: p.lanes,
+                lane: p.lane,
+                shld: p.shld,
+                template: snapshotRoadTemplate(tpl),
+                built: !!model
+            };
+        }
 
         function defaultRoadTemplate(widthL, widthR) {
             const L = Math.max(0.5, Number(widthL) || 15);
@@ -14931,6 +15193,72 @@
                 sh = shape(spec.code, [anchor.id, i1, i2, i3, i4]);
             }
             return sh ? { shape: sh, anchor, kind } : null;
+        }
+
+        const ROAD_XS_FIGURE_CODES = new Set(['CURB', 'SHLD', 'DITCH', 'BOX', 'TRAP', 'TRI']);
+
+        function isMovableXsShape(sh) {
+            return !!(sh && ROAD_XS_FIGURE_CODES.has(sh.code));
+        }
+
+        function exclusiveShapeIds(tpl, sh) {
+            const shared = new Set();
+            (tpl.shapes || []).forEach((other) => {
+                if (other.id === sh.id) return;
+                (other.pts || []).forEach((id) => shared.add(id));
+            });
+            const ids = new Set();
+            (sh.pts || []).forEach((id) => {
+                if (!shared.has(id)) ids.add(id);
+            });
+            let added = true;
+            while (added) {
+                added = false;
+                (tpl.points || []).forEach((p) => {
+                    if (p.parent != null && ids.has(p.parent) && !ids.has(p.id) && !shared.has(p.id)) {
+                        ids.add(p.id);
+                        added = true;
+                    }
+                });
+            }
+            return ids;
+        }
+
+        function shapeRootPoints(tpl, ids) {
+            return (tpl.points || []).filter((p) =>
+                ids.has(p.id) && (p.parent == null || !ids.has(p.parent)));
+        }
+
+        function moveTemplateShape(tpl, sh, dOff, dDz) {
+            if (!tpl || !sh) return null;
+            const ids = exclusiveShapeIds(tpl, sh);
+            const roots = shapeRootPoints(tpl, ids);
+            roots.forEach((pt) => {
+                writeTemplatePointAbs(tpl, pt, pt.off + dOff, pt.dz + dDz);
+            });
+            return { ids: [...ids], roots: roots.map((p) => p.id) };
+        }
+
+        function attachShapeToPoint(tpl, sh, targetId) {
+            if (!tpl || !sh) return null;
+            const target = templatePoint(tpl, targetId);
+            if (!target) return null;
+            const ids = exclusiveShapeIds(tpl, sh);
+            if (ids.has(targetId)) return null;
+            const roots = shapeRootPoints(tpl, ids);
+            roots.forEach((pt) => {
+                pt.parent = target.id;
+                pt.relOff = pt.off - target.off;
+                pt.relDz = pt.dz - target.dz;
+            });
+            sh.pts = (sh.pts || []).map((id) => (ids.has(id) ? id : target.id));
+            const seen = new Set();
+            sh.pts = sh.pts.filter((id) => {
+                if (seen.has(id)) return false;
+                seen.add(id);
+                return true;
+            });
+            return { target: target.id, roots: roots.map((p) => p.id) };
         }
 
         function sampleStationGroundZ(st, off) {
@@ -15712,7 +16040,7 @@
             Object.assign(model, {
                 name: record.name,
                 color: opts.color || $('roadXsColor')?.value || '#2a7de1',
-                live: opts.live !== false,
+                live: !!opts.live,
                 ...sampled
             });
             if (!keptTpl) {
@@ -15815,7 +16143,9 @@
                 mCut: num('roadXsMCut', 1, 0.1),
                 step: 0.5,
                 maxReach: num('roadXsSlopeReach', 30, 0.5),
-                fillColor: '#c9793a'
+                fillColor: '#c9793a',
+                thickness: num('roadXsSlopeThk', 0.15, 0),
+                endCaps: false
             };
         }
 
@@ -16078,6 +16408,7 @@
                     <text x="${(q.x + 8).toFixed(1)}" y="${(q.y - 8).toFixed(1)}" fill="#6a5420">${esc(p.code)}${ghost ? ' ∅' : ''}</text>
                 </g>`;
             }).join('');
+            const slopeThk = Math.max(0, Number(slopeOpts.thickness) || 0);
             const slopeDraw = slopeSecs.map(({ side, pt, sec }) => {
                 if (!sec?.valid || !sec.exit) return '';
                 const a = xyOf(pt);
@@ -16087,13 +16418,25 @@
                 const bx = px(off), by = py(ez);
                 const col = sec.mode === 'cut' ? '#3a83c9' : '#c9793a';
                 const mx = (a.x + bx) / 2, my = (a.y + by) / 2;
-                return `<line class="xs-slope" data-side="${side}" data-mode="${esc(sec.mode || '')}"
+                let body = '';
+                if (slopeThk > 1e-4) {
+                    const doff = off - pt.off;
+                    const dz = ez - (zAxis + pt.dz);
+                    const len = Math.hypot(doff, dz) || 1;
+                    const nx = (-dz / len) * slopeThk;
+                    const nz = (doff / len) * slopeThk;
+                    const a2 = { x: px(pt.off + nx), y: py(zAxis + pt.dz + nz) };
+                    const b2 = { x: px(off + nx), y: py(ez + nz) };
+                    body = `<path class="xs-slope-body" data-side="${side}" d="M ${a.x.toFixed(1)} ${a.y.toFixed(1)} L ${bx.toFixed(1)} ${by.toFixed(1)} L ${b2.x.toFixed(1)} ${b2.y.toFixed(1)} L ${a2.x.toFixed(1)} ${a2.y.toFixed(1)} Z"
+                        fill="${col}" fill-opacity="0.38" stroke="${col}" stroke-width="0.8"/>`;
+                }
+                return `${body}<line class="xs-slope" data-side="${side}" data-mode="${esc(sec.mode || '')}"
                     x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}"
                     x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}"
                     stroke="${col}" stroke-width="2.2" stroke-dasharray="5 3"/>
                     <circle class="xs-slope-end" cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="3.2"
                         fill="${col}" stroke="#fff" stroke-width="1"/>
-                    <text x="${mx.toFixed(1)}" y="${(my - 6).toFixed(1)}" text-anchor="middle" fill="${col}">откос</text>`;
+                    <text x="${mx.toFixed(1)}" y="${(my - 6).toFixed(1)}" text-anchor="middle" fill="${col}">откос ${slopeThk > 1e-4 ? slopeThk.toFixed(2) + ' м' : ''}</text>`;
             }).join('');
             svg.setAttribute('viewBox', `0 0 ${pad.w} ${pad.h}`);
             svg.innerHTML = `
@@ -16560,6 +16903,21 @@
         });
         $('roadXsLayerThk')?.addEventListener('change', () => applyRoadLayerThicknessFromForm());
         $('roadXsLayerThk')?.addEventListener('input', () => applyRoadLayerThicknessFromForm());
+        $('roadXsSlopeThk')?.addEventListener('change', () => renderRoadXsView());
+        $('roadXsSlopeThk')?.addEventListener('input', () => renderRoadXsView());
+        $('roadXsCategory')?.addEventListener('change', () => {
+            const cat = $('roadXsCategory')?.value;
+            if (!cat) return;
+            const res = applyRoadCategoryPreset(cat);
+            if (!res) return;
+            if (res.built) {
+                showRoadStudioTab('xs');
+                notify(`Категория ${res.cat}: ${res.lanes}×${res.lane.toFixed(2)} м + обоч. ${res.shld.toFixed(2)} м, одежда ${res.thk.toFixed(2)} м.`);
+            } else {
+                notify(`Категория ${res.cat}: ширины и толщина подставлены — нажмите «Построить».`);
+            }
+            trackUsage('road_xs_category', { cat: res.cat });
+        });
         $('roadXsFit')?.addEventListener('click', () => fitRoadXsView());
         $('roadXsFigure')?.addEventListener('change', () => {
             const kind = $('roadXsFigure').value;
@@ -16735,9 +17093,73 @@
                     return;
                 }
                 if (shapeEl) {
-                    roadXsActive.shapeId = Number(shapeEl.dataset.sid);
+                    const sid = Number(shapeEl.dataset.sid);
+                    const sh = (tpl.shapes || []).find((s) => s.id === sid);
+                    roadXsActive.shapeId = sid;
                     roadXsActive.linkKey = null;
-                    renderRoadXsView();
+                    if (!isMovableXsShape(sh)) {
+                        renderRoadXsView();
+                        return;
+                    }
+                    ev.preventDefault();
+                    const start = roadXsClientToOffZ(ev);
+                    if (!start) {
+                        renderRoadXsView();
+                        return;
+                    }
+                    const ids = exclusiveShapeIds(tpl, sh);
+                    const origRoots = shapeRootPoints(tpl, ids)
+                        .map((p) => ({ id: p.id, off: p.off, dz: p.dz }));
+                    const origAll = (tpl.points || [])
+                        .filter((p) => ids.has(p.id))
+                        .map((p) => ({ id: p.id, off: p.off, dz: p.dz }));
+                    const svg = $('roadXsChart');
+                    try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+                    shapeEl.classList.add('is-drag');
+                    let snapTarget = null;
+                    const move = (e) => {
+                        const at = roadXsClientToOffZ(e);
+                        if (!at) return;
+                        let dOff = at.off - start.off;
+                        let dDz = at.dz - start.dz;
+                        snapTarget = null;
+                        const f = roadXsChartFrame;
+                        if (f) {
+                            const pxPerOff = (f.w - f.pad.l - f.pad.r) / Math.max(1e-6, f.offMax - f.offMin);
+                            const pxPerZ = (f.h - f.pad.t - f.pad.b) / Math.max(1e-6, f.spanZ);
+                            const SNAP = 10;
+                            let best = SNAP;
+                            origAll.forEach((o) => {
+                                const no = o.off + dOff, nz = o.dz + dDz;
+                                (tpl.points || []).forEach((q) => {
+                                    if (ids.has(q.id)) return;
+                                    const d = Math.hypot((no - q.off) * pxPerOff, (nz - q.dz) * pxPerZ);
+                                    if (d < best) {
+                                        best = d;
+                                        snapTarget = q;
+                                        dOff = q.off - o.off;
+                                        dDz = q.dz - o.dz;
+                                    }
+                                });
+                            });
+                        }
+                        origRoots.forEach((o) => {
+                            const pt = templatePoint(tpl, o.id);
+                            if (pt) writeTemplatePointAbs(tpl, pt, o.off + dOff, o.dz + dDz);
+                        });
+                        applyRoadTemplateChange(model, { relink: false, preview: true });
+                        renderRoadXsView();
+                    };
+                    const up = () => {
+                        window.removeEventListener('pointermove', move);
+                        window.removeEventListener('pointerup', up);
+                        shapeEl.classList.remove('is-drag');
+                        if (snapTarget) attachShapeToPoint(tpl, sh, snapTarget.id);
+                        applyRoadTemplateChange(model, { relink: false });
+                        trackUsage('road_xs_shape_drag', { snap: !!snapTarget });
+                    };
+                    window.addEventListener('pointermove', move);
+                    window.addEventListener('pointerup', up);
                     return;
                 }
                 const start = { x: ev.clientX, y: ev.clientY };
@@ -27368,6 +27790,16 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 handle.appendChild(chrome);
             }
 
+            if (!el0.querySelector('.pal-resize')) {
+                ['e', 's', 'n', 'w', 'se'].forEach((dir) => {
+                    const h = document.createElement('div');
+                    h.className = 'pal-resize pal-resize-' + dir;
+                    h.dataset.dir = dir;
+                    h.title = 'Растянуть окно';
+                    el0.appendChild(h);
+                });
+            }
+
             const undock = (el) => {
                 el.classList.remove('dock-left', 'dock-right', 'dock-bottom');
                 el.dataset.dock = 'float';
@@ -27513,6 +27945,54 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             };
             handle.addEventListener('pointerup', stop);
             handle.addEventListener('pointercancel', stop);
+
+            el0.querySelectorAll('.pal-resize').forEach((grip) => {
+                grip.addEventListener('pointerdown', (e) => {
+                    if (e.button != null && e.button !== 0) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const el = card();
+                    if (!el || el.classList.contains('pal-min')) return;
+                    const dir = grip.dataset.dir;
+                    const rect = el.getBoundingClientRect();
+                    const startX = e.clientX, startY = e.clientY;
+                    const origW = rect.width, origH = rect.height;
+                    const origL = rect.left, origT = rect.top;
+                    const minW = 280, minH = 160;
+                    try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+                    const move = (ev) => {
+                        const dx = ev.clientX - startX;
+                        const dy = ev.clientY - startY;
+                        let w = origW, h = origH, left = origL, top = origT;
+                        if (dir === 'e' || dir === 'se') w = origW + dx;
+                        if (dir === 'w') w = origW - dx;
+                        if (dir === 's' || dir === 'se') h = origH + dy;
+                        if (dir === 'n') h = origH - dy;
+                        w = Math.max(minW, Math.min(w, window.innerWidth - 16));
+                        h = Math.max(minH, Math.min(h, window.innerHeight - 24));
+                        el.style.setProperty('--pal-w', w + 'px');
+                        el.style.setProperty('--pal-h', h + 'px');
+                        const dockedL = el.classList.contains('dock-left');
+                        const dockedR = el.classList.contains('dock-right');
+                        const dockedB = el.classList.contains('dock-bottom');
+                        if (!dockedL && !dockedR && !dockedB) {
+                            el.style.width = w + 'px';
+                            el.style.height = h + 'px';
+                            if (dir === 'w') left = origL + (origW - w);
+                            if (dir === 'n') top = origT + (origH - h);
+                            if (dir === 'w' || dir === 'n') setPosition(left, top);
+                        } else if (dockedB) {
+                            el.style.height = h + 'px';
+                        }
+                    };
+                    const up = () => {
+                        window.removeEventListener('pointermove', move);
+                        window.removeEventListener('pointerup', up);
+                    };
+                    window.addEventListener('pointermove', move);
+                    window.addEventListener('pointerup', up);
+                });
+            });
 
             const api = { setPosition, reset, park, setMinimized, cycleDock, hide };
             el0.dataset.palReady = '1';
@@ -34694,7 +35174,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.15',
-            buildId: 'xs-parent',
+            buildId: 'road-ux',
             released: '2026-08-15',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -34703,6 +35183,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.15: дорога — без откосов на торцах; профиль обновляется по кнопке; толщина откоса видна; ручки окон; фигуры таскаются с привязкой; шаблоны I–V.',
                 '2026.08.15: точки фигуры едут за якорем; условие «скрыть» прячет точку и детей на пикете (бордюр в насыпи / нет в выемке).',
                 '2026.08.15: чертёж поперечника — зум колесом (как профиль), готовые фигуры (бордюр, кювет, …) и условие на точке: если рабочая/земля/ось, то другие ΔZ и смещение на этом пикете.',
                 '2026.08.15: палитра «Трасса» — план, профиль и поперечник вкладками; толщина слоя одежды правится полем; окна не модальные, их можно таскать, закреплять и сворачивать.',
@@ -34788,7 +35269,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=112').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=113').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
