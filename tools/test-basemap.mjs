@@ -66,11 +66,24 @@ const CORS = {
 };
 
 async function resolveChromium() {
+    const explicit = process.env.SMOKE_CHROMIUM || process.env.CHROMIUM_PATH;
+    if (explicit) return explicit;
     const base = process.env.PLAYWRIGHT_BROWSERS_PATH;
-    if (!base) return undefined;
-    const entries = await fs.readdir(base).catch(() => []);
-    for (const dir of entries.filter((d) => d.startsWith('chromium-')).sort().reverse()) {
-        const bin = path.join(base, dir, 'chrome-linux', 'chrome');
+    if (base) {
+        const entries = await fs.readdir(base).catch(() => []);
+        for (const dir of entries.filter((d) => d.startsWith('chromium-')).sort().reverse()) {
+            const bin = path.join(base, dir, 'chrome-linux', 'chrome');
+            if (await fs.access(bin).then(() => true, () => false)) return bin;
+        }
+    }
+    // Песочница: ревизия Playwright не совпадает с кэшем, системный Chrome уже стоит.
+    for (const bin of [
+        '/usr/local/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium'
+    ]) {
         if (await fs.access(bin).then(() => true, () => false)) return bin;
     }
     return undefined;
@@ -213,13 +226,12 @@ try {
         const apply = document.getElementById('baseMapDemApply');
         const src = document.getElementById('baseMapDemSource');
         const row = document.getElementById('baseMapDemTemplateRow');
-        const note = [...document.querySelectorAll('#baseMapModal .bulk-note')]
-            .map((n) => n.textContent).join(' | ');
+        const note = document.getElementById('baseMapDemNote')?.textContent || '';
         const before = {
             hasApply: !!apply,
             source: src?.value,
             templateHidden: row?.style.display === 'none',
-            warns: /10–30|10-30/.test(note) && /меш|сетк/i.test(note)
+            warns: /Рельеф с карты/.test(note) && /DEM/.test(note) && /10/.test(note) && /меш|сетк/.test(note)
         };
         src.value = 'terrainRgb';
         src.dispatchEvent(new Event('change', { bubbles: true }));
