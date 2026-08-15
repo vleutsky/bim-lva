@@ -2123,13 +2123,17 @@ async function checkRoadCrossSections(page) {
         btn?.click();
         const card = document.getElementById('roadXsCard');
         const cr = card?.getBoundingClientRect();
-        const btns = [...(card?.querySelectorAll('.modal-actions button') || [])].map((b) => {
+        const btns = [...(card?.querySelectorAll('button') || [])].map((b) => {
             const r = b.getBoundingClientRect();
-            return { t: (b.textContent || '').trim(), left: r.left, w: r.width, h: r.height };
+            return { t: (b.textContent || '').trim(), left: r.left, w: r.width, h: r.height, id: b.id };
         });
         return {
             found: !!btn,
             shown: document.getElementById('roadXsModal')?.classList.contains('show'),
+            tabs: [...(card?.querySelectorAll('.rstabs .ptab') || [])].map((t) => t.textContent.trim()),
+            palMin: !!card?.querySelector('.pal-min'),
+            palDock: !!card?.querySelector('.pal-dock'),
+            clashChrome: !!document.querySelector('#clashModalCard .pal-min'),
             left: cr?.left ?? -1,
             vw: innerWidth,
             btns
@@ -2140,9 +2144,18 @@ async function checkRoadCrossSections(page) {
     } else if (ui.left < -1) {
         problems.push(`поперечники: окно уехало влево (${ui.left})`);
     } else {
-        const apply = ui.btns.find((b) => b.t.includes('Построить'));
+        const apply = ui.btns.find((b) => b.id === 'roadXsApply' || b.t.includes('Построить'));
         if (!apply || apply.w < 4 || apply.left < -1) {
             problems.push(`поперечники: кнопка «Построить» не видна (${JSON.stringify(apply)})`);
+        }
+        if (!ui.tabs.includes('План') || !ui.tabs.includes('Профиль') || !ui.tabs.includes('Поперечник')) {
+            problems.push(`поперечники: нет вкладок План/Профиль/Поперечник (${JSON.stringify(ui.tabs)})`);
+        }
+        if (!ui.palMin || !ui.palDock) {
+            problems.push('поперечники: нет кнопок свернуть/закрепить на палитре');
+        }
+        if (!ui.clashChrome) {
+            problems.push('окна: нет хрома свернуть/закрепить у коллизий');
         }
     }
 
@@ -2178,8 +2191,44 @@ async function checkRoadCrossSections(page) {
         problems.push('поперечники: нет кнопки «Откосы»');
     }
 
+    const zoom = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadXsViewSpan();
+        D.zoomRoadXs(1 / 1.18);
+        const mid = D.roadXsViewSpan();
+        D.fitRoadXs();
+        const after = D.roadXsViewSpan();
+        return {
+            hasFit: !!document.getElementById('roadXsFit'),
+            hasFigure: !!document.getElementById('roadXsFigure'),
+            before: before?.off,
+            mid: mid?.off,
+            after: after?.off
+        };
+    });
+    if (!zoom.hasFit || !zoom.hasFigure) {
+        problems.push(`поперечники: нет ⤢ или «＋ фигура» (${JSON.stringify(zoom)})`);
+    }
+    if (!(zoom.mid < zoom.before - 0.05)) {
+        problems.push(`поперечники: зум не сузил окно смещений (${JSON.stringify(zoom)})`);
+    }
+    if (Math.abs((zoom.after ?? 0) - (zoom.before ?? 0)) > 0.05) {
+        problems.push(`поперечники: ⤢ не вернул масштаб сечения (${JSON.stringify(zoom)})`);
+    }
+
     const layer = await page.evaluate(() => {
         const D = window.BimLvaDebug;
+        const thkEl = document.getElementById('roadXsLayerThk');
+        const beforeThk = D.roadXsTemplate();
+        const rb0 = beforeThk?.points?.find((p) => p.code === 'RB');
+        if (thkEl) {
+            thkEl.value = '0.35';
+            thkEl.dispatchEvent(new Event('input', { bubbles: true }));
+            thkEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const mid = D.roadXsTemplate();
+        const rbMid = mid?.points?.find((p) => p.code === 'RB');
+        D.setRoadXsLayerThickness(0.20);
         const before = D.roadXsTemplate();
         const res = D.addRoadXsLayer(0.30);
         const after = D.roadXsTemplate();
@@ -2191,6 +2240,8 @@ async function checkRoadCrossSections(page) {
             profileXs: !!document.getElementById('polyProfileXs'),
             bigDraw: !!document.querySelector('#btnRoadXs.rbtn-big'),
             bigRelief: !!document.querySelector('#btnRoadXsAnalyze.rbtn-big'),
+            rb0: rb0?.dz,
+            rbMid: rbMid?.dz,
             beforeShapes: before?.shapes?.length || 0,
             afterShapes: after?.shapes?.length || 0,
             beforePts: before?.points?.length || 0,
@@ -2201,6 +2252,9 @@ async function checkRoadCrossSections(page) {
     });
     if (!layer.hasBtn || !layer.hasChk) {
         problems.push(`поперечники: нет «＋ слой» или галочки откосов (${JSON.stringify(layer)})`);
+    }
+    if (Math.abs((layer.rbMid ?? 0) + 0.35) > 1e-6) {
+        problems.push(`поперечники: смена толщины слоя не сдвинула низ покрытия (${JSON.stringify(layer)})`);
     }
     if (!/Откосы до рельефа/.test(layer.slopeLabel)) {
         problems.push(`поперечники: кнопка откосов без подписи «до рельефа» (${layer.slopeLabel})`);
@@ -2230,11 +2284,14 @@ async function checkRoadCrossSections(page) {
         const after = D.roadXsTemplate();
         const moved = after?.points?.find((p) => p.id === left.id);
         const opened = D.openRoadProfile();
+        const profilePane = document.getElementById('rstab-profile');
         return {
             ok: true,
             dz: moved?.dz,
             tris: D.roadXs[0]?.corridorTris || 0,
-            profile: !!document.getElementById('polyProfileModal')?.classList.contains('show')
+            profile: !!document.getElementById('roadXsModal')?.classList.contains('show')
+                && profilePane && !profilePane.hidden,
+            alias: !!document.getElementById('polyProfileModal')?.classList.contains('show')
         };
     });
     if (!live.ok || Math.abs((live.dz || 0) - 0.4) > 1e-6) {
@@ -2249,26 +2306,29 @@ async function checkRoadCrossSections(page) {
 
     await page.waitForTimeout(250);
     const pair = await page.evaluate(() => {
-        const p = document.getElementById('polyProfileCard')?.getBoundingClientRect();
-        const x = document.getElementById('roadXsCard')?.getBoundingClientRect();
-        if (!p || !x) return { ok: false };
-        const overlap = p.left < x.right - 4 && x.left < p.right - 4
-            && p.top < x.bottom - 4 && x.top < p.bottom - 4;
+        document.getElementById('polyProfileXs')?.click();
+        const card = document.getElementById('roadXsCard');
+        const xs = document.getElementById('rstab-xs');
+        const prof = document.getElementById('rstab-profile');
+        const plan = document.getElementById('rstab-plan');
+        const chart = document.getElementById('roadXsChart');
+        const cr = card?.getBoundingClientRect();
         return {
-            ok: true,
-            overlap,
-            gap: Math.round(x.left - p.right),
-            sameRow: Math.abs(p.top - x.top) < 80,
-            pLeft: Math.round(p.left),
-            xLeft: Math.round(x.left)
+            ok: !!card && !!xs && !!prof && !!plan,
+            xsOn: xs && !xs.hidden,
+            profOn: prof && !prof.hidden,
+            planOn: plan && !plan.hidden,
+            chartH: Math.round(chart?.getBoundingClientRect().height || 0),
+            cardH: Math.round(cr?.height || 0),
+            tabs: [...(card?.querySelectorAll('.rstabs .ptab.on') || [])].map((t) => t.dataset.rstab)
         };
     });
     if (!pair.ok) {
-        problems.push('поперечники: нет карточек профиля и сечения');
-    } else if (pair.overlap) {
-        problems.push(`поперечники: профиль и поперечник наложились (${JSON.stringify(pair)})`);
-    } else if (!pair.sameRow || pair.pLeft >= pair.xLeft) {
-        problems.push(`поперечники: окна не рядом (профиль слева, сечение справа) — ${JSON.stringify(pair)}`);
+        problems.push('поперечники: нет вкладок палитры Трасса');
+    } else if (!pair.xsOn || pair.profOn || pair.planOn) {
+        problems.push(`поперечники: «⊟ сечение» не открыло вкладку поперечника (${JSON.stringify(pair)})`);
+    } else if (pair.chartH < 80 || pair.cardH < 160) {
+        problems.push(`поперечники: чертёж сечения слишком мал (${JSON.stringify(pair)})`);
     }
 
     const slopes = await page.evaluate(() => {
@@ -2302,6 +2362,72 @@ async function checkRoadCrossSections(page) {
     }
     if (Math.abs(slopes.cut) > 0.05) {
         problems.push(`поперечники: на насыпи от кромок набралась выемка ${slopes.cut}`);
+    }
+
+    const extras = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadXsTemplate();
+        const r = before?.points?.find((p) => p.code === 'R');
+        const fig = D.addRoadXsFigure('curb', r?.id);
+        const afterFig = D.roadXsTemplate();
+        const curbT = afterFig?.points?.find((p) => p.code === 'CURBT');
+        const curbO = afterFig?.points?.find((p) => p.code === 'CURBO');
+        D.setRoadXsPoint(r.id, { dz: 0.4 });
+        const evFollow = curbT ? D.evalRoadXsPoint(curbT.id, 0) : null;
+        D.setRoadXsPoint(r.id, { dz: 0 });
+        if (curbT) D.setRoadXsPointRule(curbT.id, { when: 'work>', value: 0, thenHide: true });
+        const evHide = curbT ? D.evalRoadXsPoint(curbT.id, 0) : null;
+        const evChild = curbO ? D.evalRoadXsPoint(curbO.id, 0) : null;
+        const evR = r ? D.evalRoadXsPoint(r.id, 0) : null;
+        const left = D.roadXsTemplate()?.points?.find((p) => p.code === 'L');
+        if (left) {
+            D.setRoadXsPoint(left.id, { dz: 0 });
+            D.setRoadXsPointRule(left.id, { when: 'work>', value: 0, thenDz: 0.2 });
+        }
+        const ev = left ? D.evalRoadXsPoint(left.id, 0) : null;
+        const bar = document.getElementById('roadXsRuleBar');
+        return {
+            beforePts: before?.points?.length || 0,
+            afterPts: afterFig?.points?.length || 0,
+            beforeShapes: before?.shapes?.length || 0,
+            afterShapes: afterFig?.shapes?.length || 0,
+            code: fig?.added?.code || '',
+            hasCurb: (afterFig?.shapes || []).some((s) => s.code === 'CURB'),
+            parent: curbT?.parent,
+            relDz: curbT?.relDz,
+            childParent: curbO?.parent,
+            followDz: evFollow?.dz,
+            hide: evHide?.hide,
+            childHide: evChild?.hide,
+            rHide: evR?.hide,
+            hasHideChk: !!document.getElementById('roadXsRuleThenHide'),
+            base: ev?.baseDz,
+            dz: ev?.dz,
+            applies: ev?.applies,
+            barShown: !!(bar && !bar.hidden)
+        };
+    });
+    if (extras.afterPts !== extras.beforePts + 3 || extras.afterShapes !== extras.beforeShapes + 1) {
+        problems.push(`поперечники: «бордюр» не добавил 3 точки и форму (${JSON.stringify(extras)})`);
+    }
+    if (extras.code !== 'CURB' || !extras.hasCurb) {
+        problems.push(`поперечники: код фигуры «${extras.code}» вместо CURB`);
+    }
+    if (extras.parent == null || Math.abs((extras.relDz ?? 0) - 0.15) > 1e-6) {
+        problems.push(`поперечники: бордюр не привязан к якорю (${JSON.stringify(extras)})`);
+    }
+    if (Math.abs((extras.followDz ?? 0) - 0.55) > 1e-6) {
+        problems.push(`поперечники: бордюр не поехал за якорем (${JSON.stringify(extras)})`);
+    }
+    if (!extras.hasHideChk || extras.hide !== true || extras.childHide !== true || extras.rHide === true) {
+        problems.push(`поперечники: «скрыть» не спрятало детей бордюра (${JSON.stringify(extras)})`);
+    }
+    if (!extras.barShown) {
+        problems.push('поперечники: панель условия точки не открылась');
+    }
+    if (extras.applies !== true || Math.abs((extras.base ?? -1)) > 1e-6
+        || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
+        problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
     }
 
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
