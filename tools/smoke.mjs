@@ -2386,6 +2386,24 @@ async function checkRoadCrossSections(page) {
         }
         const ev = left ? D.evalRoadXsPoint(left.id, 0) : null;
         const bar = document.getElementById('roadXsRuleBar');
+        const sized = D.addRoadXsFigure('curb', left?.id, { w: 0.2, h: 0.2 });
+        const sizedT = D.roadXsTemplate()?.points?.find((p) => p.code === 'CURBT' && p.parent === left?.id);
+        const boxBoth = D.addRoadXsFigure('box', r?.id, { w: 0.4, h: 0.3, both: true });
+        const boxN = (D.roadXsTemplate()?.shapes || []).filter((s) => s.code === 'BOX').length;
+        if (curbT) D.setRoadXsPointRule(curbT.id, null);
+        D.setRoadXsPointGround(r.id, { on: true, mFill: 1.5, mCut: 1 });
+        const evG = r ? D.evalRoadXsPoint(r.id, 0) : null;
+        const cl = D.roadXsTemplate()?.points?.find((p) => p.code === 'CL');
+        if (cl) D.setRoadXsPointRule(cl.id, { when: 'work>', value: 0, thenDz: 0.3, staFrom: 10 });
+        const evSta0 = cl ? D.evalRoadXsPoint(cl.id, 0) : null;
+        const lastI = (D.roadXsModels?.() || [])[0] ? 2 : 2;
+        if (cl) D.setRoadXsPointRule(cl.id, { when: '', thenHide: true, staFrom: 0, staTo: 0.5 });
+        const evStaIn = cl ? D.evalRoadXsPoint(cl.id, 0) : null;
+        const evStaOut = cl ? D.evalRoadXsPoint(cl.id, lastI) : null;
+        const pk120 = D.parseRoadXsSta('1+20');
+        const pk340 = D.parseRoadXsSta('3+40');
+        const urban = D.applyRoadXsPreset('urban');
+        const urbanCurbs = (urban?.shapes || []).filter((s) => s.code === 'CURB').length;
         return {
             beforePts: before?.points?.length || 0,
             afterPts: afterFig?.points?.length || 0,
@@ -2404,7 +2422,28 @@ async function checkRoadCrossSections(page) {
             base: ev?.baseDz,
             dz: ev?.dz,
             applies: ev?.applies,
-            barShown: !!(bar && !bar.hidden)
+            barShown: !!(bar && !bar.hidden),
+            sizedRelDz: sizedT?.relDz,
+            sizedCode: sized?.added?.code || '',
+            boxN,
+            boxCode: boxBoth?.added?.code || '',
+            gOff: evG?.off,
+            gDz: evG?.dz,
+            gHide: evG?.hide,
+            gMode: evG?.ground?.mode,
+            gHit: evG?.ground?.hit,
+            sta0applies: evSta0?.applies,
+            sta0dz: evSta0?.dz,
+            staInHide: evStaIn?.hide,
+            staInApplies: evStaIn?.applies,
+            staOutApplies: evStaOut?.applies,
+            staOutHide: evStaOut?.hide,
+            pk120, pk340,
+            urbanCurbs,
+            hasFigW: !!document.getElementById('roadXsFigW'),
+            hasLib: !!document.getElementById('roadXsLib'),
+            hasGround: !!document.getElementById('roadXsPtGround'),
+            hasStaFrom: !!document.getElementById('roadXsRuleStaFrom')
         };
     });
     if (extras.afterPts !== extras.beforePts + 3 || extras.afterShapes !== extras.beforeShapes + 1) {
@@ -2428,6 +2467,35 @@ async function checkRoadCrossSections(page) {
     if (extras.applies !== true || Math.abs((extras.base ?? -1)) > 1e-6
         || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
         problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
+    }
+    if (Math.abs((extras.sizedRelDz ?? 0) - 0.2) > 1e-6 || extras.sizedCode !== 'CURB') {
+        problems.push(`поперечники: бордюр 0.20×0.20 не сел (${JSON.stringify(extras)})`);
+    }
+    if (extras.boxN !== 2 || extras.boxCode !== 'BOX') {
+        problems.push(`поперечники: «на обе стороны» не дало две формы BOX (${JSON.stringify(extras)})`);
+    }
+    if (extras.gHide === true || extras.gHit !== true || extras.gMode !== 'fill'
+        || Math.abs((extras.gOff ?? 0) - 2.75) > 0.08
+        || Math.abs((extras.gDz ?? 0) + 0.5) > 0.08) {
+        problems.push(`поперечники: точка «до земли» 1:1.5 не вышла на рельеф (${JSON.stringify(extras)})`);
+    }
+    if (extras.sta0applies != null) {
+        problems.push(`поперечники: правило с PK≥10 сработало на PK 0 (${JSON.stringify(extras)})`);
+    }
+    if (extras.staInApplies !== true || extras.staInHide !== true) {
+        problems.push(`поперечники: диапазон PK 0…0.5 не скрыл точку на PK 0 (${JSON.stringify(extras)})`);
+    }
+    if (extras.staOutApplies != null || extras.staOutHide === true) {
+        problems.push(`поперечники: диапазон PK 0…0.5 сработал на последнем пикете (${JSON.stringify(extras)})`);
+    }
+    if (extras.pk120 !== 120 || extras.pk340 !== 340) {
+        problems.push(`поперечники: пикет 1+20 / 3+40 не разобрался (${JSON.stringify(extras)})`);
+    }
+    if (extras.urbanCurbs !== 2) {
+        problems.push(`поперечники: пресет «городской» без бордюров с двух сторон (${JSON.stringify(extras)})`);
+    }
+    if (!extras.hasFigW || !extras.hasLib || !extras.hasGround || !extras.hasStaFrom) {
+        problems.push(`поперечники: нет полей размеров/библиотеки/до земли/PK (${JSON.stringify(extras)})`);
     }
 
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
