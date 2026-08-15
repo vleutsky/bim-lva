@@ -404,7 +404,7 @@
             border-color: var(--ui-line);
             font-weight: 600;
         }
-        .top .rpanel .btn:disabled { opacity: .4; }
+        .top .rpanel .btn:disabled { opacity: .62; }
         .rpanel .tool-select,
         .rpanel .near-input,
         .rpanel .editInput {
@@ -416,11 +416,21 @@
         }
         .rpanel .snap-types {
             display: flex;
-            flex-direction: column;
-            gap: 0;
+            flex-direction: row;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 5px;
+            height: 21px;
             font-size: 10.5px;
             color: var(--txt-dim);
             padding: 0 4px;
+            overflow: hidden;
+        }
+        .rpanel .snap-types label {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            white-space: nowrap;
         }
         .rhint {
             font-size: 10px;
@@ -3437,9 +3447,9 @@
                             </select>
                             <button class="btn on rbtn-sm" id="btnSnap" title="Объектная привязка">⊹ Привязка</button>
                             <div class="snap-types" title="К чему привязываться">
-                                <label><input type="checkbox" id="snapTypeVertex" checked> вершина</label>
-                                <label><input type="checkbox" id="snapTypeMid" checked> середина</label>
-                                <label><input type="checkbox" id="snapTypeEdge" checked> ребро</label>
+                                <label title="Вершина"><input type="checkbox" id="snapTypeVertex" checked> верш.</label>
+                                <label title="Середина"><input type="checkbox" id="snapTypeMid" checked> сер.</label>
+                                <label title="Ребро"><input type="checkbox" id="snapTypeEdge" checked> ребро</label>
                             </div>
                         </div>
                     </div>
@@ -3449,12 +3459,17 @@
                     <div class="items">
                         <button class="btn rbtn-big" id="btnRoadAxis" disabled title="Ось дороги: клики — вершины, Esc — поперечники"><span class="tb-ico">🛣</span><span class="tb-txt">Ось трассы</span></button>
                         <div class="col">
-                            <button class="btn rbtn-sm" id="btnRoadXs" disabled title="Окно поперечников: шаблон, пикет, откосы, слои DXF">⊟ Поперечники</button>
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
                             <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnRoadXs" disabled title="Окно поперечников: шаблон, слои одежды, пикет, откосы до рельефа"><span class="tb-ico">⊟</span><span class="tb-txt">Поперечники</span></button>
+                    </div>
+                    <div class="cap">Сечение</div>
                 </div>
                 <div class="rpanel">
                     <div class="items">
@@ -3471,10 +3486,15 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnAlignProfile" disabled title="Продольный профиль трассы LandXML">〰 Профиль</button>
                             <button class="btn rbtn-sm" id="btnRoadAxisAnalyze" disabled title="Начертить ось дороги и открыть поперечники">🛣 Ось трассы</button>
-                            <button class="btn rbtn-sm" id="btnRoadXsAnalyze" disabled title="Окно поперечников: шаблон, пикет, откосы, слои DXF">⊟ Поперечники</button>
                         </div>
                     </div>
                     <div class="cap">План</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnRoadXsAnalyze" disabled title="Окно поперечников: шаблон, слои одежды, пикет, откосы до рельефа"><span class="tb-ico">⊟</span><span class="tb-txt">Поперечники</span></button>
+                    </div>
+                    <div class="cap">Сечение</div>
                 </div>
             </div>
 
@@ -4293,6 +4313,8 @@
                 <b>Кружки — вершины оси:</b> тяните вверх-вниз, чтобы менять
                 отметку. Колесо — зум, перетаскивание фона — сдвиг,
                 двойной клик по оси — новая вершина.
+                Поперечники, слои одежды и откосы до рельефа — кнопка
+                <b>⊟ Поперечники</b> внизу или на ленте «Черчение».
             </div>
             <div class="prop small"><div class="k">Полилиния</div><select class="editInput" id="polyProfileSelect"></select></div>
             <div class="prop small">
@@ -4317,6 +4339,7 @@
             <div class="modal-actions">
                 <button class="btn" id="polyProfileCsv" title="Вершина; пикет; отметка земли; отметка оси; рабочая отметка; уклон">Копировать CSV</button>
                 <button class="btn" id="polyProfileDrape" title="Посадить вершины полилинии на землю по снятым отметкам">⤓ Посадить ось на землю</button>
+                <button class="btn" id="polyProfileXs" title="Окно поперечников этой оси: шаблон, слои одежды, откосы до рельефа">⊟ Поперечники</button>
                 <button class="btn load-btn" id="polyProfileClose">Закрыть</button>
             </div>
         </div>
@@ -4422,9 +4445,12 @@
                     не правим. <b>〰 Профиль</b> — продольный профиль этой оси
                     (отметки, уклон, вершины), те же правила, что у полилинии.
                     Окна профиля и поперечника садятся <b>рядом</b>, не друг
-                    на друга. <b>△ Откосы</b> — от кромок шаблона до земли
+                    на друга. <b>＋ слой</b> — ещё один слой одежды вниз от
+                    низа шаблона (покрытие, основание, …): задайте толщину
+                    и нажмите. <b>△ Откосы</b> — от кромок шаблона до земли
                     (1:m насыпи/выемки): лучи на чертеже сечения и TIN в сцене,
-                    тот же движок, что у площадки.
+                    тот же движок, что у площадки. Можно включить галочку
+                    «откосы до рельефа» — тогда они строятся вместе с «Построить».
                 </div>
             </details>
             <div class="modal-fields">
@@ -4438,16 +4464,30 @@
                     <div class="k">Связать с осью</div>
                     <input type="checkbox" id="roadXsLive" checked title="Перестраивать поперечники при правке оси">
                 </div>
+                <div class="prop small"><div class="k">Толщина слоя, м</div><input class="editInput" id="roadXsLayerThk" type="number" min="0.01" step="0.05" value="0.20" title="Толщина нового слоя одежды вниз от низа шаблона"></div>
+                <div class="prop small">
+                    <div class="k">Слой одежды</div>
+                    <button type="button" class="btn" id="roadXsAddLayer" title="Добавить слой вниз: покрытие уже есть (20 см), дальше основание и т.д.">＋ слой</button>
+                </div>
+                <div class="prop small"><div class="k">Насыпь, 1 : m</div><input class="editInput" id="roadXsMFill" type="number" min="0.1" step="0.1" value="1.5" title="Заложение откоса насыпи от кромки до земли"></div>
+                <div class="prop small"><div class="k">Выемка, 1 : m</div><input class="editInput" id="roadXsMCut" type="number" min="0.1" step="0.1" value="1" title="Заложение откоса выемки от кромки до земли"></div>
+                <div class="prop small"><div class="k">Вылет откоса, м</div><input class="editInput" id="roadXsSlopeReach" type="number" min="0.5" step="0.5" value="30" title="Максимальный вылет откоса от кромки, пока не встретит землю"></div>
+                <div class="prop small">
+                    <div class="k">Откосы до рельефа</div>
+                    <input type="checkbox" id="roadXsSlopeOn" title="Строить откосы от кромок шаблона до земли вместе с «Построить». Либо кнопка △ Откосы">
+                </div>
+            </div>
+            <details class="table-help">
+                <summary>Ось и кромки — цвет, толщина, слой DXF</summary>
+                <div class="modal-fields" style="margin-top:8px">
                 <div class="prop small"><div class="k">Ось, цвет</div><input type="color" class="polyline-color" id="roadAxisColor" value="#1f8f5f" title="Цвет пунктирной оси трассы"></div>
                 <div class="prop small"><div class="k">Ось, px</div><input class="editInput" id="roadAxisWidth" type="number" min="0.5" step="0.5" value="2" title="Толщина оси в пикселях"></div>
                 <div class="prop small span-2"><div class="k">Ось, слой</div><input class="editInput" id="roadAxisLayer" value="Ось" title="Слой DXF для оси"></div>
                 <div class="prop small"><div class="k">Кромки, цвет</div><input type="color" class="polyline-color" id="roadEdgeColor" value="#f4f7fb" title="Цвет сплошных кромок ширины"></div>
                 <div class="prop small"><div class="k">Кромки, px</div><input class="editInput" id="roadEdgeWidth" type="number" min="0.5" step="0.5" value="1.6" title="Толщина кромок в пикселях"></div>
                 <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
-                <div class="prop small"><div class="k">Насыпь, 1 : m</div><input class="editInput" id="roadXsMFill" type="number" min="0.1" step="0.1" value="1.5" title="Заложение откоса насыпи от кромки до земли"></div>
-                <div class="prop small"><div class="k">Выемка, 1 : m</div><input class="editInput" id="roadXsMCut" type="number" min="0.1" step="0.1" value="1" title="Заложение откоса выемки от кромки до земли"></div>
-                <div class="prop small span-2"><div class="k">Вылет откоса, м</div><input class="editInput" id="roadXsSlopeReach" type="number" min="0.5" step="0.5" value="30" title="Максимальный вылет откоса от кромки, пока не встретит землю"></div>
-            </div>
+                </div>
+            </details>
             <div class="bulk-note" id="roadXsStatus">—</div>
             <div class="prop small">
                 <div class="k">Пикет</div>
@@ -4464,7 +4504,7 @@
             <div id="roadXsTable" class="profile-table"></div>
             <div class="modal-actions">
                 <button class="btn" id="roadXsProfile" title="Продольный профиль этой оси: отметки, уклон, вершины — как у полилинии">〰 Профиль</button>
-                <button class="btn" id="roadXsSlope" title="Откосы от кромок шаблона до рельефа: на чертеже сечения и TIN в модели">△ Откосы</button>
+                <button class="btn load-btn" id="roadXsSlope" title="Откосы от кромок шаблона до рельефа: на чертеже сечения и TIN в модели">△ Откосы до рельефа</button>
                 <button class="btn" id="roadXsCsv" title="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
                 <button class="btn" id="roadXsDxf" title="Поперечники 3D-полилиниями на слое «Поперечник», координаты абсолютные">⬇ DXF</button>
                 <button class="btn" id="roadXsClear">Убрать</button>
@@ -6150,6 +6190,18 @@
                 roadXsActive.pointId = pt.id;
                 applyRoadTemplateChange(model, { relink: false });
                 return snapshotRoadTemplate(model.template);
+            },
+            addRoadXsLayer(thickness) {
+                const model = currentRoadXsModel();
+                if (!model?.template) return null;
+                const added = addRoadTemplateLayer(model.template, thickness);
+                if (!added) return null;
+                roadXsActive.shapeId = added.shape.id;
+                applyRoadTemplateChange(model, { relink: false });
+                return {
+                    ...snapshotRoadTemplate(model.template),
+                    added: { code: added.shape.code, thickness: added.thickness }
+                };
             },
             openRoadProfile(id) {
                 const rec = listedPolylines()
@@ -13933,6 +13985,11 @@
             polyProfilePanel.reset();
             requestAnimationFrame(() => dockProfileAndXs());
         });
+        $('polyProfileXs')?.addEventListener('click', () => {
+            const rec = listedPolylines().find((r) => r.id === polyProfileRecordId);
+            if (!rec) return notifyError('Нет оси в профиле.');
+            openRoadXsModal(rec);
+        });
         /* --- Зум, сдвиг и правка прямо на профиле ------------------------- */
 
         function profileRecord() {
@@ -14349,6 +14406,59 @@
             const sh = { id: tpl.shapeSeq, code: 'S' + tpl.shapeSeq, pts: cycle };
             tpl.shapes.push(sh);
             return sh;
+        }
+
+        const ROAD_LAYER_CODES = ['PVMT', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4'];
+
+        /** Нижние левая и правая точки шаблона — от них наращивается слой одежды. */
+        function templateBottomEdges(tpl) {
+            const pts = tpl?.points || [];
+            if (pts.length < 2) return null;
+            const zBot = Math.min(...pts.map((p) => p.dz));
+            const bottom = pts.filter((p) => Math.abs(p.dz - zBot) < 1e-6);
+            if (!bottom.length) return null;
+            let left = bottom[0], right = bottom[0];
+            bottom.forEach((p) => {
+                if (p.off < left.off - 1e-9) left = p;
+                if (p.off > right.off + 1e-9) right = p;
+            });
+            if (left.id === right.id) return null;
+            return { left, right, zBot };
+        }
+
+        /**
+         * Новый слой одежды вниз от низа шаблона: две точки, три связи, форма.
+         * Точки добавляются вручную — addTemplatePoint режет ближайшую связь
+         * и испортил бы покрытие сверху.
+         */
+        function addRoadTemplateLayer(tpl, thickness) {
+            if (!tpl) return null;
+            const h = Math.max(0.01, Number(thickness) || ROAD_PAVE_THICK);
+            const bot = templateBottomEdges(tpl);
+            if (!bot) return null;
+            const n = (tpl.shapes?.length || 0) + 1;
+            const code = ROAD_LAYER_CODES[n - 1] || ('LYR' + n);
+            tpl.seq = (tpl.seq || tpl.points.length) + 1;
+            const idL = tpl.seq;
+            tpl.seq += 1;
+            const idR = tpl.seq;
+            const pL = { id: idL, code: 'L' + n, off: bot.left.off, dz: bot.zBot - h };
+            const pR = { id: idR, code: 'R' + n, off: bot.right.off, dz: bot.zBot - h };
+            tpl.points.push(pL, pR);
+            tpl.links = tpl.links || [];
+            if (!templateHasLink(tpl, bot.left.id, bot.right.id)) {
+                tpl.links.push({ a: bot.left.id, b: bot.right.id, code: 'TOP' + n });
+            }
+            tpl.links.push(
+                { a: bot.left.id, b: idL, code: 'LS' + n },
+                { a: bot.right.id, b: idR, code: 'RS' + n },
+                { a: idL, b: idR, code: 'BOT' + n }
+            );
+            tpl.shapeSeq = (tpl.shapeSeq || (tpl.shapes?.length || 0)) + 1;
+            const sh = { id: tpl.shapeSeq, code, pts: [bot.left.id, bot.right.id, idR, idL] };
+            tpl.shapes = tpl.shapes || [];
+            tpl.shapes.push(sh);
+            return { shape: sh, left: pL, right: pR, thickness: h };
         }
 
         function relinkTemplateByOffset(tpl) {
@@ -15618,10 +15728,23 @@
                 live: !!$('roadXsLive')?.checked
             });
             if (!model) notifyError('Не удалось построить поперечники.');
-            else notify(
-                `Полотно по «${rec.name}»: ${model.stations.length} сечений, ` +
-                `${model.corridorTris || 0} граней шаблона.`
-            );
+            else {
+                let extra = '';
+                if ($('roadXsSlopeOn')?.checked) {
+                    const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                    if (built?.length) {
+                        let fill = 0, cut = 0;
+                        built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+                        extra = ` Откосы до рельефа: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
+                    } else {
+                        extra = ' Откосы до рельефа не построились — нет земли у кромок.';
+                    }
+                }
+                notify(
+                    `Полотно по «${rec.name}»: ${model.stations.length} сечений, ` +
+                    `${model.corridorTris || 0} граней шаблона.${extra}`
+                );
+            }
         });
         $('roadXsClear')?.addEventListener('click', () => {
             const id = Number($('roadXsSelect')?.value);
@@ -15653,11 +15776,23 @@
             if (!built?.length) {
                 return notifyError('Не удалось построить откосы: нет рельефа у кромок шаблона.');
             }
+            if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = true;
             let fill = 0, cut = 0;
             built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
             notifyOk(
                 `Откосы от кромок «${model.name}»: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`
             );
+        });
+        $('roadXsAddLayer')?.addEventListener('click', () => {
+            const model = currentRoadXsModel();
+            if (!model?.template) return notifyError('Сначала постройте поперечники — появится шаблон.');
+            const thk = parseFloat($('roadXsLayerThk')?.value);
+            const added = addRoadTemplateLayer(model.template, thk);
+            if (!added) return notifyError('Не удалось добавить слой: в шаблоне нет левой и правой кромок.');
+            roadXsActive.shapeId = added.shape.id;
+            applyRoadTemplateChange(model, { relink: false });
+            notify(`Слой «${added.shape.code}»: ${added.thickness.toFixed(2)} м вниз от низа шаблона.`);
+            trackUsage('road_xs_layer_add', { code: added.shape.code });
         });
         ['roadXsMFill', 'roadXsMCut', 'roadXsSlopeReach'].forEach((id) => {
             $(id)?.addEventListener('change', () => renderRoadXsView());
@@ -33509,7 +33644,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.15',
-            buildId: 'xs-style',
+            buildId: 'xs-layer',
             released: '2026-08-15',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -33518,6 +33653,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.15: поперечники — крупная кнопка на ленте Черчение и Рельеф; в окне «＋ слой» одежды и «△ Откосы до рельефа».',
                 '2026.08.15: поперечники на новой ленте — «⊟ Поперечники» во вкладках Черчение и Рельеф; слои DXF по-русски; профиль и сечение рядом.',
                 '2026.08.15: оболочка плотнее — поиск и «Все» в одной строке, вкладки свойств без заливки, куб видов без тени и оранжевого.',
                 '2026.08.14: вкладки боковых панелей — слева Структура / Файлы / Классы, справа Свойства / Pset / Ведомость.',
@@ -33599,7 +33735,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=108').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=109').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

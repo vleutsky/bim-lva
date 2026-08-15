@@ -2178,6 +2178,49 @@ async function checkRoadCrossSections(page) {
         problems.push('поперечники: нет кнопки «Откосы»');
     }
 
+    const layer = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadXsTemplate();
+        const res = D.addRoadXsLayer(0.30);
+        const after = D.roadXsTemplate();
+        const zMin = Math.min(...(after?.points || []).map((p) => p.dz));
+        return {
+            hasBtn: !!document.getElementById('roadXsAddLayer'),
+            hasChk: !!document.getElementById('roadXsSlopeOn'),
+            slopeLabel: document.getElementById('roadXsSlope')?.textContent || '',
+            profileXs: !!document.getElementById('polyProfileXs'),
+            bigDraw: !!document.querySelector('#btnRoadXs.rbtn-big'),
+            bigRelief: !!document.querySelector('#btnRoadXsAnalyze.rbtn-big'),
+            beforeShapes: before?.shapes?.length || 0,
+            afterShapes: after?.shapes?.length || 0,
+            beforePts: before?.points?.length || 0,
+            afterPts: after?.points?.length || 0,
+            code: res?.added?.code || '',
+            zMin
+        };
+    });
+    if (!layer.hasBtn || !layer.hasChk) {
+        problems.push(`поперечники: нет «＋ слой» или галочки откосов (${JSON.stringify(layer)})`);
+    }
+    if (!/Откосы до рельефа/.test(layer.slopeLabel)) {
+        problems.push(`поперечники: кнопка откосов без подписи «до рельефа» (${layer.slopeLabel})`);
+    }
+    if (!layer.profileXs) problems.push('поперечники: нет кнопки в окне профиля');
+    if (!layer.bigDraw || !layer.bigRelief) {
+        problems.push('поперечники: кнопки на ленте не крупные (Черчение / Рельеф)');
+    }
+    if (layer.afterShapes !== layer.beforeShapes + 1 || layer.afterPts !== layer.beforePts + 2) {
+        problems.push(
+            `поперечники: «＋ слой» не добавил форму/точки (${JSON.stringify(layer)})`
+        );
+    }
+    if (layer.code !== 'BASE') {
+        problems.push(`поперечники: код второго слоя «${layer.code}» вместо BASE`);
+    }
+    if (Math.abs(layer.zMin + 0.5) > 1e-6) {
+        problems.push(`поперечники: низ второго слоя ${layer.zMin} вместо −0.50`);
+    }
+
     const live = await page.evaluate(() => {
         const D = window.BimLvaDebug;
         const before = D.roadXsTemplate();
