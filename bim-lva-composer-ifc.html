@@ -8451,7 +8451,7 @@
          */
         const MAP_BUILDER_MAX_HA = 200;
         const MAP_BUILDER_MAX_M2 = MAP_BUILDER_MAX_HA * 10_000;
-        const mb = {
+        const mapBld = {
             lat: 55.75,
             lon: 37.62,
             zoom: 4,
@@ -8485,19 +8485,19 @@
 
         function mapBuilderLonLatToPx(lon, lat) {
             const { w, h } = mapBuilderCssSize();
-            const z = mb.zoom;
+            const z = mapBld.zoom;
             const wx = lonToMercatorX(lon, z) * 256;
             const wy = latToMercatorY(lat, z) * 256;
-            const cx = lonToMercatorX(mb.lon, z) * 256;
-            const cy = latToMercatorY(mb.lat, z) * 256;
+            const cx = lonToMercatorX(mapBld.lon, z) * 256;
+            const cy = latToMercatorY(mapBld.lat, z) * 256;
             return { x: w / 2 + (wx - cx), y: h / 2 + (wy - cy) };
         }
 
         function mapBuilderPxToLonLat(x, y) {
             const { w, h } = mapBuilderCssSize();
-            const z = mb.zoom;
-            const cx = lonToMercatorX(mb.lon, z) * 256;
-            const cy = latToMercatorY(mb.lat, z) * 256;
+            const z = mapBld.zoom;
+            const cx = lonToMercatorX(mapBld.lon, z) * 256;
+            const cy = latToMercatorY(mapBld.lat, z) * 256;
             const mx = (cx + (x - w / 2)) / 256;
             const my = (cy + (y - h / 2)) / 256;
             return {
@@ -8532,8 +8532,8 @@
         }
 
         function mbSelectionRing() {
-            if (mb.sel?.pts?.length >= 3) return mb.sel.pts;
-            if (mb.draft?.pts?.length >= 3) return mb.draft.pts;
+            if (mapBld.sel?.pts?.length >= 3) return mapBld.sel.pts;
+            if (mapBld.draft?.pts?.length >= 3) return mapBld.draft.pts;
             return [];
         }
 
@@ -8570,11 +8570,11 @@
             const ring = mbSelectionRing();
             return {
                 shown: !!$('mapBuilderModal')?.classList.contains('show'),
-                lat: mb.lat,
-                lon: mb.lon,
-                zoom: mb.zoom,
-                tool: mb.tool,
-                type: mb.sel?.type || mb.draft?.type || null,
+                lat: mapBld.lat,
+                lon: mapBld.lon,
+                zoom: mapBld.zoom,
+                tool: mapBld.tool,
+                type: mapBld.sel?.type || mapBld.draft?.type || null,
                 points: ring.length,
                 areaHa: mapBuilderAreaHa(),
                 overLimit: polygonAreaM2(ring) > MAP_BUILDER_MAX_M2,
@@ -8588,37 +8588,37 @@
         }
 
         function mapBuilderSetTool(tool) {
-            mb.tool = tool === 'rect' || tool === 'poly' ? tool : 'pan';
-            if (mb.tool !== 'poly') mb.polyLive = null;
+            mapBld.tool = tool === 'rect' || tool === 'poly' ? tool : 'pan';
+            if (mapBld.tool !== 'poly') mapBld.polyLive = null;
             ['mapBuilderPan', 'mapBuilderRect', 'mapBuilderPoly'].forEach((id) => {
-                $(id)?.classList.toggle('on', $(id)?.dataset.mbtool === mb.tool);
+                $(id)?.classList.toggle('on', $(id)?.dataset.mbtool === mapBld.tool);
             });
             const c = mapBuilderCanvasEl();
-            c?.classList.toggle('is-draw', mb.tool !== 'pan');
-            if (mb.tool === 'rect') mapBuilderHint('Рамка: зажмите и протяните, как в InfraWorks. Лимит 200 га.');
-            else if (mb.tool === 'poly') mapBuilderHint('Контур: клики — вершины, двойной щелчок или Enter — замкнуть. Лимит 200 га.');
+            c?.classList.toggle('is-draw', mapBld.tool !== 'pan');
+            if (mapBld.tool === 'rect') mapBuilderHint('Рамка: зажмите и протяните, как в InfraWorks. Лимит 200 га.');
+            else if (mapBld.tool === 'poly') mapBuilderHint('Контур: клики — вершины, двойной щелчок или Enter — замкнуть. Лимит 200 га.');
             else mapBuilderHint('Как в InfraWorks: найдите место, рамка или произвольный контур до 200 га, затем «Загрузить». Колесо — масштаб, перетаскивание — сдвиг.');
         }
 
         function mapBuilderClearSelection() {
-            mb.sel = null;
-            mb.draft = null;
-            mb.polyLive = null;
+            mapBld.sel = null;
+            mapBld.draft = null;
+            mapBld.polyLive = null;
             mapBuilderRefreshArea();
             mapBuilderRedraw();
         }
 
         function mapBuilderSetView(lat, lon, zoom) {
-            if (Number.isFinite(lat)) mb.lat = Math.max(-85, Math.min(85, lat));
-            if (Number.isFinite(lon)) mb.lon = ((lon + 540) % 360) - 180;
-            if (Number.isFinite(zoom)) mb.zoom = Math.max(2, Math.min(18, zoom));
+            if (Number.isFinite(lat)) mapBld.lat = Math.max(-85, Math.min(85, lat));
+            if (Number.isFinite(lon)) mapBld.lon = ((lon + 540) % 360) - 180;
+            if (Number.isFinite(zoom)) mapBld.zoom = Math.max(2, Math.min(18, zoom));
             mapBuilderRedraw();
         }
 
         function mapBuilderDrawRect(a, b) {
             if (!a || !b) return;
             const lat0 = a.lat, lon0 = a.lon, lat1 = b.lat, lon1 = b.lon;
-            mb.sel = {
+            mapBld.sel = {
                 type: 'rect',
                 pts: [
                     { lat: lat0, lon: lon0 },
@@ -8627,16 +8627,16 @@
                     { lat: lat1, lon: a.lon }
                 ]
             };
-            mb.draft = null;
+            mapBld.draft = null;
             mapBuilderRefreshArea();
             mapBuilderRedraw();
         }
 
         function mapBuilderDrawPolygon(pts) {
             if (!Array.isArray(pts) || pts.length < 3) return;
-            mb.sel = { type: 'poly', pts: pts.map((p) => ({ lat: p.lat, lon: p.lon })) };
-            mb.draft = null;
-            mb.polyLive = null;
+            mapBld.sel = { type: 'poly', pts: pts.map((p) => ({ lat: p.lat, lon: p.lon })) };
+            mapBld.draft = null;
+            mapBld.polyLive = null;
             mapBuilderRefreshArea();
             mapBuilderRedraw();
         }
@@ -8647,13 +8647,13 @@
         }
 
         function mapBuilderEnsureTile(url) {
-            if (mb.tiles.has(url)) return mb.tiles.get(url);
-            if (mb.tiles.size > 220) {
-                const first = mb.tiles.keys().next().value;
-                mb.tiles.delete(first);
+            if (mapBld.tiles.has(url)) return mapBld.tiles.get(url);
+            if (mapBld.tiles.size > 220) {
+                const first = mapBld.tiles.keys().next().value;
+                mapBld.tiles.delete(first);
             }
             const rec = { img: null, failed: false };
-            mb.tiles.set(url, rec);
+            mapBld.tiles.set(url, rec);
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.onload = () => { rec.img = img; mapBuilderRedraw(); };
@@ -8704,10 +8704,10 @@
         }
 
         function mapBuilderRedraw() {
-            if (mb.redrawQueued) return;
-            mb.redrawQueued = true;
+            if (mapBld.redrawQueued) return;
+            mapBld.redrawQueued = true;
             requestAnimationFrame(() => {
-                mb.redrawQueued = false;
+                mapBld.redrawQueued = false;
                 const c = mapBuilderCanvasEl();
                 if (!c || !$('mapBuilderModal')?.classList.contains('show')) return;
                 if (!c.width) mapBuilderResize();
@@ -8715,10 +8715,10 @@
                 const { w, h } = mapBuilderCssSize();
                 ctx.fillStyle = '#0b1d33';
                 ctx.fillRect(0, 0, w, h);
-                const zTile = Math.max(0, Math.min(mapBuilderProvider().maxZoom || 19, Math.round(mb.zoom)));
-                const scale = Math.pow(2, mb.zoom - zTile);
-                const cx = lonToMercatorX(mb.lon, zTile) * 256;
-                const cy = latToMercatorY(mb.lat, zTile) * 256;
+                const zTile = Math.max(0, Math.min(mapBuilderProvider().maxZoom || 19, Math.round(mapBld.zoom)));
+                const scale = Math.pow(2, mapBld.zoom - zTile);
+                const cx = lonToMercatorX(mapBld.lon, zTile) * 256;
+                const cy = latToMercatorY(mapBld.lat, zTile) * 256;
                 const tileSize = 256 * scale;
                 const x0 = Math.floor((cx - w / 2 / scale) / 256);
                 const y0 = Math.floor((cy - h / 2 / scale) / 256);
@@ -8741,14 +8741,14 @@
                         }
                     }
                 }
-                const ring = mb.sel?.pts || mb.draft?.pts;
+                const ring = mapBld.sel?.pts || mapBld.draft?.pts;
                 if (ring?.length >= 2) {
                     const over = polygonAreaM2(ring) > MAP_BUILDER_MAX_M2;
                     mapBuilderDrawRing(ctx, ring, over ? 'rgba(192,57,43,0.22)' : 'rgba(243,156,18,0.22)');
                 }
-                if (mb.polyLive?.length) {
+                if (mapBld.polyLive?.length) {
                     ctx.beginPath();
-                    mb.polyLive.forEach((p, i) => {
+                    mapBld.polyLive.forEach((p, i) => {
                         const xy = mapBuilderLonLatToPx(p.lon, p.lat);
                         if (i) ctx.lineTo(xy.x, xy.y);
                         else ctx.moveTo(xy.x, xy.y);
@@ -8794,15 +8794,15 @@
         function openMapBuilderModal() {
             const saved = loadBasemapSettings() || {};
             if (Number.isFinite(saved.lat) && Number.isFinite(saved.lon)) {
-                mb.lat = saved.lat;
-                mb.lon = saved.lon;
-                if (mb.zoom < 10) mb.zoom = 12;
+                mapBld.lat = saved.lat;
+                mapBld.lon = saved.lon;
+                if (mapBld.zoom < 10) mapBld.zoom = 12;
             }
             if (saved.provider === 'osm' || saved.provider === 'esri') {
                 const layer = $('mapBuilderLayer');
                 if (layer) layer.value = saved.provider;
             }
-            mapBuilderSetTool(mb.tool || 'pan');
+            mapBuilderSetTool(mapBld.tool || 'pan');
             mapBuilderRefreshArea();
             $('mapBuilderModal').classList.add('show');
             requestAnimationFrame(() => {
@@ -8813,7 +8813,7 @@
 
         function closeMapBuilderModal() {
             $('mapBuilderModal')?.classList.remove('show');
-            mb.dragging = false;
+            mapBld.dragging = false;
             mapBuilderCanvasEl()?.classList.remove('is-drag');
         }
 
@@ -8822,7 +8822,7 @@
             if (!raw) return;
             const pair = parseLatLonPair(raw);
             if (pair && Math.abs(pair.lat) <= 85 && Math.abs(pair.lon) <= 180) {
-                mapBuilderSetView(pair.lat, pair.lon, Math.max(mb.zoom, 13));
+                mapBuilderSetView(pair.lat, pair.lon, Math.max(mapBld.zoom, 13));
                 mapBuilderHint(`Место: ${pair.lat.toFixed(5)}, ${pair.lon.toFixed(5)}`);
                 return;
             }
@@ -8911,7 +8911,7 @@
                 if (e.key === 'Enter') { e.preventDefault(); mapBuilderSearchGo(); }
             });
             $('mapBuilderLayer')?.addEventListener('change', () => {
-                mb.tiles.clear();
+                mapBld.tiles.clear();
                 mapBuilderRedraw();
             });
             $('mapBuilderBind')?.addEventListener('click', () => {
@@ -8932,16 +8932,16 @@
             });
             window.addEventListener('keydown', (e) => {
                 if (!$('mapBuilderModal')?.classList.contains('show')) return;
-                if (e.key === 'Enter' && mb.tool === 'poly' && mb.polyLive?.length >= 3) {
+                if (e.key === 'Enter' && mapBld.tool === 'poly' && mapBld.polyLive?.length >= 3) {
                     e.preventDefault();
-                    mapBuilderDrawPolygon(mb.polyLive);
-                    mb.polyLive = null;
+                    mapBuilderDrawPolygon(mapBld.polyLive);
+                    mapBld.polyLive = null;
                     return;
                 }
                 if (e.key === 'Escape') {
-                    if (mb.polyLive?.length || mb.draft) {
-                        mb.polyLive = null;
-                        mb.draft = null;
+                    if (mapBld.polyLive?.length || mapBld.draft) {
+                        mapBld.polyLive = null;
+                        mapBld.draft = null;
                         mapBuilderRedraw();
                         return;
                     }
@@ -8952,56 +8952,56 @@
                 if (e.button !== 0) return;
                 canvas.setPointerCapture(e.pointerId);
                 const pt = mapBuilderEventPt(e);
-                mb.lastX = pt.x;
-                mb.lastY = pt.y;
-                if (mb.tool === 'pan' || e.shiftKey) {
-                    mb.dragging = true;
+                mapBld.lastX = pt.x;
+                mapBld.lastY = pt.y;
+                if (mapBld.tool === 'pan' || e.shiftKey) {
+                    mapBld.dragging = true;
                     canvas.classList.add('is-drag');
                     return;
                 }
-                if (mb.tool === 'rect') {
+                if (mapBld.tool === 'rect') {
                     const ll = mapBuilderPxToLonLat(pt.x, pt.y);
-                    mb.draft = { type: 'rect', start: ll, pts: mapBuilderRectFromCorners(ll, ll) };
+                    mapBld.draft = { type: 'rect', start: ll, pts: mapBuilderRectFromCorners(ll, ll) };
                     return;
                 }
-                if (mb.tool === 'poly') {
+                if (mapBld.tool === 'poly') {
                     const ll = mapBuilderPxToLonLat(pt.x, pt.y);
-                    if (!mb.polyLive) mb.polyLive = [];
-                    mb.polyLive.push(ll);
+                    if (!mapBld.polyLive) mapBld.polyLive = [];
+                    mapBld.polyLive.push(ll);
                     mapBuilderRedraw();
                 }
             });
             canvas.addEventListener('pointermove', (e) => {
                 const pt = mapBuilderEventPt(e);
-                if (mb.dragging) {
-                    const z = mb.zoom;
-                    const dx = pt.x - mb.lastX;
-                    const dy = pt.y - mb.lastY;
-                    mb.lastX = pt.x;
-                    mb.lastY = pt.y;
-                    const mx = lonToMercatorX(mb.lon, z) - dx / 256;
-                    const my = latToMercatorY(mb.lat, z) - dy / 256;
-                    mb.lon = mx / Math.pow(2, z) * 360 - 180;
-                    mb.lat = Math.max(-85, Math.min(85, mercatorYToLat(my, z)));
+                if (mapBld.dragging) {
+                    const z = mapBld.zoom;
+                    const dx = pt.x - mapBld.lastX;
+                    const dy = pt.y - mapBld.lastY;
+                    mapBld.lastX = pt.x;
+                    mapBld.lastY = pt.y;
+                    const mx = lonToMercatorX(mapBld.lon, z) - dx / 256;
+                    const my = latToMercatorY(mapBld.lat, z) - dy / 256;
+                    mapBld.lon = mx / Math.pow(2, z) * 360 - 180;
+                    mapBld.lat = Math.max(-85, Math.min(85, mercatorYToLat(my, z)));
                     mapBuilderRedraw();
                     return;
                 }
-                if (mb.tool === 'rect' && mb.draft?.start) {
+                if (mapBld.tool === 'rect' && mapBld.draft?.start) {
                     const ll = mapBuilderPxToLonLat(pt.x, pt.y);
-                    mb.draft.pts = mapBuilderRectFromCorners(mb.draft.start, ll);
+                    mapBld.draft.pts = mapBuilderRectFromCorners(mapBld.draft.start, ll);
                     mapBuilderRefreshArea();
                     mapBuilderRedraw();
                 }
             });
             const endDrag = () => {
-                if (mb.dragging) {
-                    mb.dragging = false;
+                if (mapBld.dragging) {
+                    mapBld.dragging = false;
                     canvas.classList.remove('is-drag');
                 }
-                if (mb.tool === 'rect' && mb.draft?.pts) {
-                    const m2 = polygonAreaM2(mb.draft.pts);
-                    if (m2 >= 100) mb.sel = { type: 'rect', pts: mb.draft.pts };
-                    mb.draft = null;
+                if (mapBld.tool === 'rect' && mapBld.draft?.pts) {
+                    const m2 = polygonAreaM2(mapBld.draft.pts);
+                    if (m2 >= 100) mapBld.sel = { type: 'rect', pts: mapBld.draft.pts };
+                    mapBld.draft = null;
                     mapBuilderRefreshArea();
                     mapBuilderRedraw();
                 }
@@ -9009,26 +9009,26 @@
             canvas.addEventListener('pointerup', endDrag);
             canvas.addEventListener('pointercancel', endDrag);
             canvas.addEventListener('dblclick', (e) => {
-                if (mb.tool !== 'poly' || !mb.polyLive) return;
+                if (mapBld.tool !== 'poly' || !mapBld.polyLive) return;
                 e.preventDefault();
-                if (mb.polyLive.length >= 2) {
-                    const a = mb.polyLive[mb.polyLive.length - 1];
-                    const b = mb.polyLive[mb.polyLive.length - 2];
-                    if (latLonDistanceM(a.lat, a.lon, b.lat, b.lon) < 2) mb.polyLive.pop();
+                if (mapBld.polyLive.length >= 2) {
+                    const a = mapBld.polyLive[mapBld.polyLive.length - 1];
+                    const b = mapBld.polyLive[mapBld.polyLive.length - 2];
+                    if (latLonDistanceM(a.lat, a.lon, b.lat, b.lon) < 2) mapBld.polyLive.pop();
                 }
-                if (mb.polyLive.length >= 3) mapBuilderDrawPolygon(mb.polyLive);
-                mb.polyLive = null;
+                if (mapBld.polyLive.length >= 3) mapBuilderDrawPolygon(mapBld.polyLive);
+                mapBld.polyLive = null;
             });
             canvas.addEventListener('wheel', (e) => {
                 e.preventDefault();
                 const pt = mapBuilderEventPt(e);
                 const before = mapBuilderPxToLonLat(pt.x, pt.y);
                 const dir = e.deltaY > 0 ? -1 : 1;
-                mb.zoom = Math.max(2, Math.min(18, mb.zoom + dir * (e.deltaMode === 1 ? 0.35 : 0.12)));
+                mapBld.zoom = Math.max(2, Math.min(18, mapBld.zoom + dir * (e.deltaMode === 1 ? 0.35 : 0.12)));
                 const after = mapBuilderPxToLonLat(pt.x, pt.y);
-                mb.lon += before.lon - after.lon;
-                mb.lat += before.lat - after.lat;
-                mb.lat = Math.max(-85, Math.min(85, mb.lat));
+                mapBld.lon += before.lon - after.lon;
+                mapBld.lat += before.lat - after.lat;
+                mapBld.lat = Math.max(-85, Math.min(85, mapBld.lat));
                 mapBuilderRedraw();
             }, { passive: false });
             if (typeof ResizeObserver !== 'undefined') {
