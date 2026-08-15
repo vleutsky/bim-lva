@@ -3063,6 +3063,77 @@
             min-height: 120px;
             height: auto;
         }
+
+        /* Model Builder: окно карты как в InfraWorks — глобус, рамка или контур. */
+        #mapBuilderModal .map-builder-card {
+            width: min(1100px, 96vw);
+            height: min(760px, 90vh);
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            padding: 0 0 8px;
+            overflow: hidden;
+        }
+        .mb-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--line);
+        }
+        .mb-toolbar input[type="search"],
+        .mb-toolbar input[type="text"] {
+            flex: 1;
+            min-width: 140px;
+            height: 28px;
+            padding: 0 8px;
+        }
+        .mb-toolbar .btn.on { background: var(--accent); color: #fff; }
+        #mapBuilderArea {
+            font: 12px 'IBM Plex Mono', monospace;
+            color: var(--txt-dim);
+            min-width: 140px;
+        }
+        #mapBuilderArea.is-over { color: #c0392b; font-weight: 600; }
+        .mb-map-wrap {
+            position: relative;
+            flex: 1;
+            min-height: 320px;
+            background: #0b1d33;
+        }
+        #mapBuilderCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            cursor: grab;
+            touch-action: none;
+        }
+        #mapBuilderCanvas.is-draw { cursor: crosshair; }
+        #mapBuilderCanvas.is-drag { cursor: grabbing; }
+        #mapBuilderHint {
+            position: absolute;
+            left: 10px;
+            bottom: 10px;
+            max-width: min(520px, 80%);
+            padding: 6px 10px;
+            background: color-mix(in srgb, var(--panel) 88%, transparent);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            font-size: 12px;
+            pointer-events: none;
+        }
+        .mb-foot {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px 0;
+            font-size: 11px;
+            color: var(--txt-dim);
+        }
+        .mb-foot select { width: 180px; height: 26px; }
+        .mb-toolbar .fill { flex: 1; min-width: 8px; }
         .rs-bar {
             display: flex;
             flex-wrap: wrap;
@@ -3540,7 +3611,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · c586fa5</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 55a4141</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -3571,7 +3642,7 @@
                         <div class="tb-menu-label">Открыть</div>
                         <button class="btn" id="btnYaLoad" title="Открыть модели с публичной папки или файла Яндекс.Диска">☁ Яндекс.Диск</button>
                         <button class="btn" id="btnGeoRaster" title="ECW / GeoTIFF с геопривязкой — растр по координатам на 3D-рельеф">🗺 Растр (ECW / GeoTIFF)</button>
-                        <button class="btn" id="btnBaseMap" title="Онлайн-карта или космоснимок подложкой под модель">🌍 Карта-подложка (онлайн)</button>
+                        <button class="btn" id="btnBaseMap" title="Площадка с карты: глобус, рамка или контур до 200 га, как в InfraWorks">🌍 Карта-подложка (онлайн)</button>
                             <button class="btn" id="btnProprietaryHint" title="Как открыть Revit / Tekla / Plant 3D">RVT / Tekla / Plant</button>
                             <div class="tb-menu-label">Кэш геометрии</div>
                         <label class="btn" title="Тесселяция — около 80% времени открытия IFC, и для одного и того же файла она всегда даёт один и тот же результат. С кэшем повторное открытие пропускает её целиком: меши читаются с диска. Кэш лежит в браузере (IndexedDB), на сервер ничего не уходит.">
@@ -3596,7 +3667,7 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnYaLoadRibbon" title="Открыть модели с Яндекс.Диска">☁ Яндекс.Диск</button>
                             <button class="btn rbtn-sm" id="btnGeoRasterRibbon" title="ECW / GeoTIFF с геопривязкой">🗺 Растр</button>
-                            <button class="btn rbtn-sm" id="btnBaseMapRibbon" title="Онлайн-карта подложкой под модель">🌍 Карта</button>
+                            <button class="btn rbtn-sm" id="btnBaseMapRibbon" title="Выбрать площадку на карте (глобус), как в InfraWorks">🌍 Карта</button>
                         </div>
                     </div>
                     <div class="cap">Открыть</div>
@@ -3750,6 +3821,12 @@
             </div>
 
             <div class="rpage" data-rp="relief">
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnMapBuilder" title="Выбрать площадку на глобусе: рамка или контур до 200 га, загрузить снимок и рельеф"><span class="tb-ico">🌍</span><span class="tb-txt">Площадка с карты</span></button>
+                    </div>
+                    <div class="cap">Карта</div>
+                </div>
                 <div class="rpanel">
                     <div class="items">
                         <button class="btn rbtn-big" id="btnPadList" disabled title="Таблица площадок"><span class="tb-ico">▣</span><span class="tb-txt">Площадки: <span id="padsCount">0</span></span></button>
@@ -4474,6 +4551,41 @@
                 <button class="btn" id="baseMapRemove">Убрать подложку</button>
                 <button class="btn" id="baseMapCancel">Закрыть</button>
                 <button class="btn load-btn" id="baseMapApply">Построить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="mapBuilderModal">
+        <div class="modal-card map-builder-card" id="mapBuilderCard" role="dialog" aria-modal="true" aria-labelledby="mapBuilderTitle">
+            <div class="modal-drag-handle" id="mapBuilderDrag" title="Перетащите окно">
+                <h3 id="mapBuilderTitle">Площадка с карты</h3>
+                <span class="fill"></span>
+            </div>
+            <div class="mb-toolbar">
+                <input type="search" id="mapBuilderSearch" placeholder="Найти место — город, площадка…" autocomplete="off">
+                <button type="button" class="btn" id="mapBuilderSearchGo">Найти</button>
+                <button type="button" class="btn on" id="mapBuilderPan" data-mbtool="pan" title="Двигать карту">↕ Карта</button>
+                <button type="button" class="btn" id="mapBuilderRect" data-mbtool="rect" title="Прямоугольная рамка, как в InfraWorks">▭ Рамка</button>
+                <button type="button" class="btn" id="mapBuilderPoly" data-mbtool="poly" title="Произвольный контур кликами, двойной щелчок — замкнуть">⬠ Контур</button>
+                <button type="button" class="btn" id="mapBuilderClearSel" title="Сбросить рамку или контур">Сбросить</button>
+                <span id="mapBuilderArea">площадь — · лимит 200 га</span>
+                <span class="fill"></span>
+                <button type="button" class="btn" id="mapBuilderBind" title="Старый диалог: привязать карту к уже загруженной модели">Привязка к модели…</button>
+                <button type="button" class="btn" id="mapBuilderCancel">Закрыть</button>
+                <button type="button" class="btn load-btn" id="mapBuilderLoad" disabled title="Скачать космоснимок и рельеф выбранного контура">Загрузить</button>
+            </div>
+            <div class="mb-map-wrap">
+                <canvas id="mapBuilderCanvas" width="1000" height="560"></canvas>
+                <div id="mapBuilderHint">Как в InfraWorks: найдите место, рамка или произвольный контур до 200 га, затем «Загрузить». Колесо — масштаб, перетаскивание — сдвиг.</div>
+            </div>
+            <div class="mb-foot">
+                <label>слой
+                    <select class="editInput" id="mapBuilderLayer">
+                        <option value="esri">Космоснимок (ESRI)</option>
+                        <option value="osm">Схема (OpenStreetMap)</option>
+                    </select>
+                </label>
+                <span id="mapBuilderAttr">© OpenStreetMap · Esri / Maxar. Рельеф — AWS Terrarium. Лимит 200 га.</span>
             </div>
         </div>
     </div>
@@ -5873,6 +5985,15 @@
             removeMapTerrain() {
                 return removeMapTerrainLayer();
             },
+            openMapBuilder() { openMapBuilderModal(); },
+            closeMapBuilder() { closeMapBuilderModal(); },
+            mapBuilderSetView: (lat, lon, zoom) => { mapBuilderSetView(lat, lon, zoom); },
+            mapBuilderDrawRect: (a, b) => { mapBuilderDrawRect(a, b); },
+            mapBuilderDrawPolygon: (pts) => { mapBuilderDrawPolygon(pts); },
+            mapBuilderClear: () => { mapBuilderClearSelection(); },
+            get mapBuilderAreaHa() { return polygonAreaM2(mbSelectionRing()) / 10_000; },
+            get mapBuilderState() { return mapBuilderDebugState(); },
+            mapBuilderLoad: () => mapBuilderLoad(),
             /** Габарит каждой загруженной модели по отдельности, в метрах сцены. */
             get modelBounds() {
                 const out = [];
@@ -8342,6 +8463,601 @@
             const abs = worldPointToAbsoluteXYZ(box.getCenter(new THREE.Vector3()));
             return { x: abs.x, y: abs.y };
         }
+
+        /**
+         * Model Builder как в InfraWorks: окно-глобус, рамка или произвольный
+         * контур, лимит 200 га, «Загрузить» — снимок + рельеф.
+         */
+        const MAP_BUILDER_MAX_HA = 200;
+        const MAP_BUILDER_MAX_M2 = MAP_BUILDER_MAX_HA * 10_000;
+        const mb = {
+            lat: 55.75,
+            lon: 37.62,
+            zoom: 4,
+            tool: 'pan',
+            sel: null,
+            draft: null,
+            polyLive: null,
+            dragging: false,
+            lastX: 0,
+            lastY: 0,
+            redrawQueued: false,
+            tiles: new Map(),
+            gen: 0
+        };
+
+        function mercatorYToLat(y, z) {
+            const n = Math.PI - 2 * Math.PI * y / Math.pow(2, z);
+            return (180 / Math.PI) * Math.atan(Math.sinh(n));
+        }
+
+        function mapBuilderCanvasEl() {
+            return $('mapBuilderCanvas');
+        }
+
+        function mapBuilderCssSize() {
+            const c = mapBuilderCanvasEl();
+            if (!c) return { w: 1, h: 1 };
+            const r = c.getBoundingClientRect();
+            return { w: Math.max(1, r.width), h: Math.max(1, r.height) };
+        }
+
+        function mapBuilderLonLatToPx(lon, lat) {
+            const { w, h } = mapBuilderCssSize();
+            const z = mb.zoom;
+            const wx = lonToMercatorX(lon, z) * 256;
+            const wy = latToMercatorY(lat, z) * 256;
+            const cx = lonToMercatorX(mb.lon, z) * 256;
+            const cy = latToMercatorY(mb.lat, z) * 256;
+            return { x: w / 2 + (wx - cx), y: h / 2 + (wy - cy) };
+        }
+
+        function mapBuilderPxToLonLat(x, y) {
+            const { w, h } = mapBuilderCssSize();
+            const z = mb.zoom;
+            const cx = lonToMercatorX(mb.lon, z) * 256;
+            const cy = latToMercatorY(mb.lat, z) * 256;
+            const mx = (cx + (x - w / 2)) / 256;
+            const my = (cy + (y - h / 2)) / 256;
+            return {
+                lon: mx / Math.pow(2, z) * 360 - 180,
+                lat: mercatorYToLat(my, z)
+            };
+        }
+
+        function mapBuilderEventPt(ev) {
+            const r = mapBuilderCanvasEl().getBoundingClientRect();
+            return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+        }
+
+        function latLonDistanceM(lat1, lon1, lat2, lon2) {
+            const lat0 = (lat1 + lat2) / 2;
+            const mLat = EARTH_METERS_PER_DEGREE;
+            const mLon = EARTH_METERS_PER_DEGREE * Math.cos(lat0 * Math.PI / 180);
+            return Math.hypot((lon2 - lon1) * mLon, (lat2 - lat1) * mLat);
+        }
+
+        function polygonAreaM2(pts) {
+            if (!pts || pts.length < 3) return 0;
+            const lat0 = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+            const mLat = EARTH_METERS_PER_DEGREE;
+            const mLon = EARTH_METERS_PER_DEGREE * Math.cos(lat0 * Math.PI / 180);
+            let a = 0;
+            for (let i = 0, n = pts.length; i < n; i++) {
+                const p = pts[i], q = pts[(i + 1) % n];
+                a += (p.lon * mLon) * (q.lat * mLat) - (q.lon * mLon) * (p.lat * mLat);
+            }
+            return Math.abs(a) / 2;
+        }
+
+        function mbSelectionRing() {
+            if (mb.sel?.pts?.length >= 3) return mb.sel.pts;
+            if (mb.draft?.pts?.length >= 3) return mb.draft.pts;
+            return [];
+        }
+
+        function mapBuilderAreaHa() {
+            return polygonAreaM2(mbSelectionRing()) / 10_000;
+        }
+
+        function mapBuilderRefreshArea() {
+            const el = $('mapBuilderArea');
+            const btn = $('mapBuilderLoad');
+            const ring = mbSelectionRing();
+            const m2 = polygonAreaM2(ring);
+            const ha = m2 / 10_000;
+            const over = m2 > MAP_BUILDER_MAX_M2;
+            if (!ring.length) {
+                if (el) {
+                    el.textContent = 'площадь — · лимит 200 га';
+                    el.classList.remove('is-over');
+                }
+                if (btn) btn.disabled = true;
+                return;
+            }
+            const txt = ha >= 10 ? ha.toFixed(0) : ha.toFixed(2);
+            if (el) {
+                el.textContent = over
+                    ? `площадь ${txt} га — больше 200, уменьшите контур`
+                    : `площадь ${txt} га · лимит 200 га`;
+                el.classList.toggle('is-over', over);
+            }
+            if (btn) btn.disabled = over || m2 < 100;
+        }
+
+        function mapBuilderDebugState() {
+            const ring = mbSelectionRing();
+            return {
+                shown: !!$('mapBuilderModal')?.classList.contains('show'),
+                lat: mb.lat,
+                lon: mb.lon,
+                zoom: mb.zoom,
+                tool: mb.tool,
+                type: mb.sel?.type || mb.draft?.type || null,
+                points: ring.length,
+                areaHa: mapBuilderAreaHa(),
+                overLimit: polygonAreaM2(ring) > MAP_BUILDER_MAX_M2,
+                loadEnabled: !$('mapBuilderLoad')?.disabled
+            };
+        }
+
+        function mapBuilderHint(text) {
+            const el = $('mapBuilderHint');
+            if (el) el.textContent = text;
+        }
+
+        function mapBuilderSetTool(tool) {
+            mb.tool = tool === 'rect' || tool === 'poly' ? tool : 'pan';
+            if (mb.tool !== 'poly') mb.polyLive = null;
+            ['mapBuilderPan', 'mapBuilderRect', 'mapBuilderPoly'].forEach((id) => {
+                $(id)?.classList.toggle('on', $(id)?.dataset.mbtool === mb.tool);
+            });
+            const c = mapBuilderCanvasEl();
+            c?.classList.toggle('is-draw', mb.tool !== 'pan');
+            if (mb.tool === 'rect') mapBuilderHint('Рамка: зажмите и протяните, как в InfraWorks. Лимит 200 га.');
+            else if (mb.tool === 'poly') mapBuilderHint('Контур: клики — вершины, двойной щелчок или Enter — замкнуть. Лимит 200 га.');
+            else mapBuilderHint('Как в InfraWorks: найдите место, рамка или произвольный контур до 200 га, затем «Загрузить». Колесо — масштаб, перетаскивание — сдвиг.');
+        }
+
+        function mapBuilderClearSelection() {
+            mb.sel = null;
+            mb.draft = null;
+            mb.polyLive = null;
+            mapBuilderRefreshArea();
+            mapBuilderRedraw();
+        }
+
+        function mapBuilderSetView(lat, lon, zoom) {
+            if (Number.isFinite(lat)) mb.lat = Math.max(-85, Math.min(85, lat));
+            if (Number.isFinite(lon)) mb.lon = ((lon + 540) % 360) - 180;
+            if (Number.isFinite(zoom)) mb.zoom = Math.max(2, Math.min(18, zoom));
+            mapBuilderRedraw();
+        }
+
+        function mapBuilderDrawRect(a, b) {
+            if (!a || !b) return;
+            const lat0 = a.lat, lon0 = a.lon, lat1 = b.lat, lon1 = b.lon;
+            mb.sel = {
+                type: 'rect',
+                pts: [
+                    { lat: lat0, lon: lon0 },
+                    { lat: lat0, lon: lon1 },
+                    { lat: lat1, lon: lon1 },
+                    { lat: lat1, lon: a.lon }
+                ]
+            };
+            mb.draft = null;
+            mapBuilderRefreshArea();
+            mapBuilderRedraw();
+        }
+
+        function mapBuilderDrawPolygon(pts) {
+            if (!Array.isArray(pts) || pts.length < 3) return;
+            mb.sel = { type: 'poly', pts: pts.map((p) => ({ lat: p.lat, lon: p.lon })) };
+            mb.draft = null;
+            mb.polyLive = null;
+            mapBuilderRefreshArea();
+            mapBuilderRedraw();
+        }
+
+        function mapBuilderProvider() {
+            const key = $('mapBuilderLayer')?.value === 'osm' ? 'osm' : 'esri';
+            return BASEMAP_PROVIDERS[key];
+        }
+
+        function mapBuilderEnsureTile(url) {
+            if (mb.tiles.has(url)) return mb.tiles.get(url);
+            if (mb.tiles.size > 220) {
+                const first = mb.tiles.keys().next().value;
+                mb.tiles.delete(first);
+            }
+            const rec = { img: null, failed: false };
+            mb.tiles.set(url, rec);
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => { rec.img = img; mapBuilderRedraw(); };
+            img.onerror = () => { rec.failed = true; };
+            img.src = url;
+            return rec;
+        }
+
+        function mapBuilderResize() {
+            const c = mapBuilderCanvasEl();
+            const wrap = c?.parentElement;
+            if (!c || !wrap) return;
+            const dpr = Math.min(2, window.devicePixelRatio || 1);
+            const w = Math.max(1, wrap.clientWidth);
+            const h = Math.max(1, wrap.clientHeight);
+            c.width = Math.round(w * dpr);
+            c.height = Math.round(h * dpr);
+            c.style.width = w + 'px';
+            c.style.height = h + 'px';
+            const ctx = c.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        function mapBuilderDrawRing(ctx, pts, fill) {
+            if (!pts?.length) return;
+            ctx.beginPath();
+            pts.forEach((p, i) => {
+                const xy = mapBuilderLonLatToPx(p.lon, p.lat);
+                if (i) ctx.lineTo(xy.x, xy.y);
+                else ctx.moveTo(xy.x, xy.y);
+            });
+            ctx.closePath();
+            if (fill) {
+                ctx.fillStyle = fill;
+                ctx.fill();
+            }
+            ctx.strokeStyle = polygonAreaM2(pts) > MAP_BUILDER_MAX_M2 ? '#c0392b' : '#f39c12';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = '#fff';
+            pts.forEach((p) => {
+                const xy = mapBuilderLonLatToPx(p.lon, p.lat);
+                ctx.beginPath();
+                ctx.arc(xy.x, xy.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            });
+        }
+
+        function mapBuilderRedraw() {
+            if (mb.redrawQueued) return;
+            mb.redrawQueued = true;
+            requestAnimationFrame(() => {
+                mb.redrawQueued = false;
+                const c = mapBuilderCanvasEl();
+                if (!c || !$('mapBuilderModal')?.classList.contains('show')) return;
+                if (!c.width) mapBuilderResize();
+                const ctx = c.getContext('2d');
+                const { w, h } = mapBuilderCssSize();
+                ctx.fillStyle = '#0b1d33';
+                ctx.fillRect(0, 0, w, h);
+                const zTile = Math.max(0, Math.min(mapBuilderProvider().maxZoom || 19, Math.round(mb.zoom)));
+                const scale = Math.pow(2, mb.zoom - zTile);
+                const cx = lonToMercatorX(mb.lon, zTile) * 256;
+                const cy = latToMercatorY(mb.lat, zTile) * 256;
+                const tileSize = 256 * scale;
+                const x0 = Math.floor((cx - w / 2 / scale) / 256);
+                const y0 = Math.floor((cy - h / 2 / scale) / 256);
+                const x1 = Math.floor((cx + w / 2 / scale) / 256);
+                const y1 = Math.floor((cy + h / 2 / scale) / 256);
+                const n = Math.pow(2, zTile);
+                const provider = mapBuilderProvider();
+                for (let ty = y0; ty <= y1; ty++) {
+                    if (ty < 0 || ty >= n) continue;
+                    for (let tx = x0; tx <= x1; tx++) {
+                        const wrapped = ((tx % n) + n) % n;
+                        const url = basemapTileUrl(provider, '', zTile, wrapped, ty);
+                        const rec = mapBuilderEnsureTile(url);
+                        const dx = w / 2 + (tx * 256 - cx) * scale;
+                        const dy = h / 2 + (ty * 256 - cy) * scale;
+                        if (rec.img) ctx.drawImage(rec.img, dx, dy, tileSize, tileSize);
+                        else {
+                            ctx.fillStyle = rec.failed ? '#1a2a40' : '#123';
+                            ctx.fillRect(dx, dy, tileSize, tileSize);
+                        }
+                    }
+                }
+                const ring = mb.sel?.pts || mb.draft?.pts;
+                if (ring?.length >= 2) {
+                    const over = polygonAreaM2(ring) > MAP_BUILDER_MAX_M2;
+                    mapBuilderDrawRing(ctx, ring, over ? 'rgba(192,57,43,0.22)' : 'rgba(243,156,18,0.22)');
+                }
+                if (mb.polyLive?.length) {
+                    ctx.beginPath();
+                    mb.polyLive.forEach((p, i) => {
+                        const xy = mapBuilderLonLatToPx(p.lon, p.lat);
+                        if (i) ctx.lineTo(xy.x, xy.y);
+                        else ctx.moveTo(xy.x, xy.y);
+                    });
+                    ctx.strokeStyle = '#f39c12';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            });
+        }
+
+        function mapBuilderSettingsFromSelection() {
+            const ring = mbSelectionRing();
+            if (ring.length < 3) return null;
+            const lat = ring.reduce((s, p) => s + p.lat, 0) / ring.length;
+            const lon = ring.reduce((s, p) => s + p.lon, 0) / ring.length;
+            let radius = 50;
+            for (const p of ring) {
+                const d = latLonDistanceM(lat, lon, p.lat, p.lon);
+                if (d > radius) radius = d;
+            }
+            const center = currentModelCenterXY();
+            const provider = $('mapBuilderLayer')?.value === 'osm' ? 'osm' : 'esri';
+            return {
+                provider,
+                template: '',
+                lat,
+                lon,
+                latRaw: String(lat),
+                lonRaw: String(lon),
+                anchorX: center.x,
+                anchorY: center.y,
+                rotationDeg: 0,
+                radius: Math.max(50, Math.ceil(radius * 1.05)),
+                detail: 'normal',
+                opacity: 0.9,
+                drape: true,
+                demSource: 'terrarium',
+                demTemplate: ''
+            };
+        }
+
+        function openMapBuilderModal() {
+            const saved = loadBasemapSettings() || {};
+            if (Number.isFinite(saved.lat) && Number.isFinite(saved.lon)) {
+                mb.lat = saved.lat;
+                mb.lon = saved.lon;
+                if (mb.zoom < 10) mb.zoom = 12;
+            }
+            if (saved.provider === 'osm' || saved.provider === 'esri') {
+                const layer = $('mapBuilderLayer');
+                if (layer) layer.value = saved.provider;
+            }
+            mapBuilderSetTool(mb.tool || 'pan');
+            mapBuilderRefreshArea();
+            $('mapBuilderModal').classList.add('show');
+            requestAnimationFrame(() => {
+                mapBuilderResize();
+                mapBuilderRedraw();
+            });
+        }
+
+        function closeMapBuilderModal() {
+            $('mapBuilderModal')?.classList.remove('show');
+            mb.dragging = false;
+            mapBuilderCanvasEl()?.classList.remove('is-drag');
+        }
+
+        async function mapBuilderSearchGo() {
+            const raw = ($('mapBuilderSearch')?.value || '').trim();
+            if (!raw) return;
+            const pair = parseLatLonPair(raw);
+            if (pair && Math.abs(pair.lat) <= 85 && Math.abs(pair.lon) <= 180) {
+                mapBuilderSetView(pair.lat, pair.lon, Math.max(mb.zoom, 13));
+                mapBuilderHint(`Место: ${pair.lat.toFixed(5)}, ${pair.lon.toFixed(5)}`);
+                return;
+            }
+            try {
+                const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(raw);
+                const res = await fetch(url, { headers: { Accept: 'application/json' } });
+                if (!res.ok) throw new Error('поиск недоступен');
+                const rows = await res.json();
+                const hit = rows?.[0];
+                const lat = parseFloat(hit?.lat), lon = parseFloat(hit?.lon);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+                    notifyError('Место не найдено: «' + raw + '»');
+                    return;
+                }
+                mapBuilderSetView(lat, lon, 13);
+                mapBuilderHint(hit.display_name || raw);
+            } catch (err) {
+                notifyError('Поиск по карте: ' + (err?.message || err) + '. Можно вставить широту и долготу в поле поиска.');
+            }
+        }
+
+        async function mapBuilderLoad() {
+            const ring = mbSelectionRing();
+            if (ring.length < 3) {
+                notifyError('Сначала рамка или контур на карте.');
+                return;
+            }
+            const m2 = polygonAreaM2(ring);
+            if (m2 > MAP_BUILDER_MAX_M2) {
+                notifyError('Лимит площадки 200 га. Уменьшите рамку или контур.');
+                return;
+            }
+            const settings = mapBuilderSettingsFromSelection();
+            if (!settings) return;
+            const btn = $('mapBuilderLoad');
+            if (btn) btn.disabled = true;
+            const sceneWasEmpty = loadedModels.size === 0 && !mapTerrain && !geoRasterLayers.length;
+            let demOk = false;
+            try {
+                try {
+                    await applyMapTerrainLayer(settings);
+                    demOk = true;
+                } catch (err) {
+                    console.error(err);
+                    notifyError('Рельеф с карты: ' + (err?.message || err));
+                }
+                await applyBasemapLayer({ ...settings, drape: demOk });
+                closeMapBuilderModal();
+                const fitBtn = $('fit');
+                if (fitBtn) fitBtn.disabled = false;
+                if (sceneWasEmpty) fitView();
+                notifyOk(
+                    `Площадка с карты: ${(m2 / 10_000).toFixed(1)} га, ` +
+                    `${settings.provider === 'osm' ? 'схема OSM' : 'космоснимок ESRI'}` +
+                    (demOk ? ' и рельеф Terrarium.' : '.')
+                );
+            } catch (err) {
+                console.error(err);
+                hideLoader();
+                notifyError('Карта: ' + (err?.message || err));
+            } finally {
+                mapBuilderRefreshArea();
+            }
+        }
+
+        function mapBuilderRectFromCorners(a, b) {
+            return [
+                { lat: a.lat, lon: a.lon },
+                { lat: a.lat, lon: b.lon },
+                { lat: b.lat, lon: b.lon },
+                { lat: b.lat, lon: a.lon }
+            ];
+        }
+
+        (function initMapBuilderUi() {
+            const canvas = mapBuilderCanvasEl();
+            if (!canvas) return;
+            $('mapBuilderPan')?.addEventListener('click', () => mapBuilderSetTool('pan'));
+            $('mapBuilderRect')?.addEventListener('click', () => mapBuilderSetTool('rect'));
+            $('mapBuilderPoly')?.addEventListener('click', () => mapBuilderSetTool('poly'));
+            $('mapBuilderClearSel')?.addEventListener('click', mapBuilderClearSelection);
+            $('mapBuilderCancel')?.addEventListener('click', closeMapBuilderModal);
+            $('mapBuilderLoad')?.addEventListener('click', () => { mapBuilderLoad(); });
+            $('mapBuilderSearchGo')?.addEventListener('click', () => { mapBuilderSearchGo(); });
+            $('mapBuilderSearch')?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); mapBuilderSearchGo(); }
+            });
+            $('mapBuilderLayer')?.addEventListener('change', () => {
+                mb.tiles.clear();
+                mapBuilderRedraw();
+            });
+            $('mapBuilderBind')?.addEventListener('click', () => {
+                const settings = mapBuilderSettingsFromSelection();
+                closeMapBuilderModal();
+                openBaseMapModal();
+                if (settings) {
+                    $('baseMapLat').value = settings.latRaw;
+                    $('baseMapLon').value = settings.lonRaw;
+                    $('baseMapRadius').value = settings.radius;
+                    $('baseMapProvider').value = settings.provider;
+                    refreshBaseMapProviderUi();
+                    refreshBaseMapEstimate();
+                }
+            });
+            $('mapBuilderModal')?.addEventListener('click', (e) => {
+                if (e.target === $('mapBuilderModal')) closeMapBuilderModal();
+            });
+            window.addEventListener('keydown', (e) => {
+                if (!$('mapBuilderModal')?.classList.contains('show')) return;
+                if (e.key === 'Enter' && mb.tool === 'poly' && mb.polyLive?.length >= 3) {
+                    e.preventDefault();
+                    mapBuilderDrawPolygon(mb.polyLive);
+                    mb.polyLive = null;
+                    return;
+                }
+                if (e.key === 'Escape') {
+                    if (mb.polyLive?.length || mb.draft) {
+                        mb.polyLive = null;
+                        mb.draft = null;
+                        mapBuilderRedraw();
+                        return;
+                    }
+                    closeMapBuilderModal();
+                }
+            });
+            canvas.addEventListener('pointerdown', (e) => {
+                if (e.button !== 0) return;
+                canvas.setPointerCapture(e.pointerId);
+                const pt = mapBuilderEventPt(e);
+                mb.lastX = pt.x;
+                mb.lastY = pt.y;
+                if (mb.tool === 'pan' || e.shiftKey) {
+                    mb.dragging = true;
+                    canvas.classList.add('is-drag');
+                    return;
+                }
+                if (mb.tool === 'rect') {
+                    const ll = mapBuilderPxToLonLat(pt.x, pt.y);
+                    mb.draft = { type: 'rect', start: ll, pts: mapBuilderRectFromCorners(ll, ll) };
+                    return;
+                }
+                if (mb.tool === 'poly') {
+                    const ll = mapBuilderPxToLonLat(pt.x, pt.y);
+                    if (!mb.polyLive) mb.polyLive = [];
+                    mb.polyLive.push(ll);
+                    mapBuilderRedraw();
+                }
+            });
+            canvas.addEventListener('pointermove', (e) => {
+                const pt = mapBuilderEventPt(e);
+                if (mb.dragging) {
+                    const z = mb.zoom;
+                    const dx = pt.x - mb.lastX;
+                    const dy = pt.y - mb.lastY;
+                    mb.lastX = pt.x;
+                    mb.lastY = pt.y;
+                    const mx = lonToMercatorX(mb.lon, z) - dx / 256;
+                    const my = latToMercatorY(mb.lat, z) - dy / 256;
+                    mb.lon = mx / Math.pow(2, z) * 360 - 180;
+                    mb.lat = Math.max(-85, Math.min(85, mercatorYToLat(my, z)));
+                    mapBuilderRedraw();
+                    return;
+                }
+                if (mb.tool === 'rect' && mb.draft?.start) {
+                    const ll = mapBuilderPxToLonLat(pt.x, pt.y);
+                    mb.draft.pts = mapBuilderRectFromCorners(mb.draft.start, ll);
+                    mapBuilderRefreshArea();
+                    mapBuilderRedraw();
+                }
+            });
+            const endDrag = () => {
+                if (mb.dragging) {
+                    mb.dragging = false;
+                    canvas.classList.remove('is-drag');
+                }
+                if (mb.tool === 'rect' && mb.draft?.pts) {
+                    const m2 = polygonAreaM2(mb.draft.pts);
+                    if (m2 >= 100) mb.sel = { type: 'rect', pts: mb.draft.pts };
+                    mb.draft = null;
+                    mapBuilderRefreshArea();
+                    mapBuilderRedraw();
+                }
+            };
+            canvas.addEventListener('pointerup', endDrag);
+            canvas.addEventListener('pointercancel', endDrag);
+            canvas.addEventListener('dblclick', (e) => {
+                if (mb.tool !== 'poly' || !mb.polyLive) return;
+                e.preventDefault();
+                if (mb.polyLive.length >= 2) {
+                    const a = mb.polyLive[mb.polyLive.length - 1];
+                    const b = mb.polyLive[mb.polyLive.length - 2];
+                    if (latLonDistanceM(a.lat, a.lon, b.lat, b.lon) < 2) mb.polyLive.pop();
+                }
+                if (mb.polyLive.length >= 3) mapBuilderDrawPolygon(mb.polyLive);
+                mb.polyLive = null;
+            });
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const pt = mapBuilderEventPt(e);
+                const before = mapBuilderPxToLonLat(pt.x, pt.y);
+                const dir = e.deltaY > 0 ? -1 : 1;
+                mb.zoom = Math.max(2, Math.min(18, mb.zoom + dir * (e.deltaMode === 1 ? 0.35 : 0.12)));
+                const after = mapBuilderPxToLonLat(pt.x, pt.y);
+                mb.lon += before.lon - after.lon;
+                mb.lat += before.lat - after.lat;
+                mb.lat = Math.max(-85, Math.min(85, mb.lat));
+                mapBuilderRedraw();
+            }, { passive: false });
+            if (typeof ResizeObserver !== 'undefined') {
+                new ResizeObserver(() => {
+                    if (!$('mapBuilderModal')?.classList.contains('show')) return;
+                    mapBuilderResize();
+                    mapBuilderRedraw();
+                }).observe(canvas.parentElement);
+            }
+        })();
 
         async function refreshGeoRasterEcwNote() {
             const note = $('geoRasterEcwNote');
@@ -27893,7 +28609,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
 
         const PALETTE_KEEP_MODAL = new Set([
             'aboutModal', 'proprietaryModal', 'branchModal', 'normalizeModal',
-            'propSearchModal', 'qrViewModal', 'filletModal'
+            'propSearchModal', 'qrViewModal', 'filletModal',
+            'mapBuilderModal'
         ]);
 
         function initAllFloatingPalettes() {
@@ -32891,7 +33608,8 @@ ${componentXml || '    '}
                 (est.capped ? ' · зум снижен, чтобы уложиться в бюджет детализации' : '');
         }
 
-        $('btnBaseMap').addEventListener('click', openBaseMapModal);
+        $('btnBaseMap').addEventListener('click', openMapBuilderModal);
+        $('btnMapBuilder')?.addEventListener('click', openMapBuilderModal);
         $('baseMapProvider').addEventListener('change', () => { refreshBaseMapProviderUi(); refreshBaseMapEstimate(); });
         ['baseMapDetail', 'baseMapRadius', 'baseMapLat', 'baseMapLon', 'baseMapRotation', 'baseMapAnchorX', 'baseMapAnchorY']
             .forEach(id => $(id).addEventListener('input', refreshBaseMapEstimate));
@@ -35097,7 +35815,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.15',
-            buildId: 'c586fa5-preview',
+            buildId: '55a4141-preview',
             released: '2026-08-15',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -35106,6 +35824,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.15: площадка с карты — окно-глобус как в InfraWorks: поиск, рамка или контур до 200 га, «Загрузить» (снимок + рельеф).',
                 '2026.08.15: «Рельеф с карты» — сетка высот Terrarium / Terrain-RGB в том же охвате, что подложка; луч сверлит меш, картинка землю не считает.',
                 '2026.08.15: точки фигуры едут за якорем; условие «скрыть» прячет точку и детей на пикете (бордюр в насыпи / нет в выемке).',
                 '2026.08.15: чертёж поперечника — зум колесом (как профиль), готовые фигуры (бордюр, кювет, …) и условие на точке: если рабочая/земля/ось, то другие ΔZ и смещение на этом пикете.',
