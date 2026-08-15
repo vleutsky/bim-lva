@@ -1,14 +1,15 @@
 /**
- * Карта-подложка. Настоящие тайл-серверы из песочницы закрыты прокси, поэтому
- * перехватываем запросы и отдаём сгенерированный PNG: проверяем не сеть, а
- * нашу математику — что подложка встала по привязке, нужного размера, и что UV
- * считается по Меркатору, а не линейно.
+ * Карта-подложка и рельеф с карты. Настоящие тайл-серверы из песочницы закрыты
+ * прокси, поэтому перехватываем запросы и отдаём сгенерированный PNG: проверяем
+ * не сеть, а математику — привязка, размер, UV по Меркатору, формула Terrarium
+ * и что sampleTerrainZ сверлит меш DEM, а не картинку подложки.
  */
 import { chromium } from 'playwright';
 import { makeGeoIfc } from './fixtures/make-geo-ifc.mjs';
 import { startStaticServer } from './static-server.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 import { fileURLToPath } from 'node:url';
 
@@ -18,6 +19,51 @@ const PNG_1PX = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     'base64'
 );
+
+/** CRC32 для чанков PNG — без зависимости от версии Node (zlib.crc32 не везде). */
+function crc32(buf) {
+    let c = ~0;
+    for (let i = 0; i < buf.length; i++) {
+        c ^= buf[i];
+        for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xEDB88320 & -(c & 1));
+    }
+    return (~c) >>> 0;
+}
+
+function pngChunk(type, data) {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const typeBuf = Buffer.from(type);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])));
+    return Buffer.concat([len, typeBuf, data, crc]);
+}
+
+/** 1×1 RGBA PNG сплошного цвета. drawImage растянет его на тайл 256×256. */
+function pngRgba(r, g, b, a = 255) {
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(1, 0);
+    ihdr.writeUInt32BE(1, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 6;
+    const raw = Buffer.from([0, r, g, b, a]);
+    const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    return Buffer.concat([
+        sig,
+        pngChunk('IHDR', ihdr),
+        pngChunk('IDAT', zlib.deflateSync(raw)),
+        pngChunk('IEND', Buffer.alloc(0))
+    ]);
+}
+
+// Terrarium: (R·256 + G + B/256) − 32768. Высота 60 м = MODEL.worldZ.
+const TERRARIUM_Z = 60;
+const PNG_TERRARIUM_60 = pngRgba(128, 60, 0, 255);
+const CORS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET',
+    'Cache-Control': 'no-store'
+};
 
 async function resolveChromium() {
     const base = process.env.PLAYWRIGHT_BROWSERS_PATH;
@@ -40,12 +86,17 @@ page.on('console', (m) => {
 });
 
 const tileUrls = [];
+const demUrls = [];
 for (const pattern of ['**/tile.openstreetmap.org/**', '**/server.arcgisonline.com/**']) {
     await page.route(pattern, (route) => {
         tileUrls.push(route.request().url());
-        route.fulfill({ status: 200, contentType: 'image/png', body: PNG_1PX });
+        route.fulfill({ status: 200, contentType: 'image/png', headers: CORS, body: PNG_1PX });
     });
 }
+await page.route('**/elevation-tiles-prod/terrarium/**', (route) => {
+    demUrls.push(route.request().url());
+    route.fulfill({ status: 200, contentType: 'image/png', headers: CORS, body: PNG_TERRARIUM_60 });
+});
 
 const SITE = { lat: 55.7, lon: 52.4 };          // Набережные Челны: искажение Меркатора ~1.77
 const MODEL = { worldX: 456_000, worldY: 6_188_000, worldZ: 60 };
@@ -156,6 +207,35 @@ try {
         return shown;
     });
     if (!customShown) problems.push('для своего шаблона не появилось поле URL');
+
+    // A1. Рельеф с карты: предупреждение, Terrarium без шаблона, Terrain-RGB — с шаблоном
+    const demUi = await page.evaluate(() => {
+        const apply = document.getElementById('baseMapDemApply');
+        const src = document.getElementById('baseMapDemSource');
+        const row = document.getElementById('baseMapDemTemplateRow');
+        const note = [...document.querySelectorAll('#baseMapModal .bulk-note')]
+            .map((n) => n.textContent).join(' | ');
+        const before = {
+            hasApply: !!apply,
+            source: src?.value,
+            templateHidden: row?.style.display === 'none',
+            warns: /10–30|10-30/.test(note) && /меш|сетк/i.test(note)
+        };
+        src.value = 'terrainRgb';
+        src.dispatchEvent(new Event('change', { bubbles: true }));
+        const rgbShown = row.style.display !== 'none';
+        src.value = 'terrarium';
+        src.dispatchEvent(new Event('change', { bubbles: true }));
+        const terrHidden = row.style.display === 'none';
+        return { ...before, rgbShown, terrHidden };
+    });
+    if (!demUi.hasApply) problems.push('нет кнопки «Рельеф с карты»');
+    if (demUi.source !== 'terrarium') problems.push(`источник высот по умолчанию «${demUi.source}», ожидался terrarium`);
+    if (!demUi.templateHidden) problems.push('шаблон Terrain-RGB виден для Terrarium');
+    if (!demUi.rgbShown) problems.push('для Terrain-RGB не появилось поле шаблона');
+    if (!demUi.terrHidden) problems.push('после возврата на Terrarium поле шаблона осталось на экране');
+    if (!demUi.warns) problems.push('нет предупреждения, что DEM — глобальный, шаг 10–30 м, не картинка');
+    console.log(`A1. рельеф с карты: Terrarium, шаблон ${demUi.terrHidden ? 'скрыт' : 'виден'}, предупреждение ${demUi.warns ? 'есть' : 'НЕТ'}`);
 
     // A2. Пара из карт вставляется целиком в любое из двух полей и разделяется.
     // Проверяем настоящей вставкой (paste), а не подстановкой value: разделение
@@ -415,15 +495,111 @@ try {
     }
     console.log(`D. прозрачность ${opacityChanged.before.toFixed(2)} → ${opacityChanged.after.toFixed(2)}`);
 
-    // E. Убрать подложку
+    // E. Рельеф с карты: формула высот + меш, который сверлит sampleTerrainZ
+    const demFormula = await page.evaluate(() => ({
+        terrarium: window.BimLvaDebug.decodeDemHeight('terrarium', 128, 60, 0, 255),
+        mapbox: window.BimLvaDebug.decodeDemHeight('mapbox', 1, 136, 248, 255),
+        nodata: window.BimLvaDebug.decodeDemHeight('terrarium', 128, 60, 0, 0)
+    }));
+    if (Math.abs(demFormula.terrarium - TERRARIUM_Z) > 1e-6) {
+        problems.push(`Terrarium (128,60,0) → ${demFormula.terrarium}, ожидалось ${TERRARIUM_Z}`);
+    }
+    if (Math.abs(demFormula.mapbox - TERRARIUM_Z) > 0.05) {
+        problems.push(`Terrain-RGB (1,136,248) → ${demFormula.mapbox}, ожидалось ${TERRARIUM_Z}`);
+    }
+    if (Number.isFinite(demFormula.nodata)) {
+        problems.push(`прозрачный пиксель Terrarium дал ${demFormula.nodata}, ожидался NaN`);
+    }
+    console.log(`E0. формула: Terrarium ${demFormula.terrarium} м, Terrain-RGB ${demFormula.mapbox} м`);
+
+    const rgbNeedTemplate = await page.evaluate(async () => {
+        document.getElementById('btnBaseMap').click();
+        await new Promise((r) => setTimeout(r, 300));
+        document.getElementById('baseMapDemSource').value = 'terrainRgb';
+        document.getElementById('baseMapDemTemplate').value = '';
+        document.querySelectorAll('.toast .toast-close').forEach((b) => b.click());
+        document.getElementById('baseMapDemApply').click();
+        await new Promise((r) => setTimeout(r, 800));
+        const toast = [...document.querySelectorAll('.toast .toast-text')].map((t) => t.textContent).join(' | ');
+        document.getElementById('baseMapDemSource').value = 'terrarium';
+        document.getElementById('baseMapDemSource').dispatchEvent(new Event('change', { bubbles: true }));
+        return toast;
+    });
+    if (!/\{z\}|шаблон/i.test(rgbNeedTemplate)) {
+        problems.push(`Terrain-RGB без шаблона: «${rgbNeedTemplate.slice(0, 160)}»`);
+    }
+    console.log(`E1. Terrain-RGB без ключа: ${/шаблон/i.test(rgbNeedTemplate) ? 'ошибка шаблона' : 'СБОЙ'}`);
+    await page.evaluate(() => document.querySelectorAll('.toast .toast-close').forEach((b) => b.click()));
+
+    const demBefore = demUrls.length;
+    await page.evaluate(([lat, lon, radius]) => {
+        document.getElementById('baseMapLat').value = String(lat);
+        document.getElementById('baseMapLon').value = String(lon);
+        document.getElementById('baseMapRadius').value = String(radius);
+        document.getElementById('baseMapDemSource').value = 'terrarium';
+        document.getElementById('baseMapDemApply').click();
+    }, [SITE.lat, SITE.lon, RADIUS]);
+    const demBuilt = await page
+        .waitForFunction(() => window.BimLvaDebug?.mapTerrainLayer != null, { timeout: 90_000 })
+        .then(() => true).catch(() => false);
+    if (!demBuilt) {
+        problems.push('рельеф с карты не построился');
+    } else {
+        const dem = await page.evaluate((offsetM) => {
+            const layer = window.BimLvaDebug.mapTerrainLayer;
+            const mb = window.BimLvaDebug.modelBounds[0];
+            // Бить в стороне от коробок IFC: иначе луч первым поймает крышу, не DEM.
+            const x = layer.centerX + offsetM;
+            const y = layer.centerY;
+            const z = window.BimLvaDebug.sampleTerrainZ(x, y, Number.NaN);
+            return { layer, mb, sample: { x, y, z } };
+        }, 600);
+        if (!dem.layer.isMapTerrain) problems.push('меш рельефа без isMapTerrain');
+        if (dem.layer.isGeoRaster) problems.push('меш рельефа помечен isGeoRaster — луч его не увидит');
+        const sizeOk = Math.abs(dem.layer.sizeX - RADIUS * 2) < 2 && Math.abs(dem.layer.sizeY - RADIUS * 2) < 2;
+        if (!sizeOk) {
+            problems.push(`размер рельефа ${dem.layer.sizeX.toFixed(0)}×${dem.layer.sizeY.toFixed(0)} вместо ${RADIUS * 2}`);
+        }
+        const offset = Math.hypot(dem.layer.centerX - dem.mb.centerX, dem.layer.centerY - dem.mb.centerY);
+        if (!(offset < 300)) problems.push(`рельеф съехал от модели на ${offset.toFixed(0)} м`);
+        if (!Number.isFinite(dem.sample.z)) {
+            problems.push(`sampleTerrainZ в стороне от модели не попал в DEM (${dem.sample.x.toFixed(1)}, ${dem.sample.y.toFixed(1)})`);
+        } else {
+            const dz = Math.abs(dem.sample.z - dem.layer.centerZ);
+            if (!(dz < 2)) {
+                problems.push(
+                    `sampleTerrainZ дал ${dem.sample.z.toFixed(2)}, центр DEM ${dem.layer.centerZ.toFixed(2)} ` +
+                    `(ожидалась высота Terrarium ${TERRARIUM_Z} м минус ноль сцены)`
+                );
+            }
+        }
+        if (demUrls.length <= demBefore) problems.push('ни один тайл Terrarium не запрошен');
+        console.log(
+            `E2. рельеф: ${dem.layer.sizeX.toFixed(0)}×${dem.layer.sizeY.toFixed(0)} м, ` +
+            `смещение ${offset.toFixed(0)} м, z сцены ${dem.layer.centerZ.toFixed(2)}, ` +
+            `sampleTerrainZ ${Number.isFinite(dem.sample.z) ? dem.sample.z.toFixed(2) : 'NaN'}, ` +
+            `тайлов ${demUrls.length - demBefore}`
+        );
+    }
+
+    const demRemoved = await page.evaluate(() => {
+        document.getElementById('btnBaseMap').click();
+        document.getElementById('baseMapDemRemove').click();
+        document.getElementById('baseMapCancel').click();
+        return window.BimLvaDebug.mapTerrainLayer == null;
+    });
+    if (!demRemoved) problems.push('рельеф с карты не убрался по кнопке');
+    console.log(`E3. удаление рельефа: ${demRemoved ? 'ок' : 'СБОЙ'}`);
+
+    // F. Убрать подложку
     const removed = await page.evaluate(() => {
         document.getElementById('baseMapRemove').click();
         return window.BimLvaDebug.basemapLayer == null;
     });
     if (!removed) problems.push('подложка не убралась по кнопке');
-    console.log(`E. удаление подложки: ${removed ? 'ок' : 'СБОЙ'}`);
+    console.log(`F. удаление подложки: ${removed ? 'ок' : 'СБОЙ'}`);
 
-    // F. Понятная ошибка, если тайлы не отдаются
+    // G. Понятная ошибка, если тайлы не отдаются
     await page.route('**/tile.openstreetmap.org/**', (route) => route.abort());
     await page.evaluate(() => {
         document.getElementById('btnBaseMap').click();
@@ -436,7 +612,7 @@ try {
         )
         .then(() => true).catch(() => false);
     if (!errShown) problems.push('при недоступных тайлах нет понятного сообщения');
-    console.log(`F. недоступные тайлы: сообщение ${errShown ? 'показано' : 'НЕТ'}`);
+    console.log(`G. недоступные тайлы: сообщение ${errShown ? 'показано' : 'НЕТ'}`);
 } finally {
     await fs.rm(file, { force: true });
     await browser.close();

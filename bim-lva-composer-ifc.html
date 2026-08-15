@@ -4428,6 +4428,29 @@
                 <input type="checkbox" id="baseMapDrape" title="Положить карту на 3D-поверхность вместо плоскости">
             </div>
             <div class="bulk-note" id="baseMapAttribution"></div>
+            <div class="bulk-note" style="margin-top:12px">
+                <b>Рельеф с карты.</b> Подложка и «Рельеф, отмывка» — картинка: луч вниз по ним землю не считает
+                (георастр с <code>isGeoRaster</code> в выборку не входит). Эта кнопка качает сетку высот
+                и собирает обычный меш — профиль, поперечники и «откосы до рельефа» по нему работают.
+                Глобальный DEM, шаг примерно 10–30&nbsp;м: для «ось на карте → откосы» годится,
+                для объёмов и посадки здания — нет (там LandXML / IFC / свой растр).
+                Чтобы картинка легла на этот меш — включите «Натянуть на рельеф» и постройте подложку после.
+            </div>
+            <div class="prop small">
+                <div class="k">Высоты</div>
+                <select class="editInput" id="baseMapDemSource">
+                    <option value="terrarium">AWS Terrarium (без ключа)</option>
+                    <option value="terrainRgb">Terrain-RGB (MapTiler / Mapbox — свой ключ)</option>
+                </select>
+            </div>
+            <div class="prop small" id="baseMapDemTemplateRow" style="display:none">
+                <div class="k">Шаблон Terrain-RGB</div>
+                <input class="editInput" id="baseMapDemTemplate" placeholder="https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.png?key=ВАШ_КЛЮЧ">
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start;gap:6px;flex-wrap:wrap">
+                <button type="button" class="btn" id="baseMapDemRemove" title="Убрать меш рельефа с карты, подложку не трогает">Убрать рельеф</button>
+                <button type="button" class="btn load-btn" id="baseMapDemApply" title="Скачать высоты в том же охвате и привязке, что у подложки">Рельеф с карты</button>
+            </div>
             <div class="modal-actions">
                 <button class="btn" id="baseMapRemove">Убрать подложку</button>
                 <button class="btn" id="baseMapCancel">Закрыть</button>
@@ -5797,6 +5820,39 @@
                     uvLast: at(uv.count - 1),
                     uvMid: at(Math.floor(uv.count / 2))
                 };
+            },
+            get mapTerrainLayer() {
+                if (!mapTerrain?.mesh?.geometry) return null;
+                const mesh = mapTerrain.mesh;
+                mesh.geometry.computeBoundingBox();
+                mesh.updateWorldMatrix(true, false);
+                const box = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+                return {
+                    name: mapTerrain.name,
+                    encoding: mapTerrain.encoding,
+                    zoom: mapTerrain.zoom,
+                    tiles: mapTerrain.tiles,
+                    failed: mapTerrain.failed,
+                    sizeX: box.max.x - box.min.x,
+                    sizeY: box.max.y - box.min.y,
+                    centerX: (box.min.x + box.max.x) / 2,
+                    centerY: (box.min.y + box.max.y) / 2,
+                    centerZ: (box.min.z + box.max.z) / 2,
+                    isGeoRaster: !!mesh.userData?.isGeoRaster,
+                    isMapTerrain: !!mesh.userData?.isMapTerrain
+                };
+            },
+            decodeDemHeight(encoding, r, g, b, a) {
+                return decodeDemPixel(encoding, r, g, b, a);
+            },
+            sampleTerrainZ(x, y, fallbackZ) {
+                return sampleTerrainZ(x, y, fallbackZ);
+            },
+            async applyMapTerrain(settings) {
+                return applyMapTerrainLayer(settings || readBaseMapForm());
+            },
+            removeMapTerrain() {
+                return removeMapTerrainLayer();
             },
             /** Габарит каждой загруженной модели по отдельности, в метрах сцены. */
             get modelBounds() {
@@ -7313,13 +7369,15 @@
         }
 
         function sampleTerrainZ(x, y, fallbackZ) {
-            if (!allMeshes.length) return fallbackZ;
             const raycaster = new THREE.Raycaster();
             raycaster.set(new THREE.Vector3(x, y, 1e7), new THREE.Vector3(0, 0, -1));
-            const hits = raycaster.intersectObjects(
-                collectRaycastTargets(_terrainRayTargets, m => !m.userData?.isGeoRaster),
-                false
-            );
+            const targets = collectRaycastTargets(_terrainRayTargets, m => !m.userData?.isGeoRaster);
+            if (mapTerrain?.mesh?.visible && !targets.includes(mapTerrain.mesh)) {
+                ensureBoundsTree(mapTerrain.mesh);
+                targets.push(mapTerrain.mesh);
+            }
+            if (!targets.length) return fallbackZ;
+            const hits = raycaster.intersectObjects(targets, false);
             return hits.length ? hits[0].point.z : fallbackZ;
         }
 
@@ -7337,6 +7395,10 @@
             const n = seg + 1;
             const z = new Float64Array(n * n).fill(NaN);
             const targets = collectRaycastTargets(_terrainRayTargets, m => !m.userData?.isGeoRaster);
+            if (mapTerrain?.mesh?.visible && !targets.includes(mapTerrain.mesh)) {
+                ensureBoundsTree(mapTerrain.mesh);
+                targets.push(mapTerrain.mesh);
+            }
             if (!targets.length) return z.fill(baseZ);
 
             const raycaster = new THREE.Raycaster();
@@ -7492,6 +7554,7 @@
         function clearAllGeoRasters() {
             geoRasterLayers.forEach(disposeGeoRasterLayer);
             geoRasterLayers.length = 0;
+            removeMapTerrainLayer();
             updateGeoRasterListUI();
         }
 
@@ -7614,6 +7677,27 @@
         let activeBasemapBinding = null;
         const EARTH_METERS_PER_DEGREE = 111320; // по меридиану, достаточно на км-масштабах
         let basemapLayerId = null;
+        /** Меш высот с карты: не isGeoRaster, луч sampleTerrainZ его сверлит. */
+        let mapTerrain = null;
+
+        const DEM_PROVIDERS = {
+            terrarium: {
+                name: 'AWS Terrarium',
+                url: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+                encoding: 'terrarium',
+                attribution: 'Terrain tiles © AWS / Mapzen',
+                maxZoom: 15
+            },
+            terrainRgb: {
+                name: 'Terrain-RGB',
+                url: '',
+                encoding: 'mapbox',
+                attribution: 'Источник указан в шаблоне',
+                maxZoom: 15
+            }
+        };
+        const DEM_MAX_TILES = 80;
+        const DEM_STEP_M = 20;
 
         function lonToMercatorX(lon, z) {
             return ((lon + 180) / 360) * Math.pow(2, z);
@@ -7812,11 +7896,7 @@
             return true;
         }
 
-        async function applyBasemapLayer(settings) {
-            const provider = BASEMAP_PROVIDERS[settings.provider] || BASEMAP_PROVIDERS.osm;
-            if (provider === BASEMAP_PROVIDERS.custom && !/\{z\}/.test(settings.template || '')) {
-                throw new Error('Укажите шаблон тайлов со знаками {z}/{x}/{y} — например https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=ВАШ_КЛЮЧ');
-            }
+        function resolveBasemapBinding(settings) {
             const binding = {
                 lat: settings.lat,
                 lon: settings.lon,
@@ -7824,12 +7904,8 @@
                 anchorY: settings.anchorY,
                 rotationDeg: settings.rotationDeg || 0
             };
-            // Сообщение показывает, что именно прочитано: «широта 2308446» сразу
-            // объясняет, что в поле попали координаты модели, а не градусы.
             const latRaw = String(settings.latRaw ?? '').trim();
             const lonRaw = String(settings.lonRaw ?? '').trim();
-            // «Пусто» и «не то число» — разные ошибки: раньше обе показывали
-            // одинаковый текст про диапазон, и пустое поле было не отличить.
             if (!latRaw || !lonRaw) {
                 throw new Error(
                     `Не заполнено поле «${!latRaw ? 'Широта' : 'Долгота'}» (шаг 2).\n` +
@@ -7849,7 +7925,283 @@
                     `Долгота «${lonRaw}» — не градусы. Нужно число от −180 до 180, например 52.412345.`
                 );
             }
-            const radius = Math.max(50, Number(settings.radius) || 1000);
+            return { binding, radius: Math.max(50, Number(settings.radius) || 1000) };
+        }
+
+        /** Terrarium: (R·256 + G + B/256) − 32768. Mapbox/MapTiler Terrain-RGB: −10000 + (R·65536+G·256+B)·0.1 */
+        function decodeDemPixel(encoding, r, g, b, a) {
+            if (a === 0) return NaN;
+            const z = encoding === 'mapbox'
+                ? -10000 + (r * 256 * 256 + g * 256 + b) * 0.1
+                : (r * 256 + g + b / 256) - 32768;
+            if (!Number.isFinite(z) || z < -500 || z > 8900) return NaN;
+            return z;
+        }
+
+        function demTileUrl(source, template, z, x, y) {
+            const tpl = (source.encoding === 'mapbox' ? template : source.url) || '';
+            return tpl
+                .replace('{z}', String(z))
+                .replace('{x}', String(x))
+                .replace('{y}', String(y))
+                .replace('{s}', 'a');
+        }
+
+        async function fetchDemCanvas(binding, radius, source, template) {
+            const corners = [
+                [-radius, -radius], [radius, -radius], [-radius, radius], [radius, radius]
+            ].map(([dx, dy]) => basemapModelToLatLon(binding, binding.anchorX + dx, binding.anchorY + dy));
+            const lats = corners.map((c) => c.lat);
+            const lons = corners.map((c) => c.lon);
+            const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+            const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+            const metersAcross = radius * 2;
+            const targetPx = Math.max(64, metersAcross / DEM_STEP_M);
+            const provider = { maxZoom: source.maxZoom || 15 };
+            let zoom = pickBasemapZoom(binding, radius, provider, targetPx);
+            let x0, x1, y0, y1;
+            for (;;) {
+                x0 = Math.floor(lonToMercatorX(minLon, zoom));
+                x1 = Math.floor(lonToMercatorX(maxLon, zoom));
+                y0 = Math.floor(latToMercatorY(maxLat, zoom));
+                y1 = Math.floor(latToMercatorY(minLat, zoom));
+                const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+                const fitsSide = (x1 - x0 + 1) <= BASEMAP_MAX_TILES_PER_SIDE &&
+                    (y1 - y0 + 1) <= BASEMAP_MAX_TILES_PER_SIDE;
+                if ((count <= DEM_MAX_TILES && fitsSide) || zoom <= 1) break;
+                zoom--;
+            }
+            const cols = x1 - x0 + 1;
+            const rows = y1 - y0 + 1;
+            const TILE = 256;
+            const canvas = document.createElement('canvas');
+            canvas.width = cols * TILE;
+            canvas.height = rows * TILE;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const jobs = [];
+            for (let ty = y0; ty <= y1; ty++) {
+                for (let tx = x0; tx <= x1; tx++) {
+                    const max = Math.pow(2, zoom);
+                    const wrappedX = ((tx % max) + max) % max;
+                    if (ty < 0 || ty >= max) continue;
+                    jobs.push({ tx, ty, url: demTileUrl(source, template, zoom, wrappedX, ty) });
+                }
+            }
+            let failed = 0, done = 0;
+            for (let i = 0; i < jobs.length; i += 8) {
+                const batch = jobs.slice(i, i + 8);
+                const images = await Promise.all(batch.map((j) => loadTileImage(j.url)));
+                images.forEach((img, k) => {
+                    done++;
+                    if (!img) { failed++; return; }
+                    const j = batch[k];
+                    ctx.drawImage(img, (j.tx - x0) * TILE, (j.ty - y0) * TILE, TILE, TILE);
+                });
+                showLoader('РЕЛЬЕФ', `Высоты ${done}/${jobs.length}…`);
+                await new Promise((r) => setTimeout(r, jobs.length > 40 ? 40 : 0));
+            }
+            let imageData;
+            try {
+                imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            } catch {
+                throw new Error(
+                    'Тайлы высот загрузились, но браузер не даёт прочитать пиксели (CORS). ' +
+                    'Terrarium на AWS обычно открыт для canvas; для Terrain-RGB нужен шаблон с CORS, как у подложки MapTiler/Mapbox.'
+                );
+            }
+            return {
+                canvas, ctx, imageData,
+                mercMinX: x0, mercMinY: y0, mercSpanX: cols, mercSpanY: rows,
+                zoom, tiles: jobs.length, failed
+            };
+        }
+
+        function sampleDemCanvas(tiles, encoding, px, py) {
+            const { data, width: w, height: h } = tiles.imageData;
+            const decode = (ix, iy) => {
+                if (ix < 0 || iy < 0 || ix >= w || iy >= h) return NaN;
+                const o = (iy * w + ix) * 4;
+                return decodeDemPixel(encoding, data[o], data[o + 1], data[o + 2], data[o + 3]);
+            };
+            if (px < 0 || py < 0 || px >= w - 1 || py >= h - 1) {
+                return decode(Math.round(Math.max(0, Math.min(w - 1, px))), Math.round(Math.max(0, Math.min(h - 1, py))));
+            }
+            const x0 = Math.floor(px), y0 = Math.floor(py);
+            const tx = px - x0, ty = py - y0;
+            const z00 = decode(x0, y0), z10 = decode(x0 + 1, y0);
+            const z01 = decode(x0, y0 + 1), z11 = decode(x0 + 1, y0 + 1);
+            const parts = [];
+            if (Number.isFinite(z00)) parts.push(z00 * (1 - tx) * (1 - ty));
+            if (Number.isFinite(z10)) parts.push(z10 * tx * (1 - ty));
+            if (Number.isFinite(z01)) parts.push(z01 * (1 - tx) * ty);
+            if (Number.isFinite(z11)) parts.push(z11 * tx * ty);
+            if (!parts.length) return NaN;
+            const wsum = (Number.isFinite(z00) ? (1 - tx) * (1 - ty) : 0)
+                + (Number.isFinite(z10) ? tx * (1 - ty) : 0)
+                + (Number.isFinite(z01) ? (1 - tx) * ty : 0)
+                + (Number.isFinite(z11) ? tx * ty : 0);
+            return wsum < 1e-9 ? NaN : parts.reduce((a, b) => a + b, 0) / wsum;
+        }
+
+        function removeMapTerrainLayer() {
+            if (!mapTerrain?.mesh) return false;
+            const mesh = mapTerrain.mesh;
+            allMeshes = allMeshes.filter((m) => m !== mesh);
+            geoRasterGroup.remove(mesh);
+            mesh.geometry?.dispose();
+            mesh.material?.dispose();
+            mapTerrain = null;
+            markNeedsRender();
+            return true;
+        }
+
+        function buildMapTerrainMesh(binding, radius, tiles, encoding) {
+            const minX = binding.anchorX - radius;
+            const maxX = binding.anchorX + radius;
+            const minY = binding.anchorY - radius;
+            const maxY = binding.anchorY + radius;
+            const w = maxX - minX, h = maxY - minY;
+            const seg = Math.max(24, Math.min(160, Math.round((radius * 2) / DEM_STEP_M)));
+            const n = seg + 1;
+            const zGrid = new Float64Array(n * n).fill(NaN);
+            let hitCount = 0;
+            for (let j = 0; j < n; j++) {
+                for (let i = 0; i < n; i++) {
+                    const x = minX + (i / seg) * w;
+                    const y = minY + (j / seg) * h;
+                    const ll = basemapModelToLatLon(binding, x, y);
+                    const mx = lonToMercatorX(ll.lon, tiles.zoom);
+                    const my = latToMercatorY(ll.lat, tiles.zoom);
+                    const px = (mx - tiles.mercMinX) / tiles.mercSpanX * tiles.canvas.width;
+                    const py = (my - tiles.mercMinY) / tiles.mercSpanY * tiles.canvas.height;
+                    const z = sampleDemCanvas(tiles, encoding, px, py);
+                    if (Number.isFinite(z)) {
+                        zGrid[j * n + i] = z;
+                        hitCount++;
+                    }
+                }
+            }
+            if (!hitCount) return null;
+            const avg = zGrid.reduce((acc, v) => Number.isNaN(v) ? acc : acc + v, 0) / hitCount;
+            for (let pass = 0; pass < n; pass++) {
+                let missing = 0;
+                for (let j = 0; j < n; j++) {
+                    for (let i = 0; i < n; i++) {
+                        const k = j * n + i;
+                        if (!Number.isNaN(zGrid[k])) continue;
+                        missing++;
+                        let sum = 0, cnt = 0;
+                        for (let dj = -1; dj <= 1; dj++) {
+                            for (let di = -1; di <= 1; di++) {
+                                const nj = j + dj, ni = i + di;
+                                if (nj < 0 || ni < 0 || nj >= n || ni >= n) continue;
+                                const vz = zGrid[nj * n + ni];
+                                if (Number.isNaN(vz)) continue;
+                                sum += vz;
+                                cnt++;
+                            }
+                        }
+                        if (cnt) zGrid[k] = sum / cnt;
+                    }
+                }
+                if (!missing) break;
+            }
+            for (let k = 0; k < zGrid.length; k++) {
+                if (Number.isNaN(zGrid[k])) zGrid[k] = avg;
+            }
+            const positions = [];
+            const indices = [];
+            for (let j = 0; j <= seg; j++) {
+                for (let i = 0; i <= seg; i++) {
+                    positions.push(minX + (i / seg) * w, minY + (j / seg) * h, zGrid[j * n + i]);
+                }
+            }
+            for (let j = 0; j < seg; j++) {
+                for (let i = 0; i < seg; i++) {
+                    const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+                    indices.push(a, c, b, b, c, d);
+                }
+            }
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals();
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x7a8a6a,
+                roughness: 1,
+                metalness: 0,
+                side: THREE.DoubleSide
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.name = 'MapTerrain';
+            mesh.userData.isMapTerrain = true;
+            mesh.userData.isOverlay = true;
+            mesh.userData.isGeoRaster = false;
+            mesh.receiveShadow = true;
+            return { mesh, bounds: { minX, maxX, minY, maxY }, segments: seg, hits: hitCount };
+        }
+
+        async function applyMapTerrainLayer(settings) {
+            const sourceKey = settings.demSource === 'terrainRgb' ? 'terrainRgb' : 'terrarium';
+            const source = DEM_PROVIDERS[sourceKey];
+            if (sourceKey === 'terrainRgb' && !/\{z\}/.test(settings.demTemplate || '')) {
+                throw new Error(
+                    'Укажите шаблон Terrain-RGB со знаками {z}/{x}/{y} — например ' +
+                    'https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.png?key=ВАШ_КЛЮЧ'
+                );
+            }
+            const { binding, radius } = resolveBasemapBinding(settings);
+            showLoader('РЕЛЬЕФ', 'Загрузка высот…');
+            try {
+                const tiles = await fetchDemCanvas(binding, radius, source, settings.demTemplate || '');
+                if (tiles.failed >= tiles.tiles) {
+                    throw new Error(
+                        'Ни один тайл высот не загрузился. Terrarium — AWS без ключа; Terrain-RGB — свой ключ MapTiler/Mapbox. ' +
+                        'Проверьте сеть и шаблон.'
+                    );
+                }
+                const built = buildMapTerrainMesh(binding, radius, tiles, source.encoding);
+                if (!built) {
+                    throw new Error('В тайлах не нашлось высот — пустая сетка.');
+                }
+                removeMapTerrainLayer();
+                geoRasterGroup.add(built.mesh);
+                if (!allMeshes.includes(built.mesh)) allMeshes.push(built.mesh);
+                ensureBoundsTree(built.mesh);
+                syncGeoRasterToIfcOrigin();
+                mapTerrain = {
+                    mesh: built.mesh,
+                    name: `Рельеф: ${source.name}`,
+                    encoding: source.encoding,
+                    zoom: tiles.zoom,
+                    tiles: tiles.tiles,
+                    failed: tiles.failed,
+                    bounds: built.bounds
+                };
+                markNeedsRender();
+                activeBasemapBinding = { ...(activeBasemapBinding || {}), ...settings };
+                saveBasemapSettings({ ...(loadBasemapSettings() || {}), ...settings });
+                const mPerPx = 156543.03392 * Math.cos(binding.lat * Math.PI / 180) / Math.pow(2, tiles.zoom);
+                const note = tiles.failed ? ` Не отдалось тайлов: ${tiles.failed} из ${tiles.tiles}.` : '';
+                notifyOk(
+                    `Рельеф с карты: ${source.name}, зум ${tiles.zoom}, ~${mPerPx.toFixed(0)} м/пикс, сетка ${built.segments}×${built.segments}. ` +
+                    `Это глобальный DEM, не съёмка площадки.${note}`
+                );
+                trackUsage('map_terrain_apply', { source: sourceKey, zoom: tiles.zoom });
+                return mapTerrain;
+            } finally {
+                hideLoader();
+            }
+        }
+
+        async function applyBasemapLayer(settings) {
+            const provider = BASEMAP_PROVIDERS[settings.provider] || BASEMAP_PROVIDERS.osm;
+            if (provider === BASEMAP_PROVIDERS.custom && !/\{z\}/.test(settings.template || '')) {
+                throw new Error('Укажите шаблон тайлов со знаками {z}/{x}/{y} — например https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=ВАШ_КЛЮЧ');
+            }
+            // Те же сообщения, что у «Рельеф с карты»: пустое поле ≠ «не градусы».
+            const { binding, radius } = resolveBasemapBinding(settings);
 
             showLoader('КАРТА', 'Загрузка тайлов…');
             const tiles = await fetchBasemapTexture(binding, radius, provider, settings.template, settings.detail);
@@ -32442,7 +32794,9 @@ ${componentXml || '    '}
                 radius: parseDecimal($('baseMapRadius').value, 1000),
                 detail: $('baseMapDetail').value in BASEMAP_DETAIL ? $('baseMapDetail').value : 'normal',
                 opacity: parseFloat($('baseMapOpacity').value) || 0.9,
-                drape: $('baseMapDrape').checked
+                drape: $('baseMapDrape').checked,
+                demSource: $('baseMapDemSource')?.value === 'terrainRgb' ? 'terrainRgb' : 'terrarium',
+                demTemplate: $('baseMapDemTemplate')?.value.trim() || ''
             };
         }
 
@@ -32471,6 +32825,11 @@ ${componentXml || '    '}
             $('baseMapOpacity').value = saved.opacity ?? 0.9;
             $('baseMapOpacityVal').textContent = Number($('baseMapOpacity').value).toFixed(2);
             $('baseMapDrape').checked = !!saved.drape;
+            if ($('baseMapDemSource')) {
+                $('baseMapDemSource').value = saved.demSource === 'terrainRgb' ? 'terrainRgb' : 'terrarium';
+            }
+            if ($('baseMapDemTemplate')) $('baseMapDemTemplate').value = saved.demTemplate || '';
+            syncBaseMapDemTemplateRow();
 
             // Привязка запоминается, но модель могла смениться — центр берём заново,
             // если сохранённая точка далеко за пределами того, что сейчас загружено.
@@ -32483,6 +32842,12 @@ ${componentXml || '    '}
             refreshBaseMapProviderUi();
             refreshBaseMapEstimate();
             $('baseMapModal').classList.add('show');
+        }
+
+        function syncBaseMapDemTemplateRow() {
+            const row = $('baseMapDemTemplateRow');
+            if (!row) return;
+            row.style.display = $('baseMapDemSource')?.value === 'terrainRgb' ? '' : 'none';
         }
 
         /** Живая подсказка: сколько тайлов и какая детальность выйдет. */
@@ -32656,6 +33021,25 @@ ${componentXml || '    '}
             } finally {
                 $('baseMapApply').disabled = false;
             }
+        });
+        $('baseMapDemSource')?.addEventListener('change', syncBaseMapDemTemplateRow);
+        $('baseMapDemApply')?.addEventListener('click', async () => {
+            const btn = $('baseMapDemApply');
+            btn.disabled = true;
+            try {
+                await applyMapTerrainLayer(readBaseMapForm());
+                $('baseMapModal').classList.remove('show');
+            } catch (err) {
+                console.error(err);
+                hideLoader();
+                notifyError('Рельеф с карты: ' + (err?.message || err));
+            } finally {
+                btn.disabled = false;
+            }
+        });
+        $('baseMapDemRemove')?.addEventListener('click', () => {
+            if (removeMapTerrainLayer()) notifyOk('Рельеф с карты убран. Подложка на месте.');
+            else notifyError('Рельефа с карты на сцене нет.');
         });
         $('cancelGeoRaster').addEventListener('click', closeGeoRasterModal);
         $('geoRasterModal').addEventListener('click', event => {
@@ -34694,7 +35078,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.15',
-            buildId: 'xs-parent',
+            buildId: 'map-relief',
             released: '2026-08-15',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -34703,6 +35087,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.15: «Рельеф с карты» — сетка высот Terrarium / Terrain-RGB в том же охвате, что подложка; луч сверлит меш, картинка землю не считает.',
                 '2026.08.15: точки фигуры едут за якорем; условие «скрыть» прячет точку и детей на пикете (бордюр в насыпи / нет в выемке).',
                 '2026.08.15: чертёж поперечника — зум колесом (как профиль), готовые фигуры (бордюр, кювет, …) и условие на точке: если рабочая/земля/ось, то другие ΔZ и смещение на этом пикете.',
                 '2026.08.15: палитра «Трасса» — план, профиль и поперечник вкладками; толщина слоя одежды правится полем; окна не модальные, их можно таскать, закреплять и сворачивать.',
@@ -34788,7 +35173,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=112').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=113').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
