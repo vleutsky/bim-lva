@@ -1292,8 +1292,8 @@ async function checkSlopeToTerrain(page) {
         });
         const sides = cut.res.sides.map((s) => s.side).sort().join(',');
         if (sides !== 'left,right') problems.push(`откосы: «в обе стороны» дала стороны ${sides} вместо left,right`);
-        if (!(cut.res.tin?.capFaces > 0)) {
-            problems.push('откосы: торцы разомкнутой линии не закрылись — в TIN дыра с конца');
+        if ((cut.res.tin?.capFaces || 0) !== 0) {
+            problems.push(`откосы: у разомкнутой линии не должно быть торцов (${cut.res.tin?.capFaces}) — это для мостовых уступов`);
         }
         const contour = await page.evaluate((pid) => {
             const D = window.BimLvaDebug;
@@ -2133,6 +2133,8 @@ async function checkRoadCrossSections(page) {
             tabs: [...(card?.querySelectorAll('.rstabs .ptab') || [])].map((t) => t.textContent.trim()),
             palMin: !!card?.querySelector('.pal-min'),
             palDock: !!card?.querySelector('.pal-dock'),
+            palResize: !!card?.querySelector('.pal-resize-se'),
+            palResizeN: !!card?.querySelector('.pal-resize-n'),
             clashChrome: !!document.querySelector('#clashModalCard .pal-min'),
             left: cr?.left ?? -1,
             vw: innerWidth,
@@ -2153,6 +2155,9 @@ async function checkRoadCrossSections(page) {
         }
         if (!ui.palMin || !ui.palDock) {
             problems.push('поперечники: нет кнопок свернуть/закрепить на палитре');
+        }
+        if (!ui.palResize || !ui.palResizeN) {
+            problems.push('поперечники: нет ручек растягивания окна');
         }
         if (!ui.clashChrome) {
             problems.push('окна: нет хрома свернуть/закрепить у коллизий');
@@ -2340,8 +2345,11 @@ async function checkRoadCrossSections(page) {
         return {
             res,
             hasRay: /class="xs-slope"/.test(html),
+            hasBody: /class="xs-slope-body"/.test(html),
             hasBtn: !!document.getElementById('roadXsSlope'),
             tin: res?.tinFaces || 0,
+            capFaces: res?.capFaces || 0,
+            thickness: res?.thickness,
             fill: (res?.sides || []).reduce((n, s) => n + (s.fill || 0), 0),
             cut: (res?.sides || []).reduce((n, s) => n + (s.cut || 0), 0),
             n: res?.sides?.length || 0
@@ -2349,6 +2357,13 @@ async function checkRoadCrossSections(page) {
     });
     if (!slopes.hasBtn) problems.push('поперечники: нет кнопки «Откосы»');
     if (!slopes.hasRay) problems.push('поперечники: на чертеже нет лучей откоса до земли');
+    if (!slopes.hasBody) problems.push('поперечники: на чертеже нет полосы толщины откоса');
+    if ((slopes.capFaces || 0) !== 0) {
+        problems.push(`поперечники: торцы откосов ${slopes.capFaces} — у дороги их быть не должно`);
+    }
+    if (Math.abs((slopes.thickness || 0) - 0.15) > 1e-6) {
+        problems.push(`поперечники: толщина откоса ${slopes.thickness} вместо 0.15`);
+    }
     if (slopes.n !== 2) {
         problems.push(`поперечники: откосы сторон ${slopes.n} вместо 2 (${JSON.stringify(slopes.res)})`);
     }
@@ -2428,6 +2443,55 @@ async function checkRoadCrossSections(page) {
     if (extras.applies !== true || Math.abs((extras.base ?? -1)) > 1e-6
         || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
         problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
+    }
+
+    const ux = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const pal = D.paletteResize();
+        const tpl = D.roadXsTemplate();
+        const curb = (tpl?.shapes || []).find((s) => s.code === 'CURB');
+        const curbT0 = (tpl?.points || []).find((p) => p.code === 'CURBT');
+        const moved = curb ? D.moveRoadXsShape(curb.id, 0.4, 0) : null;
+        const curbT1 = D.roadXsTemplate()?.points?.find((p) => p.code === 'CURBT');
+        const L = D.roadXsTemplate()?.points?.find((p) => p.code === 'L');
+        const att = curb && L ? D.attachRoadXsShape(curb.id, L.id) : null;
+        const curbT2 = D.roadXsTemplate()?.points?.find((p) => p.code === 'CURBT');
+        const cat = D.applyRoadCategory('III');
+        const after = D.roadXsTemplate();
+        return {
+            pal,
+            off0: curbT0?.off,
+            off1: curbT1?.off,
+            parent: curbT2?.parent ?? null,
+            L: L?.id ?? null,
+            attached: !!att?.attached,
+            catW: cat?.widthL,
+            catThk: cat?.thk,
+            catShapes: after?.shapes?.length || 0,
+            hasLS: (after?.points || []).some((p) => p.code === 'LS'),
+            hasLE: (after?.points || []).some((p) => p.code === 'LE')
+        };
+    });
+    if (!ux.pal?.se || !ux.pal?.n || !ux.pal?.hasRefresh || !ux.pal?.hasCategory) {
+        problems.push(`поперечники: нет ручек окна / «Обновить» / категорий (${JSON.stringify(ux.pal)})`);
+    }
+    if (ux.pal?.liveDefault) {
+        problems.push('поперечники: живая перестройка оси включена по умолчанию');
+    }
+    if (Math.abs((ux.pal?.slopeThk ?? 0) - 0.15) > 1e-6) {
+        problems.push(`поперечники: поле толщины откоса ${ux.pal?.slopeThk} вместо 0.15`);
+    }
+    if (Math.abs((ux.off1 ?? 0) - ((ux.off0 ?? 0) + 0.4)) > 1e-6) {
+        problems.push(`поперечники: перенос фигуры за форму не сдвинул точки (${JSON.stringify(ux)})`);
+    }
+    if (!ux.attached || ux.parent !== ux.L) {
+        problems.push(`поперечники: фигура не привязалась к точке (${JSON.stringify(ux)})`);
+    }
+    if (Math.abs((ux.catW ?? 0) - 5.5) > 1e-6 || Math.abs((ux.catThk ?? 0) - 0.20) > 1e-6) {
+        problems.push(`поперечники: категория III не дала 5.50 / 0.20 (${JSON.stringify(ux)})`);
+    }
+    if (!ux.hasLS || !ux.hasLE || ux.catShapes < 3) {
+        problems.push(`поперечники: шаблон категории без обочин (${JSON.stringify(ux)})`);
     }
 
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
