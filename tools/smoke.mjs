@@ -2191,6 +2191,31 @@ async function checkRoadCrossSections(page) {
         problems.push('поперечники: нет кнопки «Откосы»');
     }
 
+    const zoom = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadXsViewSpan();
+        D.zoomRoadXs(1 / 1.18);
+        const mid = D.roadXsViewSpan();
+        D.fitRoadXs();
+        const after = D.roadXsViewSpan();
+        return {
+            hasFit: !!document.getElementById('roadXsFit'),
+            hasFigure: !!document.getElementById('roadXsFigure'),
+            before: before?.off,
+            mid: mid?.off,
+            after: after?.off
+        };
+    });
+    if (!zoom.hasFit || !zoom.hasFigure) {
+        problems.push(`поперечники: нет ⤢ или «＋ фигура» (${JSON.stringify(zoom)})`);
+    }
+    if (!(zoom.mid < zoom.before - 0.05)) {
+        problems.push(`поперечники: зум не сузил окно смещений (${JSON.stringify(zoom)})`);
+    }
+    if (Math.abs((zoom.after ?? 0) - (zoom.before ?? 0)) > 0.05) {
+        problems.push(`поперечники: ⤢ не вернул масштаб сечения (${JSON.stringify(zoom)})`);
+    }
+
     const layer = await page.evaluate(() => {
         const D = window.BimLvaDebug;
         const thkEl = document.getElementById('roadXsLayerThk');
@@ -2337,6 +2362,46 @@ async function checkRoadCrossSections(page) {
     }
     if (Math.abs(slopes.cut) > 0.05) {
         problems.push(`поперечники: на насыпи от кромок набралась выемка ${slopes.cut}`);
+    }
+
+    const extras = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadXsTemplate();
+        const r = before?.points?.find((p) => p.code === 'R');
+        const fig = D.addRoadXsFigure('curb', r?.id);
+        const afterFig = D.roadXsTemplate();
+        const left = afterFig?.points?.find((p) => p.code === 'L');
+        if (left) {
+            D.setRoadXsPoint(left.id, { dz: 0 });
+            D.setRoadXsPointRule(left.id, { when: 'work>', value: 0, thenDz: 0.2 });
+        }
+        const ev = left ? D.evalRoadXsPoint(left.id, 0) : null;
+        const bar = document.getElementById('roadXsRuleBar');
+        return {
+            beforePts: before?.points?.length || 0,
+            afterPts: afterFig?.points?.length || 0,
+            beforeShapes: before?.shapes?.length || 0,
+            afterShapes: afterFig?.shapes?.length || 0,
+            code: fig?.added?.code || '',
+            hasCurb: (afterFig?.shapes || []).some((s) => s.code === 'CURB'),
+            base: ev?.baseDz,
+            dz: ev?.dz,
+            applies: ev?.applies,
+            barShown: !!(bar && !bar.hidden)
+        };
+    });
+    if (extras.afterPts !== extras.beforePts + 3 || extras.afterShapes !== extras.beforeShapes + 1) {
+        problems.push(`поперечники: «бордюр» не добавил 3 точки и форму (${JSON.stringify(extras)})`);
+    }
+    if (extras.code !== 'CURB' || !extras.hasCurb) {
+        problems.push(`поперечники: код фигуры «${extras.code}» вместо CURB`);
+    }
+    if (!extras.barShown) {
+        problems.push('поперечники: панель условия точки не открылась');
+    }
+    if (extras.applies !== true || Math.abs((extras.base ?? -1)) > 1e-6
+        || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
+        problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
     }
 
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());

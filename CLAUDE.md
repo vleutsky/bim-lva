@@ -56,7 +56,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v160`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v161`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `ui-style-preview.html` — **прототип оформления**, отдельный файл, рабочий
   вьювер не трогает. Смотреть через Pages или открывать локально.
@@ -891,6 +891,15 @@ null` обычный пользователь не видит, а админ в�
   `buildRoadTemplateSlopes`: скрытые бровки `role=road-slope-brow` (не в
   списке полилиний) и тот же `buildSlopeToTerrain`. На чертеже сечения
   лучи `xs-slope` считаются тем же `computeSlopeCrossSection`, что TIN.
+  Чертёж сечения зумится как профиль: колесо к курсору (`zoomRoadXsAt`),
+  Shift+колесо только по высоте, фон — пан по пиксельной дельте исходного
+  кадра (не через `roadXsClientToOffZ` на каждом move — иначе кадр уезжает),
+  ⤢ сбрасывает `roadXsView`. Готовые фигуры (`addTemplateFigure`) — бордюр /
+  обочина / кювет / прямоугольник / трапеция / треугольник — к якорю наружу
+  от оси, без `addTemplatePoint` (тот режет связи покрытия). На точке
+  `pt.rule`: `{ when, value, thenDz, thenOff, elseDz, elseOff }`;
+  `resolveTemplatePoint` на каждой станции (`work>`/`work<`/`gAbove`/`gBelow`/
+  `axis>`/`axis<`). Скрытая ветка (`thenHide`) не попадает в коридор.
 
 - **Удаление полилинии не по старому индексу.** `deleteDrawnPolyline` сначала
   зовёт `removeSlopeModelsForPolyline`, а та через `dropPoly` уже вынимает
