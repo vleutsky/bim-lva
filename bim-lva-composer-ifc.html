@@ -1089,6 +1089,7 @@
            раздувают. */
         #polyProfileChart { height: 260px; }
         #roadXsChart { height: 240px; background: var(--panel-2); }
+        #roadXsChart .xs-slope { pointer-events: none; }
         .road-xs-nav {
             display: flex;
             align-items: center;
@@ -2866,6 +2867,7 @@
 
         .modal-actions {
             display: flex;
+            flex-wrap: wrap;
             justify-content: flex-end;
             gap: 8px;
             margin-top: 14px;
@@ -3447,6 +3449,7 @@
                     <div class="items">
                         <button class="btn rbtn-big" id="btnRoadAxis" disabled title="Ось дороги: клики — вершины, Esc — поперечники"><span class="tb-ico">🛣</span><span class="tb-txt">Ось трассы</span></button>
                         <div class="col">
+                            <button class="btn rbtn-sm" id="btnRoadXs" disabled title="Окно поперечников: шаблон, пикет, откосы, слои DXF">⊟ Поперечники</button>
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
                             <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
                         </div>
@@ -3468,6 +3471,7 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnAlignProfile" disabled title="Продольный профиль трассы LandXML">〰 Профиль</button>
                             <button class="btn rbtn-sm" id="btnRoadAxisAnalyze" disabled title="Начертить ось дороги и открыть поперечники">🛣 Ось трассы</button>
+                            <button class="btn rbtn-sm" id="btnRoadXsAnalyze" disabled title="Окно поперечников: шаблон, пикет, откосы, слои DXF">⊟ Поперечники</button>
                         </div>
                     </div>
                     <div class="cap">План</div>
@@ -4417,6 +4421,10 @@
                     удалить точку или связь. Земля на чертеже — справка, её
                     не правим. <b>〰 Профиль</b> — продольный профиль этой оси
                     (отметки, уклон, вершины), те же правила, что у полилинии.
+                    Окна профиля и поперечника садятся <b>рядом</b>, не друг
+                    на друга. <b>△ Откосы</b> — от кромок шаблона до земли
+                    (1:m насыпи/выемки): лучи на чертеже сечения и TIN в сцене,
+                    тот же движок, что у площадки.
                 </div>
             </details>
             <div class="modal-fields">
@@ -4432,10 +4440,13 @@
                 </div>
                 <div class="prop small"><div class="k">Ось, цвет</div><input type="color" class="polyline-color" id="roadAxisColor" value="#1f8f5f" title="Цвет пунктирной оси трассы"></div>
                 <div class="prop small"><div class="k">Ось, px</div><input class="editInput" id="roadAxisWidth" type="number" min="0.5" step="0.5" value="2" title="Толщина оси в пикселях"></div>
-                <div class="prop small span-2"><div class="k">Ось, слой</div><input class="editInput" id="roadAxisLayer" value="LVA_AXIS" title="Слой DXF для оси"></div>
+                <div class="prop small span-2"><div class="k">Ось, слой</div><input class="editInput" id="roadAxisLayer" value="Ось" title="Слой DXF для оси"></div>
                 <div class="prop small"><div class="k">Кромки, цвет</div><input type="color" class="polyline-color" id="roadEdgeColor" value="#f4f7fb" title="Цвет сплошных кромок ширины"></div>
                 <div class="prop small"><div class="k">Кромки, px</div><input class="editInput" id="roadEdgeWidth" type="number" min="0.5" step="0.5" value="1.6" title="Толщина кромок в пикселях"></div>
-                <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="LVA_ROAD" title="Слой DXF для кромок ширины"></div>
+                <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
+                <div class="prop small"><div class="k">Насыпь, 1 : m</div><input class="editInput" id="roadXsMFill" type="number" min="0.1" step="0.1" value="1.5" title="Заложение откоса насыпи от кромки до земли"></div>
+                <div class="prop small"><div class="k">Выемка, 1 : m</div><input class="editInput" id="roadXsMCut" type="number" min="0.1" step="0.1" value="1" title="Заложение откоса выемки от кромки до земли"></div>
+                <div class="prop small span-2"><div class="k">Вылет откоса, м</div><input class="editInput" id="roadXsSlopeReach" type="number" min="0.5" step="0.5" value="30" title="Максимальный вылет откоса от кромки, пока не встретит землю"></div>
             </div>
             <div class="bulk-note" id="roadXsStatus">—</div>
             <div class="prop small">
@@ -4453,8 +4464,9 @@
             <div id="roadXsTable" class="profile-table"></div>
             <div class="modal-actions">
                 <button class="btn" id="roadXsProfile" title="Продольный профиль этой оси: отметки, уклон, вершины — как у полилинии">〰 Профиль</button>
+                <button class="btn" id="roadXsSlope" title="Откосы от кромок шаблона до рельефа: на чертеже сечения и TIN в модели">△ Откосы</button>
                 <button class="btn" id="roadXsCsv" title="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
-                <button class="btn" id="roadXsDxf" title="Поперечники 3D-полилиниями на слое LVA_XS, координаты абсолютные">⬇ DXF</button>
+                <button class="btn" id="roadXsDxf" title="Поперечники 3D-полилиниями на слое «Поперечник», координаты абсолютные">⬇ DXF</button>
                 <button class="btn" id="roadXsClear">Убрать</button>
                 <button class="btn" id="roadXsClose">Закрыть</button>
                 <button class="btn load-btn" id="roadXsApply">Построить</button>
@@ -5701,7 +5713,7 @@
                         points: r.pts.length, radii: r.radii.slice(),
                         closed: !!r.closed, area: polylinePlanArea(r),
                         color: r.color, width: r.width,
-                        layer: r.layer || null, role: r.role || null,
+                        layer: r.layer || null, edgeLayer: r.edgeLayer || null, role: r.role || null,
                         dashed: !!r.object?.material?.dashed
                     }));
             },
@@ -5867,6 +5879,7 @@
             startRoadAxisDraw() {
                 drawingRoadAxis = true;
                 if ($('drawModeSelect')) $('drawModeSelect').value = '3d';
+                fillRoadAxisStyleForm({ role: 'road-axis' });
                 setDrawMode(true);
             },
             addDrawWorldPoint(x, y, z) {
@@ -6139,12 +6152,31 @@
                 return snapshotRoadTemplate(model.template);
             },
             openRoadProfile(id) {
-                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                const rec = listedPolylines()
                     .find((r) => r.id === id)
-                    || drawnPolylines.find((r) => r.id === currentRoadXsModel()?.polylineId);
+                    || listedPolylines().find((r) => r.id === currentRoadXsModel()?.polylineId);
                 if (!rec) return false;
                 openPolylineProfile(rec);
                 return true;
+            },
+            buildRoadXsSlopes(opts) {
+                const model = currentRoadXsModel();
+                if (!model) return null;
+                const built = buildRoadTemplateSlopes(model, {
+                    mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30,
+                    ...(opts || {})
+                });
+                if (!built?.length) return null;
+                return {
+                    sides: built.map((b) => ({
+                        side: b.side,
+                        fill: b.sm.sides.reduce((n, s) => n + s.fill, 0),
+                        cut: b.sm.sides.reduce((n, s) => n + s.cut, 0),
+                        tinFaces: b.sm.tin?.faces?.length || 0,
+                        polylineId: b.rec.id
+                    })),
+                    tinFaces: built.reduce((n, b) => n + (b.sm.tin?.faces?.length || 0), 0)
+                };
             },
             /**
              * Слои КДО площадки. id построения или 0/null — последнее.
@@ -8167,6 +8199,14 @@
             return record;
         }
 
+        function isInternalPolyline(r) {
+            return r?.role === 'road-slope-brow';
+        }
+
+        function listedPolylines() {
+            return drawnPolylines.filter((r) => !isInternalPolyline(r));
+        }
+
         /* ------------------------------------------------------------------
          * Откосы до рельефа / до уже построенных площадок.
          *
@@ -10038,7 +10078,7 @@
             };
             const sat = acisSatFromMesh(absTin.points, absTin.faces);
             if (!sat) return 0;
-            const layerName = layer || 'LVA_SLOPE';
+            const layerName = layer || DXF_LAYER_SLOPE;
             g(0, '3DSOLID');
             g(5, allocHandle());
             if (ownerHandle) g(330, ownerHandle);
@@ -10052,14 +10092,14 @@
         }
 
         function slopeTinToSolidDxf(g, sm, allocHandle, ownerHandle) {
-            return tinToSolidDxf(g, sm?.tin, 'LVA_SLOPE', allocHandle, ownerHandle);
+            return tinToSolidDxf(g, sm?.tin, DXF_LAYER_SLOPE, allocHandle, ownerHandle);
         }
 
         function kdoLayersToDxf(g, only, allocHandle, ownerHandle) {
             let faces = 0;
             slopeModelsForDxf(only).forEach((sm) => {
                 (sm.kdoMeshes || []).forEach((mesh) => {
-                    faces += tinToSolidDxf(g, weldTin(slopeMeshTriangles(mesh)), 'LVA_KDO', allocHandle, ownerHandle);
+                    faces += tinToSolidDxf(g, weldTin(slopeMeshTriangles(mesh)), DXF_LAYER_KDO, allocHandle, ownerHandle);
                 });
             });
             return faces;
@@ -10084,15 +10124,55 @@
             const ids = new Set();
             slopeModels.forEach((sm) => {
                 if (sm.contourPolylineId) ids.add(sm.contourPolylineId);
+                if (sm.polylineId) {
+                    const rec = drawnPolylines.find((r) => r.id === sm.polylineId);
+                    if (isInternalPolyline(rec)) ids.add(sm.polylineId);
+                }
                 (sm.sides || []).forEach((s) => {
                     (s.exitPolylineIds || []).forEach((id) => ids.add(id));
                 });
+            });
+            drawnPolylines.forEach((r) => {
+                if (isInternalPolyline(r)) ids.add(r.id);
             });
             return ids;
         }
 
         function downloadTextFile(text, filename, mime) {
             const blob = new Blob([text], { type: mime || 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        /**
+         * DXF объявлен как $DWGCODEPAGE ANSI_1251 — Civil читает имена слоёв
+         * в этой кодировке. Blob из JS-строки иначе уедет UTF-8, и кириллица
+         * в слоях станет кракозябрами.
+         */
+        function encodeWindows1251(str) {
+            const s = String(str);
+            const out = new Uint8Array(s.length);
+            for (let i = 0; i < s.length; i++) {
+                const c = s.charCodeAt(i);
+                let b = 0x5F;
+                if (c < 0x80) b = c;
+                else if (c >= 0x0410 && c <= 0x044F) b = c - 0x0410 + 0xC0;
+                else if (c === 0x0401) b = 0xA8;
+                else if (c === 0x0451) b = 0xB8;
+                else if (c === 0x2116) b = 0xB9;
+                else if (c === 0x00A0) b = 0xA0;
+                else if (c === 0x00A7) b = 0xA7;
+                out[i] = b;
+            }
+            return out;
+        }
+
+        function downloadDxfFile(text, filename) {
+            const blob = new Blob([encodeWindows1251(text)], { type: 'application/dxf' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -10111,10 +10191,9 @@
             const text = buildDxf([], [], model || list);
             const faces = list.reduce((n, sm) => n + sm.tin.faces.length, 0);
             const slug = String(target.name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
-            downloadTextFile(
+            downloadDxfFile(
                 text,
-                `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dxf`,
-                'application/dxf'
+                `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dxf`
             );
             const kdoN = list.reduce((n, sm) => n + (sm.kdoMeshes?.length || 0), 0);
             notify(
@@ -10799,8 +10878,15 @@
         let drawRoadEdgeRight = null;
         const ROAD_EDGE_COLOR = '#f4f7fb';
         const ROAD_EDGE_WIDTH = 1.6;
-        const ROAD_AXIS_LAYER = 'LVA_AXIS';
-        const ROAD_EDGE_LAYER = 'LVA_ROAD';
+        const ROAD_AXIS_LAYER = 'Ось';
+        const ROAD_EDGE_LAYER = 'Кромка';
+        const DXF_LAYER_2D = '2Д';
+        const DXF_LAYER_3D = '3Д';
+        const DXF_LAYER_POINTS = 'Точки';
+        const DXF_LAYER_SOLID = 'Тело';
+        const DXF_LAYER_SLOPE = 'Откос';
+        const DXF_LAYER_KDO = 'КДО';
+        const DXF_LAYER_XS = 'Поперечник';
 
         function sanitizeDxfLayer(name, fallback = '0') {
             const s = String(name || '').trim().replace(/[<>/\\":;?*|,=`'\n\r]/g, '_').slice(0, 255);
@@ -10809,7 +10895,7 @@
 
         function defaultPolylineLayer(kind, role) {
             if (role === 'road-axis') return ROAD_AXIS_LAYER;
-            return kind === '2d' ? 'LVA_2D' : 'LVA_3D';
+            return kind === '2d' ? DXF_LAYER_2D : DXF_LAYER_3D;
         }
 
         function roadAxisDraftStyle() {
@@ -12363,16 +12449,17 @@
         function renderPolylinesList() {
             const body = $('polylinesList');
             const count = $('polylinesCount');
-            if (count) count.textContent = String(drawnPolylines.length);
+            const list = listedPolylines();
+            if (count) count.textContent = String(list.length);
             if (!body) return;
-            if (!drawnPolylines.length) {
+            if (!list.length) {
                 body.innerHTML = '<div class="empty">Полилиний пока нет. Включите «✏ Полилиния» и кликните по модели.</div>';
                 polylineEditingId = null;
                 $('polylinePointsBox')?.setAttribute('hidden', '');
                 return;
             }
             const frag = document.createDocumentFragment();
-            drawnPolylines.forEach((r) => {
+            list.forEach((r) => {
                 const row = document.createElement('div');
                 row.className = 'polyline-row';
                 row.classList.toggle('is-active', r.id === polylineEditingId);
@@ -12480,7 +12567,7 @@
 
                 const xs = document.createElement('button');
                 xs.className = 'btn';
-                xs.textContent = '⊟';
+                xs.textContent = '⊟ Поперечники';
                 xs.title = 'Поперечники по этой оси: сечения по нормали, земля с рельефа';
                 xs.addEventListener('click', () => openRoadXsModal(r));
 
@@ -12674,9 +12761,9 @@
             const allocHandle = () => (nextHandle++).toString(16).toUpperCase();
             const ltypeH = allocHandle();
             const dashedH = allocHandle();
-            const layers = ['0', 'LVA_2D', 'LVA_3D', 'LVA_POINTS', 'LVA_SOLID', 'LVA_SLOPE', 'LVA_KDO', 'LVA_XS', 'LVA_ROAD', 'LVA_AXIS'];
+            const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_KDO, DXF_LAYER_XS, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
             const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3];
-            const dashedLayers = new Set(['LVA_AXIS']);
+            const dashedLayers = new Set([ROAD_AXIS_LAYER]);
             const addLayer = (name, color) => {
                 const nm = sanitizeDxfLayer(name, '');
                 if (!nm || layers.includes(nm)) return nm;
@@ -12780,7 +12867,7 @@
                     tinToSolidDxf(
                         ge,
                         weldTin(slopeMeshTriangles(solid.mesh)),
-                        'LVA_SOLID',
+                        DXF_LAYER_SOLID,
                         allocHandle,
                         blockRecModel
                     );
@@ -12789,7 +12876,7 @@
             if (!opts.xsOnly) slopeTinFacesToDxfPairs(ge, onlySlope, allocHandle, blockRecModel);
             if (onlySlope == null) writeRoadXsToDxf(ge, entityOpen, n, { edges: !!opts.xsOnly });
             if (!opts.xsOnly) pins.forEach((pin) => {
-                entityOpen('POINT', 'LVA_POINTS');
+                entityOpen('POINT', DXF_LAYER_POINTS);
                 ge(100, 'AcDbPoint');
                 ge(10, n(pin.abs.x)); ge(20, n(pin.abs.y)); ge(30, n(pin.abs.z));
             });
@@ -12912,13 +12999,7 @@
                 return;
             }
             const text = buildDxf(drawnPolylines, coordPins);
-            const blob = new Blob([text], { type: 'application/dxf' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}.dxf`;
-            a.click();
-            URL.revokeObjectURL(url);
+            downloadDxfFile(text, `bim-lva-${new Date().toISOString().slice(0, 10)}.dxf`);
             const derived = slopeDerivedPolylineIds();
             const polyCount = drawnPolylines.filter((p) => !derived.has(p.id)).length;
             const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
@@ -13184,6 +13265,7 @@
             pendingPadHolePolylineId = null;
             drawingRoadAxis = true;
             if ($('drawModeSelect')) $('drawModeSelect').value = '3d';
+            fillRoadAxisStyleForm({ role: 'road-axis' });
             if (!drawMode) setDrawMode(true);
             else {
                 $('btnDraw')?.classList.remove('on');
@@ -13193,6 +13275,8 @@
             notify('Ось трассы: клики — вершины, Esc — закончить и открыть поперечники.');
         });
         $('btnRoadAxisAnalyze')?.addEventListener('click', () => $('btnRoadAxis')?.click());
+        $('btnRoadXs')?.addEventListener('click', () => openRoadXsModal());
+        $('btnRoadXsAnalyze')?.addEventListener('click', () => openRoadXsModal());
         const sweepPanel = createFloatingPanel({
             cardId: 'sweepModalCard', modalId: 'sweepModal',
             handleId: 'sweepModalDrag', defaultWidth: 480
@@ -13799,7 +13883,7 @@
             polyProfileActiveVertex = -1;
             const sel = $('polyProfileSelect');
             if (sel) {
-                sel.innerHTML = drawnPolylines
+                sel.innerHTML = listedPolylines()
                     .map((r) => `<option value="${r.id}"${r.id === record.id ? ' selected' : ''}>${esc(r.name)}</option>`)
                     .join('');
             }
@@ -13807,7 +13891,9 @@
             const modal = $('polyProfileModal');
             const wasOpen = modal.classList.contains('show');
             modal.classList.add('show');
-            if (!wasOpen) requestAnimationFrame(() => polyProfilePanel.park());
+            if (!wasOpen || $('roadXsModal')?.classList.contains('show')) {
+                requestAnimationFrame(() => dockProfileAndXs());
+            }
             trackUsage('polyline_profile', { points: record.pts.length });
         }
 
@@ -13842,7 +13928,10 @@
 
         $('polyProfileClose')?.addEventListener('click', () => {
             $('polyProfileModal').classList.remove('show');
+            const card = $('polyProfileCard');
+            if (card) card.style.width = '';
             polyProfilePanel.reset();
+            requestAnimationFrame(() => dockProfileAndXs());
         });
         /* --- Зум, сдвиг и правка прямо на профиле ------------------------- */
 
@@ -14596,6 +14685,7 @@
         }
 
         function disposeRoadXsModel(model) {
+            clearRoadXsSlopes(model);
             disposeRoadXsLines(model);
             disposeRoadCorridor(model);
         }
@@ -14718,6 +14808,9 @@
             }
             buildRoadCorridor(model);
             if (!preview) {
+                if ((model.slopeModelIds || []).length) {
+                    buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                }
                 renderRoadXsView();
                 updateRoadXsStatus();
             }
@@ -14832,6 +14925,9 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
+            if ((model.slopeModelIds || []).length) {
+                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+            }
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
@@ -14888,7 +14984,139 @@
             el.textContent =
                 `Сечений ${model.stations.length} на ${model.total.toFixed(1)} м оси · ` +
                 `полотно ${model.corridorTris || 0} гран.` +
+                ((model.slopeModelIds || []).length
+                    ? ` · откосы ${model.slopeModelIds.length} стор.`
+                    : '') +
                 (model.missed ? ` · промахов земли ${model.missed}` : '');
+        }
+
+        function templateEdgePoints(tpl) {
+            const pts = tpl?.points || [];
+            if (!pts.length) return { left: null, right: null };
+            const pick = (wantMin) => pts.reduce((best, p) => {
+                if (!best) return p;
+                const d = p.off - best.off;
+                if (wantMin ? d < -1e-9 : d > 1e-9) return p;
+                if (Math.abs(d) <= 1e-9 && (p.dz || 0) > (best.dz || 0)) return p;
+                return best;
+            }, null);
+            return { left: pick(true), right: pick(false) };
+        }
+
+        function readRoadXsSlopeOpts() {
+            const num = (id, fallback, min) => {
+                const v = parseFloat($(id)?.value);
+                return Number.isFinite(v) && v >= (min ?? 0) ? v : fallback;
+            };
+            return {
+                mFill: num('roadXsMFill', 1.5, 0.1),
+                mCut: num('roadXsMCut', 1, 0.1),
+                step: 0.5,
+                maxReach: num('roadXsSlopeReach', 30, 0.5),
+                fillColor: '#c9793a'
+            };
+        }
+
+        function roadXsSlopeSection(st, pt, side, opts) {
+            if (!st || !pt) return null;
+            const brow = placeTemplateAtStation(st, pt);
+            const sign = side === 'left' ? -1 : 1;
+            const nx = (st.rx || 0) * sign;
+            const ny = (st.ry || 0) * sign;
+            const len = Math.hypot(nx, ny);
+            if (len < 1e-9) return null;
+            return computeSlopeCrossSection(
+                brow,
+                { x: nx / len, y: ny / len },
+                opts.mFill, opts.mCut, opts.step, opts.maxReach
+            );
+        }
+
+        function roadXsSlopeExitOff(st, sec) {
+            if (!sec?.valid || !sec.exit) return null;
+            return (sec.exit.x - st.x) * (st.rx || 0) + (sec.exit.y - st.y) * (st.ry || 0);
+        }
+
+        function ensureRoadSlopeBrow(model, side, pts) {
+            let rec = drawnPolylines.find((r) => r.roadXsModelId === model.id && r.roadSlopeSide === side);
+            const vecs = pts.map((p) => (p instanceof THREE.Vector3 ? p.clone() : new THREE.Vector3(p.x, p.y, p.z)));
+            if (!rec) {
+                rec = addPolylineFromPoints(vecs, {
+                    name: `${model.name || 'Ось'} — бровка ${side === 'left' ? 'Л' : 'П'}`,
+                    role: 'road-slope-brow',
+                    color: '#c9793a',
+                    width: 1
+                });
+                if (!rec) return null;
+                rec.roadXsModelId = model.id;
+                rec.roadSlopeSide = side;
+            } else {
+                rec.pts = vecs;
+                rec.radii = vecs.map(() => 0);
+                rebuildPolylineGeometry(rec);
+            }
+            if (rec.object) {
+                rec.object.visible = false;
+                rec.object.raycast = () => {};
+            }
+            return rec;
+        }
+
+        function dropRoadSlopeBrow(rec) {
+            if (!rec) return;
+            removeSlopeModelsForPolyline(rec.id);
+            const i = drawnPolylines.findIndex((r) => r.id === rec.id);
+            if (i >= 0) {
+                disposePolylineObject(drawnPolylines[i]);
+                drawnPolylines.splice(i, 1);
+            }
+        }
+
+        function clearRoadXsSlopes(model) {
+            if (!model) return;
+            const ids = [
+                ...(model.slopeBrowIds || []),
+                ...drawnPolylines.filter((r) => r.roadXsModelId === model.id).map((r) => r.id)
+            ];
+            model.slopeBrowIds = [];
+            model.slopeModelIds = [];
+            [...new Set(ids)].forEach((id) => {
+                dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
+            });
+        }
+
+        function buildRoadTemplateSlopes(model, opts) {
+            if (!model?.stations || model.stations.length < 2) return null;
+            const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
+            const edges = templateEdgePoints(tpl);
+            if (!edges.left && !edges.right) return null;
+            const full = {
+                mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30, fillColor: '#c9793a',
+                ...(opts || {})
+            };
+            const prevBrows = (model.slopeBrowIds || []).slice();
+            const built = [];
+            const addSide = (side, pt) => {
+                if (!pt) return;
+                const pts = model.stations.map((st) => placeTemplateAtStation(st, pt));
+                if (pts.length < 2) return;
+                const rec = ensureRoadSlopeBrow(model, side, pts);
+                if (!rec) return;
+                const sm = buildSlopeToTerrain(rec, { ...full, side });
+                if (sm) built.push({ side, rec, sm });
+            };
+            addSide('left', edges.left);
+            addSide('right', edges.right);
+            model.slopeBrowIds = built.map((b) => b.rec.id);
+            model.slopeModelIds = built.map((b) => b.sm.id);
+            prevBrows.forEach((id) => {
+                if (model.slopeBrowIds.includes(id)) return;
+                dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
+            });
+            renderRoadXsView();
+            updateRoadXsStatus();
+            markNeedsRender();
+            return built;
         }
 
         function renderRoadXsView() {
@@ -14932,11 +15160,27 @@
                 zMin = Math.min(zMin, zAxis + p.dz);
                 zMax = Math.max(zMax, zAxis + p.dz);
             });
+            const slopeOpts = readRoadXsSlopeOpts();
+            const edgePts = templateEdgePoints(tpl);
+            const slopeSecs = [];
+            [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
+                if (!pt) return;
+                const sec = roadXsSlopeSection(st, pt, side, slopeOpts);
+                slopeSecs.push({ side, pt, sec });
+                if (sec?.valid && sec.exit) {
+                    const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z;
+                    zMin = Math.min(zMin, ez, zAxis + (pt.dz || 0));
+                    zMax = Math.max(zMax, ez, zAxis + (pt.dz || 0));
+                }
+            });
+            const slopeOffs = slopeSecs
+                .map((s) => (s.sec?.valid ? roadXsSlopeExitOff(st, s.sec) : null))
+                .filter((v) => v != null);
             const relief = zMax - zMin;
             const spanZ = Math.max(3, relief * 1.6, 0.12 * (model.widthL + model.widthR));
             const z0 = (zMin + zMax) / 2;
-            const offMin = Math.min(-model.widthL, ...(st.samples.map((s) => s.off)), ...tpl.points.map((p) => p.off));
-            const offMax = Math.max(model.widthR, ...(st.samples.map((s) => s.off)), ...tpl.points.map((p) => p.off));
+            const offMin = Math.min(-model.widthL, ...(st.samples.map((s) => s.off)), ...tpl.points.map((p) => p.off), ...slopeOffs);
+            const offMax = Math.max(model.widthR, ...(st.samples.map((s) => s.off)), ...tpl.points.map((p) => p.off), ...slopeOffs);
             const px = (off) => pad.l + ((off - offMin) / Math.max(1e-6, offMax - offMin)) * (pad.w - pad.l - pad.r);
             const py = (z) => pad.h / 2 - ((z - z0) / spanZ) * (pad.h - pad.t - pad.b);
             const clipL = pad.l, clipR = pad.w - pad.r;
@@ -15019,6 +15263,23 @@
                     <text x="${(q.x + 8).toFixed(1)}" y="${(q.y - 8).toFixed(1)}" fill="#6a5420">${esc(p.code)}</text>
                 </g>`;
             }).join('');
+            const slopeDraw = slopeSecs.map(({ side, pt, sec }) => {
+                if (!sec?.valid || !sec.exit) return '';
+                const a = xyOf(pt);
+                const off = roadXsSlopeExitOff(st, sec);
+                if (off == null) return '';
+                const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z;
+                const bx = px(off), by = py(ez);
+                const col = sec.mode === 'cut' ? '#3a83c9' : '#c9793a';
+                const mx = (a.x + bx) / 2, my = (a.y + by) / 2;
+                return `<line class="xs-slope" data-side="${side}" data-mode="${esc(sec.mode || '')}"
+                    x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}"
+                    x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}"
+                    stroke="${col}" stroke-width="2.2" stroke-dasharray="5 3"/>
+                    <circle class="xs-slope-end" cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="3.2"
+                        fill="${col}" stroke="#fff" stroke-width="1"/>
+                    <text x="${mx.toFixed(1)}" y="${(my - 6).toFixed(1)}" text-anchor="middle" fill="${col}">откос</text>`;
+            }).join('');
             svg.setAttribute('viewBox', `0 0 ${pad.w} ${pad.h}`);
             svg.innerHTML = `
                 <rect x="0" y="0" width="${pad.w}" height="${pad.h}" fill="#f7f9fb"/>
@@ -15036,6 +15297,7 @@
                 ${shapeDraw}
                 ${linkDraw}
                 ${knotDraw}
+                ${slopeDraw}
                 <text x="${clipL + 4}" y="14">отм., м</text>
                 <text x="${clipR}" y="${pad.h - 8}" text-anchor="end">смещ., м</text>
                 <text x="${clipL + 8}" y="${(axisY - 8).toFixed(1)}" fill="#e8442a">ось</text>
@@ -15112,14 +15374,14 @@
                     let run = [];
                     const flush = () => {
                         if (run.length < 2) { run = []; return; }
-                        entityOpen('POLYLINE', 'LVA_XS');
+                        entityOpen('POLYLINE', DXF_LAYER_XS);
                         ge(66, 1); ge(10, 0); ge(20, 0); ge(30, 0); ge(70, 8);
                         run.forEach((p) => {
-                            entityOpen('VERTEX', 'LVA_XS');
+                            entityOpen('VERTEX', DXF_LAYER_XS);
                             ge(10, n(p.x)); ge(20, n(p.y)); ge(30, n(p.z));
                             ge(70, 32);
                         });
-                        entityOpen('SEQEND', 'LVA_XS');
+                        entityOpen('SEQEND', DXF_LAYER_XS);
                         count++;
                         run = [];
                     };
@@ -15171,13 +15433,12 @@
                 notifyError(`Сбой экспорта DXF: ${err?.message || err}`);
                 return;
             }
-            downloadTextFile(
+            downloadDxfFile(
                 text,
-                `bim-lva-xs-${new Date().toISOString().slice(0, 10)}.dxf`,
-                'application/dxf'
+                `bim-lva-xs-${new Date().toISOString().slice(0, 10)}.dxf`
             );
             const n = roadXsModels.reduce((s, m) => s + m.stations.length, 0);
-            notify(`DXF: поперечников ${n} на слое LVA_XS. Координаты мировые, метры.`);
+            notify(`DXF: поперечников ${n} на слое «${DXF_LAYER_XS}». Координаты мировые, метры.`);
         }
 
         function roadXsCsvText(model) {
@@ -15203,11 +15464,64 @@
             handleId: 'roadXsDrag', defaultWidth: 560
         });
 
+        function panelIsShown(id) {
+            return !!$(id)?.classList.contains('show');
+        }
+
+        /**
+         * Профиль и поперечник рядом, не стопкой в одном правом углу.
+         * Оба открыты: профиль слева от поперечника, оба под шапкой.
+         * На узком окне ширины сжимаются, чтобы карточки не наехали.
+         */
+        function dockProfileAndXs() {
+            const profOpen = panelIsShown('polyProfileModal');
+            const xsOpen = panelIsShown('roadXsModal');
+            const profEl = $('polyProfileCard');
+            const xsEl = $('roadXsCard');
+            if (profEl && !(profOpen && xsOpen)) profEl.style.width = '';
+            if (xsEl && !(profOpen && xsOpen)) xsEl.style.width = '';
+            if (profOpen && xsOpen && profEl && xsEl) {
+                const gap = 10;
+                const margin = 10;
+                const top = 72;
+                profEl.style.width = '';
+                xsEl.style.width = '';
+                let pw = Math.min(760, profEl.offsetWidth || 760);
+                let xw = Math.min(560, xsEl.offsetWidth || 560);
+                const avail = Math.max(560, window.innerWidth - 2 * margin - gap);
+                if (pw + xw > avail) {
+                    const share = pw / (pw + xw);
+                    pw = Math.max(300, Math.round(avail * share));
+                    xw = Math.max(280, avail - pw);
+                    profEl.style.width = `${pw}px`;
+                    xsEl.style.width = `${xw}px`;
+                }
+                const xsLeft = window.innerWidth - margin - (xsEl.offsetWidth || xw);
+                const profLeft = xsLeft - gap - (profEl.offsetWidth || pw);
+                polyProfilePanel.setPosition(profLeft, top);
+                roadXsPanel.setPosition(xsLeft, top);
+                requestAnimationFrame(() => {
+                    renderPolylineProfile();
+                    renderRoadXsView();
+                });
+                return;
+            }
+            if (profOpen) polyProfilePanel.park();
+            if (xsOpen) roadXsPanel.park();
+        }
+
+        window.addEventListener('resize', () => {
+            if (panelIsShown('polyProfileModal') && panelIsShown('roadXsModal')) {
+                dockProfileAndXs();
+            }
+        });
+
         function fillRoadAxisStyleForm(rec) {
             const set = (id, v) => { const el = $(id); if (el && v != null) el.value = String(v); };
+            const asRoad = rec?.role === 'road-axis';
             set('roadAxisColor', rec?.color || DRAW_COLOR);
             set('roadAxisWidth', rec?.width || DRAW_WIDTH);
-            set('roadAxisLayer', rec?.layer || defaultPolylineLayer(rec?.kind, rec?.role));
+            set('roadAxisLayer', asRoad && rec?.layer ? rec.layer : ROAD_AXIS_LAYER);
             set('roadEdgeColor', rec?.edgeColor || ROAD_EDGE_COLOR);
             set('roadEdgeWidth', rec?.edgeWidth || ROAD_EDGE_WIDTH);
             set('roadEdgeLayer', rec?.edgeLayer || ROAD_EDGE_LAYER);
@@ -15242,14 +15556,14 @@
         function fillRoadXsSelect(targetId) {
             const sel = $('roadXsSelect');
             if (!sel) return;
-            const list = drawnPolylines.filter((r) => r.pts.length >= 2);
+            const list = listedPolylines().filter((r) => r.pts.length >= 2);
             sel.innerHTML = list
                 .map((r) => `<option value="${r.id}"${r.id === targetId ? ' selected' : ''}>${esc(r.name)}</option>`)
                 .join('');
         }
 
         function openRoadXsModal(record) {
-            const candidates = drawnPolylines.filter((r) => r.pts.length >= 2);
+            const candidates = listedPolylines().filter((r) => r.pts.length >= 2);
             if (!candidates.length) {
                 notifyError('Нет линий: сначала начертите ось.');
                 return;
@@ -15276,16 +15590,20 @@
             const modal = $('roadXsModal');
             const wasOpen = modal.classList.contains('show');
             modal.classList.add('show');
-            if (!wasOpen) requestAnimationFrame(() => {
-                roadXsPanel.park();
-                requestAnimationFrame(() => renderRoadXsView());
-            });
-            else requestAnimationFrame(() => renderRoadXsView());
+            if (!wasOpen || $('polyProfileModal')?.classList.contains('show')) {
+                requestAnimationFrame(() => {
+                    dockProfileAndXs();
+                    requestAnimationFrame(() => renderRoadXsView());
+                });
+            } else requestAnimationFrame(() => renderRoadXsView());
         }
 
         $('roadXsClose')?.addEventListener('click', () => {
             $('roadXsModal').classList.remove('show');
+            const card = $('roadXsCard');
+            if (card) card.style.width = '';
             roadXsPanel.reset();
+            requestAnimationFrame(() => dockProfileAndXs());
         });
         $('roadXsApply')?.addEventListener('click', () => {
             const id = Number($('roadXsSelect')?.value);
@@ -15323,10 +15641,27 @@
         $('roadXsDxf')?.addEventListener('click', exportRoadXsDxf);
         $('roadXsProfile')?.addEventListener('click', () => {
             const id = Number($('roadXsSelect')?.value);
-            const rec = drawnPolylines.find((r) => r.id === id) ||
-                drawnPolylines.find((r) => r.id === currentRoadXsModel()?.polylineId);
+            const rec = listedPolylines().find((r) => r.id === id) ||
+                listedPolylines().find((r) => r.id === currentRoadXsModel()?.polylineId);
             if (!rec) return notifyError('Выберите ось.');
             openPolylineProfile(rec);
+        });
+        $('roadXsSlope')?.addEventListener('click', () => {
+            const model = currentRoadXsModel();
+            if (!model) return notifyError('Сначала постройте поперечники.');
+            const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+            if (!built?.length) {
+                return notifyError('Не удалось построить откосы: нет рельефа у кромок шаблона.');
+            }
+            let fill = 0, cut = 0;
+            built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+            notifyOk(
+                `Откосы от кромок «${model.name}»: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`
+            );
+        });
+        ['roadXsMFill', 'roadXsMCut', 'roadXsSlopeReach'].forEach((id) => {
+            $(id)?.addEventListener('change', () => renderRoadXsView());
+            $(id)?.addEventListener('input', () => renderRoadXsView());
         });
 
         function roadXsClientToOffZ(ev) {
@@ -15704,7 +16039,7 @@
         let slopeRecordId = null;
 
         function openSlopeModal(record) {
-            const candidates = drawnPolylines.filter((r) => r.pts.length >= 2);
+            const candidates = listedPolylines().filter((r) => r.pts.length >= 2);
             if (!candidates.length) {
                 notifyError('Нет линий: сначала начертите полилинию.');
                 return;
@@ -17185,7 +17520,7 @@
             if (typeof refreshFilesPane === 'function') refreshFilesPane();
             if (typeof refreshClassesPane === 'function') refreshClassesPane();
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => {
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'].forEach(id => {
                 $(id).disabled = loadedModels.size === 0;
             });
             $('clipModeSelect').disabled = loadedModels.size === 0;
@@ -29296,7 +29631,7 @@ ${componentXml || '    '}
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
                 $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => {
+                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'].forEach(id => {
                     $(id).disabled = true;
                 });
                 $('clipModeSelect').disabled = true;
@@ -30049,7 +30384,7 @@ ${componentXml || '    '}
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnQrView'].forEach(id => $(id).disabled = true);
+            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
             $('measureModeSelect').disabled = true;
             $('btnClipGizmo').disabled = true;
@@ -33174,7 +33509,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.15',
-            buildId: 'ui-compact',
+            buildId: 'xs-style',
             released: '2026-08-15',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -33183,11 +33518,15 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.15: поперечники на новой ленте — «⊟ Поперечники» во вкладках Черчение и Рельеф; слои DXF по-русски; профиль и сечение рядом.',
                 '2026.08.15: оболочка плотнее — поиск и «Все» в одной строке, вкладки свойств без заливки, куб видов без тени и оранжевого.',
                 '2026.08.14: вкладки боковых панелей — слева Структура / Файлы / Классы, справа Свойства / Pset / Ведомость.',
                 '2026.08.14: боковые панели — палитры Civil 3D (рамка 3 px, зазор до сцены), не плиты конкурента на всю высоту.',
                 '2026.08.14: лента как в Civil 3D — вкладки Файл / Вид / Измерения / Черчение / Рельеф / Анализ / IFC и именованные панели; кнопки на виду, без выпадающих меню.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
+                '2026.08.14: слои DXF по-русски — Ось, Кромка, Поперечник, Откос, КДО, 2Д, 3Д, Точки, Тело; файл в ANSI_1251, как ждёт Civil.',
+                '2026.08.14: окно поперечников открывается кнопкой «⊟ Поперечники»; профиль садится рядом.',
+                '2026.08.13: окна профиля и поперечника садятся рядом; откосы от кромок шаблона до земли — на чертеже сечения и TIN в модели (тот же движок, что у площадки).',
                 '2026.08.13: Tekla на заводской сетке (~1200 м) больше не садится в ноль из-за вырезов: старый кэш со сбросом отбрасывается, после CSG положение возвращается по координатам файла.',
                 '2026.08.13: «Построить» протягивает шаблон поперечника вдоль оси (полотно); шаблон живой — точки, связи, формы; продольный профиль оси — кнопка 〰.',
                 '2026.08.13: ось трассы — пунктир, кромки ширины сплошные; цвет, слой DXF и толщину оси и кромок можно сменить.',
@@ -33260,7 +33599,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=107').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=108').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
