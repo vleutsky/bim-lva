@@ -56,7 +56,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v162`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v163`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `ui-style-preview.html` — **прототип оформления**, отдельный файл, рабочий
   вьювер не трогает. Смотреть через Pages или открывать локально.
@@ -898,9 +898,17 @@ null` обычный пользователь не видит, а админ в�
   обочина / кювет / прямоугольник / трапеция / треугольник — к якорю наружу
   от оси, без `addTemplatePoint` (тот режет связи покрытия). Новые точки
   фигуры помнят родителя (`parent`, `relOff`/`relDz`): правило на якоре
-  двигает весь узел. На точке `pt.rule`: `{ when, value, thenDz, thenOff,
-  thenHide, elseDz, elseOff, elseHide }`; `resolveTemplatePoints` на каждой
-  станции (`work>`/`work<`/`gAbove`/`gBelow`/`axis>`/`axis<`). Скрытый
+  двигает весь узел. На точке `pt.rule`: `{ when, value, staFrom, staTo,
+  thenDz, thenOff, thenHide, elseDz, elseOff, elseHide }`; вне диапазона PK
+  правило не применяется (база). `1+20` = 120 м. Пустой `when` внутри
+  диапазона — ветка «то». `pt.ground = { on, mFill, mCut, maxReach }`:
+  крайняя точка идёт 1:m до земли (рабочая > 0 — насыпь, < 0 — выемка),
+  тот же `computeSlopeCrossSection`; не вешать на L/R покрытия — полоса
+  поедет. Фигуры сажаются с полями ширина/высота/заложение и зеркалом
+  «на обе стороны». Библиотека: пресеты городской/сельский/с кюветом,
+  `localStorage` `bimlva_road_templates_v1`, JSON сохранить/подставить.
+  `resolveTemplatePoints` на каждой станции (`work>`/`work<`/`gAbove`/
+  `gBelow`/`axis>`/`axis<`). Скрытый
   родитель прячет детей — коридор и заливка формы их не берут.
 
 - **Удаление полилинии не по старому индексу.** `deleteDrawnPolyline` сначала
