@@ -2048,8 +2048,10 @@ async function checkRoadCrossSections(page) {
             step: 1.5, widthL: 2, widthR: 2, sampleStep: 1, live: false
         });
         const dxf = D.roadXsDxfPreview() || '';
+        const sg = D.roadXsSubgrade();
         return {
             res,
+            sg,
             dxfXs: /Поперечник/.test(dxf),
             dxfRoad: /Кромка/.test(dxf),
             dxfPolys: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
@@ -2068,6 +2070,21 @@ async function checkRoadCrossSections(page) {
         }
         if ((got.res.template?.shapes?.length || 0) < 1) {
             problems.push(`поперечники: в шаблоне нет формы покрытия`);
+        }
+        if (!got.sg || (got.sg.n || 0) < 2) {
+            problems.push(`поперечники: огибающая земполотна ${JSON.stringify(got.sg)}`);
+        } else {
+            if (Math.abs((got.sg.zMin ?? 0) + 0.20) > 1e-6) {
+                problems.push(`поперечники: низ земполотна ${got.sg.zMin} вместо −0.20`);
+            }
+            if (Math.abs((got.sg.offMin ?? 0) + 2) > 1e-4 || Math.abs((got.sg.offMax ?? 0) - 2) > 1e-4) {
+                problems.push(
+                    `поперечники: земполотно по смещению ${got.sg.offMin}…${got.sg.offMax} вместо −2…2`
+                );
+            }
+            if (got.sg.on || got.sg.hasMesh) {
+                problems.push('поперечники: земполотно включено без галочки');
+            }
         }
         if (Math.abs(got.res.first.sta) > 1e-6 || Math.abs(got.res.last.sta - 3) > 1e-4) {
             problems.push(
@@ -2459,9 +2476,17 @@ async function checkRoadCrossSections(page) {
         const res = D.addRoadXsLayer(0.30);
         const after = D.roadXsTemplate();
         const zMin = Math.min(...(after?.points || []).map((p) => p.dz));
+        const slopeLab = document.getElementById('roadXsSlopeOn')?.closest('label');
+        const sgLab = document.getElementById('roadXsSubgradeOn')?.closest('label');
         return {
             hasBtn: !!document.getElementById('roadXsAddLayer'),
             hasChk: !!document.getElementById('roadXsSlopeOn'),
+            hasSgChk: !!document.getElementById('roadXsSubgradeOn'),
+            sgNear: !!(slopeLab && sgLab && (
+                slopeLab.previousElementSibling === sgLab
+                || slopeLab.nextElementSibling === sgLab
+            )),
+            sgZ: D.roadXsSubgrade()?.zMin,
             slopeLabel: document.getElementById('roadXsSlope')?.textContent || '',
             profileXs: !!document.getElementById('polyProfileXs'),
             bigDraw: !!document.querySelector('#btnRoadXs.rbtn-big'),
@@ -2478,6 +2503,12 @@ async function checkRoadCrossSections(page) {
     });
     if (!layer.hasBtn || !layer.hasChk) {
         problems.push(`поперечники: нет «＋ слой» или галочки откосов (${JSON.stringify(layer)})`);
+    }
+    if (!layer.hasSgChk || !layer.sgNear) {
+        problems.push(`поперечники: нет галочки земполотна рядом с откосами (${JSON.stringify(layer)})`);
+    }
+    if (Math.abs((layer.sgZ ?? 0) + 0.5) > 1e-6) {
+        problems.push(`поперечники: огибающая после BASE ${layer.sgZ} вместо −0.50`);
     }
     if (Math.abs((layer.rbMid ?? 0) + 0.35) > 1e-6) {
         problems.push(`поперечники: смена толщины слоя не сдвинула низ покрытия (${JSON.stringify(layer)})`);
@@ -2758,6 +2789,53 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: галочка «откосы» не убирает/не возвращает лучи (${JSON.stringify({
             before: shapeUx.slopeBefore, off: shapeUx.slopeOff, on: shapeUx.slopeOn
         })})`);
+    }
+
+    const sgUx = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const chk = document.getElementById('roadXsSubgradeOn');
+        const html0 = document.getElementById('roadXsChart')?.innerHTML || '';
+        if (chk) {
+            chk.checked = true;
+            chk.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const htmlOn = document.getElementById('roadXsChart')?.innerHTML || '';
+        const on = D.roadXsSubgrade();
+        const dxf = D.roadXsDxfPreview() || '';
+        if (chk) {
+            chk.checked = false;
+            chk.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const htmlOff = document.getElementById('roadXsChart')?.innerHTML || '';
+        const off = D.roadXsSubgrade();
+        return {
+            line0: /class="xs-subgrade"/.test(html0),
+            lineOn: /class="xs-subgrade"/.test(htmlOn),
+            lineOff: /class="xs-subgrade"/.test(htmlOff),
+            facesOn: on?.faces || 0,
+            meshOn: !!on?.hasMesh,
+            meshOff: !!off?.hasMesh,
+            zMin: on?.zMin,
+            n: on?.n,
+            stations: D.roadXs?.[0]?.stations || 0,
+            dxfLayer: /Земполотно/.test(dxf),
+            dxfSolid: /\r\n3DSOLID\r\n/.test(dxf) || /3DSOLID/.test(dxf)
+        };
+    });
+    if (sgUx.line0 || !sgUx.lineOn || sgUx.lineOff) {
+        problems.push(`поперечники: галочка «земполотно» не рисует/не убирает линию (${JSON.stringify(sgUx)})`);
+    }
+    if (!sgUx.meshOn || sgUx.meshOff) {
+        problems.push(`поперечники: галочка «земполотно» не строит/не снимает поверхность (${JSON.stringify(sgUx)})`);
+    }
+    if ((sgUx.facesOn || 0) < 2 * Math.max(1, (sgUx.stations || 1) - 1)) {
+        problems.push(`поперечники: земполотно ${sgUx.facesOn} граней при ${sgUx.stations} сечениях`);
+    }
+    if (Math.abs((sgUx.zMin ?? 0) + 0.5) > 1e-6) {
+        problems.push(`поперечники: низ земполотна после BASE ${sgUx.zMin} вместо −0.50`);
+    }
+    if (!sgUx.dxfLayer || !sgUx.dxfSolid) {
+        problems.push(`поперечники: в DXF нет слоя Земполотно / 3DSOLID (${JSON.stringify(sgUx)})`);
     }
 
     const studio = await page.evaluate(() => {
