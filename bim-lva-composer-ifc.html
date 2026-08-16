@@ -3408,6 +3408,8 @@
             color: var(--txt-dim);
         }
         .mb-foot select { width: 180px; height: 26px; }
+        .mb-foot select#mapBuilderPlace { width: 250px; }
+        .mb-foot #mapBuilderPlaceHint { flex: 1 1 220px; min-width: 160px; }
         .mb-toolbar .fill { flex: 1; min-width: 8px; }
         .rs-bar {
             display: flex;
@@ -4839,6 +4841,13 @@
                 <div id="mapBuilderHint">Как в InfraWorks: найдите место, рамка или произвольный контур до 200 га, затем «Загрузить». Колесо — масштаб, перетаскивание — сдвиг.</div>
             </div>
             <div class="mb-foot">
+                <label>координаты
+                    <select class="editInput" id="mapBuilderPlace" title="На пустой сцене: центр рамки в нуле плана или в проекции Гаусса–Крюгера (WGS84, 6°, восток с номером зоны). Это не МСК площадки — совпадает со снимком OSM/ESRI. Если модель уже загружена, карта всегда садится в её координаты.">
+                        <option value="world">Мировые (Гаусс–Крюгер)</option>
+                        <option value="zeros">В нули сцены</option>
+                    </select>
+                </label>
+                <span id="mapBuilderPlaceHint"></span>
                 <label>слой
                     <select class="editInput" id="mapBuilderLayer">
                         <option value="esri">Космоснимок (ESRI)</option>
@@ -6293,6 +6302,27 @@
             },
             removeMapTerrain() {
                 return removeMapTerrainLayer();
+            },
+            clearBasemapBinding() {
+                activeBasemapBinding = null;
+                try { localStorage.removeItem(BASEMAP_STORAGE_KEY); } catch (_) {}
+                mapBuilderClearSelection();
+            },
+            mapBuilderSetPlace: (mode) => { mapBuilderSetPlace(mode); },
+            wgs84TmEn: (lat, lon) => wgs84GaussKrugerEn(lat, lon),
+            worldPointToAbsolute(x, y, z) {
+                const v = worldPointToAbsoluteXYZ(new THREE.Vector3(x, y, z));
+                return v ? { x: v.x, y: v.y, z: v.z } : null;
+            },
+            get worldOrigin() {
+                if (!ifcWorldOrigin) return null;
+                return {
+                    x: ifcWorldOrigin.x,
+                    y: ifcWorldOrigin.y,
+                    z: ifcWorldOrigin.z,
+                    frame: worldOriginFrame,
+                    source: worldOriginSource ? { ...worldOriginSource } : null
+                };
             },
             openMapBuilder() { openMapBuilderModal(); },
             closeMapBuilder() { closeMapBuilderModal(); },
@@ -8336,9 +8366,76 @@
         }
 
         /**
+         * Поперечная Меркатора 6° на эллипсоиде WGS84 — как Гаусс–Крюгер,
+         * но не SK-42/Красовский. Снимок OSM/ESRI в WGS84: Красовский дал бы
+         * сдвиг ~100 м относительно картинки.
+         *
+         * Зона: floor(λ/6)+1, осевой меридиан zone·6 − 3.
+         * Восток = zone·1e6 + 500000 + y_tm (российский вид с номером зоны).
+         * Север — дуга меридиана от экватора. k0 = 1.
+         * Это не МСК площадки: её в IFC обычно нет.
+         */
+        function wgs84GaussKrugerEn(latDeg, lonDeg) {
+            const latD = Number(latDeg);
+            const lonD = Number(lonDeg);
+            if (!Number.isFinite(latD) || !Number.isFinite(lonD)) {
+                return { e: 0, n: 0, zone: 0, lon0Deg: 0 };
+            }
+            const a = 6378137;
+            const f = 1 / 298.257223563;
+            const e2 = f * (2 - f);
+            const ep2 = e2 / (1 - e2);
+            const lat = latD * Math.PI / 180;
+            const lon = lonD * Math.PI / 180;
+            let zone = Math.floor(lonD / 6) + 1;
+            if (zone < 1) zone = 1;
+            if (zone > 60) zone = 60;
+            const lon0Deg = zone * 6 - 3;
+            const lon0 = lon0Deg * Math.PI / 180;
+            const sin = Math.sin(lat);
+            const cos = Math.cos(lat);
+            const tan = Math.tan(lat);
+            const nu = a / Math.sqrt(1 - e2 * sin * sin);
+            const t = tan;
+            const C = ep2 * cos * cos;
+            const A = (lon - lon0) * cos;
+            const e4 = e2 * e2;
+            const e6 = e4 * e2;
+            const M = a * (
+                (1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256) * lat
+                - (3 * e2 / 8 + 3 * e4 / 32 + 45 * e6 / 1024) * Math.sin(2 * lat)
+                + (15 * e4 / 256 + 45 * e6 / 1024) * Math.sin(4 * lat)
+                - (35 * e6 / 3072) * Math.sin(6 * lat)
+            );
+            const A2 = A * A;
+            const A3 = A2 * A;
+            const A4 = A2 * A2;
+            const A5 = A4 * A;
+            const A6 = A3 * A3;
+            const t2 = t * t;
+            const t4 = t2 * t2;
+            const east = nu * (
+                A
+                + (1 - t2 + C) * A3 / 6
+                + (5 - 18 * t2 + t4 + 72 * C - 58 * ep2) * A5 / 120
+            );
+            const north = M + nu * t * (
+                A2 / 2
+                + (5 - t2 + 9 * C + 4 * C * C) * A4 / 24
+                + (61 - 58 * t2 + t4 + 600 * C - 330 * ep2) * A6 / 720
+            );
+            return {
+                e: zone * 1e6 + 500000 + east,
+                n: north,
+                zone,
+                lon0Deg
+            };
+        }
+
+        /**
          * Точка модели → широта/долгота через локальную ENU-развёртку вокруг
          * привязки. На километровых площадках погрешность сантиметровая, а
-         * знать зону МСК не требуется — её в IFC обычно и нет.
+         * знать зону МСК не требуется — её в IFC обычно нет.
          */
         function basemapModelToLatLon(binding, modelX, modelY) {
             const dE0 = modelX - binding.anchorX;
@@ -9033,6 +9130,7 @@
         const MAP_BUILDER_MAX_ZOOM = 18;
         const MAP_BUILDER_SEARCH_ZOOM = 13;
         const MAP_SITE_MODEL_ID = 'map-site';
+        const MAP_PLACE_STORAGE_KEY = 'bimlva_map_place_v1';
         /**
          * Города без Nominatim: с github.io поиск OSM часто 403, а «Санкт-Петербург»
          * должен попадать в город, а не в ответ первого попавшегося admin-bbox.
@@ -9187,7 +9285,9 @@
                 areaHa: mapBuilderAreaHa(),
                 overLimit: polygonAreaM2(ring) > MAP_BUILDER_MAX_M2,
                 loadEnabled: !$('mapBuilderLoad')?.disabled,
-                layer: mapBuilderLayerKey()
+                layer: mapBuilderLayerKey(),
+                placeMode: mapBuilderPlaceMode(),
+                placeLocked: sceneHasLoadedModel()
             };
         }
 
@@ -9483,6 +9583,50 @@
             });
         }
 
+        function mapBuilderPlaceMode() {
+            const sel = $('mapBuilderPlace');
+            return sel?.value === 'zeros' ? 'zeros' : 'world';
+        }
+
+        function persistMapBuilderPlace(mode) {
+            try {
+                localStorage.setItem(MAP_PLACE_STORAGE_KEY, mode === 'zeros' ? 'zeros' : 'world');
+            } catch (_) {}
+        }
+
+        function mapBuilderSetPlace(mode) {
+            const sel = $('mapBuilderPlace');
+            if (sel) sel.value = mode === 'zeros' ? 'zeros' : 'world';
+            persistMapBuilderPlace(sel?.value || 'world');
+            syncMapBuilderPlaceUi();
+        }
+
+        function restoreMapBuilderPlace() {
+            try {
+                const saved = localStorage.getItem(MAP_PLACE_STORAGE_KEY);
+                if (saved === 'zeros' || saved === 'world') {
+                    const sel = $('mapBuilderPlace');
+                    if (sel) sel.value = saved;
+                }
+            } catch (_) {}
+            syncMapBuilderPlaceUi();
+        }
+
+        function syncMapBuilderPlaceUi() {
+            const sel = $('mapBuilderPlace');
+            const hint = $('mapBuilderPlaceHint');
+            const locked = sceneHasLoadedModel();
+            if (sel) sel.disabled = locked;
+            if (!hint) return;
+            if (locked) {
+                hint.textContent = 'В сцене уже есть модель — карта сядет в её координаты.';
+            } else if (mapBuilderPlaceMode() === 'world') {
+                hint.textContent = 'Мировые: Гаусс–Крюгер 6°, WGS84, восток с номером зоны. Это не МСК площадки.';
+            } else {
+                hint.textContent = 'Центр рамки — в нуле плана. Отметка Z остаётся с рельефа.';
+            }
+        }
+
         function mapBuilderSettingsFromSelection() {
             const ring = mbSelectionRing();
             if (ring.length < 3) return null;
@@ -9493,7 +9637,21 @@
                 const d = latLonDistanceM(lat, lon, p.lat, p.lon);
                 if (d > radius) radius = d;
             }
-            const center = currentModelCenterXY();
+            const hadModel = sceneHasLoadedModel();
+            const placeMode = hadModel ? 'model' : mapBuilderPlaceMode();
+            let anchorX = 0;
+            let anchorY = 0;
+            let tmZone = null;
+            if (hadModel) {
+                const center = currentModelCenterXY();
+                anchorX = center.x;
+                anchorY = center.y;
+            } else if (placeMode === 'world') {
+                const tm = wgs84GaussKrugerEn(lat, lon);
+                anchorX = tm.e;
+                anchorY = tm.n;
+                tmZone = tm.zone;
+            }
             const provider = mapBuilderLayerKey();
             return {
                 provider,
@@ -9502,15 +9660,17 @@
                 lon,
                 latRaw: String(lat),
                 lonRaw: String(lon),
-                anchorX: center.x,
-                anchorY: center.y,
+                anchorX,
+                anchorY,
                 rotationDeg: 0,
                 radius: Math.max(50, Math.ceil(radius * 1.05)),
                 detail: 'normal',
                 opacity: 0.9,
                 drape: true,
                 demSource: 'terrarium',
-                demTemplate: ''
+                demTemplate: '',
+                placeMode,
+                tmZone
             };
         }
 
@@ -9523,6 +9683,7 @@
             }
             mapBuilderRestoreIfLost();
             mapBuilderSyncLayerAttr();
+            restoreMapBuilderPlace();
             mapBuilderSetTool(mapBld.tool || 'pan');
             mapBuilderRefreshArea();
             $('mapBuilderModal').classList.add('show');
@@ -9588,6 +9749,18 @@
             if (btn) btn.disabled = true;
             const sceneWasEmpty = loadedModels.size === 0 && !mapTerrain && !geoRasterLayers.length;
             const hadModel = sceneHasLoadedModel();
+            if (!hadModel) {
+                // Повторная загрузка карты без модели не должна тащить старый origin:
+                // «в нули» после «мировых» иначе уезжает на миллионы метров.
+                resetIfcWorldOrigin();
+                if (settings.placeMode === 'world') {
+                    setWorldOriginFromFirstModel(
+                        { x: settings.anchorX, y: settings.anchorY, z: 0 },
+                        { filename: 'Площадка с карты', format: 'MAP' },
+                        'external'
+                    );
+                }
+            }
             let demOk = false;
             let usedProvider = settings.provider;
             try {
@@ -9614,10 +9787,19 @@
                 if (sceneWasEmpty) fitView();
                 syncEmptySceneChrome();
                 const layerName = usedProvider === 'osm' ? 'схема OSM' : 'космоснимок ESRI';
+                let coordNote = '';
+                if (hadModel) {
+                    coordNote = ' Карта в координатах модели.';
+                } else if (settings.placeMode === 'world') {
+                    coordNote = ` Мировые ГК зона ${settings.tmZone} (WGS84): E ${settings.anchorX.toFixed(0)}, N ${settings.anchorY.toFixed(0)}.`;
+                } else {
+                    coordNote = ' Центр рамки в нуле сцены.';
+                }
                 notifyOk(
                     `Площадка с карты: ${(m2 / 10_000).toFixed(1)} га, ` +
                     (geoRasterLayers.some((l) => l.id === basemapLayerId) ? layerName : 'без снимка') +
-                    (demOk ? ' и рельеф Terrarium.' : '.')
+                    (demOk ? ' и рельеф Terrarium.' : '.') +
+                    coordNote
                 );
             } catch (err) {
                 console.error(err);
@@ -9779,6 +9961,19 @@
                 mapBuilderSyncLayerAttr();
                 mapBuilderRedraw();
             });
+            $('mapBuilderPlace')?.addEventListener('change', () => {
+                persistMapBuilderPlace(mapBuilderPlaceMode());
+                syncMapBuilderPlaceUi();
+            });
+            // Только значение select: syncMapBuilderPlaceUi читает loadedModels,
+            // а тот объявлен ниже и здесь ещё в TDZ.
+            try {
+                const saved = localStorage.getItem(MAP_PLACE_STORAGE_KEY);
+                if (saved === 'zeros' || saved === 'world') {
+                    const sel = $('mapBuilderPlace');
+                    if (sel) sel.value = saved;
+                }
+            } catch (_) {}
             $('mapBuilderBind')?.addEventListener('click', () => {
                 const settings = mapBuilderSettingsFromSelection();
                 closeMapBuilderModal();
@@ -23094,6 +23289,10 @@ uniform vec3 uBatchSelColor;
         }
 
         function ensureSceneContentNearOrigin() {
+            // Площадка с карты: вершины в мировых E/N, к нулю сцены их двигает
+            // geoRasterGroup.position. Без модели snap видит сырые координаты и
+            // вычитает их из origin повторно — статус-бар уезжает на миллионы метров.
+            if (!sceneHasLoadedModel()) return;
             for (let i = 0; i < 4; i++) {
                 const box = new THREE.Box3();
                 if (!expandLoadedFragmentsWorldBounds(box) && !computeSceneWorldBoundsBox(box)) break;
@@ -37958,7 +38157,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'chart-rmb-pan',
+            buildId: 'map-world-en',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37967,6 +38166,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: площадка с карты — два режима координат: в нули сцены или мировые Гаусс–Крюгер (WGS84, 6°, восток с номером зоны). Если модель уже в сцене, карта садится в её координаты.',
                 '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',
                 '2026.08.16: DXF R2010 уходит UTF-8 (не Windows-1251) — Civil больше не падает «ошибка в таблице APPID» на слое 2Д.',
                 '2026.08.16: высоты плана, профиля и поперечника не едут за окном — только ручка между планом и профилем.',
@@ -38065,7 +38265,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=126').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=127').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
