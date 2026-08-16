@@ -2583,6 +2583,8 @@ async function checkRoadCrossSections(page) {
 
     const shapeUx = await page.evaluate(() => {
         const D = window.BimLvaDebug;
+        const curbTHide = D.roadXsTemplate()?.points?.find((p) => p.code === 'CURBT');
+        if (curbTHide) D.setRoadXsPointRule(curbTHide.id, null);
         const fills = [...document.querySelectorAll('#roadXsChart .xs-shape')].map((el) => ({
             code: el.getAttribute('data-code') || '',
             fill: el.getAttribute('fill') || ''
