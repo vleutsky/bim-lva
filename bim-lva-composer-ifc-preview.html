@@ -1100,6 +1100,8 @@
         #polyProfileChart { height: 260px; }
         #roadXsChart { height: 240px; background: var(--panel-2); }
         #roadXsChart .xs-slope { pointer-events: none; }
+        #roadPlanChart .pkvert { cursor: move; }
+        #roadPlanChart .pkedge { cursor: ew-resize; }
         .road-xs-nav {
             display: flex;
             align-items: center;
@@ -3768,7 +3770,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · a472f78</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 143a462</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4963,11 +4965,20 @@
                 <label data-tip="Шаг пикетов вдоль оси, м. Вершины оси всегда попадают в список.">шаг
                     <input class="editInput" id="roadXsStep" type="number" min="0.5" step="1" value="20">
                 </label>
-                <label data-tip="Ширина шаблона влево от оси, м.">←
-                    <input class="editInput" id="roadXsWidthL" type="number" min="0.5" step="0.5" value="15">
+                <label data-tip="Ширина шаблона влево от оси, м. На плане кромку можно тянуть курсором.">←
+                    <input class="editInput" id="roadXsWidthL" type="number" min="0.5" step="0.05" value="3.25">
                 </label>
-                <label data-tip="Ширина шаблона вправо от оси, м.">→
-                    <input class="editInput" id="roadXsWidthR" type="number" min="0.5" step="0.5" value="15">
+                <label data-tip="Ширина шаблона вправо от оси, м. На плане кромку можно тянуть курсором.">→
+                    <input class="editInput" id="roadXsWidthR" type="number" min="0.5" step="0.05" value="3.25">
+                </label>
+                <label data-tip="На переломе оси: прямой угол (miter, как сейчас) или сопряжение дугой — как веер на угле площадки.">углы
+                    <select class="editInput" id="roadCornerMode">
+                        <option value="miter" selected>прямой</option>
+                        <option value="fillet">скругление</option>
+                    </select>
+                </label>
+                <label id="roadCornerRadiusLab" hidden data-tip="Радиус сопряжения на внутренних вершинах оси, м.">R
+                    <input class="editInput" id="roadCornerRadius" type="number" min="0" step="0.5" value="8">
                 </label>
                 <label data-tip="Толщина верхнего слоя одежды у кромки, м. Меняет низ покрытия; откосы идут от кромок шаблона до земли.">слой
                     <input class="editInput" id="roadXsLayerThk" type="number" min="0.01" step="0.05" value="0.20">
@@ -6793,7 +6804,7 @@
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 if (!rec) return null;
                 const model = buildRoadCrossSections(rec, {
-                    step: 20, widthL: 15, widthR: 15, sampleStep: 1, live: false,
+                    step: 20, widthL: DEFAULT_ROAD_HALF_WIDTH, widthR: DEFAULT_ROAD_HALF_WIDTH, sampleStep: 1, live: false,
                     ...(opts || {})
                 });
                 if (!model) return null;
@@ -6819,6 +6830,8 @@
                         miterScale: model.stations[0].miterScale,
                         atVertex: !!model.stations[0].atVertex,
                         axisZ: model.stations[0].axisAbs.z,
+                        axisSceneZ: model.stations[0].z,
+                        designZ: (model.stations[0].designPts || [])[Math.floor(((model.stations[0].designPts || []).length - 1) / 2)]?.z,
                         samples: model.stations[0].samples.map((s) => ({
                             off: s.off, x: s.x, y: s.y, z: s.z, hit: s.hit,
                             absX: s.abs.x, absY: s.abs.y, absZ: s.abs.z, work: s.work
@@ -6842,10 +6855,37 @@
                 return roadXsModels.length ? buildDxf([], [], null, { xsOnly: true }) : '';
             },
             clearRoadXs() { clearRoadXsModels(); },
+            get defaultRoadHalfWidth() { return DEFAULT_ROAD_HALF_WIDTH; },
+            planMoveVertex(id, idx, x, y) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec || !rec.pts[idx]) return false;
+                rec.pts[idx].x = x;
+                rec.pts[idx].y = y;
+                rebuildPolylineGeometry(rec);
+                renderRoadPlanView();
+                return true;
+            },
+            setRoadWidths(id, widthL, widthR) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                setRoadHalfWidths(rec, widthL, widthR);
+                return true;
+            },
+            applyRoadCorners(id, mode, radius) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                applyRoadAxisCorners(rec, mode, radius);
+                return rec.radii.slice();
+            },
+            roadCornerState(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? roadAxisCornerState(rec) : null;
+            },
             get roadXs() {
                 return roadXsModels.map((m) => ({
                     id: m.id, polylineId: m.polylineId, stations: m.stations.length,
                     hits: m.hits, missed: m.missed, total: m.total,
+                    widthL: m.widthL, widthR: m.widthR,
                     corridorTris: m.corridorTris || 0,
                     templatePoints: m.template?.points?.length || 0,
                     templateLinks: m.template?.links?.length || 0,
@@ -13089,8 +13129,8 @@
             const L = Number($('roadXsWidthL')?.value);
             const R = Number($('roadXsWidthR')?.value);
             return {
-                widthL: Math.max(0.5, Number.isFinite(L) ? L : 15),
-                widthR: Math.max(0.5, Number.isFinite(R) ? R : 15)
+                widthL: Math.max(0.5, Number.isFinite(L) ? L : DEFAULT_ROAD_HALF_WIDTH),
+                widthR: Math.max(0.5, Number.isFinite(R) ? R : DEFAULT_ROAD_HALF_WIDTH)
             };
         }
 
@@ -15155,10 +15195,13 @@
             updateDrawInputPanel();
             if (finishedRoad) {
                 openRoadXsModal(finishedRoad);
+                if ($('roadCornerMode')?.value === 'fillet') {
+                    applyRoadAxisCorners(finishedRoad, 'fillet', $('roadCornerRadius')?.value);
+                }
                 const model = buildRoadCrossSections(finishedRoad, {
                     step: Number($('roadXsStep')?.value) || 20,
-                    widthL: Number($('roadXsWidthL')?.value) || 15,
-                    widthR: Number($('roadXsWidthR')?.value) || 15,
+                    widthL: roadWidthOrDefault($('roadXsWidthL')?.value),
+                    widthR: roadWidthOrDefault($('roadXsWidthR')?.value),
                     sampleStep: Number($('roadXsSample')?.value) || 1,
                     color: $('roadXsColor')?.value || '#2a7de1',
                     live: $('roadXsLive') ? !!$('roadXsLive').checked : true
@@ -16280,10 +16323,18 @@
         const ROAD_XS_MITER_CAP = 8;
         const ROAD_DECK_COLOR = '#8a7344';
         const ROAD_PAVE_THICK = 0.20;
+        /** Половина шаблона при создании дороги: одна полоса 3.25 м в каждую сторону. */
+        const DEFAULT_ROAD_HALF_WIDTH = 3.25;
+        const DEFAULT_ROAD_CORNER_R = 8;
+
+        function roadWidthOrDefault(raw) {
+            const n = Number(raw);
+            return Math.max(0.5, Number.isFinite(n) && n > 0 ? n : DEFAULT_ROAD_HALF_WIDTH);
+        }
 
         function defaultRoadTemplate(widthL, widthR) {
-            const L = Math.max(0.5, Number(widthL) || 15);
-            const R = Math.max(0.5, Number(widthR) || 15);
+            const L = roadWidthOrDefault(widthL);
+            const R = roadWidthOrDefault(widthR);
             const t = currentPaveThickness();
             return {
                 seq: 5,
@@ -16310,8 +16361,8 @@
 
         function isDefaultRoadTemplate(tpl, widthL, widthR) {
             if (!tpl?.points?.length) return false;
-            const L = Math.max(0.5, Number(widthL) || 15);
-            const R = Math.max(0.5, Number(widthR) || 15);
+            const L = roadWidthOrDefault(widthL);
+            const R = roadWidthOrDefault(widthR);
             const by = Object.fromEntries(tpl.points.map((p) => [p.code, p]));
             const near = (p, off, dz) => p && Math.abs(p.off - off) < 1e-6 && Math.abs(p.dz - dz) < 1e-9;
             if (tpl.points.length === 3 && tpl.points.map((p) => p.code).join(',') === 'L,CL,R') {
@@ -16325,7 +16376,7 @@
 
         function templateWidths(tpl) {
             const offs = (tpl?.points || []).map((p) => p.off);
-            if (!offs.length) return { widthL: 15, widthR: 15 };
+            if (!offs.length) return { widthL: DEFAULT_ROAD_HALF_WIDTH, widthR: DEFAULT_ROAD_HALF_WIDTH };
             return {
                 widthL: Math.max(0.5, -Math.min(0, ...offs)),
                 widthR: Math.max(0.5, Math.max(0, ...offs))
@@ -16945,6 +16996,26 @@
             );
         }
 
+        /**
+         * Синяя линия сечения в сцене — по шаблону на отметке оси, не по земле.
+         * Земля остаётся в samples для чертежа поперечника и рабочих отметок.
+         */
+        function roadXsDesignPts(model, st) {
+            const resolved = model?.template ? resolveTemplatePoints(model.template, st) : [];
+            const vis = resolved.filter((p) => !p.hide);
+            const top = vis.filter((p) => p.dz >= -1e-4);
+            const use = (top.length >= 2 ? top : vis).slice().sort((a, b) => a.off - b.off);
+            if (use.length >= 2) return use.map((p) => placeTemplateAtStation(st, p));
+            const L = roadWidthOrDefault(model?.widthL);
+            const R = roadWidthOrDefault(model?.widthR);
+            const sc = Math.max(1, st.miterScale || 1);
+            return [
+                new THREE.Vector3(st.x - st.rx * L * sc, st.y - st.ry * L * sc, st.z),
+                new THREE.Vector3(st.x, st.y, st.z),
+                new THREE.Vector3(st.x + st.rx * R * sc, st.y + st.ry * R * sc, st.z)
+            ];
+        }
+
         function snapshotRoadTemplate(tpl) {
             if (!tpl) return null;
             return {
@@ -17097,8 +17168,8 @@
         }
 
         function roadXsOffsets(widthL, widthR, sampleStep) {
-            const L = Math.max(0.5, Number(widthL) || 15);
-            const R = Math.max(0.5, Number(widthR) || 15);
+            const L = roadWidthOrDefault(widthL);
+            const R = roadWidthOrDefault(widthR);
             const ds = Math.max(0.1, Number(sampleStep) || 1);
             const raw = [-L, 0, R];
             for (let o = -L; o <= R + 1e-9; o += ds) raw.push(o);
@@ -17222,8 +17293,8 @@
             const stn = polylineStationing(record);
             if (!stn) return null;
             const step = Math.max(0.5, Number(opts.step) || 20);
-            const widthL = Math.max(0.5, Number(opts.widthL) || 15);
-            const widthR = Math.max(0.5, Number(opts.widthR) || 15);
+            const widthL = roadWidthOrDefault(opts.widthL);
+            const widthR = roadWidthOrDefault(opts.widthR);
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
             const turns = roadVertexTurns(record, stn);
             let stationsPk = roadXsStationList(stn.total, step, polylineVertexStations(record, stn));
@@ -17433,22 +17504,16 @@
             disposeRoadXsLines(model);
             const color = model.color || '#2a7de1';
             model.stations.forEach((st, index) => {
-                let run = [];
-                const flush = () => {
-                    if (run.length < 2) { run = []; return; }
-                    const line = makeLineObject(run, color, 1.6, false);
+                const pts = roadXsDesignPts(model, st);
+                st.designPts = pts;
+                if (pts.length >= 2) {
+                    const line = makeLineObject(pts, color, 1.6, false);
                     line.userData.roadXs = { modelId: model.id, index };
                     line.userData.xsIndex = index;
                     line.raycast = () => {};
                     roadXsGroup.add(line);
                     model.lines.push(line);
-                    run = [];
-                };
-                st.samples.forEach((s) => {
-                    if (!s.hit) { flush(); return; }
-                    run.push(new THREE.Vector3(s.x, s.y, s.z));
-                });
-                flush();
+                }
             });
             styleRoadXsLines(model);
             const rec = drawnPolylines.find((r) => r.id === model.polylineId);
@@ -18183,6 +18248,96 @@
             renderRoadPlanView();
         }
 
+        function roadAxisCornerState(record) {
+            const rs = (record?.radii || []).filter((_, i) => polylineVertexIsCorner(record, i));
+            const on = rs.filter((r) => r > 0);
+            const typed = Number($('roadCornerRadius')?.value);
+            const fallback = Number.isFinite(typed) && typed > 0 ? typed : DEFAULT_ROAD_CORNER_R;
+            if (!on.length) return { mode: 'miter', radius: fallback };
+            return { mode: 'fillet', radius: on[0] };
+        }
+
+        function syncRoadCornerUi(record) {
+            const st = record ? roadAxisCornerState(record) : {
+                mode: $('roadCornerMode')?.value || 'miter',
+                radius: Number($('roadCornerRadius')?.value) || DEFAULT_ROAD_CORNER_R
+            };
+            if ($('roadCornerMode')) $('roadCornerMode').value = st.mode;
+            if ($('roadCornerRadius')) $('roadCornerRadius').value = String(st.radius);
+            if ($('roadCornerRadiusLab')) $('roadCornerRadiusLab').hidden = st.mode !== 'fillet';
+        }
+
+        function applyRoadAxisCorners(record, mode, radius) {
+            if (!record) return;
+            const how = mode === 'fillet' ? 'fillet' : 'miter';
+            const r = Math.max(0, Number(radius));
+            const rad = Number.isFinite(r) && r > 0 ? r : DEFAULT_ROAD_CORNER_R;
+            record.pts.forEach((_, i) => {
+                if (!polylineVertexIsCorner(record, i)) return;
+                record.radii[i] = how === 'fillet' ? rad : 0;
+            });
+            const model = roadXsModels.find((m) => m.polylineId === record.id);
+            if (model) {
+                model.cornerMode = how;
+                model.cornerRadius = rad;
+            }
+            rebuildPolylineGeometry(record, { notifyClamp: true });
+            renderPolylinesList();
+            renderRoadPlanView();
+            syncRoadCornerUi(record);
+        }
+
+        function setRoadHalfWidths(record, widthL, widthR, { preview } = {}) {
+            if (!record) return;
+            const L = roadWidthOrDefault(widthL);
+            const R = roadWidthOrDefault(widthR);
+            if ($('roadXsWidthL')) $('roadXsWidthL').value = String(L);
+            if ($('roadXsWidthR')) $('roadXsWidthR').value = String(R);
+            const model = roadXsModels.find((m) => m.polylineId === record.id);
+            if (model) {
+                const prev = { widthL: model.widthL, widthR: model.widthR };
+                model.widthL = L;
+                model.widthR = R;
+                if (isDefaultRoadTemplate(model.template, prev.widthL, prev.widthR)) {
+                    model.template = defaultRoadTemplate(L, R);
+                }
+                if (!preview) scheduleRoadXsRebuild(record.id);
+            }
+            refreshRoadAxisEdges(record);
+            if (model) {
+                const src = record.renderPts?.length >= 2 ? record.renderPts : record.pts;
+                if (src?.length >= 2) {
+                    model.edgeLeftPts = offsetPlanPolyline(src, -L, !!record.closed);
+                    model.edgeRightPts = offsetPlanPolyline(src, R, !!record.closed);
+                }
+            }
+            renderRoadPlanView();
+            if (preview) markNeedsRender();
+        }
+
+        function nearestAxisPlanHit(record, x, y, sourcePts) {
+            const pts = sourcePts || record?.pts;
+            if (!pts || pts.length < 2) return null;
+            let best = null;
+            const last = record.closed ? pts.length : pts.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = record.closed && i === pts.length - 1 ? 0 : i + 1;
+                const a = pts[i], b = pts[j];
+                const abx = b.x - a.x, aby = b.y - a.y;
+                const len2 = abx * abx + aby * aby;
+                const t = len2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((x - a.x) * abx + (y - a.y) * aby) / len2));
+                const px = a.x + abx * t, py = a.y + aby * t;
+                const d = Math.hypot(x - px, y - py);
+                const len = Math.hypot(abx, aby) || 1;
+                const rx = aby / len, ry = -abx / len;
+                const off = (x - px) * rx + (y - py) * ry;
+                if (!best || d < best.d) {
+                    best = { i, j, t, x: px, y: py, z: a.z + (b.z - a.z) * t, d, off, rx, ry };
+                }
+            }
+            return best;
+        }
+
         function renderRoadPlanView() {
             const svg = $('roadPlanChart');
             if (!svg) return;
@@ -18204,10 +18359,16 @@
                 return;
             }
             const model = roadXsModels.find((m) => m.polylineId === rec.id);
+            const widths = roadAxisWidthsFor(rec);
+            const leftPts = model?.edgeLeftPts || rec.edgeLeftPts
+                || offsetPlanPolyline(src, -widths.widthL, !!rec.closed);
+            const rightPts = model?.edgeRightPts || rec.edgeRightPts
+                || offsetPlanPolyline(src, widths.widthR, !!rec.closed);
             const pts = [];
             src.forEach((p) => pts.push(p));
-            (model?.edgeLeftPts || []).forEach((p) => pts.push(p));
-            (model?.edgeRightPts || []).forEach((p) => pts.push(p));
+            rec.pts.forEach((p) => pts.push(p));
+            (leftPts || []).forEach((p) => pts.push(p));
+            (rightPts || []).forEach((p) => pts.push(p));
             (model?.stations || []).forEach((st) => {
                 const L = model.widthL || 0, R = model.widthR || 0;
                 pts.push({ x: st.x - st.rx * L, y: st.y - st.ry * L });
@@ -18242,17 +18403,27 @@
                 const L = model.widthL || 0, R = model.widthR || 0;
                 const a = { x: st.x - st.rx * L, y: st.y - st.ry * L };
                 const b = { x: st.x + st.rx * R, y: st.y + st.ry * R };
-                tick = `<line x1="${px(a.x).toFixed(1)}" y1="${py(a.y).toFixed(1)}" x2="${px(b.x).toFixed(1)}" y2="${py(b.y).toFixed(1)}" stroke="#e07a3d" stroke-width="2"/>`
-                    + `<circle cx="${px(st.x).toFixed(1)}" cy="${py(st.y).toFixed(1)}" r="3.2" fill="#e07a3d"/>`;
+                tick = `<line x1="${px(a.x).toFixed(1)}" y1="${py(a.y).toFixed(1)}" x2="${px(b.x).toFixed(1)}" y2="${py(b.y).toFixed(1)}" stroke="#e07a3d" stroke-width="2" pointer-events="none"/>`
+                    + `<circle cx="${px(st.x).toFixed(1)}" cy="${py(st.y).toFixed(1)}" r="3.2" fill="#e07a3d" pointer-events="none"/>`;
             }
+            const knots = rec.pts.map((p, idx) => {
+                const on = polylineVertexIsCorner(rec, idx) && rec.radii[idx] > 0;
+                return `<circle class="pkvert" data-idx="${idx}" cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" ` +
+                    `r="${on ? 6 : 5}" fill="${on ? '#ffe3d3' : '#fff'}" stroke="${on ? '#f06424' : '#1f8f5f'}" stroke-width="2">` +
+                    `<title>Вершина ${idx + 1}. Тяните — двигать. Alt+клик — удалить. ` +
+                    `${polylineVertexIsCorner(rec, idx) ? 'Shift+клик — прямой угол / скругление.' : ''}</title></circle>`;
+            }).join('');
             svg.innerHTML = `
                 <rect x="0" y="0" width="${w}" height="${h}" fill="#f7f9fb"/>
                 <style>text{font:11px 'IBM Plex Sans',sans-serif;fill:#5c6570}</style>
-                ${poly(model?.edgeLeftPts, `stroke="${edgeCol}" stroke-width="1.4"`)}
-                ${poly(model?.edgeRightPts, `stroke="${edgeCol}" stroke-width="1.4"`)}
-                ${poly(src, `stroke="${axisCol}" stroke-width="2" stroke-dasharray="6 4"`)}
+                ${poly(leftPts, `class="pkedge" data-side="left" stroke="transparent" stroke-width="12"`)}
+                ${poly(rightPts, `class="pkedge" data-side="right" stroke="transparent" stroke-width="12"`)}
+                ${poly(leftPts, `stroke="${edgeCol}" stroke-width="1.4" pointer-events="none"`)}
+                ${poly(rightPts, `stroke="${edgeCol}" stroke-width="1.4" pointer-events="none"`)}
+                ${poly(src, `stroke="${axisCol}" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"`)}
                 ${tick}
-                <text x="${pad}" y="${h - 6}">план · колесо — зум · перетащите — сдвиг</text>`;
+                ${knots}
+                <text x="${pad}" y="${h - 6}">план · вершины и кромки тянутся · колесо — зум</text>`;
             roadPlanFrame = { w, h, cx, cy, span, mPerPx, pad };
         }
 
@@ -18308,8 +18479,8 @@
                 else notifyError('Не удалось построить поперечники.');
                 return null;
             }
-            const L = Number($('roadXsWidthL')?.value) || model.widthL || 15;
-            const R = Number($('roadXsWidthR')?.value) || model.widthR || 15;
+            const L = roadWidthOrDefault($('roadXsWidthL')?.value || model.widthL);
+            const R = roadWidthOrDefault($('roadXsWidthR')?.value || model.widthR);
             model.template = cloneRoadTemplate(spec.build(L, R));
             const tw = templateWidths(model.template);
             model.widthL = tw.widthL;
@@ -18430,10 +18601,79 @@
             }, { passive: false });
             $('roadPlanChart')?.addEventListener('pointerdown', (ev) => {
                 if (ev.button !== 0 || !roadPlanFrame) return;
-                ev.preventDefault();
                 const svg = $('roadPlanChart');
-                svg.setPointerCapture?.(ev.pointerId);
-                const start = roadPlanClientToXY(ev);
+                const rec = roadPlanSource();
+                const at = roadPlanClientToXY(ev);
+                const vert = ev.target.closest?.('.pkvert');
+                const edge = ev.target.closest?.('.pkedge');
+
+                if (vert && rec) {
+                    const idx = Number(vert.dataset.idx);
+                    if (ev.altKey) {
+                        ev.preventDefault();
+                        removePolylineVertex(rec, idx);
+                        renderRoadPlanView();
+                        return;
+                    }
+                    if (ev.shiftKey && polylineVertexIsCorner(rec, idx)) {
+                        ev.preventDefault();
+                        const st = roadAxisCornerState(rec);
+                        const next = rec.radii[idx] > 0 ? 0 : st.radius;
+                        setPolylineVertexRadius(rec, idx, next);
+                        syncRoadCornerUi(rec);
+                        renderRoadPlanView();
+                        return;
+                    }
+                    ev.preventDefault();
+                    polylineEditingId = rec.id;
+                    try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+                    const move = (e) => {
+                        const p = roadPlanClientToXY(e);
+                        if (!p || !rec.pts[idx]) return;
+                        rec.pts[idx].x = p.x;
+                        rec.pts[idx].y = p.y;
+                        rebuildPolylineGeometry(rec);
+                        renderRoadPlanView();
+                    };
+                    const up = () => {
+                        window.removeEventListener('pointermove', move);
+                        window.removeEventListener('pointerup', up);
+                        renderPolylinePointsEditor(rec);
+                        renderPolylinesList();
+                        trackUsage('plan_vertex_drag', {});
+                    };
+                    window.addEventListener('pointermove', move);
+                    window.addEventListener('pointerup', up);
+                    return;
+                }
+
+                if (edge && rec && at) {
+                    ev.preventDefault();
+                    const side = edge.dataset.side;
+                    try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+                    const move = (e) => {
+                        const p = roadPlanClientToXY(e);
+                        const axis = rec.renderPts?.length >= 2 ? rec.renderPts : rec.pts;
+                        const hit = p && nearestAxisPlanHit(rec, p.x, p.y, axis);
+                        if (!hit) return;
+                        const w = Math.max(0.5, Math.abs(hit.off));
+                        if (side === 'left') setRoadHalfWidths(rec, w, roadAxisWidthsFor(rec).widthR, { preview: true });
+                        else setRoadHalfWidths(rec, roadAxisWidthsFor(rec).widthL, w, { preview: true });
+                    };
+                    const up = () => {
+                        window.removeEventListener('pointermove', move);
+                        window.removeEventListener('pointerup', up);
+                        const w = roadAxisWidthsFor(rec);
+                        setRoadHalfWidths(rec, w.widthL, w.widthR);
+                        trackUsage('plan_width_drag', {});
+                    };
+                    window.addEventListener('pointermove', move);
+                    window.addEventListener('pointerup', up);
+                    return;
+                }
+
+                ev.preventDefault();
+                try { svg.setPointerCapture?.(ev.pointerId); } catch (_) {}
                 const cx0 = roadPlanFrame.cx, cy0 = roadPlanFrame.cy;
                 const mpp = roadPlanFrame.mPerPx;
                 const box = svg.getBoundingClientRect();
@@ -18458,7 +18698,21 @@
                 };
                 svg.addEventListener('pointermove', move);
                 svg.addEventListener('pointerup', up);
-                void start;
+                void at;
+            });
+            $('roadPlanChart')?.addEventListener('dblclick', (ev) => {
+                const rec = roadPlanSource();
+                const p = roadPlanClientToXY(ev);
+                if (!rec || !p || ev.target.closest?.('.pkvert')) return;
+                ev.preventDefault();
+                const hit = nearestAxisPlanHit(rec, p.x, p.y);
+                if (!hit) return;
+                const at = insertPolylineVertexAt(rec, hit.i, new THREE.Vector3(hit.x, hit.y, hit.z));
+                if (at < 0) return;
+                polylineEditingId = rec.id;
+                renderRoadPlanView();
+                notify(`Вершина ${at + 1} добавлена на плане.`);
+                trackUsage('plan_vertex_insert', {});
             });
             $('roadPlanFit')?.addEventListener('click', () => fitRoadPlanView());
             $('roadXsTpls')?.addEventListener('click', (ev) => {
@@ -18548,6 +18802,7 @@
                 syncRoadLayerThkInput(existing.template);
                 roadXsActive = { modelId: existing.id, index: roadXsActive.index };
             }
+            syncRoadCornerUi(target);
             updateRoadXsStatus();
             renderRoadXsView();
             openRoadStudio(existing ? 'xs' : 'plan');
@@ -19000,8 +19255,26 @@
                 const rec = drawnPolylines.find((r) => r.id === selId && r.role === 'road-axis');
                 if (rec && !roadXsModels.some((m) => m.polylineId === rec.id)) {
                     refreshRoadAxisEdges(rec);
+                    renderRoadPlanView();
                 }
             });
+            $(id)?.addEventListener('change', () => {
+                const selId = Number($('roadXsSelect')?.value);
+                const rec = drawnPolylines.find((r) => r.id === selId);
+                if (!rec) return;
+                setRoadHalfWidths(rec, $('roadXsWidthL')?.value, $('roadXsWidthR')?.value);
+            });
+        });
+        $('roadCornerMode')?.addEventListener('change', () => {
+            const fillet = $('roadCornerMode').value === 'fillet';
+            if ($('roadCornerRadiusLab')) $('roadCornerRadiusLab').hidden = !fillet;
+            const rec = roadPlanSource() || drawnPolylines.find((r) => r.id === Number($('roadXsSelect')?.value));
+            if (rec) applyRoadAxisCorners(rec, $('roadCornerMode').value, $('roadCornerRadius')?.value);
+        });
+        $('roadCornerRadius')?.addEventListener('change', () => {
+            if ($('roadCornerMode')?.value !== 'fillet') return;
+            const rec = roadPlanSource() || drawnPolylines.find((r) => r.id === Number($('roadXsSelect')?.value));
+            if (rec) applyRoadAxisCorners(rec, 'fillet', $('roadCornerRadius').value);
         });
         ['roadAxisColor', 'roadEdgeColor'].forEach((id) => {
             $(id)?.addEventListener('input', applyRoadAxisStyleForm);
@@ -19021,7 +19294,9 @@
             let best = null;
             roadXsModels.forEach((model) => {
                 model.stations.forEach((st, index) => {
-                    const hits = st.samples.filter((s) => s.hit);
+                    const hits = st.designPts?.length >= 2
+                        ? st.designPts
+                        : st.samples.filter((s) => s.hit);
                     for (let i = 0; i < hits.length - 1; i++) {
                         const a = projectToPixels(new THREE.Vector3(hits[i].x, hits[i].y, hits[i].z));
                         const b = projectToPixels(new THREE.Vector3(hits[i + 1].x, hits[i + 1].y, hits[i + 1].z));
@@ -36824,7 +37099,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: 'a472f78-preview',
+            buildId: '143a462-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -36833,6 +37108,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: на плане трассы тянутся все вершины и кромки ширины; на прямых углах — прямой угол или скругление; синие сечения на отметке оси; ширина новой дороги 3.25 м в каждую сторону.',
                 '2026.08.16: палитра «План, профиль, поперечник» — одно окно: план сверху, профиль под ним, поперечник справа; зум в каждом чертеже, ручки стыков и угла окна; шаблоны дороги и «Применить на ось».',
                 '2026.08.16: повторное открытие карты не оставляет вид «весь мир»; поиск СПб и Москвы работает без Nominatim.',
                 '2026.08.16: рельеф с карты совмещается по отметке уже загруженной модели; если космоснимок не открылся — схема OSM.',
