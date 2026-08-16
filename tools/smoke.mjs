@@ -2946,6 +2946,59 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: ⤢ плана не вернул масштаб (${JSON.stringify(studio)})`);
     }
 
+    const gost = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const sum = (id) => {
+            const snap = D.buildRoadXsPreset(id);
+            if (!snap) return { id, missing: true };
+            const by = Object.fromEntries((snap.points || []).map((p) => [p.code, p]));
+            const n = (c) => (snap.shapes || []).filter((s) => s.code === c).length;
+            const curbT = (snap.points || []).find((p) => p.code === 'CURBT');
+            const curbB = (snap.points || []).find((p) => p.code === 'CURBB');
+            return {
+                id,
+                L: by.L?.off, R: by.R?.off,
+                shld: n('SHLD'), ditch: n('DITCH'), curb: n('CURB'),
+                walk: n('WALK'), median: n('MEDIAN'),
+                base: n('BASE'), subb: n('SUBB'), pvmt: n('PVMT'),
+                curbH: curbT && by.R ? curbT.dz - by.R.dz : null,
+                curbBuried: curbB && by.R ? by.R.dz - curbB.dz : 0
+            };
+        };
+        const applied = D.applyRoadXsPreset('gost-iii');
+        return {
+            ids: D.roadXsPresetIds(),
+            cards: document.querySelectorAll('#roadXsTpls .rs-tpl').length,
+            groups: [...document.querySelectorAll('#roadXsTpls .rs-catalog-label')].map((el) => el.textContent.trim()),
+            iii: sum('gost-iii'),
+            ia: sum('gost-ia'),
+            street: sum('gost-local'),
+            appliedDitch: (applied?.shapes || []).filter((s) => s.code === 'DITCH').length,
+            appliedShld: (applied?.shapes || []).filter((s) => s.code === 'SHLD').length,
+            widthL: Number(document.getElementById('roadXsWidthL')?.value)
+        };
+    });
+    const near = (a, b, eps = 1e-3) => Math.abs((a ?? 0) - b) <= eps;
+    if (!gost.ids?.includes('curb') || !gost.ids?.includes('gost-iii') || gost.cards !== gost.ids.length) {
+        problems.push(`поперечники: каталог ГОСТ (${JSON.stringify({ n: gost.cards, ids: gost.ids })})`);
+    }
+    if (!gost.groups?.some((g) => /СП 34/.test(g)) || !gost.groups?.some((g) => /СП 42/.test(g))) {
+        problems.push(`поперечники: нет групп СП в каталоге (${JSON.stringify(gost.groups)})`);
+    }
+    if (!near(gost.iii?.L, -3.5) || !near(gost.iii?.R, 3.5)
+        || (gost.iii?.shld || 0) < 4 || (gost.iii?.ditch || 0) < 2
+        || !gost.iii?.base || !gost.iii?.subb || !gost.iii?.pvmt
+        || gost.appliedDitch < 2 || gost.appliedShld < 4 || !near(gost.widthL, 3.5)) {
+        problems.push(`поперечники: шаблон III по СП 34 (${JSON.stringify(gost.iii)} appliedDitch=${gost.appliedDitch} shld=${gost.appliedShld} widthL=${gost.widthL})`);
+    }
+    if ((gost.ia?.median || 0) < 1 || !near(gost.ia?.L, -10.5) || (gost.ia?.ditch || 0) < 2) {
+        problems.push(`поперечники: шаблон IA (${JSON.stringify(gost.ia)})`);
+    }
+    if ((gost.street?.curb || 0) < 2 || (gost.street?.walk || 0) < 2
+        || !near(gost.street?.curbH, 0.15) || !near(gost.street?.curbBuried, 0.15)) {
+        problems.push(`поперечники: шаблон улицы ГОСТ 6665 (${JSON.stringify(gost.street)})`);
+    }
+
     const dragChart = async (sel, button, dx) => {
         const box = await page.locator(sel).boundingBox();
         if (!box || box.width < 40 || box.height < 40) return false;
