@@ -318,6 +318,7 @@ try {
         if (!afterClear.axis) {
             problems.push('после очистки оси трассы осталась включённой');
         }
+        await page.evaluate(() => window.BimLvaDebug.clearBasemapBinding());
     }
 
     await page.setInputFiles('#localFileInput', file);
