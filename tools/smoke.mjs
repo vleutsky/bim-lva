@@ -1009,13 +1009,53 @@ async function checkDrawDxf(page) {
         const p0 = D.drawn.find((d) => d.id === id).vertsAbs[0];
         D.editPolyline(id, 'elev', 0, p0.z + 25);   // правка идёт мимо панели
         const rowsAfter = document.getElementById('polyProfileTable').textContent;
+        const vz = [...document.querySelectorAll('#polyProfileAnnot .prof-vz-label')];
+        const sl = [...document.querySelectorAll('#polyProfileAnnot .prof-i-label')];
+        const vzShown = vz.filter((el) => !el.hidden).map((el) => el.textContent.trim());
+        const slShown = sl.filter((el) => !el.hidden).map((el) => el.textContent.trim());
+        const z1before = D.drawn.find((d) => d.id === id).vertsAbs[1].z;
+        vz[1]?.click();
+        const inpZ = vz[1]?.querySelector('input');
+        if (inpZ) {
+            inpZ.value = String(z1before + 4);
+            inpZ.blur();
+        }
+        const z1after = D.drawn.find((d) => d.id === id).vertsAbs[1].z;
+        sl[0]?.click();
+        const inpI = sl[0]?.querySelector('input');
+        if (inpI) {
+            inpI.value = '55';
+            inpI.blur();
+        }
+        const slopeAfter = D.polylineSegment(id, 0)?.slopePermille;
         document.getElementById('polyProfileClose').click();
-        return { changed: rowsBefore !== rowsAfter, had: rowsBefore.length > 0 };
+        return {
+            changed: rowsBefore !== rowsAfter,
+            had: rowsBefore.length > 0,
+            vzN: vz.length,
+            slN: sl.length,
+            vzShown,
+            slShown,
+            hadZInput: !!inpZ,
+            hadIInput: !!inpI,
+            z1delta: z1after - z1before,
+            slopeAfter
+        };
     }, three.id);
     if (!profileLive.had) {
         problems.push('таблица профиля пуста — проверка обновления вхолостую');
     } else if (!profileLive.changed) {
         problems.push('профиль не обновился после правки отметки вершины');
+    }
+    if ((profileLive.vzN || 0) < 2) {
+        problems.push(`на профиле нет подписей отметок (${JSON.stringify(profileLive)})`);
+    } else if (!profileLive.hadZInput || Math.abs((profileLive.z1delta || 0) - 4) > 0.05) {
+        problems.push(`подпись отметки на профиле не правит вершину (${JSON.stringify(profileLive)})`);
+    }
+    if ((profileLive.slN || 0) < 1) {
+        problems.push(`на профиле нет подписей уклонов (${JSON.stringify(profileLive)})`);
+    } else if (!profileLive.hadIInput || Math.abs((profileLive.slopeAfter || 0) - 55) > 0.6) {
+        problems.push(`подпись уклона на профиле не меняет звено (${JSON.stringify(profileLive)})`);
     }
 
     // «Тело по оси»: строим по конкретной полилинии и проверяем, что при
