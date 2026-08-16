@@ -2788,6 +2788,58 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: ⤢ плана не вернул масштаб (${JSON.stringify(studio)})`);
     }
 
+    const dragChart = async (sel, button, dx) => {
+        const box = await page.locator(sel).boundingBox();
+        if (!box || box.width < 40 || box.height < 40) return false;
+        const x = box.x + box.width * 0.16;
+        const y = box.y + box.height * 0.2;
+        await page.mouse.move(x, y);
+        await page.mouse.down({ button });
+        await page.mouse.move(x + dx, y + 18, { steps: 6 });
+        await page.mouse.up({ button });
+        return true;
+    };
+    const almost = (a, b, eps) => Math.abs((a ?? 0) - (b ?? 0)) <= eps;
+    const pan0 = await page.evaluate(() => ({
+        plan: window.BimLvaDebug.roadPlanViewSpan(),
+        prof: window.BimLvaDebug.polyProfileViewSpan(),
+        xs: window.BimLvaDebug.roadXsViewSpan()
+    }));
+    await dragChart('#roadPlanChart', 'left', 80);
+    await dragChart('#polyProfileChart', 'left', 80);
+    await dragChart('#roadXsChart', 'left', 80);
+    const panL = await page.evaluate(() => ({
+        plan: window.BimLvaDebug.roadPlanViewSpan(),
+        prof: window.BimLvaDebug.polyProfileViewSpan(),
+        xs: window.BimLvaDebug.roadXsViewSpan()
+    }));
+    if (!almost(panL.plan?.cx, pan0.plan?.cx, 0.08) || !almost(panL.plan?.cy, pan0.plan?.cy, 0.08)) {
+        problems.push(`план: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.plan, after: panL.plan })})`);
+    }
+    if (!almost(panL.prof?.from, pan0.prof?.from, 0.08)) {
+        problems.push(`профиль: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.prof, after: panL.prof })})`);
+    }
+    if (!almost(panL.xs?.offMin, pan0.xs?.offMin, 0.08) || !almost(panL.xs?.z0, pan0.xs?.z0, 0.08)) {
+        problems.push(`поперечник: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.xs, after: panL.xs })})`);
+    }
+    await dragChart('#roadPlanChart', 'right', 80);
+    await dragChart('#polyProfileChart', 'right', 80);
+    await dragChart('#roadXsChart', 'right', 80);
+    const panR = await page.evaluate(() => ({
+        plan: window.BimLvaDebug.roadPlanViewSpan(),
+        prof: window.BimLvaDebug.polyProfileViewSpan(),
+        xs: window.BimLvaDebug.roadXsViewSpan()
+    }));
+    if (almost(panR.plan?.cx, pan0.plan?.cx, 0.15) && almost(panR.plan?.cy, pan0.plan?.cy, 0.15)) {
+        problems.push(`план: ПКМ не сдвинул вид (${JSON.stringify({ before: pan0.plan, after: panR.plan })})`);
+    }
+    if (almost(panR.prof?.from, pan0.prof?.from, 0.15)) {
+        problems.push(`профиль: ПКМ не сдвинул вид (${JSON.stringify({ before: pan0.prof, after: panR.prof })})`);
+    }
+    if (almost(panR.xs?.offMin, pan0.xs?.offMin, 0.15) && almost(panR.xs?.z0, pan0.xs?.z0, 0.15)) {
+        problems.push(`поперечник: ПКМ не сдвинул вид (${JSON.stringify({ before: pan0.xs, after: panR.xs })})`);
+    }
+
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
 
     const menuXs = await page.evaluate(() => {
