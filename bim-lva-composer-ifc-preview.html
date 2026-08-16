@@ -3768,7 +3768,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · a472f78</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 8751475</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -6836,6 +6836,45 @@
                         left: (model.edgeLeftPts || []).map((p) => ({ x: p.x, y: p.y, z: p.z })),
                         right: (model.edgeRightPts || []).map((p) => ({ x: p.x, y: p.y, z: p.z }))
                     }
+                };
+            },
+            /**
+             * Сколько точек сечений зашло за биссектрису угла (должно быть 0).
+             * CorridorXY — вершины полотна для штучной проверки L-угла.
+             */
+            roadXsMiterOverlap() {
+                const model = currentRoadXsModel();
+                if (!model) return null;
+                const rec = drawnPolylines.find((r) => r.id === model.polylineId);
+                const stn = rec ? polylineStationing(rec) : null;
+                const turns = rec && stn ? roadVertexTurns(rec, stn) : [];
+                const side = (x, y, v) => (x - v.x) * (-v.my) + (y - v.y) * v.mx;
+                let sampleBad = 0, sampleN = 0;
+                (model.stations || []).forEach((st) => {
+                    if (st.atVertex) return;
+                    turns.forEach((v) => {
+                        const s0 = side(st.x, st.y, v);
+                        if (Math.abs(s0) < 1e-8) return;
+                        (st.samples || []).forEach((s) => {
+                            sampleN++;
+                            if (s0 * side(s.x, s.y, v) < -0.02) sampleBad++;
+                        });
+                    });
+                });
+                const arr = model.corridor?.geometry?.attributes?.position?.array;
+                const mesh = [];
+                if (arr) {
+                    for (let i = 0; i < arr.length; i += 3) {
+                        mesh.push({ x: arr[i], y: arr[i + 1] });
+                    }
+                }
+                return {
+                    sampleBad, sampleN, turns: turns.length,
+                    mesh,
+                    stations: (model.stations || []).map((s) => ({
+                        sta: s.sta, x: s.x, y: s.y, atVertex: !!s.atVertex,
+                        offMin: s.offMin, offMax: s.offMax
+                    }))
                 };
             },
             roadXsDxfPreview() {
@@ -16937,7 +16976,9 @@
 
         function placeTemplateAtStation(st, pt) {
             const scale = Math.max(1, st.miterScale || 1);
-            const off = pt.off * scale;
+            let off = pt.off * scale;
+            if (st.offMin != null && off < st.offMin) off = st.offMin;
+            if (st.offMax != null && off > st.offMax) off = st.offMax;
             return new THREE.Vector3(
                 st.x + st.rx * off,
                 st.y + st.ry * off,
@@ -17165,18 +17206,75 @@
                     const d = (stn.pts[k].x - pts[i].x) ** 2 + (stn.pts[k].y - pts[i].y) ** 2;
                     if (d < bestD) { bestD = d; best = k; }
                 }
-                turns.push({ sta: stn.cum[best], tanHalf, i });
+                const m = miterRightFrame(tIn, tOut);
+                turns.push({
+                    sta: stn.cum[best], tanHalf, i, defl,
+                    x: pts[i].x, y: pts[i].y,
+                    mx: m.rx, my: m.ry,
+                    miterScale: m.miterScale
+                });
             }
             return turns;
         }
 
+        /**
+         * Пересечение секущей станции с биссектрисой угла.
+         * t — смещение по сечению (вправо > 0), u — вдоль митера от PI.
+         */
+        function intersectSectionWithMiter(st, turn) {
+            const rx = st.rx, ry = st.ry, mx = turn.mx, my = turn.my;
+            const det = rx * (-my) - (-mx) * ry;
+            if (Math.abs(det) < 1e-10) return null;
+            const dx = turn.x - st.x, dy = turn.y - st.y;
+            const t = (dx * (-my) - (-mx) * dy) / det;
+            const u = (rx * dy - ry * dx) / det;
+            if (!Number.isFinite(t) || !Number.isFinite(u)) return null;
+            return { t, u };
+        }
+
+        /**
+         * Не заходить за биссектрису соседнего угла: иначе внутренние половины
+         * перпендикуляров наезжают на другое звено (тёмный треугольник в уголке).
+         * На самой PI секущая уже митер — её не режем.
+         */
+        function stationOffsetClip(st, turns, widthL, widthR) {
+            const scale = Math.max(1, st.miterScale || 1);
+            let offMin = -Math.max(0.5, widthL) * scale;
+            let offMax = Math.max(0.5, widthR) * scale;
+            if (st.atVertex || !turns?.length) return { offMin, offMax };
+            for (const v of turns) {
+                if (st.sta != null && Math.abs(st.sta - v.sta) < 0.08) continue;
+                const hit = intersectSectionWithMiter(st, v);
+                if (!hit) continue;
+                const uMax = Math.max(widthL, widthR) * Math.max(1, v.miterScale || 1) + 0.05;
+                if (Math.abs(hit.u) > uMax) continue;
+                if (hit.t < -1e-9) offMin = Math.max(offMin, hit.t);
+                else if (hit.t > 1e-9) offMax = Math.min(offMax, hit.t);
+            }
+            if (offMin > offMax) {
+                const mid = 0.5 * (offMin + offMax);
+                offMin = offMax = mid;
+            }
+            return { offMin, offMax };
+        }
+
+        function applyOffsetClip(offs, clip) {
+            const lo = clip.offMin, hi = clip.offMax;
+            const out = offs.filter((o) => o >= lo - 1e-9 && o <= hi + 1e-9);
+            if (!out.some((o) => Math.abs(o - lo) < 1e-6)) out.push(lo);
+            if (!out.some((o) => Math.abs(o - hi) < 1e-6)) out.push(hi);
+            out.sort((a, b) => a - b);
+            return out;
+        }
+
+        /** Дубли у PI не нужны; наезд на соседнее звено режет stationOffsetClip. */
         function pruneStationsNearCorners(stations, turns, width) {
             if (!turns.length) return stations;
             return stations.filter((s) => {
                 for (const v of turns) {
-                    if (Math.abs(s - v.sta) <= 0.08) return true;
-                    const keepOff = Math.max(0.5, width * v.tanHalf);
-                    if (Math.abs(s - v.sta) < keepOff * 0.85) return false;
+                    const d = Math.abs(s - v.sta);
+                    if (d <= 0.08) return true;
+                    if (d < 0.2) return false;
                 }
                 return true;
             });
@@ -17234,7 +17332,11 @@
                 const frame = roadXsFrameAtStation(record, stn, sta);
                 const { p, rx, ry, miterScale, atVertex } = frame;
                 const scale = Math.max(1, miterScale || 1);
-                const offs = roadXsOffsets(widthL * scale, widthR * scale, sampleStep);
+                const clip = stationOffsetClip(
+                    { x: p.x, y: p.y, rx, ry, sta, atVertex, miterScale: scale },
+                    turns, widthL, widthR
+                );
+                const offs = applyOffsetClip(roadXsOffsets(widthL * scale, widthR * scale, sampleStep), clip);
                 const axisAbs = worldPointToAbsoluteXYZ(p) || p;
                 const samples = offs.map((off) => {
                     const x = p.x + rx * off;
@@ -17257,6 +17359,7 @@
                     sta,
                     x: p.x, y: p.y, z: p.z,
                     rx, ry, miterScale: scale, atVertex: !!atVertex,
+                    offMin: clip.offMin, offMax: clip.offMax,
                     axisAbs: { x: axisAbs.x, y: axisAbs.y, z: axisAbs.z },
                     samples
                 };
@@ -17319,7 +17422,16 @@
                 return map;
             });
             const positions = [];
+            const triArea2 = (a, b, c) => {
+                const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+                const acx = c.x - a.x, acy = c.y - a.y, acz = c.z - a.z;
+                const nx = aby * acz - abz * acy;
+                const ny = abz * acx - abx * acz;
+                const nz = abx * acy - aby * acx;
+                return nx * nx + ny * ny + nz * nz;
+            };
             const push = (a, b, c) => {
+                if (triArea2(a, b, c) < 1e-16) return;
                 positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
             };
             tpl.links.forEach((link) => {
@@ -36824,7 +36936,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: 'a472f78-preview',
+            buildId: '8751475-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -36833,7 +36945,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.16: палитра «План, профиль, поперечник» — одно окно: план сверху, профиль под ним, поперечник справа; зум в каждом чертеже, ручки стыков и угла окна; шаблоны дороги и «Применить на ось».',
+                '2026.08.16: на внутреннем угле дороги сечения и полотно режутся по биссектрисе — нет наезда на соседнее звено.',
                 '2026.08.16: повторное открытие карты не оставляет вид «весь мир»; поиск СПб и Москвы работает без Nominatim.',
                 '2026.08.16: рельеф с карты совмещается по отметке уже загруженной модели; если космоснимок не открылся — схема OSM.',
                 '2026.08.16: глобус открывается на Санкт-Петербурге; после «Загрузить» рельеф и подложка в дереве, без предложения сразу добавить модели.',
