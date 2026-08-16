@@ -56,7 +56,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v164`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v165`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `ui-style-preview.html` — **прототип оформления**, отдельный файл, рабочий
   вьювер не трогает. Смотреть через Pages или открывать локально.

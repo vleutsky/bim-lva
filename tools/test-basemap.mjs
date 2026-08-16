@@ -207,12 +207,16 @@ try {
     const globe = await page.evaluate(() => ({
         shown: document.getElementById('mapBuilderModal').classList.contains('show'),
         loadDisabled: document.getElementById('mapBuilderLoad').disabled,
-        title: document.getElementById('mapBuilderTitle')?.textContent || ''
+        title: document.getElementById('mapBuilderTitle')?.textContent || '',
+        layers: [...document.getElementById('mapBuilderLayer').options].map((o) => o.value)
     }));
     if (!globe.shown) problems.push('окно карты-глобуса не открылось по «Карта»');
     if (!globe.loadDisabled) problems.push('«Загрузить» активно без рамки/контура');
     if (!/Площадка с карты/.test(globe.title)) problems.push(`заголовок глобуса «${globe.title}»`);
-    console.log(`A-g. глобус: ${globe.shown ? 'открыт' : 'НЕТ'}, Загрузить ${globe.loadDisabled ? 'выкл' : 'вкл'}`);
+    if (!globe.layers.includes('esri') || !globe.layers.includes('osm') || globe.layers.length < 5) {
+        problems.push(`слоёв глобуса [${globe.layers}], ожидались снимок, схема, топо, отмывка`);
+    }
+    console.log(`A-g. глобус: ${globe.shown ? 'открыт' : 'НЕТ'}, слои [${globe.layers}], Загрузить ${globe.loadDisabled ? 'выкл' : 'вкл'}`);
     await page.evaluate(() => document.getElementById('mapBuilderBind').click());
     await page.waitForTimeout(300);
     const opened = await page.evaluate(() => ({

@@ -4564,6 +4564,9 @@
                     <select class="editInput" id="mapBuilderLayer">
                         <option value="esri">Космоснимок (ESRI)</option>
                         <option value="osm">Схема (OpenStreetMap)</option>
+                        <option value="topo">Топографическая с горизонталями (OpenTopoMap)</option>
+                        <option value="esriTopo">Топографическая (ESRI)</option>
+                        <option value="esriRelief">Рельеф, отмывка (ESRI)</option>
                     </select>
                 </label>
                 <span id="mapBuilderAttr">© OpenStreetMap · Esri / Maxar. Рельеф — AWS Terrarium. Лимит 200 га.</span>
@@ -5974,6 +5977,15 @@
             mapBuilderClear: () => { mapBuilderClearSelection(); },
             get mapBuilderAreaHa() { return polygonAreaM2(mbSelectionRing()) / 10_000; },
             get mapBuilderState() { return mapBuilderDebugState(); },
+            get mapBuilderTiles() {
+                let loaded = 0, failed = 0, pending = 0;
+                for (const rec of mapBld.tiles.values()) {
+                    if (rec.img) loaded++;
+                    else if (rec.failed) failed++;
+                    else pending++;
+                }
+                return { loaded, failed, pending, layer: mapBuilderLayerKey() };
+            },
             mapBuilderLoad: () => mapBuilderLoad(),
             /** Габарит каждой загруженной модели по отдельности, в метрах сцены. */
             get modelBounds() {
@@ -8578,7 +8590,8 @@
                 points: ring.length,
                 areaHa: mapBuilderAreaHa(),
                 overLimit: polygonAreaM2(ring) > MAP_BUILDER_MAX_M2,
-                loadEnabled: !$('mapBuilderLoad')?.disabled
+                loadEnabled: !$('mapBuilderLoad')?.disabled,
+                layer: mapBuilderLayerKey()
             };
         }
 
@@ -8641,9 +8654,31 @@
             mapBuilderRedraw();
         }
 
+        function mapBuilderLayerKey() {
+            const key = $('mapBuilderLayer')?.value;
+            return BASEMAP_PROVIDERS[key] && key !== 'custom' ? key : 'esri';
+        }
+
         function mapBuilderProvider() {
-            const key = $('mapBuilderLayer')?.value === 'osm' ? 'osm' : 'esri';
-            return BASEMAP_PROVIDERS[key];
+            return BASEMAP_PROVIDERS[mapBuilderLayerKey()];
+        }
+
+        function fillMapBuilderLayers() {
+            const sel = $('mapBuilderLayer');
+            if (!sel || sel.dataset.filled === '1') return;
+            const cur = sel.value;
+            sel.innerHTML = Object.entries(BASEMAP_PROVIDERS)
+                .filter(([id]) => id !== 'custom')
+                .map(([id, p]) => `<option value="${id}">${p.name}</option>`)
+                .join('');
+            sel.dataset.filled = '1';
+            if (BASEMAP_PROVIDERS[cur] && cur !== 'custom') sel.value = cur;
+        }
+
+        function mapBuilderSyncLayerAttr() {
+            const p = mapBuilderProvider();
+            const el = $('mapBuilderAttr');
+            if (el && p) el.textContent = `${p.attribution}. Рельеф — AWS Terrarium. Лимит 200 га.`;
         }
 
         function mapBuilderEnsureTile(url) {
@@ -8654,11 +8689,17 @@
             }
             const rec = { img: null, failed: false };
             mapBld.tiles.set(url, rec);
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => { rec.img = img; mapBuilderRedraw(); };
-            img.onerror = () => { rec.failed = true; };
-            img.src = url;
+            const tryLoad = (useCors) => {
+                const img = new Image();
+                if (useCors) img.crossOrigin = 'anonymous';
+                img.onload = () => { rec.img = img; rec.failed = false; mapBuilderRedraw(); };
+                img.onerror = () => {
+                    if (useCors) tryLoad(false);
+                    else rec.failed = true;
+                };
+                img.src = url;
+            };
+            tryLoad(true);
             return rec;
         }
 
@@ -8771,7 +8812,7 @@
                 if (d > radius) radius = d;
             }
             const center = currentModelCenterXY();
-            const provider = $('mapBuilderLayer')?.value === 'osm' ? 'osm' : 'esri';
+            const provider = mapBuilderLayerKey();
             return {
                 provider,
                 template: '',
@@ -8798,10 +8839,12 @@
                 mapBld.lon = saved.lon;
                 if (mapBld.zoom < 10) mapBld.zoom = 12;
             }
-            if (saved.provider === 'osm' || saved.provider === 'esri') {
+            fillMapBuilderLayers();
+            if (BASEMAP_PROVIDERS[saved.provider] && saved.provider !== 'custom') {
                 const layer = $('mapBuilderLayer');
                 if (layer) layer.value = saved.provider;
             }
+            mapBuilderSyncLayerAttr();
             mapBuilderSetTool(mapBld.tool || 'pan');
             mapBuilderRefreshArea();
             $('mapBuilderModal').classList.add('show');
@@ -8910,8 +8953,11 @@
             $('mapBuilderSearch')?.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); mapBuilderSearchGo(); }
             });
+            fillMapBuilderLayers();
+            mapBuilderSyncLayerAttr();
             $('mapBuilderLayer')?.addEventListener('change', () => {
                 mapBld.tiles.clear();
+                mapBuilderSyncLayerAttr();
                 mapBuilderRedraw();
             });
             $('mapBuilderBind')?.addEventListener('click', () => {
@@ -35796,7 +35842,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.15',
-            buildId: 'map-builder',
+            buildId: 'map-layers',
             released: '2026-08-15',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -35805,7 +35851,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.15: площадка с карты — окно-глобус как в InfraWorks: поиск, рамка или контур до 200 га, «Загрузить» (снимок + рельеф).',
+                '2026.08.16: площадка с карты — окно-глобус как в InfraWorks: поиск, слои (снимок / схема / топо / отмывка), рамка или контур до 200 га, «Загрузить».',
                 '2026.08.15: «Рельеф с карты» — сетка высот Terrarium / Terrain-RGB в том же охвате, что подложка; луч сверлит меш, картинка землю не считает.',
                 '2026.08.15: точки фигуры едут за якорем; условие «скрыть» прячет точку и детей на пикете (бордюр в насыпи / нет в выемке).',
                 '2026.08.15: чертёж поперечника — зум колесом (как профиль), готовые фигуры (бордюр, кювет, …) и условие на точке: если рабочая/земля/ось, то другие ΔZ и смещение на этом пикете.',
@@ -35892,7 +35938,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=114').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=115').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
