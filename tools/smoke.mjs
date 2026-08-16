@@ -2756,8 +2756,18 @@ async function checkRoadCrossSections(page) {
         );
     }
 
-    const slopes = await page.evaluate(() => {
+    const slopes = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20.5, y: 16, z: g + 0.5 },
+                { x: 23.5, y: 16, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-объём-откосов', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, {
+            step: 1.5, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
         const left = D.roadXsTemplate()?.points?.find((p) => p.code === 'L');
         if (left) D.setRoadXsPoint(left.id, { dz: 0 });
         const res = D.buildRoadXsSlopes({ mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
@@ -2773,7 +2783,7 @@ async function checkRoadCrossSections(page) {
             n: res?.sides?.length || 0,
             ground: D.roadXsChartGround()
         };
-    });
+    }, groundZ);
     if (!slopes.hasBtn) problems.push('поперечники: нет кнопки «Откосы»');
     if (!slopes.hasRay) problems.push('поперечники: на чертеже нет лучей откоса до земли');
     if (!slopes.hasGroundClass) problems.push('поперечники: на чертеже нет линии земли xs-ground');
