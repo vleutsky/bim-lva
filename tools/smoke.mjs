@@ -2115,6 +2115,45 @@ async function checkRoadCrossSections(page) {
         }
     }
 
+    const overlap = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 10, y: 17, z: g + 0.5 },
+                { x: 18, y: 17, z: g + 0.5 },
+                { x: 18, y: 25, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-наезд' }
+        );
+        D.buildRoadXs(id, { step: 0.5, widthL: 2.5, widthR: 2.5, sampleStep: 0.5, live: false });
+        const ov = D.roadXsMiterOverlap();
+        const pi = { x: 18, y: 17 };
+        const W = 2.5;
+        let meshInner = 0;
+        (ov?.mesh || []).forEach((p) => {
+            const dx = p.x - pi.x, dy = p.y - pi.y;
+            if (dx < -0.04 && dy > 0.04 && dx > -W + 0.04 && dy < W - 0.04 && dx + dy > 0.04) {
+                meshInner++;
+            }
+        });
+        return {
+            sampleBad: ov?.sampleBad,
+            sampleN: ov?.sampleN,
+            meshInner,
+            meshN: ov?.mesh?.length || 0,
+            stations: ov?.stations?.length || 0
+        };
+    }, groundZ);
+    if ((overlap.sampleBad || 0) > 0) {
+        problems.push(`поперечники: сечения заходят за биссектрису угла (${JSON.stringify(overlap)})`);
+    }
+    if ((overlap.meshInner || 0) > 0) {
+        problems.push(`поперечники: полотно наезжает на внутренний уголок (${JSON.stringify(overlap)})`);
+    }
+    if ((overlap.stations || 0) < 8) {
+        problems.push(`поперечники: мало станций для проверки наезда (${JSON.stringify(overlap)})`);
+    }
+
     const ui = await page.evaluate(() => {
         document.getElementById('btnPolylineList')?.click();
         const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
