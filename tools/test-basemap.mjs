@@ -667,6 +667,16 @@ try {
     if (!removed) problems.push('подложка не убралась по кнопке');
     console.log(`F. удаление подложки: ${removed ? 'ок' : 'СБОЙ'}`);
 
+    // Дальше Terrarium нарочно ниже модели: без сдвига по Z сетка сядет
+    // на высоте тайла (~10 м), а площадка IFC на 60 м — как у владельца
+    // «отметка не та» (30 м с карты против 141 м в файле).
+    const PNG_TERRARIUM_10 = pngRgba(128, 10, 0, 255);
+    await page.unroute('**/elevation-tiles-prod/terrarium/**');
+    await page.route('**/elevation-tiles-prod/terrarium/**', (route) => {
+        demUrls.push(route.request().url());
+        route.fulfill({ status: 200, contentType: 'image/png', headers: CORS, body: PNG_TERRARIUM_10 });
+    });
+
     // M. Model Builder: рамка / контур, лимит 200 га, «Загрузить»
     const haAround = (site, sideM) => {
         const mLat = 111320;
@@ -769,6 +779,32 @@ try {
         console.log(
             `M4b. дерево: ${/Рельеф/.test(siteChrome.treeText) ? 'рельеф есть' : 'НЕТ'}, ` +
             `hint=${siteChrome.hintDisplay || 'visible'}`
+        );
+        const zFit = await page.evaluate(() => {
+            const dem = window.BimLvaDebug.mapTerrainLayer;
+            const mb = (window.BimLvaDebug.modelBounds || []).find((m) => m.format !== 'MAP')
+                || window.BimLvaDebug.modelBounds[0];
+            return {
+                demZ: dem.centerZ,
+                modelZ: mb.centerZ,
+                zShift: dem.zShift,
+                sample: window.BimLvaDebug.sampleTerrainZ(dem.centerX, dem.centerY, Number.NaN)
+            };
+        });
+        if (!(zFit.zShift > 20)) {
+            problems.push(
+                `рельеф не совмещён с моделью: zShift=${zFit.zShift?.toFixed?.(1)} ` +
+                `(Terrarium 10 м, модель ~60 м — ждали сдвиг ~50 м)`
+            );
+        }
+        if (!(Math.abs(zFit.demZ - zFit.modelZ) < 8)) {
+            problems.push(
+                `после совмещения DEM z=${zFit.demZ?.toFixed?.(2)}, модель z=${zFit.modelZ?.toFixed?.(2)}`
+            );
+        }
+        console.log(
+            `M4c. отметка: zShift ${zFit.zShift?.toFixed?.(1)} м, ` +
+            `DEM ${zFit.demZ?.toFixed?.(2)} / модель ${zFit.modelZ?.toFixed?.(2)}`
         );
     }
 
