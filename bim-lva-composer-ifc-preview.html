@@ -1120,6 +1120,8 @@
             z-index: 2;
             overflow: hidden;
         }
+        /* Отметки сидят НАД вершиной — clip по краю низкого профиля их съедал. */
+        #polyProfileAnnot.chart-annot { overflow: visible; }
         .plan-len-label,
         .plan-ang-label,
         .plan-r-label,
@@ -1161,7 +1163,9 @@
             background: rgba(232, 68, 42, .94);
             border: 1px solid #c2341e;
             color: var(--on-fill, #fff);
-            transform: translate(-50%, 7px);
+            /* Над вершиной: под линией подпись уезжает за край низкого чертежа
+               и clip оверлея её съедает — остаётся только зелёный уклон. */
+            transform: translate(-50%, calc(-100% - 6px));
         }
         .plan-len-label:hover,
         .prof-seg-label:hover { filter: brightness(1.06); }
@@ -3157,15 +3161,17 @@
             background: #f7f9fb;
         }
         .rstab-pane .profile-table {
-            max-height: 72px;
+            height: var(--rs-prof-table, 136px);
+            min-height: 96px;
+            max-height: none;
             overflow: auto;
             flex: none;
-            margin: 4px 8px 0;
+            margin: 0 8px 6px;
         }
         .pal-card.rs-studio {
             position: relative;
             width: min(1100px, 92vw);
-            height: 660px;
+            height: 700px;
             max-height: calc(100vh - 48px);
             overflow: auto;
         }
@@ -3212,17 +3218,17 @@
             min-width: 0;
             overflow: hidden;
         }
-        .rs-col-left > #rstab-plan { flex: 1.05 1 0; }
-        .rs-col-left > #rstab-profile { flex: 1 1 0; }
+        .rs-col-left > #rstab-plan { flex: 0.9 1 0; }
+        .rs-col-left > #rstab-profile { flex: 1.2 1 0; }
         .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-plan {
-            flex: 0 0 var(--rs-plan, 240px);
-            height: var(--rs-plan, 240px);
+            flex: 0 0 var(--rs-plan, 220px);
+            height: var(--rs-plan, 220px);
             min-height: 90px;
         }
         .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-profile {
-            flex: 0 0 var(--rs-prof, 220px);
-            height: var(--rs-prof, 220px);
-            min-height: 90px;
+            flex: 0 0 var(--rs-prof, 280px);
+            height: var(--rs-prof, 280px);
+            min-height: 220px;
         }
         .rs-pane-head {
             display: flex;
@@ -3892,7 +3898,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 04c9182</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 6aa494a</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5091,8 +5097,11 @@
                 <label data-tip="Ось трассы — начерченная полилиния. Пикетаж по плану, с дугами.">ось
                     <select class="editInput" id="roadXsSelect"></select>
                 </label>
-                <label data-tip="Шаг пикетов вдоль оси, м. Вершины оси всегда попадают в список.">шаг
+                <label data-tip="Шаг поперечников на прямых, м. Вершины оси всегда в списке.">шаг прям.
                     <input class="editInput" id="roadXsStep" type="number" min="0.5" step="1" value="20">
+                </label>
+                <label data-tip="Шаг на кривых (сопряжения и плавные повороты), м. Мельче прямого — на прямых меньше сечений, на дуге качество то же.">крив.
+                    <input class="editInput" id="roadXsStepCurve" type="number" min="0.5" step="0.5" value="5">
                 </label>
                 <label data-tip="Ширина шаблона влево от оси, м. На плане кромку можно тянуть курсором.">←
                     <input class="editInput" id="roadXsWidthL" type="number" min="0.5" step="0.05" value="3.25">
@@ -5141,7 +5150,7 @@
                         <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
                     </div>
                 </details>
-                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет их высоту; размер палитры чертежи по вертикали не тянет. Шаблон: выберите карточку и «Применить на ось».">?</button>
+                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет их высоту; ручка над таблицей профиля — её высоту. Размер палитры чертежи по вертикали не тянет. На профиле клик по отметке (красное) правит Z вершины, по длине·уклону (зелёное) — уклон звена. Шаблон: выберите карточку и «Применить на ось».">?</button>
             </div>
             <div class="rs-split" id="roadStudioSplit">
                 <div class="rs-col-left">
@@ -5188,6 +5197,7 @@
                                  preserveAspectRatio="none" style="touch-action:none;cursor:default"></svg>
                             <div class="chart-annot" id="polyProfileAnnot"></div>
                         </div>
+                        <div class="rs-split-h" id="rsSplitProfileTable" title="Потяните — высота таблицы профиля"></div>
                         <div id="polyProfileTable" class="profile-table"></div>
                     </div>
                 </div>
@@ -7004,6 +7014,7 @@
                     widthL: model.widthL,
                     widthR: model.widthR,
                     step: model.step,
+                    stepCurve: model.stepCurve,
                     lines: model.lines.length,
                     corridorTris: model.corridorTris || 0,
                     template: snapshotRoadTemplate(model.template),
@@ -7028,6 +7039,7 @@
                         x: model.stations[model.stations.length - 1].x,
                         y: model.stations[model.stations.length - 1].y
                     },
+                    pk: model.stations.map((s) => s.sta),
                     corner: model.stations.filter((s) => s.atVertex).map((s) => ({
                         sta: s.sta, x: s.x, y: s.y, rx: s.rx, ry: s.ry, miterScale: s.miterScale
                     })),
@@ -7090,6 +7102,49 @@
             },
             roadXsTemplate() {
                 return snapshotRoadTemplate(currentRoadXsModel()?.template);
+            },
+            /**
+             * Земля на чертеже сечения: крайние смещения линии и чего она
+             * должна хватать (край шаблона, выход откоса).
+             */
+            roadXsChartGround() {
+                const model = currentRoadXsModel();
+                const st = model?.stations?.[roadXsActive.index];
+                if (!st) return null;
+                const resolved = model.template
+                    ? resolveTemplatePoints(model.template, st).filter((p) => !p.hide)
+                    : [];
+                const slopeOn = !!$('roadXsSlopeOn')?.checked;
+                const slopeSecs = [];
+                if (slopeOn) {
+                    const opts = readRoadXsSlopeOpts();
+                    const edgePts = templateEdgePoints({ points: resolved });
+                    [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
+                        if (!pt) return;
+                        const sec = roadXsSlopeSection(st, pt, side, opts);
+                        slopeSecs.push({ side, pt, sec });
+                    });
+                }
+                const need = roadXsGroundNeedRange(st, resolved, slopeSecs);
+                const samples = roadXsGroundSamples(st, need.minO, need.maxO, model.sampleStep);
+                const hits = samples.filter((s) => s.hit);
+                const offs = hits.map((s) => s.off);
+                const slopeOff = (side) => {
+                    const row = slopeSecs.find((s) => s.side === side);
+                    return row?.sec?.valid ? roadXsSlopeExitOff(st, row.sec) : null;
+                };
+                const visOff = resolved.map((p) => p.off);
+                return {
+                    minOff: offs.length ? Math.min(...offs) : null,
+                    maxOff: offs.length ? Math.max(...offs) : null,
+                    n: hits.length,
+                    edgeL: visOff.length ? Math.min(...visOff) : null,
+                    edgeR: visOff.length ? Math.max(...visOff) : null,
+                    slopeL: slopeOff('left'),
+                    slopeR: slopeOff('right'),
+                    needMin: need.minO,
+                    needMax: need.maxO
+                };
             },
             setRoadXsPoint(pointId, patch) {
                 const model = currentRoadXsModel();
@@ -7223,9 +7278,15 @@
             translateRoadXsShape(id, dOff, dZ) {
                 const model = currentRoadXsModel();
                 if (!model?.template) return null;
-                const ids = shapeDragPointIds(model.template, Number(id));
+                const sid = Number(id);
+                const sh = (model.template.shapes || []).find((s) => s.id === sid);
+                detachShapeAnchors(model.template, sid);
+                const ids = sh && isRoadXsFigureShape(sh)
+                    ? [...new Set(sh.pts || [])]
+                    : shapeDragPointIds(model.template, sid);
                 if (!ids.length) return snapshotRoadTemplate(model.template);
                 translateTemplatePoints(model.template, ids, Number(dOff) || 0, Number(dZ) || 0);
+                snapShapeToNearestPoint(model.template, sid, 0.30);
                 applyRoadTemplateChange(model, { relink: false });
                 return snapshotRoadTemplate(model.template);
             },
@@ -15689,14 +15750,7 @@
                 if ($('roadCornerMode')?.value === 'fillet') {
                     applyRoadAxisCorners(finishedRoad, 'fillet', $('roadCornerRadius')?.value);
                 }
-                const model = buildRoadCrossSections(finishedRoad, {
-                    step: Number($('roadXsStep')?.value) || 20,
-                    widthL: roadWidthOrDefault($('roadXsWidthL')?.value),
-                    widthR: roadWidthOrDefault($('roadXsWidthR')?.value),
-                    sampleStep: Number($('roadXsSample')?.value) || 1,
-                    color: $('roadXsColor')?.value || '#2a7de1',
-                    live: $('roadXsLive') ? !!$('roadXsLive').checked : true
-                });
+                const model = buildRoadCrossSections(finishedRoad, roadXsOptsFromUi());
                 if (model) {
                     notify(
                         `Полотно по «${finishedRoad.name}»: ${model.stations.length} сечений, ` +
@@ -16302,8 +16356,13 @@
             const svg = $('polyProfileChart');
             if (!svg) return;
             const box = svg.getBoundingClientRect();
-            PROFILE_W = Math.max(320, Math.round(box.width) || 760);
-            PROFILE_H = Math.max(180, Math.round(box.height) || 260);
+            // Не завышать viewBox: пол 180 px при чертеже ~90 отдаёт подписи
+            // в координатах, которых нет у HTML-оверлея — красные отметки
+            // вершин пропадают, зелёный уклон в середине кадра остаётся.
+            if (box.width >= 40) PROFILE_W = Math.round(box.width);
+            if (box.height >= 40) PROFILE_H = Math.round(box.height);
+            PROFILE_W = Math.max(160, PROFILE_W || 760);
+            PROFILE_H = Math.max(80, PROFILE_H || 260);
             svg.setAttribute('viewBox', `0 0 ${PROFILE_W} ${PROFILE_H}`);
         }
 
@@ -16385,9 +16444,10 @@
             const finish = (apply) => {
                 if (done) return;
                 done = true;
-                el.classList.remove('is-editing');
                 const raw = String(input.value).trim().replace(',', '.').replace('−', '-');
                 const v = Number(raw);
+                el.classList.remove('is-editing');
+                input.remove();
                 if (apply && Number.isFinite(v)) opts.apply(v);
                 else if (opts.redraw) opts.redraw();
             };
@@ -16403,13 +16463,21 @@
 
         function placeChartLabel(host, className, x, y, text, opts) {
             const w = host.clientWidth, h = host.clientHeight;
-            if (!(x > 10 && y > 10 && x < w - 10 && y < h - 10)) return null;
+            if (w < 8 || h < 8) return null;
+            const m = opts?.margin ?? 10;
+            if (opts?.clamp) {
+                x = Math.min(w - m, Math.max(m, x));
+                y = Math.min(h - m, Math.max(m, y));
+            } else if (!(x > m && y > m && x < w - m && y < h - m)) {
+                return null;
+            }
             const el = document.createElement('div');
             el.className = className;
             el.textContent = text;
             el.style.left = x.toFixed(1) + 'px';
             el.style.top = y.toFixed(1) + 'px';
             if (opts?.title) el.title = opts.title;
+            if (opts?.idx != null) el.dataset.idx = String(opts.idx);
             if (opts?.onClick) {
                 el.addEventListener('pointerdown', (e) => e.stopPropagation());
                 el.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -16500,6 +16568,9 @@
                     : { z: r.axis };
                 placeChartLabel(host, 'prof-vz-label', x, y, abs.z.toFixed(3), {
                     title: 'Отметка вершины, м. Нажмите, чтобы изменить',
+                    clamp: true,
+                    margin: 22,
+                    idx: r.idx,
                     onClick: (el) => beginChartValueEdit(el, {
                         value: abs.z.toFixed(3),
                         step: '0.01',
@@ -16609,6 +16680,7 @@
             const meta = $('polyProfileMeta');
             const table = $('polyProfileTable');
             if (!svg) return;
+            syncProfileViewBox();
             const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
             if (!rec) return;
 
@@ -16850,6 +16922,33 @@
             return profileFrame(polyProfileData.vertices, polyProfileData.samples);
         }
 
+        /** Клик по красной подписи или по кружку без сдвига — правка Z. */
+        function startProfileVertexElevEdit(idx) {
+            const rec = profileRecord();
+            if (!rec || rec.kind === '2d' || idx < 0 || !rec.pts[idx]) return;
+            const host = $('polyProfileAnnot');
+            if (!host) return;
+            let el = host.querySelector(`.prof-vz-label[data-idx="${idx}"]`);
+            if (!el) {
+                const abs = worldPointToAbsoluteXYZ(rec.pts[idx]) || rec.pts[idx];
+                el = placeChartLabel(host, 'prof-vz-label', host.clientWidth / 2, 18, abs.z.toFixed(3), {
+                    clamp: true,
+                    idx,
+                    title: 'Отметка вершины, м. Нажмите, чтобы изменить',
+                    onClick: (node) => beginChartValueEdit(node, {
+                        value: abs.z.toFixed(3),
+                        step: '0.01',
+                        apply: (v) => {
+                            setPolylineVertexElevation(rec, idx, v);
+                            trackUsage('profile_z_inline', {});
+                        },
+                        redraw: () => renderPolylineProfile()
+                    })
+                });
+            }
+            el?.click();
+        }
+
         /** Вписать весь профиль обратно. */
         function profileFitAll() {
             const rec = profileRecord();
@@ -16919,8 +17018,11 @@
                 // viewBox равен размеру элемента, поэтому метры-на-пиксель
                 // кадра — это сразу метры на пиксель экрана.
                 const mPerPx = f.mPerPxY;
+                let dragged = false;
                 const move = (e) => {
                     if (rec.kind === '2d') return;
+                    if (Math.abs(e.clientY - startY) <= 3 && !dragged) return;
+                    dragged = true;
                     rec.pts[idx].z = startZ + (startY - e.clientY) * mPerPx;
                     rebuildPolylineGeometry(rec);
                     renderPolylineProfile();
@@ -16930,7 +17032,8 @@
                     window.removeEventListener('pointerup', up);
                     renderPolylinePointsEditor(rec);
                     renderPolylinesList();
-                    trackUsage('profile_vertex_drag', {});
+                    if (dragged) trackUsage('profile_vertex_drag', {});
+                    else startProfileVertexElevEdit(idx);
                 };
                 window.addEventListener('pointermove', move);
                 window.addEventListener('pointerup', up);
@@ -16961,11 +17064,17 @@
             };
         });
 
-        // Двойной клик по полю — новая вершина на этом пикете.
+        // Двойной клик по кружку — правка отметки; по полю — новая вершина.
         $('polyProfileChart')?.addEventListener('dblclick', (ev) => {
             const rec = profileRecord();
             const f = profileCurrentFrame();
-            if (!rec || !f || ev.target.closest?.('.pknot')) return;
+            if (!rec || !f) return;
+            const knot = ev.target.closest?.('.pknot');
+            if (knot) {
+                ev.preventDefault();
+                startProfileVertexElevEdit(Number(knot.dataset.idx));
+                return;
+            }
             ev.preventDefault();
             const sta = f.staAt(profilePointerXY(ev).x);
             const at = insertPolylineVertexAtStation(rec, sta);
@@ -17546,6 +17655,114 @@
             return sh ? { shape: sh, anchor, kind } : null;
         }
 
+        function isRoadXsFigureShape(sh) {
+            const figCodes = new Set(Object.values(ROAD_XS_FIGURES).map((s) => s.code));
+            return figCodes.has(String(sh?.code || '').toUpperCase());
+        }
+
+        /**
+         * Общий якорь (кромка L/R, точка другой формы) клонируем в состав фигуры
+         * и выдёргиваем связи: дальше фигура жёсткая, без растяжения за якорь.
+         */
+        function detachShapeAnchors(tpl, shapeId) {
+            const sh = (tpl?.shapes || []).find((s) => s.id === shapeId);
+            if (!sh || !isRoadXsFigureShape(sh)) return false;
+            const exclusive = new Set(shapeExclusivePointIds(tpl, shapeId));
+            const shared = [...new Set(sh.pts || [])].filter((id) => !exclusive.has(id));
+            if (!shared.length) return false;
+            const oldPts = new Set(sh.pts || []);
+            const idMap = Object.create(null);
+            shared.forEach((id) => {
+                const src = templatePoint(tpl, id);
+                if (!src) return;
+                tpl.seq = (tpl.seq || (tpl.points || []).length) + 1;
+                const clone = {
+                    id: tpl.seq,
+                    code: 'P' + tpl.seq,
+                    off: src.off,
+                    dz: src.dz
+                };
+                tpl.points = tpl.points || [];
+                tpl.points.push(clone);
+                idMap[id] = clone.id;
+            });
+            sh.pts = (sh.pts || []).map((id) => idMap[id] || id);
+            (tpl.links || []).forEach((ln) => {
+                if (!oldPts.has(ln.a) || !oldPts.has(ln.b)) return;
+                if (idMap[ln.a]) ln.a = idMap[ln.a];
+                if (idMap[ln.b]) ln.b = idMap[ln.b];
+            });
+            (tpl.points || []).forEach((p) => {
+                if (p.parent == null || idMap[p.parent] == null) return;
+                if (!exclusive.has(p.id) && !Object.values(idMap).includes(p.id)) return;
+                const par = templatePoint(tpl, idMap[p.parent]);
+                p.parent = par.id;
+                p.relOff = p.off - par.off;
+                p.relDz = p.dz - par.dz;
+            });
+            return true;
+        }
+
+        function mergeShapePointOnto(tpl, shapeId, fromId, toId) {
+            const sh = (tpl?.shapes || []).find((s) => s.id === shapeId);
+            const from = templatePoint(tpl, fromId);
+            const to = templatePoint(tpl, toId);
+            if (!sh || !from || !to || fromId === toId) return false;
+            const dOff = to.off - from.off;
+            const dZ = to.dz - from.dz;
+            if (Math.abs(dOff) > 1e-9 || Math.abs(dZ) > 1e-9) {
+                translateTemplatePoints(tpl, sh.pts, dOff, dZ);
+            }
+            sh.pts = [...new Set((sh.pts || []).map((id) => (id === fromId ? toId : id)))];
+            (tpl.links || []).forEach((ln) => {
+                if (ln.a === fromId) ln.a = toId;
+                if (ln.b === fromId) ln.b = toId;
+            });
+            tpl.links = (tpl.links || []).filter((ln) => ln.a !== ln.b);
+            (tpl.points || []).forEach((p) => {
+                if (p.parent !== fromId) return;
+                p.parent = toId;
+                p.relOff = p.off - to.off;
+                p.relDz = p.dz - to.dz;
+            });
+            const still = (tpl.shapes || []).some((s) => (s.pts || []).includes(fromId))
+                || (tpl.links || []).some((ln) => ln.a === fromId || ln.b === fromId)
+                || (tpl.points || []).some((p) => p.parent === fromId);
+            if (!still && (tpl.points || []).some((p) => p.id === fromId)) {
+                removeTemplatePoint(tpl, fromId);
+            }
+            return true;
+        }
+
+        /** Ближайшая вершина фигуры → ближайшая чужая точка шаблона. */
+        function snapShapeToNearestPoint(tpl, shapeId, maxDist) {
+            const sh = (tpl?.shapes || []).find((s) => s.id === shapeId);
+            if (!sh || !isRoadXsFigureShape(sh)) return null;
+            const own = new Set(sh.pts || []);
+            const foreign = (tpl.points || []).filter((p) => !own.has(p.id));
+            if (!foreign.length) return null;
+            const lim = Number.isFinite(maxDist) && maxDist > 0 ? maxDist : 0.30;
+            let best = null;
+            (sh.pts || []).forEach((sid) => {
+                const sp = templatePoint(tpl, sid);
+                if (!sp) return;
+                foreign.forEach((fp) => {
+                    const d = Math.hypot(sp.off - fp.off, sp.dz - fp.dz);
+                    if (!best || d < best.d) best = { from: sid, to: fp.id, d };
+                });
+            });
+            if (!best || best.d > lim) return null;
+            return mergeShapePointOnto(tpl, shapeId, best.from, best.to) ? best : null;
+        }
+
+        function roadXsShapeSnapLimit() {
+            const f = roadXsChartFrame;
+            if (!f) return 0.30;
+            const mOff = (f.offMax - f.offMin) / Math.max(1, f.w - f.pad.l - f.pad.r);
+            const mZ = f.spanZ / Math.max(1, f.h - f.pad.t - f.pad.b);
+            return Math.max(0.18, Math.min(0.80, 14 * Math.max(mOff, mZ)));
+        }
+
         function cloneRoadTemplate(tpl) {
             const snap = snapshotRoadTemplate(tpl);
             if (!snap) return null;
@@ -18102,11 +18319,61 @@
             return { pts, cum, total, loc };
         }
 
-        function roadXsStationList(total, step, extra) {
-            const st = Math.max(0.5, Number(step) || 20);
+        /**
+         * Кривая в пикетаже — короткие хорды с конечным радиусом (тесселяция
+         * сопряжения). Помечаем только саму вершину дуги, не соседей: иначе BC
+         * получает метку с первой хорды дуги и весь предыдущий тангент
+         * (десятки метров) идёт с шагом кривой.
+         */
+        function roadXsCurveMask(stn, stepTan) {
+            const pts = stn?.pts;
+            const n = pts?.length || 0;
+            const mask = new Array(n).fill(false);
+            const maxChord = Math.max(0.5, Number(stepTan) || 20) + 1e-6;
+            for (let i = 1; i < n - 1; i++) {
+                const r = planSignedRadius(pts[i - 1], pts[i], pts[i + 1]);
+                if (!Number.isFinite(r)) continue;
+                const c1 = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+                const c2 = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+                if (c1 > maxChord || c2 > maxChord) continue;
+                mask[i] = true;
+            }
+            return mask;
+        }
+
+        function roadXsAlignSpans(stn, stepTan) {
+            const n = stn?.pts?.length || 0;
+            if (n < 2 || !stn.cum) return [];
+            const mask = roadXsCurveMask(stn, stepTan);
+            const spans = [];
+            let i = 0;
+            while (i < n - 1) {
+                const curve = !!(mask[i] || mask[i + 1]);
+                let j = i + 1;
+                while (j < n - 1 && !!(mask[j] || mask[j + 1]) === curve) j++;
+                spans.push({ from: stn.cum[i], to: stn.cum[j], curve });
+                i = j;
+            }
+            return spans;
+        }
+
+        function roadXsStationList(stn, step, stepCurve, extra) {
+            const total = stn?.total;
+            if (!(total > 0)) return [0];
+            const dTan = Math.max(0.5, Number(step) || 20);
+            const dCrv = Math.max(0.5, Number(stepCurve) || dTan);
             const raw = [];
-            for (let s = 0; s < total - 1e-9; s += st) raw.push(s);
-            raw.push(total);
+            const spans = roadXsAlignSpans(stn, dTan);
+            if (!spans.length) {
+                for (let s = 0; s < total - 1e-9; s += dTan) raw.push(s);
+                raw.push(total);
+            } else {
+                spans.forEach((sp) => {
+                    raw.push(sp.from, sp.to);
+                    const d = sp.curve ? dCrv : dTan;
+                    for (let s = sp.from + d; s < sp.to - 1e-6; s += d) raw.push(s);
+                });
+            }
             (extra || []).forEach((s) => {
                 if (s >= -1e-9 && s <= total + 1e-9) raw.push(s);
             });
@@ -18236,20 +18503,22 @@
         }
 
         /**
-         * Снять поперечники. opts: step, widthL, widthR, sampleStep.
+         * Снять поперечники. opts: step, stepCurve, widthL, widthR, sampleStep.
          * samples[].off > 0 — вправо по ходу оси, вдоль секущей.
          * На переломе секущая — биссектриса, диапазон смещений умножается на
          * miterScale, чтобы кромка попала в сечение.
+         * На прямой шаг `step`, на кривой (сопряжение) — `stepCurve`.
          */
         function sampleRoadCrossSections(record, opts = {}) {
             const stn = polylineStationing(record);
             if (!stn) return null;
             const step = Math.max(0.5, Number(opts.step) || 20);
+            const stepCurve = Math.max(0.5, Number(opts.stepCurve) || step);
             const widthL = roadWidthOrDefault(opts.widthL);
             const widthR = roadWidthOrDefault(opts.widthR);
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
             const turns = roadVertexTurns(record, stn);
-            let stationsPk = roadXsStationList(stn.total, step, polylineVertexStations(record, stn));
+            let stationsPk = roadXsStationList(stn, step, stepCurve, polylineVertexStations(record, stn));
             stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
             const MISS = Number.NEGATIVE_INFINITY;
             let missed = 0, hits = 0;
@@ -18288,7 +18557,7 @@
             });
             return {
                 stations, total: stn.total, missed, hits,
-                step, widthL, widthR, sampleStep
+                step, stepCurve, widthL, widthR, sampleStep
             };
         }
 
@@ -18555,6 +18824,20 @@
             }
         }
 
+        function roadXsOptsFromUi() {
+            const step = Math.max(0.5, Number($('roadXsStep')?.value) || 20);
+            const crv = Number($('roadXsStepCurve')?.value);
+            return {
+                step,
+                stepCurve: Math.max(0.5, Number.isFinite(crv) && crv > 0 ? crv : step),
+                widthL: roadWidthOrDefault($('roadXsWidthL')?.value),
+                widthR: roadWidthOrDefault($('roadXsWidthR')?.value),
+                sampleStep: Math.max(0.1, Number($('roadXsSample')?.value) || 1),
+                color: $('roadXsColor')?.value || '#2a7de1',
+                live: $('roadXsLive') ? !!$('roadXsLive').checked : true
+            };
+        }
+
         function buildRoadCrossSections(record, opts = {}) {
             if (!record || record.renderPts.length < 2) return null;
             if (!allMeshes.length) return null;
@@ -18603,7 +18886,8 @@
             const rec = drawnPolylines.find((r) => r.id === polylineId);
             if (!rec) { clearRoadXsModels(polylineId); return; }
             buildRoadCrossSections(rec, {
-                step: model.step, widthL: model.widthL, widthR: model.widthR,
+                step: model.step, stepCurve: model.stepCurve,
+                widthL: model.widthL, widthR: model.widthR,
                 sampleStep: model.sampleStep, color: model.color, live: true
             });
         }
@@ -18784,6 +19068,76 @@
             return built;
         }
 
+        function sampleRoadXsOff(st, off) {
+            const x = st.x + (st.rx || 0) * off;
+            const y = st.y + (st.ry || 0) * off;
+            const MISS = Number.NEGATIVE_INFINITY;
+            const zHit = sampleTerrainZ(x, y, MISS);
+            const hit = zHit !== MISS;
+            const scene = new THREE.Vector3(x, y, hit ? zHit : st.z);
+            const abs = worldPointToAbsoluteXYZ(scene) || scene;
+            return {
+                off, x, y,
+                z: hit ? zHit : null,
+                hit,
+                abs: { x: abs.x, y: abs.y, z: abs.z },
+                work: hit && st.axisAbs ? st.axisAbs.z - abs.z : null
+            };
+        }
+
+        /**
+         * Земля на чертеже — до края шаблона (бордюр/кювет), а если откос
+         * вышел на рельеф — до его конца, а не только до ширины покрытия.
+         */
+        function roadXsGroundNeedRange(st, resolved, slopeSecs) {
+            let minO = 0, maxO = 0;
+            (st?.samples || []).forEach((s) => {
+                if (s.off < minO) minO = s.off;
+                if (s.off > maxO) maxO = s.off;
+            });
+            (resolved || []).forEach((p) => {
+                if (!p || p.hide) return;
+                if (p.off < minO) minO = p.off;
+                if (p.off > maxO) maxO = p.off;
+            });
+            (slopeSecs || []).forEach(({ sec }) => {
+                if (!sec?.valid || !sec.exit || !st) return;
+                const off = roadXsSlopeExitOff(st, sec);
+                if (off == null) return;
+                if (off < minO) minO = off;
+                if (off > maxO) maxO = off;
+            });
+            return { minO, maxO };
+        }
+
+        function roadXsGroundSamples(st, minO, maxO, sampleStep) {
+            const ds = Math.max(0.1, Number(sampleStep) || 1);
+            const key = `${Number(minO).toFixed(4)}|${Number(maxO).toFixed(4)}|${ds.toFixed(3)}`;
+            if (st._groundDraw?.key === key) return st._groundDraw.samples;
+            const byOff = new Map();
+            const put = (s) => {
+                const k = +Number(s.off).toFixed(6);
+                if (!byOff.has(k)) byOff.set(k, s);
+            };
+            (st.samples || []).forEach(put);
+            const have = [...byOff.keys()].sort((a, b) => a - b);
+            const coveredMin = have.length ? have[0] : 0;
+            const coveredMax = have.length ? have[have.length - 1] : 0;
+            const want = [];
+            if (minO < coveredMin - 1e-6) {
+                want.push(minO);
+                for (let o = coveredMin - ds; o > minO + 1e-6; o -= ds) want.push(o);
+            }
+            if (maxO > coveredMax + 1e-6) {
+                want.push(maxO);
+                for (let o = coveredMax + ds; o < maxO - 1e-6; o += ds) want.push(o);
+            }
+            want.forEach((off) => put(sampleRoadXsOff(st, off)));
+            const samples = [...byOff.values()].sort((a, b) => a.off - b.off);
+            st._groundDraw = { key, samples };
+            return samples;
+        }
+
         function renderRoadXsView() {
             const svg = $('roadXsChart');
             const meta = $('roadXsMeta');
@@ -18816,17 +19170,9 @@
                 return;
             }
             if (pk) pk.textContent = `PK ${st.sta.toFixed(2)}`;
-            const hits = st.samples.filter((s) => s.hit);
             const zAxis = st.axisAbs.z;
-            const zGround = hits.map((s) => s.abs.z);
-            let zMin = zAxis, zMax = zAxis;
-            zGround.forEach((z) => { zMin = Math.min(zMin, z); zMax = Math.max(zMax, z); });
             const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
             const resolved = resolveTemplatePoints(tpl, st);
-            resolved.forEach((p) => {
-                zMin = Math.min(zMin, zAxis + p.dz);
-                zMax = Math.max(zMax, zAxis + p.dz);
-            });
             const slopeOpts = readRoadXsSlopeOpts();
             const edgePts = templateEdgePoints({ points: resolved.filter((p) => !p.hide) });
             const slopeSecs = [];
@@ -18835,21 +19181,31 @@
                     if (!pt) return;
                     const sec = roadXsSlopeSection(st, pt, side, slopeOpts);
                     slopeSecs.push({ side, pt, sec });
-                    if (sec?.valid && sec.exit) {
-                        const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z;
-                        zMin = Math.min(zMin, ez, zAxis + (pt.dz || 0));
-                        zMax = Math.max(zMax, ez, zAxis + (pt.dz || 0));
-                    }
                 });
             }
             const slopeOffs = slopeSecs
                 .map((s) => (s.sec?.valid ? roadXsSlopeExitOff(st, s.sec) : null))
                 .filter((v) => v != null);
+            const need = roadXsGroundNeedRange(st, resolved, slopeSecs);
+            const groundSamples = roadXsGroundSamples(st, need.minO, need.maxO, model.sampleStep);
+            const hits = groundSamples.filter((s) => s.hit);
+            let zMin = zAxis, zMax = zAxis;
+            hits.forEach((s) => { zMin = Math.min(zMin, s.abs.z); zMax = Math.max(zMax, s.abs.z); });
+            resolved.forEach((p) => {
+                zMin = Math.min(zMin, zAxis + p.dz);
+                zMax = Math.max(zMax, zAxis + p.dz);
+            });
+            slopeSecs.forEach(({ pt, sec }) => {
+                if (!sec?.valid || !sec.exit) return;
+                const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z;
+                zMin = Math.min(zMin, ez, zAxis + (pt.dz || 0));
+                zMax = Math.max(zMax, ez, zAxis + (pt.dz || 0));
+            });
             const relief = zMax - zMin;
             let spanZ = Math.max(3, relief * 1.6, 0.12 * (model.widthL + model.widthR));
             let z0 = (zMin + zMax) / 2;
-            let offMin = Math.min(-model.widthL, ...(st.samples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
-            let offMax = Math.max(model.widthR, ...(st.samples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
+            let offMin = Math.min(-model.widthL, need.minO, ...(groundSamples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
+            let offMax = Math.max(model.widthR, need.maxO, ...(groundSamples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
             if (roadXsView.offMin != null && roadXsView.offMax != null && roadXsView.spanZ) {
                 offMin = roadXsView.offMin;
                 offMax = roadXsView.offMax;
@@ -18862,7 +19218,7 @@
             const groundPts = [];
             const groundPaths = [];
             let run = [];
-            st.samples.forEach((s) => {
+            groundSamples.forEach((s) => {
                 if (!s.hit) {
                     if (run.length > 1) groundPaths.push(run.join(' '));
                     run = [];
@@ -18970,7 +19326,7 @@
                       stroke="#e8442a" stroke-width="1.8" stroke-dasharray="6 3"/>
                 <line x1="${axisTick.toFixed(1)}" y1="${pad.t}" x2="${axisTick.toFixed(1)}" y2="${pad.h - pad.b}"
                       stroke="#e8442a" stroke-width="1.2"/>
-                ${groundPaths.map((d) => `<polyline fill="none" stroke="#1d6fb0" stroke-width="2.4" points="${d}"/>`).join('')}
+                ${groundPaths.map((d) => `<polyline class="xs-ground" fill="none" stroke="#1d6fb0" stroke-width="2.4" points="${d}"/>`).join('')}
                 ${shapeDraw}
                 ${linkDraw}
                 ${knotDraw}
@@ -19040,7 +19396,7 @@
                                 </tr>`).join('') || '<tr><td colspan="3">Нет форм — «＋ форма»</td></tr>'}
                         </tbody>
                     </table>
-                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочка «откосы»: снять — убрать откосы. Колесо — зум к курсору, Shift+колесо — по высоте, ПКМ — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
+                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть — форма жёсткая: отрывается от якоря целиком и при отпускании примагничивается ближайшей вершиной. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочка «откосы»: снять — убрать откосы. Колесо — зум к курсору, Shift+колесо — по высоте, ПКМ — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
             }
             fillRoadXsRuleBar();
             renderRoadPlanView();
@@ -19510,14 +19866,7 @@
             }
             let model = roadXsModels.find((m) => m.polylineId === rec.id);
             if (!model) {
-                model = buildRoadCrossSections(rec, {
-                    step: Number($('roadXsStep')?.value),
-                    widthL: Number($('roadXsWidthL')?.value),
-                    widthR: Number($('roadXsWidthR')?.value),
-                    sampleStep: Number($('roadXsSample')?.value),
-                    color: $('roadXsColor')?.value,
-                    live: $('roadXsLive')?.checked !== false
-                });
+                model = buildRoadCrossSections(rec, roadXsOptsFromUi());
             }
             if (!model) {
                 if (!allMeshes.length) notifyError('Нет загруженной геометрии — рельефа под поперечниками нет.');
@@ -19565,12 +19914,41 @@
                 const plan = $('rstab-plan'), prof = $('rstab-profile');
                 const h0 = plan?.offsetHeight || 0, h1 = prof?.offsetHeight || 0;
                 const total = h0 + h1;
+                const tableH = $('polyProfileTable')?.offsetHeight || 136;
+                const profMin = Math.max(220, tableH + 128);
                 const startY = ev.clientY;
                 const move = (e) => {
-                    const a = Math.max(90, Math.min(total - 90, h0 + (e.clientY - startY)));
+                    const a = Math.max(90, Math.min(total - profMin, h0 + (e.clientY - startY)));
                     card.style.setProperty('--rs-plan', a + 'px');
                     card.style.setProperty('--rs-prof', (total - a) + 'px');
                     card.classList.add('rs-locked');
+                };
+                const up = () => {
+                    split.classList.remove('is-drag');
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                    dockProfileAndXs();
+                };
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+            });
+            $('rsSplitProfileTable')?.addEventListener('pointerdown', (ev) => {
+                if (ev.button !== 0) return;
+                ev.preventDefault();
+                const split = ev.currentTarget;
+                split.classList.add('is-drag');
+                const table = $('polyProfileTable');
+                const prof = $('rstab-profile');
+                const startY = ev.clientY;
+                const startH = table?.offsetHeight || 136;
+                const profH = prof?.offsetHeight || 280;
+                const chartH = $('polyProfileChartWrap')?.offsetHeight || 80;
+                const splitH = split.offsetHeight || 5;
+                const chrome = Math.max(48, profH - chartH - startH - splitH);
+                const maxH = Math.max(96, profH - chrome - 80 - splitH);
+                const move = (e) => {
+                    const h = Math.max(96, Math.min(maxH, startH - (e.clientY - startY)));
+                    card.style.setProperty('--rs-prof-table', h + 'px');
                 };
                 const up = () => {
                     split.classList.remove('is-drag');
@@ -19837,6 +20215,9 @@
             const existing = roadXsModels.find((m) => m.polylineId === target.id);
             if (existing) {
                 $('roadXsStep').value = existing.step;
+                if ($('roadXsStepCurve')) {
+                    $('roadXsStepCurve').value = existing.stepCurve || existing.step;
+                }
                 $('roadXsWidthL').value = existing.widthL;
                 $('roadXsWidthR').value = existing.widthR;
                 $('roadXsSample').value = existing.sampleStep;
@@ -19856,14 +20237,7 @@
             const id = Number($('roadXsSelect')?.value);
             const rec = drawnPolylines.find((r) => r.id === id);
             if (!rec) return notifyError('Выберите ось.');
-            const model = buildRoadCrossSections(rec, {
-                step: Number($('roadXsStep').value),
-                widthL: Number($('roadXsWidthL').value),
-                widthR: Number($('roadXsWidthR').value),
-                sampleStep: Number($('roadXsSample').value),
-                color: $('roadXsColor').value,
-                live: !!$('roadXsLive')?.checked
-            });
+            const model = buildRoadCrossSections(rec, roadXsOptsFromUi());
             if (!model) notifyError('Не удалось построить поперечники.');
             else {
                 showRoadStudioTab('xs');
@@ -20167,14 +20541,18 @@
                     const sid = Number(shapeEl.dataset.sid);
                     roadXsActive.shapeId = sid;
                     roadXsActive.linkKey = null;
-                    const dragIds = shapeDragPointIds(tpl, sid);
-                    if (!dragIds.length) {
+                    const sh0 = (tpl.shapes || []).find((s) => s.id === sid);
+                    const figure = !!(sh0 && isRoadXsFigureShape(sh0));
+                    let dragIds = shapeDragPointIds(tpl, sid);
+                    if (!figure && !dragIds.length) {
                         renderRoadXsView();
                         return;
                     }
                     ev.preventDefault();
                     const startAt = roadXsClientToOffZ(ev);
-                    const snap = dragIds.map((id) => {
+                    const startX = ev.clientX, startY = ev.clientY;
+                    let detached = false;
+                    let snap = dragIds.map((id) => {
                         const p = tpl.points.find((q) => q.id === id);
                         return p ? { id, off: p.off, dz: p.dz } : null;
                     }).filter(Boolean);
@@ -20183,6 +20561,17 @@
                     const move = (e) => {
                         const at = roadXsClientToOffZ(e);
                         if (!at || !startAt) return;
+                        if (figure && !detached) {
+                            if (Math.hypot(e.clientX - startX, e.clientY - startY) < 5) return;
+                            detachShapeAnchors(tpl, sid);
+                            detached = true;
+                            const sh = (tpl.shapes || []).find((s) => s.id === sid);
+                            snap = (sh?.pts || []).map((id) => {
+                                const p = tpl.points.find((q) => q.id === id);
+                                return p ? { id, off: p.off, dz: p.dz } : null;
+                            }).filter(Boolean);
+                        }
+                        if (!snap.length) return;
                         applyTemplatePointSnapshot(tpl, snap, at.off - startAt.off, at.dz - startAt.dz);
                         applyRoadTemplateChange(model, { relink: false, preview: true });
                         renderRoadXsView();
@@ -20190,8 +20579,11 @@
                     const up = () => {
                         window.removeEventListener('pointermove', move);
                         window.removeEventListener('pointerup', up);
+                        if (figure && detached) {
+                            snapShapeToNearestPoint(tpl, sid, roadXsShapeSnapLimit());
+                        }
                         applyRoadTemplateChange(model, { relink: false });
-                        trackUsage('road_xs_shape_drag', {});
+                        if (detached) trackUsage('road_xs_shape_drag', {});
                     };
                     window.addEventListener('pointermove', move);
                     window.addEventListener('pointerup', up);
@@ -38196,7 +38588,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: '04c9182-preview',
+            buildId: '6aa494a-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38205,6 +38597,10 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: земля на поперечнике доходит до края шаблона (бордюр/кювет) и до выхода откоса на рельеф, а не обрывается на ширине покрытия.',
+                '2026.08.16: фигуры на поперечнике тащатся жёстко: отрыв от якоря целиком, при отпускании примагничивание ближайшей вершиной.',
+                '2026.08.16: шаг поперечников раздельный: на прямых крупнее, на кривых (сопряжения) мельче — меньше сечений и работы ЦПУ.',
+                '2026.08.16: таблица профиля выше и тянется ручкой; на вершине правится отметка (красное), уклон — в середине звена.',
                 '2026.08.16: после «Загрузить» с глобуса на площадке можно чертить ось, площадки и тела — лента больше не остаётся выключенной.',
                 '2026.08.16: площадка с карты — два режима координат: в нули сцены или мировые Гаусс–Крюгер (WGS84, 6°, восток с номером зоны). Если модель уже в сцене, карта садится в её координаты.',
                 '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',

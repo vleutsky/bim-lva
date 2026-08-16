@@ -2309,6 +2309,56 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: узкий филет без радиуса (${JSON.stringify(tightFillet.radii)})`);
     }
 
+    // Прямая и кривая — разный шаг: на 80 м прямой не ставим сечение каждые 4 м.
+    const splitStep = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 17, z: g + 0.5 },
+                { x: 100, y: 17, z: g + 0.5 },
+                { x: 100, y: 50, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-шаг-кривой', role: 'road-axis' }
+        );
+        D.applyRoadCorners(id, 'fillet', 12);
+        const dense = D.buildRoadXs(id, {
+            step: 4, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        const split = D.buildRoadXs(id, {
+            step: 20, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        const pk = split?.pk || [];
+        const tan = pk.filter((s) => s > 1 && s < 55);
+        const gaps = [];
+        for (let i = 1; i < tan.length; i++) gaps.push(tan[i] - tan[i - 1]);
+        const med = gaps.length
+            ? [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+            : 0;
+        return {
+            denseN: dense?.stations || 0,
+            splitN: split?.stations || 0,
+            stepCurve: split?.stepCurve,
+            tanN: tan.length,
+            medGap: med,
+            pk: pk.map((s) => +s.toFixed(2))
+        };
+    }, groundZ);
+    if ((splitStep.splitN || 0) >= (splitStep.denseN || 0)) {
+        problems.push(
+            `поперечники: раздельный шаг не сэкономил сечения ` +
+            `(${splitStep.splitN} при шаге 20/4 против ${splitStep.denseN} при 4/4)`
+        );
+    }
+    if ((splitStep.medGap || 0) < 12) {
+        problems.push(
+            `поперечники: на прямой шаг ${splitStep.medGap} м, ждали ≈20 ` +
+            `(${JSON.stringify(splitStep)})`
+        );
+    }
+    if ((splitStep.splitN || 0) < 8) {
+        problems.push(`поперечники: раздельный шаг дал слишком мало сечений (${JSON.stringify(splitStep)})`);
+    }
+
     const ui = await page.evaluate(() => {
         document.getElementById('btnPolylineList')?.click();
         const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
@@ -2327,7 +2377,9 @@ async function checkRoadCrossSections(page) {
             titles: [...(card?.querySelectorAll('.rs-pane-title') || [])].map((t) => t.textContent.trim()),
             plan: !!document.getElementById('roadPlanChart'),
             splitH: !!document.getElementById('rsSplitH'),
+            splitTable: !!document.getElementById('rsSplitProfileTable'),
             splitV: !!document.getElementById('rsSplitV'),
+            stepCurve: !!document.getElementById('roadXsStepCurve'),
             grips: [...(card?.querySelectorAll('.rs-win-grip') || [])].map((g) => g.dataset.dir),
             applyTpl: (document.getElementById('roadXsApplyTpl')?.textContent || '').trim(),
             tpls: [...(card?.querySelectorAll('#roadXsTpls .rs-tpl') || [])].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
@@ -2353,8 +2405,8 @@ async function checkRoadCrossSections(page) {
         if (!ui.titles.includes('План') || !ui.titles.includes('Профиль') || !ui.titles.includes('Поперечник')) {
             problems.push(`поперечники: нет панелей План/Профиль/Поперечник (${JSON.stringify(ui.titles)})`);
         }
-        if (!ui.plan || !ui.splitH || !ui.splitV || ui.grips.join(',') !== 'e,s,se') {
-            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, grips: ui.grips })})`);
+        if (!ui.plan || !ui.splitH || !ui.splitV || !ui.splitTable || !ui.stepCurve || ui.grips.join(',') !== 'e,s,se') {
+            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, splitTable: ui.splitTable, stepCurve: ui.stepCurve, grips: ui.grips })})`);
         }
         if (ui.applyTpl !== 'Применить на ось' || ui.tpls.length < 5) {
             problems.push(`поперечники: нет каталога шаблонов (${JSON.stringify({ applyTpl: ui.applyTpl, tpls: ui.tpls })})`);
@@ -2375,7 +2427,7 @@ async function checkRoadCrossSections(page) {
         const html = document.getElementById('roadXsChart')?.innerHTML || '';
         return {
             hasBg: /fill="#f7f9fb"/.test(html),
-            hasGround: /<polyline /.test(html),
+            hasGround: /class="xs-ground"/.test(html),
             hasFill: /<path d=/.test(html),
             hasRoad: /fill="#e8c48a"/.test(html),
             hasEdge: /кромка/.test(html),
@@ -2406,6 +2458,44 @@ async function checkRoadCrossSections(page) {
     }
     if ((chart.annot?.profZ || 0) < 2 || (chart.annot?.profSeg || 0) < 1) {
         problems.push(`поперечники: на профиле нет отметок или длины/уклона (${JSON.stringify(chart.annot)})`);
+    }
+    const profileTable = await page.evaluate(() => {
+        const table = document.getElementById('polyProfileTable');
+        const z = document.querySelector('#polyProfileAnnot .prof-vz-label');
+        const axis0 = document.querySelector('#polyProfileTable input[data-edit="axis"]');
+        const before = axis0 ? Number(axis0.value) : NaN;
+        if (z) {
+            z.click();
+            const input = z.querySelector('input');
+            if (input) {
+                input.value = (before + 1.25).toFixed(3);
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+            }
+        }
+        const axis1 = document.querySelector('#polyProfileTable input[data-edit="axis"]');
+        const h0 = Math.round(table?.getBoundingClientRect().height || 0);
+        document.getElementById('roadXsCard')?.style.setProperty('--rs-prof-table', '180px');
+        const h1 = Math.round(table?.getBoundingClientRect().height || 0);
+        return {
+            tableH: h0,
+            tableH180: h1,
+            zCount: document.querySelectorAll('#polyProfileAnnot .prof-vz-label').length,
+            zTitle: z?.title || '',
+            before,
+            after: axis1 ? Number(axis1.value) : NaN
+        };
+    });
+    if ((profileTable.tableH || 0) < 96) {
+        problems.push(`профиль: таблица слишком низкая (${JSON.stringify(profileTable)})`);
+    }
+    if ((profileTable.tableH180 || 0) < 170) {
+        problems.push(`профиль: ручка таблицы не растягивает (${JSON.stringify(profileTable)})`);
+    }
+    if ((profileTable.zCount || 0) < 2 || !/отметк/i.test(profileTable.zTitle || '')) {
+        problems.push(`профиль: на вершинах нет подписи отметки (${JSON.stringify(profileTable)})`);
+    }
+    if (!(Math.abs((profileTable.after || 0) - (profileTable.before + 1.25)) < 0.02)) {
+        problems.push(`профиль: клик по отметке на вершине не сменил Z (${JSON.stringify(profileTable)})`);
     }
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
@@ -2595,15 +2685,35 @@ async function checkRoadCrossSections(page) {
         return {
             res,
             hasRay: /class="xs-slope"/.test(html),
+            hasGroundClass: /class="xs-ground"/.test(html),
             hasBtn: !!document.getElementById('roadXsSlope'),
             tin: res?.tinFaces || 0,
             fill: (res?.sides || []).reduce((n, s) => n + (s.fill || 0), 0),
             cut: (res?.sides || []).reduce((n, s) => n + (s.cut || 0), 0),
-            n: res?.sides?.length || 0
+            n: res?.sides?.length || 0,
+            ground: D.roadXsChartGround()
         };
     });
     if (!slopes.hasBtn) problems.push('поперечники: нет кнопки «Откосы»');
     if (!slopes.hasRay) problems.push('поперечники: на чертеже нет лучей откоса до земли');
+    if (!slopes.hasGroundClass) problems.push('поперечники: на чертеже нет линии земли xs-ground');
+    const gSlope = slopes.ground;
+    if (!gSlope || gSlope.minOff == null) {
+        problems.push(`поперечники: земля на сечении не снялась (${JSON.stringify(gSlope)})`);
+    } else {
+        if (gSlope.slopeL != null && gSlope.minOff > gSlope.slopeL + 0.05) {
+            problems.push(`поперечники: земля слева ${gSlope.minOff} не дошла до откоса ${gSlope.slopeL}`);
+        }
+        if (gSlope.slopeR != null && gSlope.maxOff < gSlope.slopeR - 0.05) {
+            problems.push(`поперечники: земля справа ${gSlope.maxOff} не дошла до откоса ${gSlope.slopeR}`);
+        }
+        if (gSlope.edgeL != null && gSlope.minOff > gSlope.edgeL + 0.05) {
+            problems.push(`поперечники: земля слева ${gSlope.minOff} короче края шаблона ${gSlope.edgeL}`);
+        }
+        if (gSlope.edgeR != null && gSlope.maxOff < gSlope.edgeR - 0.05) {
+            problems.push(`поперечники: земля справа ${gSlope.maxOff} короче края шаблона ${gSlope.edgeR}`);
+        }
+    }
     if (slopes.n !== 2) {
         problems.push(`поперечники: откосы сторон ${slopes.n} вместо 2 (${JSON.stringify(slopes.res)})`);
     }
@@ -2625,6 +2735,7 @@ async function checkRoadCrossSections(page) {
         const r = before?.points?.find((p) => p.code === 'R');
         const fig = D.addRoadXsFigure('curb', r?.id);
         const afterFig = D.roadXsTemplate();
+        const groundCurb = D.roadXsChartGround();
         const curbT = afterFig?.points?.find((p) => p.code === 'CURBT');
         const curbO = afterFig?.points?.find((p) => p.code === 'CURBO');
         D.setRoadXsPoint(r.id, { dz: 0.4 });
@@ -2659,7 +2770,8 @@ async function checkRoadCrossSections(page) {
             base: ev?.baseDz,
             dz: ev?.dz,
             applies: ev?.applies,
-            barShown: !!(bar && !bar.hidden)
+            barShown: !!(bar && !bar.hidden),
+            groundCurb
         };
     });
     if (extras.afterPts !== extras.beforePts + 3 || extras.afterShapes !== extras.beforeShapes + 1) {
@@ -2684,6 +2796,13 @@ async function checkRoadCrossSections(page) {
         || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
         problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
     }
+    const gCurb = extras.groundCurb;
+    if (!gCurb || gCurb.edgeR == null || gCurb.maxOff < gCurb.edgeR - 0.05) {
+        problems.push(`поперечники: земля не дошла до края бордюра (${JSON.stringify(gCurb)})`);
+    }
+    if (gCurb?.slopeR != null && gCurb.maxOff < gCurb.slopeR - 0.05) {
+        problems.push(`поперечники: земля не дошла до откоса за бордюром (${JSON.stringify(gCurb)})`);
+    }
 
     const shapeUx = await page.evaluate(() => {
         const D = window.BimLvaDebug;
@@ -2697,10 +2816,28 @@ async function checkRoadCrossSections(page) {
         const tpl0 = D.roadXsTemplate();
         const curb = (tpl0?.shapes || []).find((s) => s.code === 'CURB');
         const curbT0 = (tpl0?.points || []).find((p) => p.code === 'CURBT');
+        const curbO0 = (tpl0?.points || []).find((p) => p.code === 'CURBO');
         const r0 = (tpl0?.points || []).find((p) => p.code === 'R');
+        const box0 = curb && curbT0 && curbO0 ? {
+            w: Math.abs(curbO0.off - curbT0.off),
+            h: Math.abs(curbT0.dz - (tpl0.points.find((p) => p.id === curb.pts[0])?.dz ?? 0)),
+            n: curb.pts.length,
+            onR: curb.pts.includes(r0?.id)
+        } : null;
         const moved = curb ? D.translateRoadXsShape(curb.id, 0.5, 0) : null;
+        const curb1 = (moved?.shapes || []).find((s) => s.code === 'CURB');
         const curbT1 = (moved?.points || []).find((p) => p.code === 'CURBT');
+        const curbO1 = (moved?.points || []).find((p) => p.code === 'CURBO');
         const r1 = (moved?.points || []).find((p) => p.code === 'R');
+        const box1 = curb1 && curbT1 && curbO1 ? {
+            w: Math.abs(curbO1.off - curbT1.off),
+            h: Math.abs(curbT1.dz - (moved.points.find((p) => p.id === curb1.pts[0])?.dz ?? 0)),
+            n: curb1.pts.length,
+            onR: curb1.pts.includes(r1?.id)
+        } : null;
+        const back = curb ? D.translateRoadXsShape(curb.id, -0.5, 0) : null;
+        const curb2 = (back?.shapes || []).find((s) => s.code === 'CURB');
+        const r2 = (back?.points || []).find((p) => p.code === 'R');
         const afterDel = curb ? D.removeRoadXsShape(curb.id) : null;
         const stillCurb = (afterDel?.shapes || []).some((s) => s.code === 'CURB');
         const stillT = (afterDel?.points || []).some((p) => p.code === 'CURBT');
@@ -2712,11 +2849,13 @@ async function checkRoadCrossSections(page) {
             chk.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const htmlOff = document.getElementById('roadXsChart')?.innerHTML || '';
+        const groundOff = D.roadXsChartGround();
         if (chk) {
             chk.checked = true;
             chk.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const htmlOn = document.getElementById('roadXsChart')?.innerHTML || '';
+        const groundOn = D.roadXsChartGround();
         return {
             fills,
             pvmt: byCode.PVMT || '',
@@ -2727,6 +2866,9 @@ async function checkRoadCrossSections(page) {
             curbT1: curbT1?.off,
             r0: r0?.off,
             r1: r1?.off,
+            box0,
+            box1,
+            snappedBack: !!(curb2 && r2 && curb2.pts.includes(r2.id)),
             stillCurb,
             stillT,
             stillR,
@@ -2734,6 +2876,8 @@ async function checkRoadCrossSections(page) {
             slopeBefore: /class="xs-slope"/.test(html0),
             slopeOff: /class="xs-slope"/.test(htmlOff),
             slopeOn: /class="xs-slope"/.test(htmlOn),
+            groundOff,
+            groundOn,
             hasRemove: typeof D.removeRoadXsShape === 'function',
             hasTranslate: typeof D.translateRoadXsShape === 'function'
         };
@@ -2751,6 +2895,14 @@ async function checkRoadCrossSections(page) {
         || Math.abs((shapeUx.r1 ?? 0) - (shapeUx.r0 ?? 0)) > 1e-6) {
         problems.push(`поперечники: сдвиг бордюра сдвинул кромку или не сдвинул CURBT (${JSON.stringify(shapeUx)})`);
     }
+    if (shapeUx.box0 && (Math.abs(shapeUx.box1?.w - shapeUx.box0.w) > 1e-6
+        || Math.abs(shapeUx.box1?.h - shapeUx.box0.h) > 1e-6
+        || shapeUx.box1?.onR !== false)) {
+        problems.push(`поперечники: сдвиг бордюра сломал жёсткость или не оторвал от R (${JSON.stringify({ box0: shapeUx.box0, box1: shapeUx.box1 })})`);
+    }
+    if (shapeUx.snappedBack !== true) {
+        problems.push(`поперечники: возврат бордюра не примагнитился к R (${JSON.stringify({ snappedBack: shapeUx.snappedBack })})`);
+    }
     if (shapeUx.stillCurb || shapeUx.stillT || !shapeUx.stillR) {
         problems.push(`поперечники: удаление бордюра не унесло форму/CURBT или сняло кромку R (${JSON.stringify(shapeUx)})`);
     }
@@ -2758,6 +2910,12 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: галочка «откосы» не убирает/не возвращает лучи (${JSON.stringify({
             before: shapeUx.slopeBefore, off: shapeUx.slopeOff, on: shapeUx.slopeOn
         })})`);
+    }
+    if (shapeUx.groundOff?.edgeR != null && shapeUx.groundOff.maxOff < shapeUx.groundOff.edgeR - 0.05) {
+        problems.push(`поперечники: без откоса земля короче края шаблона (${JSON.stringify(shapeUx.groundOff)})`);
+    }
+    if (shapeUx.groundOn?.slopeR != null && shapeUx.groundOn.maxOff < shapeUx.groundOn.slopeR - 0.05) {
+        problems.push(`поперечники: с откосом земля короче выхода на рельеф (${JSON.stringify(shapeUx.groundOn)})`);
     }
 
     const studio = await page.evaluate(() => {
