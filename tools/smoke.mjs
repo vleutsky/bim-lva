@@ -669,6 +669,36 @@ async function checkDrawDxf(page) {
     if (!has('2Д') || !has('3Д')) problems.push('в DXF нет слоёв 2Д/3Д');
     if (!has('SEQEND')) problems.push('в DXF полилиния не закрыта SEQEND');
     if (!has('EOF')) problems.push('DXF без EOF');
+    // Civil: «Ошибка в таблице APPID» на строке 242 — это слой 2Д в LAYER,
+    // не APPID. R2010 без owner 330 и файл в 1251 вместо UTF-8 ломают импорт.
+    if (!/\r\n0\r\nTABLE\r\n2\r\nAPPID\r\n5\r\n[0-9A-F]+\r\n330\r\n0\r\n/.test(dxf)) {
+        problems.push('таблица APPID без owner 330 — Civil 3D не откроет R2010');
+    }
+    if (!/\r\n0\r\nAPPID\r\n5\r\n[0-9A-F]+\r\n330\r\n[0-9A-F]+\r\n/.test(dxf)) {
+        problems.push('запись APPID без owner 330');
+    }
+    if (!has('ACAD_PLOTSTYLENAME')) problems.push('в DXF нет ACAD_PLOTSTYLENAME');
+    if (!/\r\n370\r\n-3\r\n390\r\n/.test(dxf)) {
+        problems.push('у LAYER нет lineweight/plotstyle (370/390)');
+    }
+    const dxfBytes = await page.evaluate(() => window.BimLvaDebug.dxfDownloadBytes());
+    const utf8De = [0x32, 0xD0, 0x94]; // «2Д» в UTF-8
+    const cp1251De = [0x32, 0xC4];     // «2Д» в Windows-1251
+    const hasSeq = (hay, needle) => {
+        outer: for (let i = 0; i <= hay.length - needle.length; i++) {
+            for (let j = 0; j < needle.length; j++) {
+                if (hay[i + j] !== needle[j]) continue outer;
+            }
+            return true;
+        }
+        return false;
+    };
+    if (!hasSeq(dxfBytes, utf8De)) {
+        problems.push('скачиваемый DXF не содержит UTF-8 «2Д» — Civil 2010+ не откроет кириллические слои');
+    }
+    if (hasSeq(dxfBytes, cp1251De) && !hasSeq(dxfBytes, utf8De)) {
+        problems.push('скачиваемый DXF в Windows-1251 — Civil читает AC1024 как UTF-8 и падает в APPID');
+    }
 
     const vertexCount = (dxf.match(/\r\nVERTEX\r\n/g) || []).length;
     const wantVertex = drawn.reduce((n, d) => n + d.abs.length, 0);
@@ -2030,7 +2060,7 @@ async function checkRoadCrossSections(page) {
     if (!got.res || got.res.stations !== 3) {
         problems.push(`поперечники: сечений ${got.res?.stations} вместо 3 (0 / 1.5 / 3)`);
     } else {
-        if ((got.res.corridorTris || 0) < 8) {
+        if ((got.res.corridorTris || 0) < 20) {
             problems.push(`поперечники: полотно ${got.res.corridorTris} граней — «Построить» не протянуло шаблон`);
         }
         if ((got.res.template?.points?.length || 0) < 5) {
@@ -2200,6 +2230,50 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: новая ось без ширины дала ${planEdit.defL}/${planEdit.defR} вместо 3.25/3.25`);
     }
 
+    const labels = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 21, y: 19, z: g + 0.5 },
+                { x: 24, y: 19, z: g + 0.5 },
+                { x: 24, y: 22, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-подписи', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, { step: 20, widthL: 2, widthR: 2, sampleStep: 1, live: false });
+        const defl0 = D.polylineDeflection(id, 1);
+        D.openRoadProfile(id);
+        D.fitRoadPlan();
+        D.editPolyline(id, 'defl', 1, 45);
+        const defl1 = D.polylineDeflection(id, 1);
+        D.editPolyline(id, 'defl', 1, 90);
+        D.editPolyline(id, 'radius', 1, 2);
+        return { id, defl0, defl1, deflBack: D.polylineDeflection(id, 1) };
+    }, groundZ);
+    await page.waitForTimeout(250);
+    const labelUi = await page.evaluate(() => window.BimLvaDebug.chartAnnot());
+    if (Math.abs((labels.defl0 || 0) - 90) > 0.05) {
+        problems.push(`поперечники: угол L-оси ${labels.defl0}° вместо 90`);
+    }
+    if (Math.abs((labels.defl1 || 0) - 45) > 0.05) {
+        problems.push(`поперечники: правка угла поворота дала ${labels.defl1}° вместо 45`);
+    }
+    if (Math.abs((labels.deflBack || 0) - 90) > 0.05) {
+        problems.push(`поперечники: возврат угла поворота дал ${labels.deflBack}° вместо 90`);
+    }
+    if ((labelUi.planAng || 0) < 1 || !/Δ90|Δ\+?90/.test(labelUi.plan || '')) {
+        problems.push(`поперечники: на плане нет угла поворота Δ90° (${JSON.stringify(labelUi)})`);
+    }
+    if ((labelUi.planLen || 0) < 2 || !/3\.00\s*м/.test(labelUi.plan || '')) {
+        problems.push(`поперечники: на плане нет длин звеньев 3.00 м (${JSON.stringify(labelUi)})`);
+    }
+    if ((labelUi.planR || 0) < 1 || !/R\s*2/.test(labelUi.plan || '')) {
+        problems.push(`поперечники: на плане нет радиуса R 2 (${JSON.stringify(labelUi)})`);
+    }
+    if ((labelUi.profZ || 0) < 3 || (labelUi.profSeg || 0) < 2) {
+        problems.push(`поперечники: на профиле L-оси нет отметок/уклонов (${JSON.stringify(labelUi)})`);
+    }
+
     // Короткое плечо + R больше ширины: радиус сожмётся, внутренность без
     // правки выворачивается (кромка идёт назад, полотно — «ёжик»).
     const tightFillet = await page.evaluate((g) => {
@@ -2314,7 +2388,8 @@ async function checkRoadCrossSections(page) {
             planVerts: document.querySelectorAll('#roadPlanChart .pkvert').length,
             planEdges: document.querySelectorAll('#roadPlanChart .pkedge').length,
             cornerMode: !!document.getElementById('roadCornerMode'),
-            profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80
+            profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80,
+            annot: window.BimLvaDebug.chartAnnot()
         };
     });
     if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
@@ -2325,6 +2400,12 @@ async function checkRoadCrossSections(page) {
     }
     if ((chart.planVerts || 0) < 2 || (chart.planEdges || 0) < 2 || !chart.cornerMode) {
         problems.push(`поперечники: на плане нет ручек вершин/кромок (${JSON.stringify({ verts: chart.planVerts, edges: chart.planEdges, corner: chart.cornerMode })})`);
+    }
+    if ((chart.annot?.planLen || 0) < 1 || !/м/.test(chart.annot?.plan || '')) {
+        problems.push(`поперечники: на плане нет подписи длины (${JSON.stringify(chart.annot)})`);
+    }
+    if ((chart.annot?.profZ || 0) < 2 || (chart.annot?.profSeg || 0) < 1) {
+        problems.push(`поперечники: на профиле нет отметок или длины/уклона (${JSON.stringify(chart.annot)})`);
     }
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
@@ -2445,7 +2526,7 @@ async function checkRoadCrossSections(page) {
     if (!live.ok || Math.abs((live.dz || 0) - 0.4) > 1e-6) {
         problems.push(`поперечники: правка точки шаблона не сработала (${JSON.stringify(live)})`);
     }
-    if ((live.tris || 0) < 8) {
+    if ((live.tris || 0) < 20) {
         problems.push(`поперечники: после правки точки полотно пропало (${live.tris})`);
     }
     if (!live.profile) {
@@ -2480,6 +2561,29 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: «⊟ сечение» спрятало одну из панелей (${JSON.stringify(pair)})`);
     } else if (pair.chartH < 80 || pair.planH < 60 || pair.cardH < 280) {
         problems.push(`поперечники: чертежи слишком малы (${JSON.stringify(pair)})`);
+    }
+
+    const paneLock = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadStudioPaneBox();
+        const card = document.getElementById('roadXsCard');
+        const h0 = card?.getBoundingClientRect().height || 0;
+        if (card) card.style.height = Math.round(h0 + 140) + 'px';
+        const afterGrow = D.roadStudioPaneBox();
+        if (card) card.style.height = Math.round(h0) + 'px';
+        const afterBack = D.roadStudioPaneBox();
+        return { before, afterGrow, afterBack, h0 };
+    });
+    const dPlan = Math.abs((paneLock.afterGrow?.plan?.h || 0) - (paneLock.before?.plan?.h || 0));
+    const dProf = Math.abs((paneLock.afterGrow?.prof?.h || 0) - (paneLock.before?.prof?.h || 0));
+    const dXs = Math.abs((paneLock.afterGrow?.xs?.h || 0) - (paneLock.before?.xs?.h || 0));
+    if (!paneLock.before?.locked) {
+        problems.push(`поперечники: высоты панелей не зафиксировались (${JSON.stringify(paneLock.before)})`);
+    } else if (dPlan > 2 || dProf > 2 || dXs > 2) {
+        problems.push(
+            `поперечники: высота плана/профиля/сечения уехала при росте окна ` +
+            `(Δ план ${dPlan}, профиль ${dProf}, сечение ${dXs})`
+        );
     }
 
     const slopes = await page.evaluate(() => {
@@ -2682,6 +2786,58 @@ async function checkRoadCrossSections(page) {
     }
     if (Math.abs((studio.after ?? 0) - (studio.plan0 ?? 0)) > Math.max(0.4, (studio.plan0 || 0) * 0.08)) {
         problems.push(`поперечники: ⤢ плана не вернул масштаб (${JSON.stringify(studio)})`);
+    }
+
+    const dragChart = async (sel, button, dx) => {
+        const box = await page.locator(sel).boundingBox();
+        if (!box || box.width < 40 || box.height < 40) return false;
+        const x = box.x + box.width * 0.16;
+        const y = box.y + box.height * 0.2;
+        await page.mouse.move(x, y);
+        await page.mouse.down({ button });
+        await page.mouse.move(x + dx, y + 18, { steps: 6 });
+        await page.mouse.up({ button });
+        return true;
+    };
+    const almost = (a, b, eps) => Math.abs((a ?? 0) - (b ?? 0)) <= eps;
+    const pan0 = await page.evaluate(() => ({
+        plan: window.BimLvaDebug.roadPlanViewSpan(),
+        prof: window.BimLvaDebug.polyProfileViewSpan(),
+        xs: window.BimLvaDebug.roadXsViewSpan()
+    }));
+    await dragChart('#roadPlanChart', 'left', 80);
+    await dragChart('#polyProfileChart', 'left', 80);
+    await dragChart('#roadXsChart', 'left', 80);
+    const panL = await page.evaluate(() => ({
+        plan: window.BimLvaDebug.roadPlanViewSpan(),
+        prof: window.BimLvaDebug.polyProfileViewSpan(),
+        xs: window.BimLvaDebug.roadXsViewSpan()
+    }));
+    if (!almost(panL.plan?.cx, pan0.plan?.cx, 0.08) || !almost(panL.plan?.cy, pan0.plan?.cy, 0.08)) {
+        problems.push(`план: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.plan, after: panL.plan })})`);
+    }
+    if (!almost(panL.prof?.from, pan0.prof?.from, 0.08)) {
+        problems.push(`профиль: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.prof, after: panL.prof })})`);
+    }
+    if (!almost(panL.xs?.offMin, pan0.xs?.offMin, 0.08) || !almost(panL.xs?.z0, pan0.xs?.z0, 0.08)) {
+        problems.push(`поперечник: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.xs, after: panL.xs })})`);
+    }
+    await dragChart('#roadPlanChart', 'right', 80);
+    await dragChart('#polyProfileChart', 'right', 80);
+    await dragChart('#roadXsChart', 'right', 80);
+    const panR = await page.evaluate(() => ({
+        plan: window.BimLvaDebug.roadPlanViewSpan(),
+        prof: window.BimLvaDebug.polyProfileViewSpan(),
+        xs: window.BimLvaDebug.roadXsViewSpan()
+    }));
+    if (almost(panR.plan?.cx, pan0.plan?.cx, 0.15) && almost(panR.plan?.cy, pan0.plan?.cy, 0.15)) {
+        problems.push(`план: ПКМ не сдвинул вид (${JSON.stringify({ before: pan0.plan, after: panR.plan })})`);
+    }
+    if (almost(panR.prof?.from, pan0.prof?.from, 0.15)) {
+        problems.push(`профиль: ПКМ не сдвинул вид (${JSON.stringify({ before: pan0.prof, after: panR.prof })})`);
+    }
+    if (almost(panR.xs?.offMin, pan0.xs?.offMin, 0.15) && almost(panR.xs?.z0, pan0.xs?.z0, 0.15)) {
+        problems.push(`поперечник: ПКМ не сдвинул вид (${JSON.stringify({ before: pan0.xs, after: panR.xs })})`);
     }
 
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());

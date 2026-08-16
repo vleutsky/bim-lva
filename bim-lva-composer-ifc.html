@@ -1098,6 +1098,90 @@
            точки на прямой между вершинами ничего не сообщают, а список
            раздувают. */
         #polyProfileChart { height: 260px; }
+        #roadPlanChartWrap,
+        #polyProfileChartWrap {
+            position: relative;
+            overflow: hidden;
+            min-height: 80px;
+            background: #f7f9fb;
+        }
+        #roadPlanChartWrap .align-profile-svg,
+        #polyProfileChartWrap .align-profile-svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .chart-annot {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 2;
+            overflow: hidden;
+        }
+        .plan-len-label,
+        .plan-ang-label,
+        .plan-r-label,
+        .prof-vz-label,
+        .prof-seg-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: auto;
+            cursor: text;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 10px;
+            line-height: 1.3;
+            white-space: nowrap;
+            padding: 1px 5px;
+            border-radius: 3px;
+            box-shadow: 0 1px 3px rgba(10, 20, 32, .28);
+        }
+        .plan-len-label,
+        .prof-seg-label {
+            background: var(--glass-solid, #fff);
+            border: 1px solid var(--ok, #2a9d5c);
+            color: #10321f;
+            transform: translate(-50%, calc(-100% - 5px));
+        }
+        .plan-ang-label {
+            background: rgba(31, 111, 139, .94);
+            border: 1px solid #16556c;
+            color: var(--on-fill, #fff);
+            transform: translate(-50%, calc(-100% - 7px));
+        }
+        .plan-r-label {
+            background: rgba(240, 100, 36, .94);
+            border: 1px solid #c24d17;
+            color: var(--on-fill, #fff);
+            transform: translate(-50%, 7px);
+        }
+        .prof-vz-label {
+            background: rgba(232, 68, 42, .94);
+            border: 1px solid #c2341e;
+            color: var(--on-fill, #fff);
+            transform: translate(-50%, 7px);
+        }
+        .plan-len-label:hover,
+        .prof-seg-label:hover { filter: brightness(1.06); }
+        .plan-ang-label:hover { background: rgba(23, 88, 111, .97); }
+        .plan-r-label:hover { background: rgba(214, 86, 28, .97); }
+        .prof-vz-label:hover { background: rgba(196, 52, 30, .97); }
+        .plan-len-label.is-editing,
+        .plan-ang-label.is-editing,
+        .plan-r-label.is-editing,
+        .prof-vz-label.is-editing,
+        .prof-seg-label.is-editing { padding: 0; }
+        .chart-annot input {
+            width: 72px;
+            font: inherit;
+            padding: 1px 4px;
+            border: 0;
+            border-radius: 3px;
+            background: var(--panel, #fff);
+            color: var(--txt, #1a1a1a);
+        }
         #roadXsChart { height: 240px; background: var(--panel-2); }
         #roadXsChart .xs-slope { pointer-events: none; }
         #roadXsChart .xs-shape { cursor: grab; }
@@ -3059,9 +3143,14 @@
         }
             .rstab-pane[hidden] { display: none !important; }
         .pal-card.rs-studio .rstab-pane[hidden] { display: flex !important; }
-        .pal-card #polyProfileChart,
-        .pal-card #roadXsChart,
-        .pal-card #roadPlanChart {
+        .pal-card #polyProfileChartWrap,
+        .pal-card #roadPlanChartWrap {
+            height: auto;
+            flex: 1;
+            min-height: 80px;
+            background: #f7f9fb;
+        }
+        .pal-card #roadXsChart {
             height: auto;
             flex: 1;
             min-height: 80px;
@@ -3076,23 +3165,29 @@
         .pal-card.rs-studio {
             position: relative;
             width: min(1100px, 92vw);
-            height: min(660px, 72vh);
-            max-height: none !important;
+            height: 660px;
+            max-height: calc(100vh - 48px);
+            overflow: auto;
         }
         .pal-card.rs-studio.dock-bottom {
-            height: min(70vh, 740px) !important;
-            max-height: none !important;
+            height: auto !important;
+            max-height: calc(100vh - var(--top-bar-h) - var(--status) - 24px) !important;
         }
         .pal-card.rs-studio.dock-left,
         .pal-card.rs-studio.dock-right {
             width: min(420px, 46vw) !important;
             height: auto !important;
+            max-height: none;
         }
         .rs-split {
             display: flex;
             flex: 1;
             min-height: 0;
             min-width: 0;
+            align-items: stretch;
+        }
+        .pal-card.rs-studio.rs-locked .rs-split {
+            flex: 0 0 auto;
         }
         .rs-col-left {
             display: flex;
@@ -3117,8 +3212,18 @@
             min-width: 0;
             overflow: hidden;
         }
-        .rs-col-left > #rstab-plan { flex: var(--rs-plan, 1.05) 1 0; }
-        .rs-col-left > #rstab-profile { flex: var(--rs-prof, 1) 1 0; }
+        .rs-col-left > #rstab-plan { flex: 1.05 1 0; }
+        .rs-col-left > #rstab-profile { flex: 1 1 0; }
+        .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-plan {
+            flex: 0 0 var(--rs-plan, 240px);
+            height: var(--rs-plan, 240px);
+            min-height: 90px;
+        }
+        .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-profile {
+            flex: 0 0 var(--rs-prof, 220px);
+            height: var(--rs-prof, 220px);
+            min-height: 90px;
+        }
         .rs-pane-head {
             display: flex;
             align-items: center;
@@ -3226,9 +3331,9 @@
             top: 50%; left: 1px; width: 3px; height: 28px; margin-top: -14px;
         }
         .pal-card.rs-studio #roadXsTable { max-height: 52px; }
-        .pal-card.dock-bottom #polyProfileChart,
+        .pal-card.dock-bottom #polyProfileChartWrap,
         .pal-card.dock-bottom #roadXsChart,
-        .pal-card.dock-bottom #roadPlanChart {
+        .pal-card.dock-bottom #roadPlanChartWrap {
             flex: 1;
             min-height: 120px;
             height: auto;
@@ -5008,7 +5113,7 @@
                         <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
                     </div>
                 </details>
-                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручки на стыках меняют доли окон, угол окна — размер палитры. Шаблон: выберите карточку и «Применить на ось».">?</button>
+                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет их высоту; размер палитры чертежи по вертикали не тянет. Шаблон: выберите карточку и «Применить на ось».">?</button>
             </div>
             <div class="rs-split" id="roadStudioSplit">
                 <div class="rs-col-left">
@@ -5017,10 +5122,13 @@
                             <span class="rs-pane-title">План</span>
                             <span class="fill"></span>
                             <span class="pal-status" id="roadXsStatus" style="margin:0">—</span>
-                            <button class="btn" id="roadPlanFit" data-tip="Вписать ось в план. Колесо — зум, перетаскивание — сдвиг.">⤢</button>
+                            <button class="btn" id="roadPlanFit" data-tip="Вписать ось в план. Колесо — зум, ПКМ — сдвиг.">⤢</button>
                         </div>
-                        <svg class="align-profile-svg" id="roadPlanChart" viewBox="0 0 480 220"
-                             preserveAspectRatio="none" style="touch-action:none;cursor:grab"></svg>
+                        <div class="chart-wrap" id="roadPlanChartWrap">
+                            <svg class="align-profile-svg" id="roadPlanChart" viewBox="0 0 480 220"
+                                 preserveAspectRatio="none" style="touch-action:none;cursor:default"></svg>
+                            <div class="chart-annot" id="roadPlanAnnot"></div>
+                        </div>
                     </div>
                     <div class="rs-split-h" id="rsSplitH" title="Потяните — высота плана и профиля"></div>
                     <div class="rstab-pane rs-pane" id="rstab-profile">
@@ -5041,14 +5149,17 @@
                                 </select>
                             </label>
                             <span class="fill"></span>
-                            <button class="btn" id="polyProfileFit" data-tip="Вписать весь профиль в окно. Колесо — зум, Shift+колесо — только высота.">⤢</button>
+                            <button class="btn" id="polyProfileFit" data-tip="Вписать весь профиль в окно. Колесо — зум, Shift+колесо — высота, ПКМ — сдвиг.">⤢</button>
                             <button class="btn" id="polyProfileCsv" data-tip="Вершина; пикет; земля; ось; рабочая; уклон">CSV</button>
                             <button class="btn" id="polyProfileDrape" data-tip="Посадить вершины оси на снятые отметки земли">⤓ на землю</button>
                             <button class="btn" id="polyProfileXs" data-tip="Перейти к чертежу поперечника">⊟ сечение</button>
                         </div>
                         <div class="pal-status" id="polyProfileMeta">—</div>
-                        <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 260"
-                             preserveAspectRatio="none" style="touch-action:none;cursor:grab"></svg>
+                        <div class="chart-wrap" id="polyProfileChartWrap">
+                            <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 260"
+                                 preserveAspectRatio="none" style="touch-action:none;cursor:default"></svg>
+                            <div class="chart-annot" id="polyProfileAnnot"></div>
+                        </div>
                         <div id="polyProfileTable" class="profile-table"></div>
                     </div>
                 </div>
@@ -5063,7 +5174,7 @@
                             <span id="roadXsPk" class="pin-xyz">PK —</span>
                         </div>
                         <span class="fill"></span>
-                        <button class="btn" id="roadXsFit" data-tip="Вписать сечение. Колесо — зум к курсору, Shift+колесо — высота, фон — сдвиг.">⤢</button>
+                        <button class="btn" id="roadXsFit" data-tip="Вписать сечение. Колесо — зум к курсору, Shift+колесо — высота, ПКМ — сдвиг.">⤢</button>
                         <button class="btn" id="roadXsProfile" data-tip="Продольный профиль этой оси">〰 профиль</button>
                         <button class="btn load-btn" id="roadXsSlope" data-tip="Откосы от кромок шаблона до рельефа">△ Откосы до рельефа</button>
                         <button class="btn" id="roadXsCsv" data-tip="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
@@ -6541,15 +6652,33 @@
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 return rec ? setPolylineClosed(rec, closed) : false;
             },
-            /** Правка геометрии числами: 'elev' | 'length' | 'slope'. */
+            /** Правка геометрии числами: 'elev' | 'length' | 'slope' | 'radius' | 'defl'. */
             editPolyline(id, what, idx, value) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 if (!rec) return false;
                 if (what === 'elev') setPolylineVertexElevation(rec, idx, value);
                 else if (what === 'length') setPolylineSegmentLength(rec, idx, value);
                 else if (what === 'slope') setPolylineSegmentSlope(rec, idx, value);
+                else if (what === 'radius') setPolylineVertexRadius(rec, idx, value);
+                else if (what === 'defl') setPolylineVertexDeflection(rec, idx, value);
                 else return false;
                 return true;
+            },
+            polylineDeflection(id, idx) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec ? polylineVertexDeflectionDeg(rec, idx) : null;
+            },
+            chartAnnot() {
+                const q = (sel) => document.querySelectorAll(sel).length;
+                return {
+                    plan: document.getElementById('roadPlanAnnot')?.innerText || '',
+                    profile: document.getElementById('polyProfileAnnot')?.innerText || '',
+                    planLen: q('#roadPlanAnnot .plan-len-label'),
+                    planAng: q('#roadPlanAnnot .plan-ang-label'),
+                    planR: q('#roadPlanAnnot .plan-r-label'),
+                    profZ: q('#polyProfileAnnot .prof-vz-label'),
+                    profSeg: q('#polyProfileAnnot .prof-seg-label')
+                };
             },
             /** Длина и уклон отрезка — для сверки с тем, что показывает таблица. */
             polylineSegment(id, idx) {
@@ -6978,6 +7107,31 @@
                 const f = roadPlanFrame;
                 return f ? { span: f.span, cx: f.cx, cy: f.cy } : null;
             },
+            polyProfileViewSpan() {
+                if (!polyProfileData) return null;
+                const f = profileCurrentFrame();
+                if (!f) return null;
+                return {
+                    from: f.from,
+                    to: f.to,
+                    span: f.to - f.from,
+                    zCentre: polyProfileView.zCentre,
+                    zMid: (f.zMin + f.zMax) / 2
+                };
+            },
+            roadStudioPaneBox() {
+                const box = (id) => {
+                    const r = document.getElementById(id)?.getBoundingClientRect();
+                    return r ? { h: Math.round(r.height), w: Math.round(r.width) } : null;
+                };
+                return {
+                    plan: box('rstab-plan'),
+                    prof: box('rstab-profile'),
+                    xs: box('rstab-xs'),
+                    card: box('roadXsCard'),
+                    locked: !!document.getElementById('roadXsCard')?.classList.contains('rs-locked')
+                };
+            },
             applyRoadXsPreset(id) {
                 return applyRoadStudioPreset(id);
             },
@@ -7232,6 +7386,10 @@
             /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
             dxfPreview() {
                 return buildDxf(drawnPolylines, coordPins);
+            },
+            /** Байты скачиваемого DXF (UTF-8) — ловит регресс Windows-1251. */
+            dxfDownloadBytes() {
+                return Array.from(new TextEncoder().encode(buildDxf(drawnPolylines, coordPins)));
             },
             /** Единичный вектор «куда смотрит камера» — для проверки видов. */
             get cameraDir() {
@@ -12340,30 +12498,15 @@
         }
 
         /**
-         * DXF объявлен как $DWGCODEPAGE ANSI_1251 — Civil читает имена слоёв
-         * в этой кодировке. Blob из JS-строки иначе уедет UTF-8, и кириллица
-         * в слоях станет кракозябрами.
+         * R2010 (AC1024) пишется UTF-8 — так AutoCAD 2007+ и Civil читают DXF.
+         * Windows-1251 давал «Ошибка в таблице APPID» на первом кириллическом
+         * слое (у пустого чертежа строка 242 — «2Д»): байт 0xC4 для UTF-8-читателя
+         * порченый, а APPID в файле ещё ниже. $DWGCODEPAGE оставляем ANSI_1251,
+         * как сам AutoCAD — на декодирование строк R2010 он не влияет.
          */
-        function encodeWindows1251(str) {
-            const s = String(str);
-            const out = new Uint8Array(s.length);
-            for (let i = 0; i < s.length; i++) {
-                const c = s.charCodeAt(i);
-                let b = 0x5F;
-                if (c < 0x80) b = c;
-                else if (c >= 0x0410 && c <= 0x044F) b = c - 0x0410 + 0xC0;
-                else if (c === 0x0401) b = 0xA8;
-                else if (c === 0x0451) b = 0xB8;
-                else if (c === 0x2116) b = 0xB9;
-                else if (c === 0x00A0) b = 0xA0;
-                else if (c === 0x00A7) b = 0xA7;
-                out[i] = b;
-            }
-            return out;
-        }
-
         function downloadDxfFile(text, filename) {
-            const blob = new Blob([encodeWindows1251(text)], { type: 'application/dxf' });
+            const bytes = new TextEncoder().encode(String(text));
+            const blob = new Blob([bytes], { type: 'application/dxf' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -14172,6 +14315,55 @@
             return record.closed ? 0 : -1;
         }
 
+        /** Предыдущая вершина: у замкнутого контура перед первой идёт последняя. */
+        function polylinePrevIndex(record, idx) {
+            if (idx > 0) return idx - 1;
+            return record.closed ? record.pts.length - 1 : -1;
+        }
+
+        /**
+         * Угол поворота трассы в вершине, градусы. Знак: плюс — влево
+         * (против часовой в плане XY, X восток, Y север).
+         */
+        function polylineVertexDeflectionDeg(record, idx) {
+            if (!polylineVertexIsCorner(record, idx)) return null;
+            const pi = polylinePrevIndex(record, idx);
+            const ni = polylineNextIndex(record, idx);
+            if (pi < 0 || ni < 0) return null;
+            const prev = record.pts[pi], cur = record.pts[idx], next = record.pts[ni];
+            const ax = cur.x - prev.x, ay = cur.y - prev.y;
+            const bx = next.x - cur.x, by = next.y - cur.y;
+            const aLen = Math.hypot(ax, ay), bLen = Math.hypot(bx, by);
+            if (aLen < 1e-9 || bLen < 1e-9) return null;
+            return Math.atan2(ax * by - ay * bx, ax * bx + ay * by) * 180 / Math.PI;
+        }
+
+        /**
+         * Задать угол поворота в PI: исходящее звено крутится вокруг вершины,
+         * его длина в плане сохраняется. Входящее не трогаем.
+         */
+        function setPolylineVertexDeflection(record, idx, deg) {
+            if (!polylineVertexIsCorner(record, idx)) return;
+            const ang = Number(deg);
+            if (!Number.isFinite(ang)) return;
+            const pi = polylinePrevIndex(record, idx);
+            const ni = polylineNextIndex(record, idx);
+            if (pi < 0 || ni < 0) return;
+            const prev = record.pts[pi], cur = record.pts[idx], next = record.pts[ni];
+            const ax = cur.x - prev.x, ay = cur.y - prev.y;
+            const aLen = Math.hypot(ax, ay);
+            const outLen = Math.hypot(next.x - cur.x, next.y - cur.y);
+            if (aLen < 1e-9 || outLen < 1e-9) return;
+            const rad = ang * Math.PI / 180;
+            const ux = ax / aLen, uy = ay / aLen;
+            const c = Math.cos(rad), s = Math.sin(rad);
+            next.x = cur.x + (ux * c - uy * s) * outLen;
+            next.y = cur.y + (ux * s + uy * c) * outLen;
+            rebuildPolylineGeometry(record);
+            renderPolylinePointsEditor(record);
+            renderPolylinesList();
+        }
+
         /**
          * Ближайший к точке отрезок ИСХОДНЫХ вершин (pts), а не renderPts.
          * Пикинг возвращает точку на отрисованной линии, где после сопряжения
@@ -14988,6 +15180,8 @@
             const dictH = allocHandle();
             const dictGroupH = allocHandle();
             const dictLayoutH = allocHandle();
+            const dictPlotH = allocHandle();
+            const plotStyleH = allocHandle();
             const layoutModelH = allocHandle();
             const layoutPaperH = allocHandle();
             const tblVport = allocHandle();
@@ -15089,49 +15283,59 @@
             g(0, 'ENDSEC');
 
             g(0, 'SECTION'); g(2, 'TABLES');
-            g(0, 'TABLE'); g(2, 'VPORT'); g(5, tblVport); g(100, 'AcDbSymbolTable'); g(70, 1);
-            g(0, 'VPORT'); g(5, vportH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbViewportTableRecord');
+            const tableOpen = (name, handle, count, extra) => {
+                g(0, 'TABLE'); g(2, name); g(5, handle); g(330, 0);
+                g(100, 'AcDbSymbolTable'); g(70, count);
+                if (extra) g(100, extra);
+            };
+            const recOpen = (type, handle, tableHandle, subclass, handleCode = 5) => {
+                g(0, type); g(handleCode, handle); g(330, tableHandle);
+                g(100, 'AcDbSymbolTableRecord'); g(100, subclass);
+            };
+            tableOpen('VPORT', tblVport, 1);
+            recOpen('VPORT', vportH, tblVport, 'AcDbViewportTableRecord');
             g(2, '*ACTIVE'); g(70, 0); g(10, 0); g(20, 0); g(11, 1); g(21, 1);
             g(12, 0); g(22, 0); g(13, 0); g(23, 0); g(14, 10); g(24, 10); g(15, 10); g(25, 10);
             g(16, 0); g(26, 0); g(36, 1); g(17, 0); g(27, 0); g(37, 0);
             g(40, 50); g(41, 1.5); g(42, 50); g(43, 0); g(44, 0); g(50, 0); g(51, 0);
             g(71, 0); g(72, 100); g(73, 1); g(74, 3); g(75, 0); g(76, 0); g(77, 0); g(78, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'LTYPE'); g(5, tblLtype); g(100, 'AcDbSymbolTable'); g(70, 2);
-            g(0, 'LTYPE'); g(5, ltypeH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLinetypeTableRecord');
+            tableOpen('LTYPE', tblLtype, 2);
+            recOpen('LTYPE', ltypeH, tblLtype, 'AcDbLinetypeTableRecord');
             g(2, 'CONTINUOUS'); g(70, 0); g(3, 'Solid line'); g(72, 65); g(73, 0); g(40, 0);
-            g(0, 'LTYPE'); g(5, dashedH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLinetypeTableRecord');
+            recOpen('LTYPE', dashedH, tblLtype, 'AcDbLinetypeTableRecord');
             g(2, 'DASHED'); g(70, 0); g(3, 'Dashed __ __'); g(72, 65); g(73, 2); g(40, 0.75);
             g(49, 0.5); g(74, 0); g(49, -0.25); g(74, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'LAYER'); g(5, tblLayer); g(100, 'AcDbSymbolTable'); g(70, layers.length);
+            tableOpen('LAYER', tblLayer, layers.length);
             layers.forEach((name, i) => {
-                g(0, 'LAYER'); g(5, layerH[name]); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLayerTableRecord');
+                recOpen('LAYER', layerH[name], tblLayer, 'AcDbLayerTableRecord');
                 g(2, name); g(70, 0); g(62, layerColors[i]);
                 g(6, dashedLayers.has(name) ? 'DASHED' : 'CONTINUOUS');
+                g(370, -3); g(390, plotStyleH);
             });
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'STYLE'); g(5, tblStyle); g(100, 'AcDbSymbolTable'); g(70, 1);
-            g(0, 'STYLE'); g(5, styleH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbTextStyleTableRecord');
+            tableOpen('STYLE', tblStyle, 1);
+            recOpen('STYLE', styleH, tblStyle, 'AcDbTextStyleTableRecord');
             g(2, 'STANDARD'); g(70, 0); g(40, 0); g(41, 1); g(50, 0); g(71, 0); g(42, 2.5);
             g(3, 'txt'); g(4, '');
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'VIEW'); g(5, tblView); g(100, 'AcDbSymbolTable'); g(70, 0);
+            tableOpen('VIEW', tblView, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'UCS'); g(5, tblUcs); g(100, 'AcDbSymbolTable'); g(70, 0);
+            tableOpen('UCS', tblUcs, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'APPID'); g(5, tblAppid); g(100, 'AcDbSymbolTable'); g(70, 1);
-            g(0, 'APPID'); g(5, appidH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbRegAppTableRecord');
+            tableOpen('APPID', tblAppid, 1);
+            recOpen('APPID', appidH, tblAppid, 'AcDbRegAppTableRecord');
             g(2, 'ACAD'); g(70, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'DIMSTYLE'); g(5, tblDimstyle); g(100, 'AcDbSymbolTable'); g(70, 1); g(100, 'AcDbDimStyleTable');
-            g(0, 'DIMSTYLE'); g(105, dimstyleH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbDimStyleTableRecord');
+            tableOpen('DIMSTYLE', tblDimstyle, 1, 'AcDbDimStyleTable');
+            recOpen('DIMSTYLE', dimstyleH, tblDimstyle, 'AcDbDimStyleTableRecord', 105);
             g(2, 'STANDARD'); g(70, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'BLOCK_RECORD'); g(5, tblBlockRec); g(100, 'AcDbSymbolTable'); g(70, 2);
-            g(0, 'BLOCK_RECORD'); g(5, blockRecModel); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
+            tableOpen('BLOCK_RECORD', tblBlockRec, 2);
+            recOpen('BLOCK_RECORD', blockRecModel, tblBlockRec, 'AcDbBlockTableRecord');
             g(2, '*MODEL_SPACE'); g(340, layoutModelH);
-            g(0, 'BLOCK_RECORD'); g(5, blockRecPaper); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
+            recOpen('BLOCK_RECORD', blockRecPaper, tblBlockRec, 'AcDbBlockTableRecord');
             g(2, '*PAPER_SPACE'); g(340, layoutPaperH);
             g(0, 'ENDTAB');
             g(0, 'ENDSEC');
@@ -15153,10 +15357,14 @@
             g(0, 'DICTIONARY'); g(5, dictH); g(330, 0); g(100, 'AcDbDictionary'); g(281, 1);
             g(3, 'ACAD_GROUP'); g(350, dictGroupH);
             g(3, 'ACAD_LAYOUT'); g(350, dictLayoutH);
+            g(3, 'ACAD_PLOTSTYLENAME'); g(350, dictPlotH);
             g(0, 'DICTIONARY'); g(5, dictGroupH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
             g(0, 'DICTIONARY'); g(5, dictLayoutH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
             g(3, 'Model'); g(350, layoutModelH);
             g(3, 'Layout1'); g(350, layoutPaperH);
+            g(0, 'DICTIONARY'); g(5, dictPlotH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
+            g(3, 'Normal'); g(350, plotStyleH);
+            g(0, 'PLACEHOLDER'); g(5, plotStyleH); g(330, dictPlotH); g(100, 'AcDbPlaceHolder');
             const writeLayout = (handle, name, tab, blockRec) => {
                 g(0, 'LAYOUT'); g(5, handle); g(330, dictLayoutH);
                 g(100, 'AcDbPlotSettings');
@@ -15831,6 +16039,7 @@
                 return;
             }
             renderPolylineProfile();
+            renderRoadPlanView();
         }
 
         /* Геометрия кадра профиля — одна на отрисовку и на попадание мышью. */
@@ -15902,6 +16111,251 @@
             return (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * p;
         }
 
+        /* Подписи на плане/профиле — HTML поверх SVG: preserveAspectRatio="none"
+         * растянул бы <text>, а клик по числу должен открывать поле ввода. */
+        const CHART_SEG_LABEL_MIN_PX = 36;
+
+        function chartAnnotBusy(id) {
+            const host = $(id);
+            return !!(host && host.contains(document.activeElement)
+                && document.activeElement.matches('input'));
+        }
+
+        function beginChartValueEdit(el, opts) {
+            if (!el || el.classList.contains('is-editing')) return;
+            el.classList.add('is-editing');
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = opts.step || '0.01';
+            if (opts.min != null) input.min = String(opts.min);
+            input.value = opts.value;
+            el.textContent = '';
+            el.appendChild(input);
+            input.focus();
+            input.select();
+            let done = false;
+            const finish = (apply) => {
+                if (done) return;
+                done = true;
+                el.classList.remove('is-editing');
+                const raw = String(input.value).trim().replace(',', '.').replace('−', '-');
+                const v = Number(raw);
+                if (apply && Number.isFinite(v)) opts.apply(v);
+                else if (opts.redraw) opts.redraw();
+            };
+            input.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('pointerdown', (e) => e.stopPropagation());
+            input.addEventListener('mousedown', (e) => e.stopPropagation());
+            input.addEventListener('blur', () => finish(true));
+        }
+
+        function placeChartLabel(host, className, x, y, text, opts) {
+            const w = host.clientWidth, h = host.clientHeight;
+            if (!(x > 10 && y > 10 && x < w - 10 && y < h - 10)) return null;
+            const el = document.createElement('div');
+            el.className = className;
+            el.textContent = text;
+            el.style.left = x.toFixed(1) + 'px';
+            el.style.top = y.toFixed(1) + 'px';
+            if (opts?.title) el.title = opts.title;
+            if (opts?.onClick) {
+                el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                el.addEventListener('mousedown', (e) => e.stopPropagation());
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    opts.onClick(el);
+                });
+            }
+            host.appendChild(el);
+            return el;
+        }
+
+        function fmtChartLen(m) { return `${m.toFixed(2)} м`; }
+        function fmtChartSlope(p) {
+            const n = Number(p);
+            if (!Number.isFinite(n)) return '— ‰';
+            return `${n > 0 ? '+' : ''}${n.toFixed(1)} ‰`;
+        }
+        function fmtChartAng(d) {
+            const n = Number(d);
+            if (!Number.isFinite(n)) return 'Δ —';
+            const abs = Math.abs(n).toFixed(2);
+            return `Δ${n < 0 ? '−' : ''}${abs}°`;
+        }
+
+        /**
+         * Сдвиг чертежа — зажатый ПКМ (как в Civil: ЛКМ правит, ПКМ двигает вид).
+         * Слушаем host (обёртка плана/профиля или сам SVG поперечника), чтобы
+         * старт с подписи-оверлея тоже панорамировал, а не открывал меню.
+         */
+        function bindChartRmbPan(host, begin) {
+            if (!host) return;
+            host.addEventListener('contextmenu', (ev) => ev.preventDefault());
+            host.addEventListener('pointerdown', (ev) => {
+                if (ev.button !== 2) return;
+                const moveFn = begin(ev);
+                if (!moveFn) return;
+                ev.preventDefault();
+                try { host.setPointerCapture(ev.pointerId); } catch (_) {}
+                const prev = host.style.cursor;
+                host.style.cursor = 'grabbing';
+                const move = (e) => moveFn(e);
+                const up = () => {
+                    host.style.cursor = prev;
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                };
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+            });
+        }
+
+        function bindChartAnnotWheel(annotId, chartId) {
+            $(annotId)?.addEventListener('wheel', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const chart = $(chartId);
+                if (!chart) return;
+                chart.dispatchEvent(new WheelEvent('wheel', {
+                    deltaY: ev.deltaY,
+                    deltaX: ev.deltaX,
+                    deltaMode: ev.deltaMode,
+                    shiftKey: ev.shiftKey,
+                    ctrlKey: ev.ctrlKey,
+                    altKey: ev.altKey,
+                    metaKey: ev.metaKey,
+                    clientX: ev.clientX,
+                    clientY: ev.clientY,
+                    bubbles: true,
+                    cancelable: true
+                }));
+            }, { passive: false });
+        }
+
+        function syncProfileChartLabels(rec, rows, f) {
+            const host = $('polyProfileAnnot');
+            if (!host) return;
+            if (chartAnnotBusy('polyProfileAnnot')) return;
+            host.innerHTML = '';
+            if (!rec || !rows || !f) return;
+            const clipL = PROFILE_PAD.l, clipR = PROFILE_W - PROFILE_PAD.r;
+            rows.forEach((r) => {
+                const x = f.px(r.sta), y = f.py(r.axis);
+                if (x < clipL - 4 || x > clipR + 4) return;
+                const abs = rec.pts[r.idx]
+                    ? (worldPointToAbsoluteXYZ(rec.pts[r.idx]) || rec.pts[r.idx])
+                    : { z: r.axis };
+                placeChartLabel(host, 'prof-vz-label', x, y, abs.z.toFixed(3), {
+                    title: 'Отметка вершины, м. Нажмите, чтобы изменить',
+                    onClick: (el) => beginChartValueEdit(el, {
+                        value: abs.z.toFixed(3),
+                        step: '0.01',
+                        apply: (v) => {
+                            setPolylineVertexElevation(rec, r.idx, v);
+                            trackUsage('profile_z_inline', {});
+                        },
+                        redraw: () => renderPolylineProfile()
+                    })
+                });
+            });
+            const last = rec.closed ? rec.pts.length : rec.pts.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = polylineNextIndex(rec, i);
+                if (j < 0) continue;
+                const a = rows.find((r) => r.idx === i);
+                const b = rows.find((r) => r.idx === j);
+                if (!a || !b) continue;
+                const x = (f.px(a.sta) + f.px(b.sta)) / 2;
+                const y = (f.py(a.axis) + f.py(b.axis)) / 2;
+                if (x < clipL || x > clipR) continue;
+                if (Math.abs(f.px(b.sta) - f.px(a.sta)) < CHART_SEG_LABEL_MIN_PX) continue;
+                const st = polylineSegmentStats(rec, i);
+                if (!st) continue;
+                const text = `${fmtChartLen(st.length3d)} · ${fmtChartSlope(st.slopePermille)}`;
+                placeChartLabel(host, 'prof-seg-label', x, y, text, {
+                    title: 'Длина звена и уклон, ‰. Нажмите — править уклон',
+                    onClick: (el) => beginChartValueEdit(el, {
+                        value: st.slopePermille == null ? '0' : st.slopePermille.toFixed(1),
+                        step: '0.1',
+                        apply: (v) => {
+                            setPolylineSegmentSlope(rec, i, v);
+                            trackUsage('profile_slope_inline', {});
+                        },
+                        redraw: () => renderPolylineProfile()
+                    })
+                });
+            }
+        }
+
+        function syncRoadPlanLabels(rec, px, py) {
+            const host = $('roadPlanAnnot');
+            if (!host) return;
+            if (chartAnnotBusy('roadPlanAnnot')) return;
+            host.innerHTML = '';
+            if (!rec || rec.pts.length < 2 || !px || !py) return;
+            const last = rec.closed ? rec.pts.length : rec.pts.length - 1;
+            for (let i = 0; i < last; i++) {
+                const j = polylineNextIndex(rec, i);
+                if (j < 0) continue;
+                const a = rec.pts[i], b = rec.pts[j];
+                const x = (px(a.x) + px(b.x)) / 2;
+                const y = (py(a.y) + py(b.y)) / 2;
+                if (Math.hypot(px(b.x) - px(a.x), py(b.y) - py(a.y)) < CHART_SEG_LABEL_MIN_PX) continue;
+                const st = polylineSegmentStats(rec, i);
+                if (!st) continue;
+                placeChartLabel(host, 'plan-len-label', x, y, fmtChartLen(st.length2d), {
+                    title: 'Длина звена в плане, м. Нажмите, чтобы изменить',
+                    onClick: (el) => beginChartValueEdit(el, {
+                        value: st.length2d.toFixed(2),
+                        step: '0.01',
+                        min: 0.01,
+                        apply: (v) => {
+                            setPolylineSegmentLength(rec, i, v);
+                            trackUsage('plan_len_inline', {});
+                        },
+                        redraw: () => renderRoadPlanView()
+                    })
+                });
+            }
+            rec.pts.forEach((p, idx) => {
+                if (!polylineVertexIsCorner(rec, idx)) return;
+                const x = px(p.x), y = py(p.y);
+                const ang = polylineVertexDeflectionDeg(rec, idx);
+                const r = rec.radii[idx] || 0;
+                placeChartLabel(host, 'plan-ang-label', x, y, fmtChartAng(ang), {
+                    title: 'Угол поворота в вершине, градусы. Нажмите, чтобы изменить',
+                    onClick: (el) => beginChartValueEdit(el, {
+                        value: ang == null ? '0' : ang.toFixed(2),
+                        step: '0.01',
+                        apply: (v) => {
+                            setPolylineVertexDeflection(rec, idx, v);
+                            trackUsage('plan_defl_inline', {});
+                        },
+                        redraw: () => renderRoadPlanView()
+                    })
+                });
+                placeChartLabel(host, 'plan-r-label', x, y, r > 0 ? `R ${r.toFixed(2)}` : 'R —', {
+                    title: 'Радиус сопряжения, м. Нажмите, чтобы вписать. 0 — прямой угол',
+                    onClick: (el) => beginChartValueEdit(el, {
+                        value: r.toFixed(2),
+                        step: '0.1',
+                        min: 0,
+                        apply: (v) => {
+                            setPolylineVertexRadius(rec, idx, v);
+                            syncRoadCornerUi(rec);
+                            trackUsage('plan_r_inline', {});
+                        },
+                        redraw: () => renderRoadPlanView()
+                    })
+                });
+            });
+        }
+
         function renderPolylineProfile() {
             const svg = $('polyProfileChart');
             const meta = $('polyProfileMeta');
@@ -15923,6 +16377,8 @@
 
             if (!data || !rows) {
                 svg.innerHTML = '';
+                const annot = $('polyProfileAnnot');
+                if (annot && !chartAnnotBusy('polyProfileAnnot')) annot.innerHTML = '';
                 if (meta) meta.textContent = 'Полилиния слишком короткая для профиля.';
                 if (table) table.innerHTML = '<div class="profile-empty">Нет данных.</div>';
                 return;
@@ -16016,6 +16472,7 @@
             }
 
             renderProfileTable(rec, rows);
+            syncProfileChartLabels(rec, rows, f);
         }
 
         /** Компактная таблица вершин с правкой отметки и уклона на месте. */
@@ -16116,6 +16573,8 @@
         };
 
         $('polyProfileClose')?.addEventListener('click', () => closeRoadStudio());
+        bindChartAnnotWheel('polyProfileAnnot', 'polyProfileChart');
+        bindChartAnnotWheel('roadPlanAnnot', 'roadPlanChart');
         $('polyProfileXs')?.addEventListener('click', () => {
             const rec = listedPolylines().find((r) => r.id === polyProfileRecordId);
             if (!rec) return notifyError('Нет оси в профиле.');
@@ -16182,7 +16641,7 @@
             renderPolylineProfile();
         }, { passive: false });
 
-        // Перетаскивание: за кружок — отметка вершины, за фон — сдвиг окна.
+        // Перетаскивание: за кружок ЛКМ — отметка вершины, ПКМ — сдвиг окна.
         $('polyProfileChart')?.addEventListener('pointerdown', (ev) => {
             if (ev.button !== 0 || !polyProfileData) return;
             const svg = $('polyProfileChart');
@@ -16199,6 +16658,7 @@
                 renderPolylineProfile();
                 return;
             }
+            if (!knot) return;
 
             ev.preventDefault();
             try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
@@ -16231,28 +16691,26 @@
                 }
                 return;
             }
+        });
 
-            // Фон — сдвиг окна по пикетажу и по высоте.
-            svg.style.cursor = 'grabbing';
+        bindChartRmbPan($('polyProfileChartWrap') || $('polyProfileChart'), (ev) => {
+            if (!polyProfileData) return null;
+            const rec = profileRecord();
+            const f = profileCurrentFrame();
+            if (!rec || !f) return null;
             const start = profilePointerXY(ev);
             const from0 = f.from;
             const to0 = f.to;
             const z0 = polyProfileView.zCentre == null ? (f.zMin + f.zMax) / 2 : polyProfileView.zCentre;
-            const move = (e) => {
+            const mppX = f.mPerPxX, mppY = f.mPerPxY;
+            return (e) => {
                 const p = profilePointerXY(e);
-                const ds = (p.x - start.x) * f.mPerPxX;
+                const ds = (p.x - start.x) * mppX;
                 polyProfileView.from = from0 - ds;
                 polyProfileView.to = to0 - ds;
-                polyProfileView.zCentre = z0 + (p.y - start.y) * f.mPerPxY;
+                polyProfileView.zCentre = z0 + (p.y - start.y) * mppY;
                 renderPolylineProfile();
             };
-            const up = () => {
-                window.removeEventListener('pointermove', move);
-                window.removeEventListener('pointerup', up);
-                svg.style.cursor = 'grab';
-            };
-            window.addEventListener('pointermove', move);
-            window.addEventListener('pointerup', up);
         });
 
         // Двойной клик по полю — новая вершина на этом пикете.
@@ -17627,9 +18085,16 @@
         }
 
         function corridorLoftPush(positions, placed, pairs, capIds) {
-            const areaXY = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+            /* Вырожденность — в 3D, не по площади в плане. Бока одежды (R–RB)
+             * и торцы сечения стоят вертикально: areaXY у них ноль, и при
+             * проверке в XY формы становились открытыми листами без торцов. */
             const push = (a, b, c) => {
-                if (Math.abs(areaXY(a, b, c)) < 1e-6) return;
+                const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+                const acx = c.x - a.x, acy = c.y - a.y, acz = c.z - a.z;
+                const nx = aby * acz - abz * acy;
+                const ny = abz * acx - abx * acz;
+                const nz = abx * acy - aby * acx;
+                if ((nx * nx + ny * ny + nz * nz) < 1e-16) return;
                 positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
             };
             (pairs || []).forEach((link) => {
@@ -18327,7 +18792,7 @@
                                 </tr>`).join('') || '<tr><td colspan="3">Нет форм — «＋ форма»</td></tr>'}
                         </tbody>
                     </table>
-                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочка «откосы»: снять — убрать откосы. Колесо — зум к курсору, Shift+колесо — по высоте, фон — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
+                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочка «откосы»: снять — убрать откосы. Колесо — зум к курсору, Shift+колесо — по высоте, ПКМ — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
             }
             fillRoadXsRuleBar();
             renderRoadPlanView();
@@ -18473,11 +18938,39 @@
         }
 
         function redrawRoadStudio() {
+            lockRoadStudioPaneHeights();
             syncRoadStudioProfile();
             syncProfileViewBox();
             renderPolylineProfile();
             renderRoadPlanView();
             renderRoadXsView();
+        }
+
+        /**
+         * Высоты плана/профиля/поперечника — в пикселях после первого кадра.
+         * Иначе flex-grow тянет все три вместе с палитрой и с окном браузера.
+         * Менять вертикаль можно только ручкой между планом и профилем.
+         */
+        function lockRoadStudioPaneHeights() {
+            const card = $('roadXsCard');
+            const plan = $('rstab-plan');
+            const prof = $('rstab-profile');
+            if (!card || !plan || !prof || !roadStudioIsOpen()) return;
+            if (card.classList.contains('rs-locked')) return;
+            const h0 = Math.round(plan.getBoundingClientRect().height);
+            const h1 = Math.round(prof.getBoundingClientRect().height);
+            if (h0 < 80 || h1 < 80) return;
+            card.style.setProperty('--rs-plan', h0 + 'px');
+            card.style.setProperty('--rs-prof', h1 + 'px');
+            card.classList.add('rs-locked');
+        }
+
+        function unlockRoadStudioPaneHeights() {
+            const card = $('roadXsCard');
+            if (!card) return;
+            card.classList.remove('rs-locked');
+            card.style.removeProperty('--rs-plan');
+            card.style.removeProperty('--rs-prof');
         }
 
         /** Имя вкладки больше не прячет панели: все три чертежа на экране. */
@@ -18502,10 +18995,11 @@
             document.querySelector(`#paletteTray [data-pal="${card.id}"]`)?.remove();
             if (!wasOpen) {
                 card.classList.remove('dock-left', 'dock-right', 'dock-bottom');
+                unlockRoadStudioPaneHeights();
                 const w = Math.min(1100, Math.max(640, window.innerWidth - 32));
-                const h = Math.min(660, Math.max(420, window.innerHeight - 96));
+                const h = Math.min(660, window.innerHeight - 96);
                 card.style.width = w + 'px';
-                card.style.height = h + 'px';
+                card.style.height = Math.max(420, h) + 'px';
                 roadXsPanel.setPosition(Math.max(8, (window.innerWidth - w) / 2), 64);
             }
             showRoadStudioTab(tab || 'plan');
@@ -18517,6 +19011,7 @@
             const card = $('roadXsCard');
             if (card) {
                 card.classList.remove('pal-min', 'dock-left', 'dock-right', 'dock-bottom');
+                unlockRoadStudioPaneHeights();
                 card.style.width = '';
                 card.style.height = '';
                 document.querySelector(`#paletteTray [data-pal="${card.id}"]`)?.remove();
@@ -18655,6 +19150,8 @@
                         Нет оси — начертите полилинию
                     </text>`;
                 roadPlanFrame = null;
+                const annot = $('roadPlanAnnot');
+                if (annot && !chartAnnotBusy('roadPlanAnnot')) annot.innerHTML = '';
                 return;
             }
             const model = roadXsModels.find((m) => m.polylineId === rec.id);
@@ -18722,8 +19219,9 @@
                 ${poly(src, `stroke="${axisCol}" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"`)}
                 ${tick}
                 ${knots}
-                <text x="${pad}" y="${h - 6}">план · вершины и кромки тянутся · колесо — зум</text>`;
+                <text x="${pad}" y="${h - 6}">план · вершины и кромки тянутся · колесо — зум · ПКМ — сдвиг</text>`;
             roadPlanFrame = { w, h, cx, cy, span, mPerPx, pad };
+            syncRoadPlanLabels(rec, px, py);
         }
 
         function zoomRoadPlanAt(at, k) {
@@ -18822,8 +19320,9 @@
                 const startY = ev.clientY;
                 const move = (e) => {
                     const a = Math.max(90, Math.min(total - 90, h0 + (e.clientY - startY)));
-                    card.style.setProperty('--rs-plan', String(a));
-                    card.style.setProperty('--rs-prof', String(total - a));
+                    card.style.setProperty('--rs-plan', a + 'px');
+                    card.style.setProperty('--rs-prof', (total - a) + 'px');
+                    card.classList.add('rs-locked');
                 };
                 const up = () => {
                     split.classList.remove('is-drag');
@@ -18970,34 +19469,31 @@
                     window.addEventListener('pointerup', up);
                     return;
                 }
-
-                ev.preventDefault();
-                try { svg.setPointerCapture?.(ev.pointerId); } catch (_) {}
+                void at;
+            });
+            bindChartRmbPan($('roadPlanChartWrap') || $('roadPlanChart'), (ev) => {
+                if (!roadPlanFrame) renderRoadPlanView();
+                if (!roadPlanFrame) return null;
+                const svg = $('roadPlanChart');
+                if (!svg) return null;
                 const cx0 = roadPlanFrame.cx, cy0 = roadPlanFrame.cy;
                 const mpp = roadPlanFrame.mPerPx;
+                const w = roadPlanFrame.w, h = roadPlanFrame.h;
                 const box = svg.getBoundingClientRect();
-                const sx0 = (ev.clientX - box.left) / Math.max(1, box.width) * roadPlanFrame.w;
-                const sy0 = (ev.clientY - box.top) / Math.max(1, box.height) * roadPlanFrame.h;
-                svg.style.cursor = 'grabbing';
-                const move = (e) => {
+                const sx0 = (ev.clientX - box.left) / Math.max(1, box.width) * w;
+                const sy0 = (ev.clientY - box.top) / Math.max(1, box.height) * h;
+                const span0 = roadPlanFrame.span;
+                return (e) => {
                     const box2 = svg.getBoundingClientRect();
-                    const sx = (e.clientX - box2.left) / Math.max(1, box2.width) * roadPlanFrame.w;
-                    const sy = (e.clientY - box2.top) / Math.max(1, box2.height) * roadPlanFrame.h;
+                    const sx = (e.clientX - box2.left) / Math.max(1, box2.width) * w;
+                    const sy = (e.clientY - box2.top) / Math.max(1, box2.height) * h;
                     roadPlanView = {
                         cx: cx0 - (sx - sx0) * mpp,
                         cy: cy0 + (sy - sy0) * mpp,
-                        span: roadPlanFrame.span
+                        span: span0
                     };
                     renderRoadPlanView();
                 };
-                const up = () => {
-                    svg.style.cursor = 'grab';
-                    svg.removeEventListener('pointermove', move);
-                    svg.removeEventListener('pointerup', up);
-                };
-                svg.addEventListener('pointermove', move);
-                svg.addEventListener('pointerup', up);
-                void at;
             });
             $('roadPlanChart')?.addEventListener('dblclick', (ev) => {
                 const rec = roadPlanSource();
@@ -19236,6 +19732,30 @@
             const k = ev.deltaY > 0 ? 1.18 : 1 / 1.18;
             zoomRoadXsAt(at, k, ev.shiftKey);
         }, { passive: false });
+        bindChartRmbPan($('roadXsChart'), (ev) => {
+            const f0 = roadXsChartFrame;
+            const svg = $('roadXsChart');
+            if (!f0 || !svg) return null;
+            const start = { x: ev.clientX, y: ev.clientY };
+            const orig = { offMin: f0.offMin, offMax: f0.offMax, z0: f0.z0, spanZ: f0.spanZ,
+                w: f0.w, h: f0.h, pad: f0.pad };
+            const box0 = svg.getBoundingClientRect();
+            return (e) => {
+                const innerW = Math.max(1e-6, orig.w - orig.pad.l - orig.pad.r);
+                const innerH = Math.max(1e-6, orig.h - orig.pad.t - orig.pad.b);
+                const dOff = ((e.clientX - start.x) / Math.max(1, box0.width) * orig.w) / innerW
+                    * (orig.offMax - orig.offMin);
+                const dZ = -((e.clientY - start.y) / Math.max(1, box0.height) * orig.h) / innerH
+                    * orig.spanZ;
+                roadXsView = {
+                    offMin: orig.offMin - dOff,
+                    offMax: orig.offMax - dOff,
+                    z0: orig.z0 - dZ,
+                    spanZ: orig.spanZ
+                };
+                renderRoadXsView();
+            };
+        });
 
         function fillRoadXsRuleBar() {
             const bar = $('roadXsRuleBar');
@@ -19429,36 +19949,6 @@
                     window.addEventListener('pointerup', up);
                     return;
                 }
-                const start = { x: ev.clientX, y: ev.clientY };
-                const f0 = roadXsChartFrame;
-                if (!f0) return;
-                ev.preventDefault();
-                const orig = { offMin: f0.offMin, offMax: f0.offMax, z0: f0.z0, spanZ: f0.spanZ,
-                    w: f0.w, h: f0.h, pad: f0.pad };
-                const svg = $('roadXsChart');
-                const box0 = svg.getBoundingClientRect();
-                try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
-                const move = (e) => {
-                    const innerW = Math.max(1e-6, orig.w - orig.pad.l - orig.pad.r);
-                    const innerH = Math.max(1e-6, orig.h - orig.pad.t - orig.pad.b);
-                    const dOff = ((e.clientX - start.x) / Math.max(1, box0.width) * orig.w) / innerW
-                        * (orig.offMax - orig.offMin);
-                    const dZ = -((e.clientY - start.y) / Math.max(1, box0.height) * orig.h) / innerH
-                        * orig.spanZ;
-                    roadXsView = {
-                        offMin: orig.offMin - dOff,
-                        offMax: orig.offMax - dOff,
-                        z0: orig.z0 - dZ,
-                        spanZ: orig.spanZ
-                    };
-                    renderRoadXsView();
-                };
-                const up = () => {
-                    window.removeEventListener('pointermove', move);
-                    window.removeEventListener('pointerup', up);
-                };
-                window.addEventListener('pointermove', move);
-                window.addEventListener('pointerup', up);
                 return;
             }
             ev.preventDefault();
@@ -19596,7 +20086,10 @@
         $('roadXsSelect')?.addEventListener('change', () => {
             const id = Number($('roadXsSelect').value);
             const rec = drawnPolylines.find((r) => r.id === id);
-            if (rec) fillRoadAxisStyleForm(rec);
+            if (rec) {
+                fillRoadAxisStyleForm(rec);
+                polyProfileRecordId = rec.id;
+            }
             const existing = roadXsModels.find((m) => m.polylineId === id);
             if (existing) setRoadXsActive(existing.id, 0);
             else {
@@ -19604,6 +20097,8 @@
                 updateRoadXsStatus();
                 renderRoadXsView();
             }
+            renderRoadPlanView();
+            if (rec) renderPolylineProfile();
         });
         $('roadXsColor')?.addEventListener('input', () => {
             const model = currentRoadXsModel();
@@ -37463,7 +37958,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'xs-shape-colors',
+            buildId: 'chart-rmb-pan',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37472,6 +37967,10 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',
+                '2026.08.16: DXF R2010 уходит UTF-8 (не Windows-1251) — Civil больше не падает «ошибка в таблице APPID» на слое 2Д.',
+                '2026.08.16: высоты плана, профиля и поперечника не едут за окном — только ручка между планом и профилем.',
+                '2026.08.16: полотно слоёв — замкнутые формы с торцами (вертикальные грани больше не отбрасываются); на плане длины / углы / радиусы, на профиле отметки и длина·уклон — клик вписывает число.',
                 '2026.08.16: формы поперечника — свои цвета (асфальт / щебень / бетон / кювет); заливку можно тянуть; Alt+клик или ✕ удаляет форму и её точки; галочка «откосы» снимает откосы.',
                 '2026.08.16: на узком скруглении внутреннюю кромку не выворачивает за центр дуги — полотно без «ёжика».',
                 '2026.08.16: на плане трассы тянутся все вершины и кромки ширины; на прямых углах — прямой угол или скругление; синие сечения на отметке оси; ширина новой дороги 3.25 м в каждую сторону.',
@@ -37491,7 +37990,7 @@ ${componentXml || '    '}
                 '2026.08.14: боковые панели — палитры Civil 3D (рамка 3 px, зазор до сцены), не плиты конкурента на всю высоту.',
                 '2026.08.14: лента как в Civil 3D — вкладки Файл / Вид / Измерения / Черчение / Рельеф / Анализ / IFC и именованные панели; кнопки на виду, без выпадающих меню.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.14: слои DXF по-русски — Ось, Кромка, Поперечник, Откос, КДО, 2Д, 3Д, Точки, Тело; файл в ANSI_1251, как ждёт Civil.',
+                '2026.08.14: слои DXF по-русски — Ось, Кромка, Поперечник, Откос, КДО, 2Д, 3Д, Точки, Тело; R2010 — UTF-8.',
                 '2026.08.14: окно поперечников открывается кнопкой «⊟ Поперечники»; профиль садится рядом.',
                 '2026.08.13: окна профиля и поперечника садятся рядом; откосы от кромок шаблона до земли — на чертеже сечения и TIN в модели (тот же движок, что у площадки).',
                 '2026.08.13: Tekla на заводской сетке (~1200 м) больше не садится в ноль из-за вырезов: старый кэш со сбросом отбрасывается, после CSG положение возвращается по координатам файла.',
@@ -37566,7 +38065,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=122').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=126').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
