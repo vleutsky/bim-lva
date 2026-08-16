@@ -2169,6 +2169,37 @@ async function checkRoadCrossSections(page) {
         }
     }
 
+    // Внутренний уголок: сечения до PI перпендикулярны оси, а на PI —
+    // биссектриса. Бордюр/обочина без подрезки заходят в соседнее звено.
+    const innerClip = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 18, z: g + 0.5 },
+                { x: 28, y: 18, z: g + 0.5 },
+                { x: 28, y: 26, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-внутренний-угол', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, {
+            step: 1, widthL: 3.25, widthR: 3.25, sampleStep: 1, live: false
+        });
+        D.addRoadXsFigureBoth('curb');
+        D.addRoadXsFigureBoth('shoulder');
+        const ov = D.corridorInnerOverlap(id);
+        const row = (D.roadXs || []).find((m) => m.polylineId === id);
+        return { ov, tris: row?.corridorTris || 0 };
+    }, groundZ);
+    if (!(innerClip.ov?.raw > 0.02)) {
+        problems.push(`поперечники: на внутреннем угле нет вылета до клипа (${JSON.stringify(innerClip)})`);
+    }
+    if (!((innerClip.ov?.clipped ?? 1) < 1e-3)) {
+        problems.push(`поперечники: после клипа вылет ${innerClip.ov?.clipped} вместо ≈0`);
+    }
+    if ((innerClip.tris || 0) < 20) {
+        problems.push(`поперечники: на внутреннем угле полотно ${innerClip.tris} граней`);
+    }
+
     const planEdit = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
         const id = D.createPolylineFromPoints(
