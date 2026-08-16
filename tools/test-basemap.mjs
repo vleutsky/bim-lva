@@ -260,7 +260,13 @@ try {
         document.getElementById('mapBuilderLoad').click();
     }, [SITE, { lat: SITE.lat - dLat0, lon: SITE.lon - dLon0 }, { lat: SITE.lat + dLat0, lon: SITE.lon + dLon0 }]);
     const mapOnlyOk = await page
-        .waitForFunction(() => window.BimLvaDebug?.mapTerrainLayer != null, { timeout: 90_000 })
+        .waitForFunction(
+            () => window.BimLvaDebug?.mapTerrainLayer != null
+                && window.BimLvaDebug?.basemapLayer != null
+                && !document.getElementById('mapBuilderModal')?.classList.contains('show')
+                && !document.getElementById('loader')?.classList.contains('show'),
+            { timeout: 90_000 }
+        )
         .then(() => true).catch(() => false);
     if (!mapOnlyOk) {
         problems.push('карта на пустой сцене не загрузила рельеф');
@@ -295,7 +301,12 @@ try {
             `чертёж ${mapTools.drawing ? 'ок' : 'НЕТ'}, ось ${mapTools.axisOn ? 'ок' : 'НЕТ'}`
         );
         await page.evaluate(() => document.getElementById('clear')?.click());
-        await page.waitForTimeout(400);
+        await page.waitForFunction(
+            () => window.BimLvaDebug.modelCount === 0
+                && window.BimLvaDebug.mapTerrainLayer == null
+                && !document.getElementById('loader')?.classList.contains('show'),
+            { timeout: 30_000 }
+        );
         const afterClear = await page.evaluate(() => ({
             models: window.BimLvaDebug.modelCount,
             dem: window.BimLvaDebug.mapTerrainLayer != null,
