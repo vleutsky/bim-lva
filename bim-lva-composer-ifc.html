@@ -15142,6 +15142,8 @@
             const n = (v) => (Math.round(v * 1e6) / 1e6).toFixed(6);
             let nextHandle = 0x20;
             const allocHandle = () => (nextHandle++).toString(16).toUpperCase();
+            const byBlockLtypeH = allocHandle();
+            const byLayerLtypeH = allocHandle();
             const ltypeH = allocHandle();
             const dashedH = allocHandle();
             const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_KDO, DXF_LAYER_XS, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
@@ -15300,9 +15302,17 @@
             g(40, 50); g(41, 1.5); g(42, 50); g(43, 0); g(44, 0); g(50, 0); g(51, 0);
             g(71, 0); g(72, 100); g(73, 1); g(74, 3); g(75, 0); g(76, 0); g(77, 0); g(78, 0);
             g(0, 'ENDTAB');
-            tableOpen('LTYPE', tblLtype, 2);
-            recOpen('LTYPE', ltypeH, tblLtype, 'AcDbLinetypeTableRecord');
-            g(2, 'CONTINUOUS'); g(70, 0); g(3, 'Solid line'); g(72, 65); g(73, 0); g(40, 0);
+            /* Civil: «Отсутствует стандартный элемент ByLayer в таблице LTYPE».
+             * R2010 требует три служебных типа, как в файле из AutoCAD:
+             * ByBlock, ByLayer, Continuous. CONTINUOUS без них не считается. */
+            const writeSolidLtype = (handle, name) => {
+                recOpen('LTYPE', handle, tblLtype, 'AcDbLinetypeTableRecord');
+                g(2, name); g(70, 0); g(3, ''); g(72, 65); g(73, 0); g(40, 0);
+            };
+            tableOpen('LTYPE', tblLtype, 4);
+            writeSolidLtype(byBlockLtypeH, 'ByBlock');
+            writeSolidLtype(byLayerLtypeH, 'ByLayer');
+            writeSolidLtype(ltypeH, 'Continuous');
             recOpen('LTYPE', dashedH, tblLtype, 'AcDbLinetypeTableRecord');
             g(2, 'DASHED'); g(70, 0); g(3, 'Dashed __ __'); g(72, 65); g(73, 2); g(40, 0.75);
             g(49, 0.5); g(74, 0); g(49, -0.25); g(74, 0);
@@ -15311,13 +15321,13 @@
             layers.forEach((name, i) => {
                 recOpen('LAYER', layerH[name], tblLayer, 'AcDbLayerTableRecord');
                 g(2, name); g(70, 0); g(62, layerColors[i]);
-                g(6, dashedLayers.has(name) ? 'DASHED' : 'CONTINUOUS');
+                g(6, dashedLayers.has(name) ? 'DASHED' : 'Continuous');
                 g(370, -3); g(390, plotStyleH);
             });
             g(0, 'ENDTAB');
             tableOpen('STYLE', tblStyle, 1);
             recOpen('STYLE', styleH, tblStyle, 'AcDbTextStyleTableRecord');
-            g(2, 'STANDARD'); g(70, 0); g(40, 0); g(41, 1); g(50, 0); g(71, 0); g(42, 2.5);
+            g(2, 'Standard'); g(70, 0); g(40, 0); g(41, 1); g(50, 0); g(71, 0); g(42, 2.5);
             g(3, 'txt'); g(4, '');
             g(0, 'ENDTAB');
             tableOpen('VIEW', tblView, 0);
@@ -15330,7 +15340,7 @@
             g(0, 'ENDTAB');
             tableOpen('DIMSTYLE', tblDimstyle, 1, 'AcDbDimStyleTable');
             recOpen('DIMSTYLE', dimstyleH, tblDimstyle, 'AcDbDimStyleTableRecord', 105);
-            g(2, 'STANDARD'); g(70, 0);
+            g(2, 'Standard'); g(70, 0);
             g(0, 'ENDTAB');
             tableOpen('BLOCK_RECORD', tblBlockRec, 2);
             recOpen('BLOCK_RECORD', blockRecModel, tblBlockRec, 'AcDbBlockTableRecord');
@@ -37958,7 +37968,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'chart-rmb-pan',
+            buildId: 'dxf-bylayer',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37967,6 +37977,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: в DXF таблица LTYPE содержит ByLayer / ByBlock / Continuous — Civil больше не падает «отсутствует ByLayer».',
                 '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',
                 '2026.08.16: DXF R2010 уходит UTF-8 (не Windows-1251) — Civil больше не падает «ошибка в таблице APPID» на слое 2Д.',
                 '2026.08.16: высоты плана, профиля и поперечника не едут за окном — только ручка между планом и профилем.',
@@ -38065,7 +38076,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=126').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=127').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
