@@ -9965,7 +9965,15 @@
                 persistMapBuilderPlace(mapBuilderPlaceMode());
                 syncMapBuilderPlaceUi();
             });
-            restoreMapBuilderPlace();
+            // Только значение select: syncMapBuilderPlaceUi читает loadedModels,
+            // а тот объявлен ниже и здесь ещё в TDZ.
+            try {
+                const saved = localStorage.getItem(MAP_PLACE_STORAGE_KEY);
+                if (saved === 'zeros' || saved === 'world') {
+                    const sel = $('mapBuilderPlace');
+                    if (sel) sel.value = saved;
+                }
+            } catch (_) {}
             $('mapBuilderBind')?.addEventListener('click', () => {
                 const settings = mapBuilderSettingsFromSelection();
                 closeMapBuilderModal();
