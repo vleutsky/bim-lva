@@ -1989,6 +1989,22 @@ async function checkRoadCrossSections(page) {
         problems.push('поперечники: нет отметки площадки — проверка пропущена');
         return null;
     }
+    const defaults = await page.evaluate(() => ({
+        half: window.BimLvaDebug.defaultRoadHalfWidth,
+        L: document.getElementById('roadXsWidthL')?.value,
+        R: document.getElementById('roadXsWidthR')?.value,
+        mode: document.getElementById('roadCornerMode')?.value,
+        rHidden: !!document.getElementById('roadCornerRadiusLab')?.hidden
+    }));
+    if (defaults.half !== 3.25) {
+        problems.push(`поперечники: DEFAULT ширина ${defaults.half} вместо 3.25`);
+    }
+    if (defaults.L !== '3.25' || defaults.R !== '3.25') {
+        problems.push(`поперечники: поля ширины ${defaults.L}/${defaults.R} вместо 3.25/3.25`);
+    }
+    if (defaults.mode !== 'miter' || !defaults.rHidden) {
+        problems.push(`поперечники: углы по умолчанию ${JSON.stringify(defaults)} вместо прямой (miter)`);
+    }
     const got = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
         const id = D.createPolylineFromPoints(
@@ -2061,6 +2077,14 @@ async function checkRoadCrossSections(page) {
                 `поперечники: правая нормаль (${got.res.first.rx}, ${got.res.first.ry}) вместо (0, -1)`
             );
         }
+        const az = got.res.first.axisSceneZ;
+        const dz = got.res.first.designZ;
+        if (!(Math.abs((dz ?? NaN) - az) < 0.05)) {
+            problems.push(`поперечники: синяя линия Z=${dz} не на оси ${az}`);
+        }
+        if (!(Math.abs((dz ?? az) - groundZ) > 0.2)) {
+            problems.push(`поперечники: синяя линия на земле (${dz} ≈ ${groundZ}), а не на оси`);
+        }
     }
     if (!got.dxfXs || !got.dxfRoad || got.dxfPolys < 3) {
         problems.push(
@@ -2113,6 +2137,67 @@ async function checkRoadCrossSections(page) {
         if (corner.rightN < 3 || corner.leftN < 3) {
             problems.push(`поперечники: кромки L-угла left=${corner.leftN} right=${corner.rightN} (ждали по 3 вершины)`);
         }
+    }
+
+    const planEdit = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 21, y: 18, z: g + 0.5 },
+                { x: 25, y: 18, z: g + 0.5 },
+                { x: 25, y: 22, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-план', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, { step: 20, widthL: 2, widthR: 2, sampleStep: 1, live: false });
+        const moved = D.planMoveVertex(id, 1, 26, 18);
+        const afterMove = D.buildRoadXs(id, { step: 20, widthL: 2, widthR: 2, sampleStep: 1, live: false });
+        D.setRoadWidths(id, 4.5, 5);
+        const afterW = D.buildRoadXs(id, { step: 20, widthL: 4.5, widthR: 5, sampleStep: 1, live: false });
+        const fillet = D.applyRoadCorners(id, 'fillet', 3);
+        const filletSt = D.roadCornerState(id);
+        const miter = D.applyRoadCorners(id, 'miter', 3);
+        const miterSt = D.roadCornerState(id);
+        const defId = D.createPolylineFromPoints(
+            [
+                { x: 30, y: 17, z: g + 0.5 },
+                { x: 33, y: 17, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-ширина' }
+        );
+        const defW = D.buildRoadXs(defId, { step: 10, sampleStep: 1, live: false });
+        return {
+            moved,
+            pi: (afterMove?.corner || []).find((c) => Math.abs(c.x - 26) < 1e-3 && Math.abs(c.y - 18) < 1e-3),
+            widthL: afterW?.widthL,
+            widthR: afterW?.widthR,
+            htmlL: document.getElementById('roadXsWidthL')?.value,
+            htmlR: document.getElementById('roadXsWidthR')?.value,
+            filletR: fillet?.[1],
+            filletMode: filletSt?.mode,
+            miterR: miter?.[1],
+            miterMode: miterSt?.mode,
+            defL: defW?.widthL,
+            defR: defW?.widthR
+        };
+    }, groundZ);
+    if (!planEdit.moved || !planEdit.pi) {
+        problems.push(`поперечники: на плане вершина не сдвинулась в (26, 18) — ${JSON.stringify(planEdit)}`);
+    }
+    if (Math.abs((planEdit.widthL || 0) - 4.5) > 1e-6 || Math.abs((planEdit.widthR || 0) - 5) > 1e-6) {
+        problems.push(`поперечники: тяга ширины ${planEdit.widthL}/${planEdit.widthR} вместо 4.5/5`);
+    }
+    if (planEdit.htmlL !== '4.5' || planEdit.htmlR !== '5') {
+        problems.push(`поперечники: поля ширины после правки ${planEdit.htmlL}/${planEdit.htmlR} вместо 4.5/5`);
+    }
+    if (!(planEdit.filletR > 0) || planEdit.filletMode !== 'fillet') {
+        problems.push(`поперечники: скругление угла не записалось (${JSON.stringify(planEdit)})`);
+    }
+    if (planEdit.miterR !== 0 || planEdit.miterMode !== 'miter') {
+        problems.push(`поперечники: прямой угол не сбросил радиус (${JSON.stringify(planEdit)})`);
+    }
+    if (Math.abs((planEdit.defL || 0) - 3.25) > 1e-6 || Math.abs((planEdit.defR || 0) - 3.25) > 1e-6) {
+        problems.push(`поперечники: новая ось без ширины дала ${planEdit.defL}/${planEdit.defR} вместо 3.25/3.25`);
     }
 
     const ui = await page.evaluate(() => {
@@ -2191,6 +2276,9 @@ async function checkRoadCrossSections(page) {
             profileBtn: !!document.getElementById('roadXsProfile'),
             slopeBtn: !!document.getElementById('roadXsSlope'),
             planPoly: /<polyline /.test(document.getElementById('roadPlanChart')?.innerHTML || ''),
+            planVerts: document.querySelectorAll('#roadPlanChart .pkvert').length,
+            planEdges: document.querySelectorAll('#roadPlanChart .pkedge').length,
+            cornerMode: !!document.getElementById('roadCornerMode'),
             profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80
         };
     });
@@ -2199,6 +2287,9 @@ async function checkRoadCrossSections(page) {
     }
     if (!chart.planPoly || !chart.profSvg) {
         problems.push(`поперечники: план или профиль пустой (${JSON.stringify({ planPoly: chart.planPoly, profSvg: chart.profSvg })})`);
+    }
+    if ((chart.planVerts || 0) < 2 || (chart.planEdges || 0) < 2 || !chart.cornerMode) {
+        problems.push(`поперечники: на плане нет ручек вершин/кромок (${JSON.stringify({ verts: chart.planVerts, edges: chart.planEdges, corner: chart.cornerMode })})`);
     }
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
