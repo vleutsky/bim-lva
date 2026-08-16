@@ -2169,6 +2169,73 @@ async function checkRoadCrossSections(page) {
         }
     }
 
+    // Кювет на том же L-угле: miter растягивает только кромку полотна,
+    // вынос кювета (берма+откос+дно+откос = 1.60 м) не множится на √2 —
+    // иначе солид и синяя линия торчат плавником.
+    const ditchMiter = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 21, y: 16, z: g + 0.5 },
+                { x: 24, y: 16, z: g + 0.5 },
+                { x: 24, y: 19, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-кювет-угол', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, { step: 10, widthL: 2, widthR: 2, sampleStep: 1, live: false });
+        const before = D.roadXsTemplate();
+        const r0 = before?.points?.find((p) => p.code === 'R');
+        const l0 = before?.points?.find((p) => p.code === 'L');
+        if (r0) D.addRoadXsFigure('ditch', r0.id);
+        if (l0) D.addRoadXsFigure('ditch', l0.id);
+        const tpl = D.roadXsTemplate();
+        const r = tpl?.points?.find((p) => p.code === 'R');
+        const doR = (tpl?.points || [])
+            .filter((p) => p.code === 'DO')
+            .reduce((best, p) => (!best || p.off > best.off ? p : best), null);
+        let piIdx = 1;
+        let evR = r ? D.evalRoadXsPoint(r.id, 1) : null;
+        for (let i = 0; i < 6; i++) {
+            const e = r ? D.evalRoadXsPoint(r.id, i) : null;
+            if (e && Math.abs((e.miterScale || 1) - Math.SQRT2) < 0.08) {
+                piIdx = i;
+                evR = e;
+                break;
+            }
+        }
+        const evDO = doR ? D.evalRoadXsPoint(doR.id, piIdx) : null;
+        const extra = (evDO?.along != null && evR?.along != null) ? evDO.along - evR.along : null;
+        return {
+            miterScale: evR?.miterScale,
+            alongR: evR?.along,
+            alongDO: evDO?.along,
+            extra,
+            rOff: r?.off,
+            doOff: doR?.off,
+            worldR: evR?.world,
+            worldDO: evDO?.world,
+            ditchShapes: (tpl?.shapes || []).filter((s) => s.code === 'DITCH').length
+        };
+    }, groundZ);
+    if (ditchMiter.ditchShapes < 2) {
+        problems.push(`поперечники: кювет на угле не добавился (${JSON.stringify(ditchMiter)})`);
+    } else {
+        if (Math.abs((ditchMiter.miterScale || 0) - Math.SQRT2) > 0.05) {
+            problems.push(`поперечники: кювет на угле miterScale ${ditchMiter.miterScale} вместо √2`);
+        }
+        if (Math.abs((ditchMiter.alongR || 0) - 2 * Math.SQRT2) > 0.08) {
+            problems.push(`поперечники: кромка R на угле вдоль секущей ${ditchMiter.alongR} вместо 2√2`);
+        }
+        // 0.30+0.40+0.50+0.40 = 1.60; с miter на всём шаблоне было бы 1.60√2 ≈ 2.26.
+        if (Math.abs((ditchMiter.extra || 0) - 1.6) > 0.08) {
+            problems.push(`поперечники: вынос кювета на угле ${ditchMiter.extra} вместо 1.60 м (${JSON.stringify(ditchMiter)})`);
+        }
+        const wr = ditchMiter.worldR;
+        if (!wr || Math.abs(wr.x - 26) > 0.08 || Math.abs(wr.y - 14) > 0.08) {
+            problems.push(`поперечники: кромка R кювета на угле не в (26, 14) — ${JSON.stringify(ditchMiter)}`);
+        }
+    }
+
     const planEdit = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
         const id = D.createPolylineFromPoints(

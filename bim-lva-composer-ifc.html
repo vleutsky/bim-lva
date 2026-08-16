@@ -7201,6 +7201,10 @@
                 const baseDz = par
                     ? par.dz + (Number(pt.relDz) || 0)
                     : pt.dz;
+                const world = r ? placeTemplateAtStation(st, r, templateDeckEdges(model.template)) : null;
+                const along = world
+                    ? (world.x - st.x) * (st.rx || 0) + (world.y - st.y) * (st.ry || 0)
+                    : null;
                 return {
                     ...r,
                     baseOff,
@@ -7208,7 +7212,11 @@
                     parent: pt.parent ?? null,
                     relOff: pt.relOff,
                     relDz: pt.relDz,
-                    applies: pointRuleApplies({ ...pt, off: baseOff, dz: baseDz }, st)
+                    applies: pointRuleApplies({ ...pt, off: baseOff, dz: baseDz }, st),
+                    world: world ? { x: world.x, y: world.y, z: world.z } : null,
+                    along,
+                    sta: st.sta, sx: st.x, sy: st.y, rx: st.rx, ry: st.ry,
+                    miterScale: st.miterScale
                 };
             },
             setRoadXsLayerThickness(h) {
@@ -16903,6 +16911,49 @@
             };
         }
 
+        /**
+         * Кромки покрытия (L/R), не край кювета. На угле miterScale растягивает
+         * только полотно до уголка; вынос бордюра/кювета остаётся в метрах.
+         */
+        function templateDeckEdges(tpl) {
+            const pts = tpl?.points || [];
+            const L = pts.find((p) => p.code === 'L');
+            const R = pts.find((p) => p.code === 'R');
+            if (L && R && Number.isFinite(L.off) && Number.isFinite(R.off)) {
+                return {
+                    left: Math.max(0.05, Math.abs(L.off)),
+                    right: Math.max(0.05, Math.abs(R.off))
+                };
+            }
+            return templateWidths(tpl);
+        }
+
+        function miteredTemplateOffset(off, scale, deck, rho) {
+            const sc = Math.max(1, Number(scale) || 1);
+            const o = Number(off) || 0;
+            let used;
+            if (!(sc > 1 + 1e-9) || !deck) {
+                used = o * sc;
+            } else if (o >= 0) {
+                const eR = Math.max(0.05, Number(deck.right) || 0);
+                used = o <= eR + 1e-9 ? o * sc : eR * sc + (o - eR);
+            } else {
+                const eL = Math.max(0.05, Number(deck.left) || 0);
+                used = -o <= eL + 1e-9 ? o * sc : -eL * sc + (o + eL);
+            }
+            return clampPlanOffset(used, rho);
+        }
+
+        /** Вынос вдоль секущей: полотно × miterScale, кювет/бордюр — как есть. */
+        function stationMiteredReach(st, widthL, widthR, deck) {
+            const scale = Math.max(1, st?.miterScale || 1);
+            const rho = st?.rho;
+            return {
+                left: Math.abs(miteredTemplateOffset(-(Number(widthL) || 0), scale, deck, rho)),
+                right: Math.abs(miteredTemplateOffset(Number(widthR) || 0, scale, deck, rho))
+            };
+        }
+
         function templatePoint(tpl, id) {
             return (tpl?.points || []).find((p) => p.id === id) || null;
         }
@@ -17601,14 +17652,17 @@
             }
         }
 
-        function placeTemplateAtStation(st, pt) {
+        function placeTemplateAtStation(st, pt, deck) {
             const scale = Math.max(1, st.miterScale || 1);
-            const off = clampPlanOffset((Number(pt.off) || 0) * scale, st.rho);
-            return new THREE.Vector3(
+            const off = miteredTemplateOffset(pt.off, scale, deck, st.rho);
+            const v = new THREE.Vector3(
                 st.x + st.rx * off,
                 st.y + st.ry * off,
                 st.z + (Number(pt.dz) || 0)
             );
+            v.off = Number(pt.off) || 0;
+            v.dz = Number(pt.dz) || 0;
+            return v;
         }
 
         /**
@@ -17620,7 +17674,10 @@
             const vis = resolved.filter((p) => !p.hide);
             const top = vis.filter((p) => p.dz >= -1e-4);
             const use = (top.length >= 2 ? top : vis).slice().sort((a, b) => a.off - b.off);
-            if (use.length >= 2) return use.map((p) => placeTemplateAtStation(st, p));
+            if (use.length >= 2) {
+                const deck = templateDeckEdges(model.template);
+                return use.map((p) => placeTemplateAtStation(st, p, deck));
+            }
             const sc = Math.max(1, st.miterScale || 1);
             const L = clampPlanOffset(-roadWidthOrDefault(model?.widthL) * sc, st.rho);
             const R = clampPlanOffset(roadWidthOrDefault(model?.widthR) * sc, st.rho);
@@ -17990,8 +18047,9 @@
         /**
          * Снять поперечники. opts: step, widthL, widthR, sampleStep.
          * samples[].off > 0 — вправо по ходу оси, вдоль секущей.
-         * На переломе секущая — биссектриса, диапазон смещений умножается на
-         * miterScale, чтобы кромка попала в сечение.
+         * На переломе секущая — биссектриса; кромка полотна уезжает на
+         * miterScale, вынос кювета/бордюра за кромкой — в метрах, иначе
+         * синяя линия и солид кювета торчат «плавником».
          */
         function sampleRoadCrossSections(record, opts = {}) {
             const stn = polylineStationing(record);
@@ -18000,6 +18058,7 @@
             const widthL = roadWidthOrDefault(opts.widthL);
             const widthR = roadWidthOrDefault(opts.widthR);
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
+            const deck = opts.deck || { left: widthL, right: widthR };
             const turns = roadVertexTurns(record, stn);
             let stationsPk = roadXsStationList(stn.total, step, polylineVertexStations(record, stn));
             stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
@@ -18010,7 +18069,8 @@
                 const { p, rx, ry, miterScale, atVertex } = frame;
                 const scale = Math.max(1, miterScale || 1);
                 const rho = stationSignedRadius(stn, sta);
-                const offs = roadXsOffsets(widthL * scale, widthR * scale, sampleStep);
+                const reach = stationMiteredReach({ miterScale: scale, rho }, widthL, widthR, deck);
+                const offs = roadXsOffsets(reach.left, reach.right, sampleStep);
                 const axisAbs = worldPointToAbsoluteXYZ(p) || p;
                 const samples = offs.map((off) => {
                     const x = p.x + rx * off;
@@ -18117,6 +18177,23 @@
                 const cap = (map, reverse) => {
                     const ring = ids.map((id) => map.get(id)).filter(Boolean);
                     if (ring.length < 3) return;
+                    const has2d = ring.every((p) => Number.isFinite(p.off) && Number.isFinite(p.dz));
+                    if (has2d) {
+                        /* Веер от первой вершины на кювете даёт «плавники»:
+                         * якорь покрытия → дно → наружная бровка. Режем в
+                         * осях сечения (off, dz), не веером в 3D. */
+                        const pts2d = ring.map((p, i) => ({ x: p.off, y: p.dz, i }));
+                        const faces = triangulateRingXY(pts2d);
+                        let n = 0;
+                        faces.forEach((tri) => {
+                            const ia = tri[0]?.i, ib = tri[1]?.i, ic = tri[2]?.i;
+                            if (![ia, ib, ic].every((k) => Number.isInteger(k) && ring[k])) return;
+                            if (reverse) push(ring[ia], ring[ic], ring[ib]);
+                            else push(ring[ia], ring[ib], ring[ic]);
+                            n++;
+                        });
+                        if (n) return;
+                    }
                     const origin = new THREE.Vector3(ring[0].x, ring[0].y, ring[0].z);
                     for (let i = 1; i < ring.length - 1; i++) {
                         const b = new THREE.Vector3(ring[i].x, ring[i].y, ring[i].z);
@@ -18168,11 +18245,12 @@
             const tpl = model?.template;
             const stations = model?.stations;
             if (!tpl || !stations || stations.length < 2) return null;
+            const deck = templateDeckEdges(tpl);
             const placed = stations.map((st) => {
                 const map = new Map();
                 resolveTemplatePoints(tpl, st).forEach((r) => {
                     if (r.hide) return;
-                    map.set(r.id, placeTemplateAtStation(st, r));
+                    map.set(r.id, placeTemplateAtStation(st, r, deck));
                 });
                 return map;
             });
@@ -18225,6 +18303,7 @@
                 if (rec) refreshRoadAxisEdges(rec);
             }
             buildRoadCorridor(model);
+            if (!preview && model.stations) buildRoadXsLines(model);
             if (!preview) {
                 if ($('roadXsSlopeOn')?.checked && (model.slopeModelIds || []).length) {
                     buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
@@ -18310,7 +18389,11 @@
         function buildRoadCrossSections(record, opts = {}) {
             if (!record || record.renderPts.length < 2) return null;
             if (!allMeshes.length) return null;
-            const sampled = sampleRoadCrossSections(record, opts);
+            const keptForDeck = roadXsModels.find((m) => m.polylineId === record.id)?.template;
+            const deckGuess = keptForDeck
+                ? templateDeckEdges(keptForDeck)
+                : { left: roadWidthOrDefault(opts.widthL), right: roadWidthOrDefault(opts.widthR) };
+            const sampled = sampleRoadCrossSections(record, { ...opts, deck: deckGuess });
             if (!sampled) return null;
             let model = roadXsModels.find((m) => m.polylineId === record.id);
             const prevW = { widthL: model?.widthL, widthR: model?.widthR };
@@ -18429,9 +18512,9 @@
             };
         }
 
-        function roadXsSlopeSection(st, pt, side, opts) {
+        function roadXsSlopeSection(st, pt, side, opts, deck) {
             if (!st || !pt) return null;
-            const brow = placeTemplateAtStation(st, pt);
+            const brow = placeTemplateAtStation(st, pt, deck);
             const sign = side === 'left' ? -1 : 1;
             const nx = (st.rx || 0) * sign;
             const ny = (st.ry || 0) * sign;
@@ -18509,12 +18592,13 @@
             const prevBrows = (model.slopeBrowIds || []).slice();
             const built = [];
             const addSide = (side) => {
+                const deck = templateDeckEdges(tpl);
                 const pts = model.stations.map((st) => {
                     const vis = resolveTemplatePoints(tpl, st).filter((p) => !p.hide);
                     const edges = templateEdgePoints({ points: vis });
                     const pt = side === 'left' ? edges.left : edges.right;
                     if (!pt) return null;
-                    return placeTemplateAtStation(st, pt);
+                    return placeTemplateAtStation(st, pt, deck);
                 }).filter(Boolean);
                 if (pts.length < 2) return;
                 const rec = ensureRoadSlopeBrow(model, side, pts);
@@ -18580,12 +18664,13 @@
                 zMax = Math.max(zMax, zAxis + p.dz);
             });
             const slopeOpts = readRoadXsSlopeOpts();
+            const deck = templateDeckEdges(tpl);
             const edgePts = templateEdgePoints({ points: resolved.filter((p) => !p.hide) });
             const slopeSecs = [];
             if ($('roadXsSlopeOn')?.checked) {
                 [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
                     if (!pt) return;
-                    const sec = roadXsSlopeSection(st, pt, side, slopeOpts);
+                    const sec = roadXsSlopeSection(st, pt, side, slopeOpts, deck);
                     slopeSecs.push({ side, pt, sec });
                     if (sec?.valid && sec.exit) {
                         const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z;
@@ -18653,8 +18738,8 @@
                 );
             }
             const axisTick = px(0);
-            const leftTick = px(-model.widthL * (st.miterScale || 1));
-            const rightTick = px(model.widthR * (st.miterScale || 1));
+            const leftTick = px(-model.widthL);
+            const rightTick = px(model.widthR);
             const roadY0 = axisY - 5, roadY1 = axisY + 5;
             const ptById = new Map(resolved.map((p) => [p.id, p]));
             const xyOf = (p) => ({ x: px(p.off), y: py(zAxis + p.dz) });
@@ -18849,10 +18934,11 @@
                         return m;
                     });
                     tpl.points.forEach((pt) => {
+                        const deck = templateDeckEdges(tpl);
                         const pts = model.stations.map((st, i) => {
                             const r = maps[i].get(pt.id);
                             if (!r || r.hide) return null;
-                            return placeTemplateAtStation(st, r);
+                            return placeTemplateAtStation(st, r, deck);
                         }).filter(Boolean);
                         writeEdge(pts);
                     });
@@ -19166,9 +19252,10 @@
             (leftPts || []).forEach((p) => pts.push(p));
             (rightPts || []).forEach((p) => pts.push(p));
             (model?.stations || []).forEach((st) => {
-                const L = model.widthL || 0, R = model.widthR || 0;
-                pts.push({ x: st.x - st.rx * L, y: st.y - st.ry * L });
-                pts.push({ x: st.x + st.rx * R, y: st.y + st.ry * R });
+                const deck = templateDeckEdges(model.template);
+                const reach = stationMiteredReach(st, model.widthL || 0, model.widthR || 0, deck);
+                pts.push({ x: st.x - st.rx * reach.left, y: st.y - st.ry * reach.left });
+                pts.push({ x: st.x + st.rx * reach.right, y: st.y + st.ry * reach.right });
             });
             let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
             pts.forEach((p) => {
@@ -19196,9 +19283,10 @@
             let tick = '';
             const st = model?.stations?.[roadXsActive.index];
             if (st) {
-                const L = model.widthL || 0, R = model.widthR || 0;
-                const a = { x: st.x - st.rx * L, y: st.y - st.ry * L };
-                const b = { x: st.x + st.rx * R, y: st.y + st.ry * R };
+                const deck = templateDeckEdges(model.template);
+                const reach = stationMiteredReach(st, model.widthL || 0, model.widthR || 0, deck);
+                const a = { x: st.x - st.rx * reach.left, y: st.y - st.ry * reach.left };
+                const b = { x: st.x + st.rx * reach.right, y: st.y + st.ry * reach.right };
                 tick = `<line x1="${px(a.x).toFixed(1)}" y1="${py(a.y).toFixed(1)}" x2="${px(b.x).toFixed(1)}" y2="${py(b.y).toFixed(1)}" stroke="#e07a3d" stroke-width="2" pointer-events="none"/>`
                     + `<circle cx="${px(st.x).toFixed(1)}" cy="${py(st.y).toFixed(1)}" r="3.2" fill="#e07a3d" pointer-events="none"/>`;
             }
@@ -37958,7 +38046,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'chart-rmb-pan',
+            buildId: 'xs-miter-fig',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37967,6 +38055,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: на угле miter растягивает только полотно до уголка; кювет и бордюр не превращаются в плавники, торцы форм режутся по сечению, а не веером от первой вершины.',
                 '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',
                 '2026.08.16: DXF R2010 уходит UTF-8 (не Windows-1251) — Civil больше не падает «ошибка в таблице APPID» на слое 2Д.',
                 '2026.08.16: высоты плана, профиля и поперечника не едут за окном — только ручка между планом и профилем.',
@@ -38065,7 +38154,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=126').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=127').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
