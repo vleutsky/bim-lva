@@ -6866,6 +6866,16 @@
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 return rec ? roadAxisCornerState(rec) : null;
             },
+            roadOffsetTravel(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                const model = (typeof roadXsModels !== 'undefined' ? roadXsModels : []).find((m) => m.polylineId === id);
+                const src = rec?.renderPts;
+                return {
+                    left: countOffsetReversals(src, model?.edgeLeftPts),
+                    right: countOffsetReversals(src, model?.edgeRightPts),
+                    srcN: src?.length || 0
+                };
+            },
             get roadXs() {
                 return roadXsModels.map((m) => ({
                     id: m.id, polylineId: m.polylineId, stations: m.stations.length,
@@ -16306,6 +16316,9 @@
         const ROAD_XS_MAX_SAMPLES = 201;
         const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 14, t: 18, b: 28 };
         const ROAD_XS_MITER_CAP = 8;
+        /** Дуга (тесселяция сопряжения): не острый miter и не прямая. */
+        const ROAD_ARC_MIN_DEFL = THREE.MathUtils.degToRad(3);
+        const ROAD_ARC_MAX_DEFL = THREE.MathUtils.degToRad(28);
         const ROAD_DECK_COLOR = '#8a7344';
         const ROAD_PAVE_THICK = 0.20;
         /** Половина шаблона при создании дороги: одна полоса 3.25 м в каждую сторону. */
@@ -16973,7 +16986,7 @@
 
         function placeTemplateAtStation(st, pt) {
             const scale = Math.max(1, st.miterScale || 1);
-            const off = pt.off * scale;
+            const off = clampPlanOffset((Number(pt.off) || 0) * scale, st.rho);
             return new THREE.Vector3(
                 st.x + st.rx * off,
                 st.y + st.ry * off,
@@ -16991,13 +17004,13 @@
             const top = vis.filter((p) => p.dz >= -1e-4);
             const use = (top.length >= 2 ? top : vis).slice().sort((a, b) => a.off - b.off);
             if (use.length >= 2) return use.map((p) => placeTemplateAtStation(st, p));
-            const L = roadWidthOrDefault(model?.widthL);
-            const R = roadWidthOrDefault(model?.widthR);
             const sc = Math.max(1, st.miterScale || 1);
+            const L = clampPlanOffset(-roadWidthOrDefault(model?.widthL) * sc, st.rho);
+            const R = clampPlanOffset(roadWidthOrDefault(model?.widthR) * sc, st.rho);
             return [
-                new THREE.Vector3(st.x - st.rx * L * sc, st.y - st.ry * L * sc, st.z),
+                new THREE.Vector3(st.x + st.rx * L, st.y + st.ry * L, st.z),
                 new THREE.Vector3(st.x, st.y, st.z),
-                new THREE.Vector3(st.x + st.rx * R * sc, st.y + st.ry * R * sc, st.z)
+                new THREE.Vector3(st.x + st.rx * R, st.y + st.ry * R, st.z)
             ];
         }
 
@@ -17032,6 +17045,67 @@
 
         function planRightNormal(tx, ty) {
             return { x: ty, y: -tx };
+        }
+
+        /**
+         * Знаковый радиус кривизны в плане по трём точкам.
+         * Плюс — поворот налево (внутрь слева). На прямой и на остром miter
+         * (> ~28°) — Infinity: там кромка сходится уголком, а не дугой, и
+         * обрезать смещение по хорде трёх вершин нельзя.
+         */
+        function planSignedRadius(a, b, c) {
+            const tIn = a && b ? planTangentXY(a.x, a.y, b.x, b.y) : null;
+            const tOut = b && c ? planTangentXY(b.x, b.y, c.x, c.y) : null;
+            if (!tIn || !tOut) return Infinity;
+            const cross = tIn.x * tOut.y - tIn.y * tOut.x;
+            const dot = tIn.x * tOut.x + tIn.y * tOut.y;
+            const defl = Math.atan2(cross, dot);
+            if (Math.abs(defl) < ROAD_ARC_MIN_DEFL || Math.abs(defl) > ROAD_ARC_MAX_DEFL) return Infinity;
+            const chord = Math.hypot(b.x - a.x, b.y - a.y);
+            if (chord < 1e-9) return Infinity;
+            const rho = chord / (2 * Math.sin(Math.abs(defl) / 2));
+            if (!(rho > 0) || rho > 1e5) return Infinity;
+            return defl > 0 ? rho : -rho;
+        }
+
+        /**
+         * Внутрь дуги нельзя смещать дальше центра: иначе кромка выворачивается
+         * и полотно собирает «ёжик». Снаружи дуги ограничения нет.
+         */
+        function clampPlanOffset(off, rho) {
+            if (!Number.isFinite(off) || !Number.isFinite(rho) || Math.abs(rho) > 1e5) return off;
+            if (off * rho >= -1e-12) return off;
+            const cap = Math.max(0, Math.abs(rho) - 0.001);
+            if (Math.abs(off) <= cap + 1e-9) return off;
+            return off < 0 ? -cap : cap;
+        }
+
+        function stationSignedRadius(stn, sta) {
+            const pts = stn?.pts, cum = stn?.cum;
+            if (!pts || pts.length < 3 || !cum) return Infinity;
+            let lo = 0, hi = cum.length - 1;
+            while (lo < hi - 1) {
+                const mid = (lo + hi) >> 1;
+                if (cum[mid] <= sta) lo = mid; else hi = mid;
+            }
+            const i = Math.max(1, Math.min(pts.length - 2, (sta - cum[lo] <= cum[hi] - sta) ? lo : hi));
+            return planSignedRadius(pts[i - 1], pts[i], pts[i + 1]);
+        }
+
+        function countOffsetReversals(src, off) {
+            if (!src || !off || src.length < 2 || off.length < 2) {
+                return { rev: 0, n: off?.length || 0 };
+            }
+            const n = Math.min(src.length, off.length);
+            let rev = 0;
+            for (let i = 1; i < n; i++) {
+                const ax = src[i].x - src[i - 1].x, ay = src[i].y - src[i - 1].y;
+                const ox = off[i].x - off[i - 1].x, oy = off[i].y - off[i - 1].y;
+                const al = Math.hypot(ax, ay);
+                if (al < 1e-4) continue;
+                if (((ax * ox + ay * oy) / al) < -0.02) rev++;
+            }
+            return { rev, n };
         }
 
         /**
@@ -17077,7 +17151,7 @@
                     const cross = tIn.x * tOut.y - tIn.y * tOut.x;
                     const dot = tIn.x * tOut.x + tIn.y * tOut.y;
                     const defl = Math.atan2(cross, dot);
-                    if (Math.abs(defl) > THREE.MathUtils.degToRad(3)) {
+                    if (Math.abs(defl) > ROAD_ARC_MIN_DEFL) {
                         const m = miterRightFrame(tIn, tOut);
                         rx = m.rx;
                         ry = m.ry;
@@ -17085,6 +17159,16 @@
                     } else {
                         rx = tOut.y;
                         ry = -tOut.x;
+                    }
+                    if (Math.abs(defl) > ROAD_ARC_MIN_DEFL && Math.abs(defl) < ROAD_ARC_MAX_DEFL) {
+                        const rho = planSignedRadius(pts[prev], pts[i], pts[next]);
+                        const used = clampPlanOffset(width * scale, rho);
+                        out.push(new THREE.Vector3(
+                            pts[i].x + rx * used,
+                            pts[i].y + ry * used,
+                            pts[i].z
+                        ));
+                        continue;
                     }
                 } else {
                     const t = tIn || tOut;
@@ -17290,6 +17374,7 @@
                 const frame = roadXsFrameAtStation(record, stn, sta);
                 const { p, rx, ry, miterScale, atVertex } = frame;
                 const scale = Math.max(1, miterScale || 1);
+                const rho = stationSignedRadius(stn, sta);
                 const offs = roadXsOffsets(widthL * scale, widthR * scale, sampleStep);
                 const axisAbs = worldPointToAbsoluteXYZ(p) || p;
                 const samples = offs.map((off) => {
@@ -17313,6 +17398,7 @@
                     sta,
                     x: p.x, y: p.y, z: p.z,
                     rx, ry, miterScale: scale, atVertex: !!atVertex,
+                    rho,
                     axisAbs: { x: axisAbs.x, y: axisAbs.y, z: axisAbs.z },
                     samples
                 };
@@ -17375,7 +17461,9 @@
                 return map;
             });
             const positions = [];
+            const areaXY = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
             const push = (a, b, c) => {
+                if (Math.abs(areaXY(a, b, c)) < 1e-6) return;
                 positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
             };
             tpl.links.forEach((link) => {
@@ -37084,7 +37172,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'plan-edit',
+            buildId: 'fillet-inner',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37093,6 +37181,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: на узком скруглении внутреннюю кромку не выворачивает за центр дуги — полотно без «ёжика».',
                 '2026.08.16: на плане трассы тянутся все вершины и кромки ширины; на прямых углах — прямой угол или скругление; синие сечения на отметке оси; ширина новой дороги 3.25 м в каждую сторону.',
                 '2026.08.16: палитра «План, профиль, поперечник» — одно окно: план сверху, профиль под ним, поперечник справа; зум в каждом чертеже, ручки стыков и угла окна; шаблоны дороги и «Применить на ось».',
                 '2026.08.16: повторное открытие карты не оставляет вид «весь мир»; поиск СПб и Москвы работает без Nominatim.',
@@ -37185,7 +37274,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=120').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=121').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

@@ -2200,6 +2200,41 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: новая ось без ширины дала ${planEdit.defL}/${planEdit.defR} вместо 3.25/3.25`);
     }
 
+    // Короткое плечо + R больше ширины: радиус сожмётся, внутренность без
+    // правки выворачивается (кромка идёт назад, полотно — «ёжик»).
+    const tightFillet = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 18, z: g + 0.5 },
+                { x: 24, y: 18, z: g + 0.5 },
+                { x: 24, y: 22, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-узкий-филет', role: 'road-axis' }
+        );
+        D.applyRoadCorners(id, 'fillet', 8);
+        const res = D.buildRoadXs(id, {
+            step: 1, widthL: 3.25, widthR: 3.25, sampleStep: 1, live: false
+        });
+        const travel = D.roadOffsetTravel(id);
+        return {
+            stations: res?.stations,
+            tris: res?.corridorTris || 0,
+            travel,
+            radii: D.applyRoadCorners(id, 'fillet', 8)
+        };
+    }, groundZ);
+    const tightRev = (tightFillet.travel?.left?.rev || 0) + (tightFillet.travel?.right?.rev || 0);
+    if (tightRev > 0) {
+        problems.push(`поперечники: на узком скруглении кромка вывернулась (${JSON.stringify(tightFillet.travel)})`);
+    }
+    if ((tightFillet.tris || 0) < 8) {
+        problems.push(`поперечники: на узком скруглении полотно ${tightFillet.tris} граней`);
+    }
+    if (!(tightFillet.radii?.[1] > 0)) {
+        problems.push(`поперечники: узкий филет без радиуса (${JSON.stringify(tightFillet.radii)})`);
+    }
+
     const ui = await page.evaluate(() => {
         document.getElementById('btnPolylineList')?.click();
         const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
