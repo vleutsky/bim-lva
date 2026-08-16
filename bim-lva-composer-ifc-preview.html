@@ -1184,6 +1184,13 @@
         }
         #roadXsChart { height: 240px; background: var(--panel-2); }
         #roadXsChart .xs-slope { pointer-events: none; }
+        #roadXsChart .xs-subgrade {
+            pointer-events: none;
+            fill: none;
+            stroke: #8b5a2b;
+            stroke-width: 2.4;
+            stroke-dasharray: 7 3.5;
+        }
         #roadXsChart .xs-shape { cursor: grab; }
         #roadXsChart .xs-shape:hover { filter: brightness(1.08); }
         .xs-swatch {
@@ -3890,7 +3897,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 24ac95b</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · e44bb02</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5109,6 +5116,9 @@
                 </label>
                 <label data-tip="Заложение откоса выемки: 1 : m.">1:m выем.
                     <input class="editInput" id="roadXsMCut" type="number" min="0.1" step="0.1" value="1">
+                </label>
+                <label class="chk" data-tip="Земляное полотно: нижняя огибающая всех конструкций шаблона. Своя поверхность в сцене и слой DXF «Земполотно». Снимите галочку — убрать с чертежа и из сцены.">
+                    <input type="checkbox" id="roadXsSubgradeOn"> земполотно
                 </label>
                 <label class="chk" data-tip="Строить откосы от кромок до рельефа вместе с «Построить». Снимите галочку — откосы пропадут с чертежа и из сцены.">
                     <input type="checkbox" id="roadXsSlopeOn"> откосы
@@ -6964,6 +6974,7 @@
                     step: model.step,
                     lines: model.lines.length,
                     corridorTris: model.corridorTris || 0,
+                    subgradeTris: model.subgradeTris || 0,
                     template: snapshotRoadTemplate(model.template),
                     first: model.stations[0] && {
                         sta: model.stations[0].sta,
@@ -6997,6 +7008,27 @@
             },
             roadXsDxfPreview() {
                 return roadXsModels.length ? buildDxf([], [], null, { xsOnly: true }) : '';
+            },
+            /**
+             * Земляное полотно: нижняя огибающая шаблона и меш, если галочка включена.
+             */
+            roadXsSubgrade() {
+                const model = currentRoadXsModel();
+                const st = model?.stations?.[roadXsActive.index]
+                    || model?.stations?.[0];
+                const env = roadSubgradeEnvelopeAt(model, st);
+                const zs = env.map((p) => p.dz);
+                return {
+                    on: !!$('roadXsSubgradeOn')?.checked,
+                    n: env.length,
+                    zMin: zs.length ? Math.min(...zs) : null,
+                    zMax: zs.length ? Math.max(...zs) : null,
+                    offMin: env.length ? env[0].off : null,
+                    offMax: env.length ? env[env.length - 1].off : null,
+                    faces: model?.subgradeTris || 0,
+                    hasMesh: !!model?.subgradeMesh,
+                    env: env.map((p) => ({ off: p.off, dz: p.dz }))
+                };
             },
             clearRoadXs() { clearRoadXsModels(); },
             get defaultRoadHalfWidth() { return DEFAULT_ROAD_HALF_WIDTH; },
@@ -7041,6 +7073,7 @@
                     hits: m.hits, missed: m.missed, total: m.total,
                     widthL: m.widthL, widthR: m.widthR,
                     corridorTris: m.corridorTris || 0,
+                    subgradeTris: m.subgradeTris || 0,
                     templatePoints: m.template?.points?.length || 0,
                     templateLinks: m.template?.links?.length || 0,
                     templateShapes: m.template?.shapes?.length || 0
@@ -13238,6 +13271,7 @@
         const DXF_LAYER_POINTS = 'Точки';
         const DXF_LAYER_SOLID = 'Тело';
         const DXF_LAYER_SLOPE = 'Откос';
+        const DXF_LAYER_SUBGRADE = 'Земполотно';
         const DXF_LAYER_KDO = 'КДО';
         const DXF_LAYER_XS = 'Поперечник';
 
@@ -15163,8 +15197,8 @@
             const allocHandle = () => (nextHandle++).toString(16).toUpperCase();
             const ltypeH = allocHandle();
             const dashedH = allocHandle();
-            const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_KDO, DXF_LAYER_XS, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
-            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3];
+            const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_SUBGRADE, DXF_LAYER_KDO, DXF_LAYER_XS, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
+            const layerColors = [7, 3, 5, 1, 30, 32, 34, 8, 6, 7, 3];
             const dashedLayers = new Set([ROAD_AXIS_LAYER]);
             const addLayer = (name, color) => {
                 const nm = sanitizeDxfLayer(name, '');
@@ -15278,7 +15312,10 @@
                 });
             }
             if (!opts.xsOnly) slopeTinFacesToDxfPairs(ge, onlySlope, allocHandle, blockRecModel);
-            if (onlySlope == null) writeRoadXsToDxf(ge, entityOpen, n, { edges: !!opts.xsOnly });
+            if (onlySlope == null) {
+                writeRoadXsToDxf(ge, entityOpen, n, { edges: !!opts.xsOnly });
+                writeRoadSubgradeToDxf(ge, allocHandle, blockRecModel);
+            }
             if (!opts.xsOnly) pins.forEach((pin) => {
                 entityOpen('POINT', DXF_LAYER_POINTS);
                 ge(100, 'AcDbPoint');
@@ -16931,6 +16968,97 @@
                 (l.a === a && l.b === b) || (l.a === b && l.b === a));
         }
 
+        /**
+         * Нижняя огибающая конструкций шаблона (не откосы до рельефа):
+         * в каждом смещении min(ΔZ) по видимым точкам и рёбрам связей/форм.
+         * Снаружи диапазона точек не клампим — иначе полка на всю ширину сечения.
+         */
+        function templateLowerEnvelope(resolved, links, shapes) {
+            const vis = (resolved || []).filter((p) => p && !p.hide);
+            if (!vis.length) return [];
+            const byId = new Map(vis.map((p) => [p.id, p]));
+            const segs = [];
+            const addSeg = (a, b) => {
+                if (!a || !b) return;
+                const o0 = +a.off, o1 = +b.off, z0 = +a.dz, z1 = +b.dz;
+                if (!Number.isFinite(o0 + o1 + z0 + z1)) return;
+                segs.push({ o0, z0, o1, z1 });
+            };
+            (links || []).forEach((ln) => addSeg(byId.get(ln.a), byId.get(ln.b)));
+            (shapes || []).forEach((sh) => {
+                const ids = sh.pts || [];
+                for (let i = 0; i < ids.length; i++) {
+                    addSeg(byId.get(ids[i]), byId.get(ids[(i + 1) % ids.length]));
+                }
+            });
+            const offSet = new Set();
+            vis.forEach((p) => {
+                if (Number.isFinite(+p.off)) offSet.add(+Number(p.off).toFixed(6));
+            });
+            segs.forEach((s) => {
+                offSet.add(+s.o0.toFixed(6));
+                offSet.add(+s.o1.toFixed(6));
+            });
+            const offs = [...offSet].sort((a, b) => a - b);
+            const zAt = (o) => {
+                let z = Infinity;
+                vis.forEach((p) => {
+                    if (Math.abs(p.off - o) < 1e-6) z = Math.min(z, p.dz);
+                });
+                segs.forEach((s) => {
+                    const lo = Math.min(s.o0, s.o1), hi = Math.max(s.o0, s.o1);
+                    if (o < lo - 1e-6 || o > hi + 1e-6) return;
+                    if (Math.abs(s.o1 - s.o0) < 1e-9) {
+                        z = Math.min(z, Math.min(s.z0, s.z1));
+                        return;
+                    }
+                    const t = (o - s.o0) / (s.o1 - s.o0);
+                    z = Math.min(z, s.z0 + t * (s.z1 - s.z0));
+                });
+                return z;
+            };
+            const raw = offs.map((off) => ({ off, dz: zAt(off) }))
+                .filter((p) => Number.isFinite(p.dz) && p.dz < Infinity / 2);
+            const out = [];
+            raw.forEach((p) => {
+                if (out.length && Math.abs(out[out.length - 1].off - p.off) < 1e-6) {
+                    out[out.length - 1].dz = Math.min(out[out.length - 1].dz, p.dz);
+                    return;
+                }
+                if (out.length >= 2) {
+                    const a = out[out.length - 2], b = out[out.length - 1];
+                    const cross = (b.off - a.off) * (p.dz - a.dz) - (p.off - a.off) * (b.dz - a.dz);
+                    if (Math.abs(cross) < 1e-8) out.pop();
+                }
+                out.push({ off: p.off, dz: p.dz });
+            });
+            return out;
+        }
+
+        function roadSubgradeEnvelopeAt(model, st) {
+            const tpl = model?.template;
+            if (!tpl) return [];
+            const resolved = st
+                ? resolveTemplatePoints(tpl, st)
+                : (tpl.points || []).map((p) => ({ ...p, hide: false }));
+            return templateLowerEnvelope(resolved, tpl.links || [], tpl.shapes || []);
+        }
+
+        function subgradeZAt(env, off) {
+            if (!env?.length) return null;
+            if (off < env[0].off - 1e-6 || off > env[env.length - 1].off + 1e-6) return null;
+            for (let i = 0; i < env.length - 1; i++) {
+                const a = env[i], b = env[i + 1];
+                const lo = Math.min(a.off, b.off), hi = Math.max(a.off, b.off);
+                if (off < lo - 1e-6 || off > hi + 1e-6) continue;
+                if (Math.abs(b.off - a.off) < 1e-9) return Math.min(a.dz, b.dz);
+                const t = (off - a.off) / (b.off - a.off);
+                return a.dz + t * (b.dz - a.dz);
+            }
+            const hit = env.find((p) => Math.abs(p.off - off) < 1e-6);
+            return hit ? hit.dz : null;
+        }
+
         function toggleTemplateLink(tpl, a, b) {
             if (!tpl || a === b) return;
             const i = (tpl.links || []).findIndex((l) =>
@@ -18067,6 +18195,60 @@
             clearRoadXsSlopes(model);
             disposeRoadXsLines(model);
             disposeRoadCorridor(model);
+            disposeRoadSubgrade(model);
+        }
+
+        function disposeRoadSubgrade(model) {
+            if (!model) return;
+            const mesh = model.subgradeMesh;
+            if (mesh) {
+                roadXsGroup.remove(mesh);
+                mesh.geometry?.dispose?.();
+                mesh.material?.dispose?.();
+            }
+            model.subgradeMesh = null;
+            model.subgradeTris = 0;
+        }
+
+        /**
+         * Земляное полотно: лофт нижней огибающей шаблона вдоль станций.
+         * Открытая поверхность, без торцов; откосы до рельефа сюда не входят.
+         */
+        function buildRoadSubgrade(model) {
+            disposeRoadSubgrade(model);
+            if (!$('roadXsSubgradeOn')?.checked) return null;
+            const tpl = model?.template;
+            const stations = model?.stations;
+            if (!tpl || !stations || stations.length < 2) return null;
+            const envelopes = stations.map((st) => roadSubgradeEnvelopeAt(model, st));
+            const offSet = new Set();
+            envelopes.forEach((env) => env.forEach((p) => offSet.add(+p.off.toFixed(6))));
+            const offs = [...offSet].sort((a, b) => a - b);
+            if (offs.length < 2) return null;
+            const placed = stations.map((st, i) => {
+                const map = new Map();
+                offs.forEach((off, k) => {
+                    const dz = subgradeZAt(envelopes[i], off);
+                    if (dz == null || !Number.isFinite(dz)) return;
+                    map.set(k, placeTemplateAtStation(st, { off, dz }));
+                });
+                return map;
+            });
+            const pairs = [];
+            for (let k = 0; k < offs.length - 1; k++) pairs.push({ a: k, b: k + 1 });
+            const positions = corridorLoftPush([], placed, pairs, null);
+            const mesh = makeRoadCorridorMesh(positions, '#7a5a32', 'RoadSubgrade', {
+                modelId: model.id,
+                subgrade: true
+            });
+            if (!mesh) return null;
+            mesh.renderOrder = 2;
+            mesh.material.polygonOffsetFactor = 2;
+            mesh.material.polygonOffsetUnits = 2;
+            roadXsGroup.add(mesh);
+            model.subgradeMesh = mesh;
+            model.subgradeTris = positions.length / 9;
+            return mesh;
         }
 
         function disposeRoadXsLines(model) {
@@ -18244,6 +18426,8 @@
                 if (rec) refreshRoadAxisEdges(rec);
             }
             buildRoadCorridor(model);
+            if ($('roadXsSubgradeOn')?.checked) buildRoadSubgrade(model);
+            else disposeRoadSubgrade(model);
             if (!preview) {
                 if ($('roadXsSlopeOn')?.checked && (model.slopeModelIds || []).length) {
                     buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
@@ -18356,6 +18540,8 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
+            if ($('roadXsSubgradeOn')?.checked) buildRoadSubgrade(model);
+            else disposeRoadSubgrade(model);
             if ((model.slopeModelIds || []).length) {
                 buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
             }
@@ -18415,6 +18601,7 @@
             el.textContent =
                 `Сечений ${model.stations.length} на ${model.total.toFixed(1)} м оси · ` +
                 `полотно ${model.corridorTris || 0} гран.` +
+                (model.subgradeTris ? ` · земполотно ${model.subgradeTris} гран.` : '') +
                 ((model.slopeModelIds || []).length
                     ? ` · откосы ${model.slopeModelIds.length} стор.`
                     : '') +
@@ -18690,6 +18877,15 @@
                     fill="${esc(st.fill)}" fill-opacity="${on ? 0.88 : 0.62}"
                     stroke="${esc(st.stroke)}" stroke-width="${on ? 1.6 : 0.7}"/>`;
             }).join('');
+            const envLine = $('roadXsSubgradeOn')?.checked
+                ? templateLowerEnvelope(resolved, tpl.links || [], tpl.shapes || [])
+                : [];
+            const subgradeDraw = envLine.length >= 2
+                ? `<polyline class="xs-subgrade" points="${envLine.map((p) => {
+                    const q = xyOf(p);
+                    return `${q.x.toFixed(1)},${q.y.toFixed(1)}`;
+                }).join(' ')}"/>`
+                : '';
             const linkDraw = tpl.links.map((ln) => {
                 const a = ptById.get(ln.a), b = ptById.get(ln.b);
                 if (!a || !b) return '';
@@ -18743,6 +18939,7 @@
                       stroke="#e8442a" stroke-width="1.2"/>
                 ${groundPaths.map((d) => `<polyline fill="none" stroke="#1d6fb0" stroke-width="2.4" points="${d}"/>`).join('')}
                 ${shapeDraw}
+                ${subgradeDraw}
                 ${linkDraw}
                 ${knotDraw}
                 ${slopeDraw}
@@ -18766,6 +18963,7 @@
                         ? ` · земля ${work0.abs.z.toFixed(3)} · рабочая ${work0.work.toFixed(3)}`
                         : ' · под осью земли нет') +
                     (model.corridorTris ? ` · полотно ${model.corridorTris} гран.` : ' · полотна нет — «Построить»') +
+                    (model.subgradeTris ? ` · земполотно ${model.subgradeTris} гран.` : '') +
                     (st.atVertex ? ' · на угле — биссектриса' : '') +
                     (flat ? ' · рельеф плоский, масштаб ±' + (spanZ / 2).toFixed(1) + ' м' : '');
             }
@@ -18811,7 +19009,7 @@
                                 </tr>`).join('') || '<tr><td colspan="3">Нет форм — «＋ форма»</td></tr>'}
                         </tbody>
                     </table>
-                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочка «откосы»: снять — убрать откосы. Колесо — зум к курсору, Shift+колесо — по высоте, ПКМ — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
+                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочки «земполотно» / «откосы»: снять — убрать с чертежа и из сцены. Колесо — зум к курсору, Shift+колесо — по высоте, ПКМ — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
             }
             fillRoadXsRuleBar();
             renderRoadPlanView();
@@ -18880,6 +19078,18 @@
             return count;
         }
 
+        function writeRoadSubgradeToDxf(ge, allocHandle, ownerHandle) {
+            let faces = 0;
+            (roadXsModels || []).forEach((model) => {
+                const mesh = model.subgradeMesh;
+                if (!mesh) return;
+                const tin = weldTin(slopeMeshTriangles(mesh));
+                if (!tin.faces?.length) return;
+                faces += tinToSolidDxf(ge, tin, DXF_LAYER_SUBGRADE, allocHandle, ownerHandle);
+            });
+            return faces;
+        }
+
         function exportRoadXsDxf() {
             if (!roadXsModels.length) {
                 notifyError('Сначала постройте поперечники.');
@@ -18897,7 +19107,12 @@
                 `bim-lva-xs-${new Date().toISOString().slice(0, 10)}.dxf`
             );
             const n = roadXsModels.reduce((s, m) => s + m.stations.length, 0);
-            notify(`DXF: поперечников ${n} на слое «${DXF_LAYER_XS}». Координаты мировые, метры.`);
+            const sg = roadXsModels.some((m) => m.subgradeMesh);
+            notify(
+                `DXF: поперечников ${n} на слое «${DXF_LAYER_XS}».` +
+                (sg ? ` Земполотно — 3DSOLID на «${DXF_LAYER_SUBGRADE}».` : '') +
+                ' Координаты мировые, метры.'
+            );
         }
 
         function roadXsCsvText(model) {
@@ -19652,6 +19867,11 @@
                     clearRoadXsSlopes(model);
                     renderRoadXsView();
                 }
+                if ($('roadXsSubgradeOn')?.checked) {
+                    extra += model.subgradeTris
+                        ? ` Земполотно: ${model.subgradeTris} гран.`
+                        : ' Земполотно не построилось.';
+                }
                 notify(
                     `Полотно по «${rec.name}»: ${model.stations.length} сечений, ` +
                     `${model.corridorTris || 0} граней шаблона.${extra}`
@@ -19715,6 +19935,27 @@
                 updateRoadXsStatus();
                 markNeedsRender();
                 notify('Откосы убраны.');
+            }
+        });
+        $('roadXsSubgradeOn')?.addEventListener('change', () => {
+            const model = currentRoadXsModel();
+            if (!model) return;
+            if ($('roadXsSubgradeOn').checked) {
+                const mesh = buildRoadSubgrade(model);
+                renderRoadXsView();
+                updateRoadXsStatus();
+                markNeedsRender();
+                if (!mesh) {
+                    notifyError('Не удалось построить земляное полотно: в шаблоне нет нижней огибающей.');
+                    return;
+                }
+                notifyOk(`Земляное полотно «${model.name}»: ${model.subgradeTris || 0} граней.`);
+            } else {
+                disposeRoadSubgrade(model);
+                renderRoadXsView();
+                updateRoadXsStatus();
+                markNeedsRender();
+                notify('Земляное полотно убрано.');
             }
         });
         $('roadXsAddLayer')?.addEventListener('click', () => {
@@ -37977,7 +38218,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: '24ac95b-preview',
+            buildId: 'e44bb02-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37986,6 +38227,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: земляное полотно на поперечнике — нижняя огибающая конструкций, своя поверхность и слой DXF «Земполотно»; галочка рядом с откосами.',
                 '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',
                 '2026.08.16: DXF R2010 уходит UTF-8 (не Windows-1251) — Civil больше не падает «ошибка в таблице APPID» на слое 2Д.',
                 '2026.08.16: высоты плана, профиля и поперечника не едут за окном — только ручка между планом и профилем.',
