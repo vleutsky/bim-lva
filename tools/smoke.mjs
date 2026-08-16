@@ -1994,7 +1994,7 @@ async function checkRoadCrossSections(page) {
         L: document.getElementById('roadXsWidthL')?.value,
         R: document.getElementById('roadXsWidthR')?.value,
         mode: document.getElementById('roadCornerMode')?.value,
-        rHidden: !!document.getElementById('roadCornerRadiusLab')?.hidden
+        rHidden: getComputedStyle(document.getElementById('roadCornerRadiusLab') || document.body).display === 'none'
     }));
     if (defaults.half !== 3.25) {
         problems.push(`поперечники: DEFAULT ширина ${defaults.half} вместо 3.25`);
