@@ -3892,7 +3892,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · ec9b8a4</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 04c9182</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -6355,11 +6355,23 @@
             get mapSite() {
                 const mod = typeof loadedModels !== 'undefined' ? loadedModels.get('map-site') : null;
                 if (!mod?.isMapSite) return null;
+                const on = (id) => {
+                    const el = document.getElementById(id);
+                    return !!el && !el.disabled;
+                };
                 return {
                     filename: mod.filename,
                     ids: [...mod.meshesByID.keys()],
                     hasTerrain: mod.meshesByID.has('terrain'),
-                    hasBasemap: mod.meshesByID.has('basemap')
+                    hasBasemap: mod.meshesByID.has('basemap'),
+                    tools: {
+                        draw: on('btnDraw'),
+                        axis: on('btnRoadAxis'),
+                        xs: on('btnRoadXs'),
+                        pad: on('btnPadList'),
+                        sweep: on('btnSweep'),
+                        measure: on('btnMeasure')
+                    }
                 };
             },
             get mapBuilderTiles() {
@@ -9837,14 +9849,36 @@
             return loadedModels.size > 0 || sceneHasMapSite();
         }
 
+        /**
+         * Кнопки, которым нужна сцена (модель или площадка с карты).
+         * Не путать с IFC-only: их гасит updateIfcToolButtons.
+         */
+        const SCENE_CONTENT_TOOL_IDS = [
+            'fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection',
+            'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash',
+            'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView',
+            'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw',
+            'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect',
+            'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile',
+            'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'
+        ];
+
+        function setSceneContentToolsEnabled(on) {
+            SCENE_CONTENT_TOOL_IDS.forEach((id) => {
+                const el = $(id);
+                if (el) el.disabled = !on;
+            });
+            if ($('clipModeSelect')) $('clipModeSelect').disabled = !on;
+            if ($('measureModeSelect')) $('measureModeSelect').disabled = !on;
+            if (!on && $('btnClipGizmo')) $('btnClipGizmo').disabled = true;
+        }
+
         function syncEmptySceneChrome() {
             const has = sceneHasContent();
             const hint = $('hint');
             if (hint) hint.style.display = has ? 'none' : '';
-            ['fit', 'clear', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnMeasure', 'btnDraw'].forEach((id) => {
-                const el = $(id);
-                if (el) el.disabled = !has;
-            });
+            setSceneContentToolsEnabled(has);
+            updateIfcToolButtons();
         }
 
         function rebuildMapSiteTree(mod) {
@@ -21970,11 +22004,7 @@
             if (typeof refreshFilesPane === 'function') refreshFilesPane();
             if (typeof refreshClassesPane === 'function') refreshClassesPane();
 
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'].forEach(id => {
-                $(id).disabled = loadedModels.size === 0;
-            });
-            $('clipModeSelect').disabled = loadedModels.size === 0;
-            $('measureModeSelect').disabled = loadedModels.size === 0;
+            setSceneContentToolsEnabled(sceneHasContent());
             updateIfcToolButtons();
 
             if (loadedModels.size) {
@@ -34261,13 +34291,7 @@ ${componentXml || '    '}
                 if (isMeasuring) $('btnMeasure').click();
                 if (isBoxSelecting) $('btnBoxSelect').click();
                 treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
-                $('hint').style.display = '';
-                ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'].forEach(id => {
-                    $(id).disabled = true;
-                });
-                $('clipModeSelect').disabled = true;
-                $('measureModeSelect').disabled = true;
-                $('btnClipGizmo').disabled = true;
+                syncEmptySceneChrome();
                 pivotLockToSelection = false;
                 $('btnPivotLock').classList.remove('on');
             } else {
@@ -35017,10 +35041,6 @@ ${componentXml || '    '}
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
             syncEmptySceneChrome();
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
-            ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'].forEach(id => $(id).disabled = true);
-            $('clipModeSelect').disabled = true;
-            $('measureModeSelect').disabled = true;
-            $('btnClipGizmo').disabled = true;
             updateIfcToolButtons();
             trackUsage('scene_clear');
 
@@ -38176,7 +38196,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: 'ec9b8a4-preview',
+            buildId: '04c9182-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38185,6 +38205,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: после «Загрузить» с глобуса на площадке можно чертить ось, площадки и тела — лента больше не остаётся выключенной.',
                 '2026.08.16: площадка с карты — два режима координат: в нули сцены или мировые Гаусс–Крюгер (WGS84, 6°, восток с номером зоны). Если модель уже в сцене, карта садится в её координаты.',
                 '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',
                 '2026.08.16: DXF R2010 уходит UTF-8 (не Windows-1251) — Civil больше не падает «ошибка в таблице APPID» на слое 2Д.',

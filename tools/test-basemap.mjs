@@ -279,7 +279,16 @@ try {
         await page.evaluate(() => window.BimLvaDebug.clearBasemapBinding());
     }
 
-    // A-k. Пустая сцена, «в нули»: центр в (0, 0), отметка с DEM, origin нет.
+    // A-k. Пустая сцена → карта: координаты «в нули» и лента черчения.
+    const emptyTools = await page.evaluate(() => ({
+        draw: !!document.getElementById('btnDraw')?.disabled,
+        axis: !!document.getElementById('btnRoadAxis')?.disabled,
+        pad: !!document.getElementById('btnPadList')?.disabled,
+        sweep: !!document.getElementById('btnSweep')?.disabled
+    }));
+    if (!emptyTools.draw || !emptyTools.axis || !emptyTools.pad || !emptyTools.sweep) {
+        problems.push(`на пустой сцене инструменты уже включены: ${JSON.stringify(emptyTools)}`);
+    }
     const zerosOk = await loadMapOnEmptyScene('zeros');
     if (!zerosOk) {
         problems.push('карта «в нули» на пустой сцене не загрузила рельеф');
@@ -287,13 +296,28 @@ try {
         const zeros = await page.evaluate(() => {
             const dem = window.BimLvaDebug.mapTerrainLayer;
             const abs = window.BimLvaDebug.worldPointToAbsolute(dem.centerX, dem.centerY, dem.centerZ);
+            const ids = [
+                'btnDraw', 'drawModeSelect', 'btnRoadAxis', 'btnRoadXs',
+                'btnPadList', 'btnSweep', 'btnMeasure', 'btnPolylineList'
+            ];
+            const disabled = Object.fromEntries(ids.map((id) => [id, !!document.getElementById(id)?.disabled]));
+            document.getElementById('btnDraw')?.click();
+            const drawing = document.getElementById('btnDraw')?.classList.contains('on');
+            if (drawing) document.getElementById('btnDraw')?.click();
+            document.getElementById('btnRoadAxis')?.click();
+            const axisOn = document.getElementById('btnRoadAxis')?.classList.contains('on');
+            if (axisOn) document.getElementById('btnRoadAxis')?.click();
             return {
                 origin: window.BimLvaDebug.worldOrigin,
                 sceneXY: Math.hypot(dem.centerX, dem.centerY),
                 absX: abs.x,
                 absY: abs.y,
                 absZ: abs.z,
-                sample: window.BimLvaDebug.sampleTerrainZ(dem.centerX, dem.centerY, Number.NaN)
+                sample: window.BimLvaDebug.sampleTerrainZ(dem.centerX, dem.centerY, Number.NaN),
+                disabled,
+                drawing,
+                axisOn,
+                tools: window.BimLvaDebug.mapSite?.tools || null
             };
         });
         if (zeros.origin) {
@@ -313,12 +337,27 @@ try {
         if (!(Number.isFinite(zeros.sample) && Math.abs(zeros.sample - TERRARIUM_Z) < 5)) {
             problems.push(`режим «нули»: sampleTerrainZ=${zeros.sample}`);
         }
+        const blocked = Object.entries(zeros.disabled).filter(([, d]) => d).map(([id]) => id);
+        if (blocked.length) {
+            problems.push(`после карты на пустой сцене заблокированы: ${blocked.join(', ')}`);
+        }
+        if (!zeros.drawing) problems.push('после карты «Полилиния» не включилась');
+        if (!zeros.axisOn) problems.push('после карты «Ось трассы» не включилась');
         console.log(
             `A-k. нули: сцена ${zeros.sceneXY.toFixed(1)} м, ` +
             `абс (${zeros.absX.toFixed(1)}, ${zeros.absY.toFixed(1)}, ${zeros.absZ.toFixed(1)}), ` +
-            `DEM ${Number.isFinite(zeros.sample) ? zeros.sample.toFixed(1) : 'NaN'}`
+            `DEM ${Number.isFinite(zeros.sample) ? zeros.sample.toFixed(1) : 'NaN'}, ` +
+            `лента ${blocked.length ? 'блок ' + blocked.join(',') : 'вкл'}, ` +
+            `ось ${zeros.axisOn ? 'ок' : 'НЕТ'}`
         );
         await clearMapScene();
+        const afterClear = await page.evaluate(() => ({
+            axis: !!document.getElementById('btnRoadAxis')?.disabled,
+            pad: !!document.getElementById('btnPadList')?.disabled
+        }));
+        if (!afterClear.axis || !afterClear.pad) {
+            problems.push(`после очистки оси/площадки остались включёнными: ${JSON.stringify(afterClear)}`);
+        }
     }
 
     // A-l. Пустая сцена, мировые ГК: статус-бар ≈ TM(55.7, 52.4), сцена у нуля.
