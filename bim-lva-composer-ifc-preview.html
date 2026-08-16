@@ -3611,7 +3611,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 7ade1a0</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 073c041</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5973,7 +5973,8 @@
                     centerY: (box.min.y + box.max.y) / 2,
                     centerZ: (box.min.z + box.max.z) / 2,
                     isGeoRaster: !!mesh.userData?.isGeoRaster,
-                    isMapTerrain: !!mesh.userData?.isMapTerrain
+                    isMapTerrain: !!mesh.userData?.isMapTerrain,
+                    zShift: mapTerrain.zShift || 0
                 };
             },
             decodeDemHeight(encoding, r, g, b, a) {
@@ -7544,6 +7545,31 @@
         }
 
         /**
+         * Отметка уже загруженной модели (сцена, Z-up), без DEM с карты.
+         * Terrarium даёт высоту в своей вертикальной системе (часто у моря),
+         * а площадка Civil — в отметках проекта: без этой пробы сетка садится
+         * на десятки метров ниже модели, и космоснимок уезжает вместе с ней.
+         */
+        function sampleModelGroundZ(sceneX, sceneY) {
+            const raycaster = new THREE.Raycaster();
+            raycaster.set(new THREE.Vector3(sceneX, sceneY, 1e7), new THREE.Vector3(0, 0, -1));
+            const targets = collectRaycastTargets(
+                _terrainRayTargets,
+                (m) => !m.userData?.isGeoRaster && !m.userData?.isMapTerrain && !m.userData?.isOverlay
+            );
+            if (!targets.length) return NaN;
+            const hits = raycaster.intersectObjects(targets, false);
+            return hits.length ? hits[0].point.z : NaN;
+        }
+
+        function sceneHasLoadedModel() {
+            for (const mod of loadedModels.values()) {
+                if (!mod.isMapSite && mod.group) return true;
+            }
+            return false;
+        }
+
+        /**
          * Высоты рельефа под сеткой драпировки.
          *
          * Промахи луча (за краем поверхности, в дырах модели) помечаем NaN и
@@ -8274,6 +8300,7 @@
             for (let k = 0; k < zGrid.length; k++) {
                 if (Number.isNaN(zGrid[k])) zGrid[k] = avg;
             }
+            const zShift = alignMapTerrainGridToModel(zGrid, minX, minY, w, h, seg);
             const positions = [];
             const indices = [];
             for (let j = 0; j <= seg; j++) {
@@ -8303,7 +8330,54 @@
             mesh.userData.isOverlay = false;
             mesh.userData.isGeoRaster = false;
             mesh.receiveShadow = true;
-            return { mesh, bounds: { minX, maxX, minY, maxY }, segments: seg, hits: hitCount };
+            return { mesh, bounds: { minX, maxX, minY, maxY }, segments: seg, hits: hitCount, zShift };
+        }
+
+        /**
+         * Сдвигает сетку Terrarium по Z, чтобы центр совпал с поверхностью
+         * уже загруженной модели. Без сдвига отметка с карты — это высота
+         * тайла (СПб у моря ~30 м), а не отметка площадки в файле.
+         */
+        function alignMapTerrainGridToModel(zGrid, minX, minY, w, h, seg) {
+            if (!sceneHasLoadedModel()) return 0;
+            const n = seg + 1;
+            const en = currentWorldShiftEN();
+            const box = new THREE.Box3();
+            for (const mod of loadedModels.values()) {
+                if (!mod.group || mod.isMapSite) continue;
+                try {
+                    const b = new THREE.Box3().setFromObject(mod.group);
+                    if (!b.isEmpty()) box.union(b);
+                } catch (_) {}
+            }
+            const probes = [];
+            const cx = minX + w / 2;
+            const cy = minY + h / 2;
+            probes.push([cx - en.e, cy - en.n]);
+            if (!box.isEmpty()) {
+                probes.push(
+                    [box.getCenter(new THREE.Vector3()).x, box.getCenter(new THREE.Vector3()).y],
+                    [box.min.x, box.min.y],
+                    [box.max.x, box.max.y],
+                    [(box.min.x + box.max.x) / 2, box.min.y],
+                    [(box.min.x + box.max.x) / 2, box.max.y]
+                );
+            }
+            let modelSceneZ = NaN;
+            for (const [x, y] of probes) {
+                const z = sampleModelGroundZ(x, y);
+                if (Number.isFinite(z)) { modelSceneZ = z; break; }
+            }
+            if (!Number.isFinite(modelSceneZ) && !box.isEmpty()) modelSceneZ = box.max.z;
+            if (!Number.isFinite(modelSceneZ)) return 0;
+            const modelAbsZ = modelSceneZ + en.h;
+            const mid = Math.floor(seg / 2);
+            const terrAbsZ = zGrid[mid * n + mid];
+            if (!Number.isFinite(terrAbsZ)) return 0;
+            const dz = modelAbsZ - terrAbsZ;
+            if (!Number.isFinite(dz) || Math.abs(dz) < 0.05) return 0;
+            for (let k = 0; k < zGrid.length; k++) zGrid[k] += dz;
+            return dz;
         }
 
         async function applyMapTerrainLayer(settings) {
@@ -8341,16 +8415,20 @@
                     zoom: tiles.zoom,
                     tiles: tiles.tiles,
                     failed: tiles.failed,
-                    bounds: built.bounds
+                    bounds: built.bounds,
+                    zShift: built.zShift || 0
                 };
                 markNeedsRender();
                 activeBasemapBinding = { ...(activeBasemapBinding || {}), ...settings };
                 saveBasemapSettings({ ...(loadBasemapSettings() || {}), ...settings });
                 const mPerPx = 156543.03392 * Math.cos(binding.lat * Math.PI / 180) / Math.pow(2, tiles.zoom);
                 const note = tiles.failed ? ` Не отдалось тайлов: ${tiles.failed} из ${tiles.tiles}.` : '';
+                const zNote = Math.abs(built.zShift) >= 0.05
+                    ? ` Отметка совмещена с моделью (сдвиг ${built.zShift > 0 ? '+' : ''}${built.zShift.toFixed(1)} м).`
+                    : '';
                 notifyOk(
                     `Рельеф с карты: ${source.name}, зум ${tiles.zoom}, ~${mPerPx.toFixed(0)} м/пикс, сетка ${built.segments}×${built.segments}. ` +
-                    `Это глобальный DEM, не съёмка площадки.${note}`
+                    `Это глобальный DEM, не съёмка площадки.${zNote}${note}`
                 );
                 trackUsage('map_terrain_apply', { source: sourceKey, zoom: tiles.zoom });
                 syncMapSiteModel();
@@ -8414,6 +8492,7 @@
                 uvFor
             });
             geoRasterGroup.add(mesh);
+            syncGeoRasterToIfcOrigin();
             const layer = {
                 id: nextGeoRasterId++,
                 name: `Карта: ${provider.name}`,
@@ -8438,6 +8517,19 @@
             );
             trackUsage('basemap_apply', { provider: settings.provider, zoom: tiles.zoom });
             syncMapSiteModel();
+        }
+
+        async function applyBasemapLayerWithFallback(settings) {
+            try {
+                await applyBasemapLayer(settings);
+                return settings.provider;
+            } catch (err) {
+                if (settings.provider === 'osm' || settings.provider === 'custom') throw err;
+                console.warn('basemap fallback osm:', err);
+                notify('Космоснимок не загрузился — пробуем схему OSM.');
+                await applyBasemapLayer({ ...settings, provider: 'osm' });
+                return 'osm';
+            }
         }
 
         function saveBasemapSettings(settings) {
@@ -8933,7 +9025,9 @@
             const btn = $('mapBuilderLoad');
             if (btn) btn.disabled = true;
             const sceneWasEmpty = loadedModels.size === 0 && !mapTerrain && !geoRasterLayers.length;
+            const hadModel = sceneHasLoadedModel();
             let demOk = false;
+            let usedProvider = settings.provider;
             try {
                 try {
                     await applyMapTerrainLayer(settings);
@@ -8942,15 +9036,25 @@
                     console.error(err);
                     notifyError('Рельеф с карты: ' + (err?.message || err));
                 }
-                await applyBasemapLayer({ ...settings, drape: demOk });
+                try {
+                    usedProvider = await applyBasemapLayerWithFallback({
+                        ...settings,
+                        drape: demOk || hadModel
+                    });
+                } catch (err) {
+                    console.error(err);
+                    if (!demOk) throw err;
+                    notifyError('Снимок не загрузился: ' + (err?.message || err) + '. Рельеф с карты в сцене остался.');
+                }
                 closeMapBuilderModal();
                 const fitBtn = $('fit');
                 if (fitBtn) fitBtn.disabled = false;
                 if (sceneWasEmpty) fitView();
                 syncEmptySceneChrome();
+                const layerName = usedProvider === 'osm' ? 'схема OSM' : 'космоснимок ESRI';
                 notifyOk(
                     `Площадка с карты: ${(m2 / 10_000).toFixed(1)} га, ` +
-                    `${settings.provider === 'osm' ? 'схема OSM' : 'космоснимок ESRI'}` +
+                    (geoRasterLayers.some((l) => l.id === basemapLayerId) ? layerName : 'без снимка') +
                     (demOk ? ' и рельеф Terrarium.' : '.')
                 );
             } catch (err) {
@@ -36019,7 +36123,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: '7ade1a0-preview',
+            buildId: '073c041-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -36028,6 +36132,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: рельеф с карты совмещается по отметке уже загруженной модели; если космоснимок не открылся — схема OSM.',
                 '2026.08.16: глобус открывается на Санкт-Петербурге; после «Загрузить» рельеф и подложка в дереве, без предложения сразу добавить модели.',
                 '2026.08.16: площадка с карты — окно-глобус как в InfraWorks: поиск, слои (снимок / схема / топо / отмывка), рамка или контур до 200 га, «Загрузить».',
                 '2026.08.15: «Рельеф с карты» — сетка высот Terrarium / Terrain-RGB в том же охвате, что подложка; луч сверлит меш, картинка землю не считает.',
