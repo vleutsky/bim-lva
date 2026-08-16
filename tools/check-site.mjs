@@ -26,6 +26,28 @@ const PLACEHOLDERS = /YOUR_LINK_HERE|PLACEHOLDER|XXXXXX|example\.com|lorem ipsum
 const problems = [];   // ломают страницу — это чинить
 const warnings = [];   // стоит знать, но само по себе не поломка
 
+/** HTML шапки Composer должен совпадать с COMPOSER_ABOUT — иначе после деплоя
+ *  вкладка и лента держат старый «v…», а «О продукте» уже новое. */
+async function checkComposerHeaderStamp() {
+    const html = await fs.readFile(path.join(ROOT, 'bim-lva-composer-ifc.html'), 'utf8');
+    const ver = html.match(/const COMPOSER_ABOUT = \{[\s\S]*?\n            version: '([^']+)'/)?.[1];
+    const build = html.match(/const COMPOSER_ABOUT = \{[\s\S]*?\n            buildId: '([^']+)'/)?.[1];
+    const label = html.match(/id="brandVersionLabel">([^<]*)/)?.[1];
+    const title = html.match(/<title>([^<]*)<\/title>/)?.[1];
+    if (!ver || !build) {
+        problems.push('composer: не разобрали version/buildId в COMPOSER_ABOUT');
+        return;
+    }
+    if (!label?.includes(ver) || !label?.includes(build)) {
+        problems.push(`composer: шапка «${label}» ≠ COMPOSER_ABOUT ${ver} · ${build}`);
+    }
+    if (!title?.includes(ver) || !title?.includes(build)) {
+        problems.push(`composer: <title> «${title}» без ${ver} · ${build}`);
+    }
+}
+
+await checkComposerHeaderStamp();
+
 async function resolveChromium() {
     const explicit = process.env.SMOKE_CHROMIUM;
     if (explicit) return explicit;

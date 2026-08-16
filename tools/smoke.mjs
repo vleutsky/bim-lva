@@ -3238,6 +3238,38 @@ async function main() {
     await page.waitForFunction(() => !!document.querySelector('#stage canvas'), { timeout: 60_000 })
         .catch(() => problems.push('canvas не появился в #stage — сцена three.js не собралась'));
 
+    // Версия в шапке ленты и во вкладке — иначе после деплоя кажется, что сборка
+    // «не сменилась»: подпись пряталась на ширине ≤1100 px, а HTML держал «v…».
+    if (/^bim-lva-composer-ifc.*\.html$/.test(PAGE)) {
+        await page.setViewportSize({ width: 1000, height: 800 });
+        const header = await page.evaluate(() => {
+            const el = document.getElementById('brandVersionLabel');
+            const cs = el ? getComputedStyle(el) : null;
+            const about = window.BimLvaDebug?.composerAbout;
+            return {
+                text: (el?.textContent || '').trim(),
+                display: cs?.display || 'missing',
+                title: document.title,
+                about
+            };
+        });
+        if (!header.about?.version) {
+            problems.push('BimLvaDebug.composerAbout пуст — шапка не из чего свериться');
+        } else {
+            if (!header.text.includes(header.about.version) || !header.text.includes(header.about.buildId)) {
+                problems.push(`шапка «${header.text}» ≠ COMPOSER_ABOUT ${header.about.label}`);
+            }
+            if (header.display === 'none') {
+                problems.push('версия в шапке скрыта CSS на ширине 1000 px');
+            }
+            if (!header.title.includes(header.about.version)) {
+                problems.push(`заголовок вкладки «${header.title}» без версии ${header.about.version}`);
+            }
+        }
+        console.log(`шапка: «${header.text}», display=${header.display}, title «${header.title}»`);
+        await page.setViewportSize({ width: 1280, height: 720 });
+    }
+
     // Загружаем настоящий IFC: это единственный способ проверить, что wasm
     // web-ifc отдаётся с локального пути и геометрия действительно строится.
     // Модель — сетка коробок: на одной коробке (12 треугольников) BVH не
