@@ -238,6 +238,146 @@ try {
         `зум ${globeNom.zoom}`
     );
 
+    const mLat0 = 111320;
+    const mLon0 = 111320 * Math.cos((SITE.lat * Math.PI) / 180);
+    const dLat0 = 400 / mLat0;
+    const dLon0 = 400 / mLon0;
+    const emptyRect = [
+        SITE,
+        { lat: SITE.lat - dLat0, lon: SITE.lon - dLon0 },
+        { lat: SITE.lat + dLat0, lon: SITE.lon + dLon0 }
+    ];
+
+    async function loadMapOnEmptyScene(place) {
+        await page.evaluate(([site, a, b, placeMode]) => {
+            document.getElementById('btnMapBuilder').click();
+            window.BimLvaDebug.mapBuilderSetPlace(placeMode);
+            window.BimLvaDebug.mapBuilderSetView(site.lat, site.lon, 14);
+            window.BimLvaDebug.mapBuilderDrawRect(a, b);
+            document.getElementById('mapBuilderLoad').click();
+        }, [...emptyRect, place]);
+        return page
+            .waitForFunction(
+                () => window.BimLvaDebug?.mapTerrainLayer != null
+                    && window.BimLvaDebug?.basemapLayer != null
+                    && !document.getElementById('mapBuilderModal')?.classList.contains('show')
+                    && !document.getElementById('loader')?.classList.contains('show'),
+                { timeout: 90_000 }
+            )
+            .then(() => true).catch(() => false);
+    }
+
+    async function clearMapScene() {
+        await page.evaluate(() => document.getElementById('clear')?.click());
+        await page.waitForFunction(
+            () => window.BimLvaDebug.modelCount === 0
+                && window.BimLvaDebug.mapTerrainLayer == null
+                && window.BimLvaDebug.worldOrigin == null
+                && !document.getElementById('loader')?.classList.contains('show'),
+            { timeout: 30_000 }
+        );
+        await page.evaluate(() => window.BimLvaDebug.clearBasemapBinding());
+    }
+
+    // A-k. Пустая сцена, «в нули»: центр в (0, 0), отметка с DEM, origin нет.
+    const zerosOk = await loadMapOnEmptyScene('zeros');
+    if (!zerosOk) {
+        problems.push('карта «в нули» на пустой сцене не загрузила рельеф');
+    } else {
+        const zeros = await page.evaluate(() => {
+            const dem = window.BimLvaDebug.mapTerrainLayer;
+            const abs = window.BimLvaDebug.worldPointToAbsolute(dem.centerX, dem.centerY, dem.centerZ);
+            return {
+                origin: window.BimLvaDebug.worldOrigin,
+                sceneXY: Math.hypot(dem.centerX, dem.centerY),
+                absX: abs.x,
+                absY: abs.y,
+                absZ: abs.z,
+                sample: window.BimLvaDebug.sampleTerrainZ(dem.centerX, dem.centerY, Number.NaN)
+            };
+        });
+        if (zeros.origin) {
+            problems.push(`режим «нули» задал origin ${JSON.stringify(zeros.origin)}`);
+        }
+        if (!(zeros.sceneXY < 50)) {
+            problems.push(`режим «нули»: центр сцены ${zeros.sceneXY.toFixed(1)} м от нуля`);
+        }
+        if (!(Math.abs(zeros.absX) < 50 && Math.abs(zeros.absY) < 50)) {
+            problems.push(
+                `режим «нули»: абсолютные (${zeros.absX.toFixed(1)}, ${zeros.absY.toFixed(1)}), ждали ~0`
+            );
+        }
+        if (!(Math.abs(zeros.absZ - TERRARIUM_Z) < 5)) {
+            problems.push(`режим «нули»: Z=${zeros.absZ?.toFixed?.(2)}, ждали DEM ${TERRARIUM_Z}`);
+        }
+        if (!(Number.isFinite(zeros.sample) && Math.abs(zeros.sample - TERRARIUM_Z) < 5)) {
+            problems.push(`режим «нули»: sampleTerrainZ=${zeros.sample}`);
+        }
+        console.log(
+            `A-k. нули: сцена ${zeros.sceneXY.toFixed(1)} м, ` +
+            `абс (${zeros.absX.toFixed(1)}, ${zeros.absY.toFixed(1)}, ${zeros.absZ.toFixed(1)}), ` +
+            `DEM ${Number.isFinite(zeros.sample) ? zeros.sample.toFixed(1) : 'NaN'}`
+        );
+        await clearMapScene();
+    }
+
+    // A-l. Пустая сцена, мировые ГК: статус-бар ≈ TM(55.7, 52.4), сцена у нуля.
+    const worldOk = await loadMapOnEmptyScene('world');
+    if (!worldOk) {
+        problems.push('карта «мировые» на пустой сцене не загрузила рельеф');
+    } else {
+        const world = await page.evaluate(([lat, lon]) => {
+            const dem = window.BimLvaDebug.mapTerrainLayer;
+            const abs = window.BimLvaDebug.worldPointToAbsolute(dem.centerX, dem.centerY, dem.centerZ);
+            const tm = window.BimLvaDebug.wgs84TmEn(lat, lon);
+            const origin = window.BimLvaDebug.worldOrigin;
+            return {
+                tm,
+                origin,
+                sceneXY: Math.hypot(dem.centerX, dem.centerY),
+                absX: abs.x,
+                absY: abs.y,
+                absZ: abs.z,
+                sample: window.BimLvaDebug.sampleTerrainZ(dem.centerX, dem.centerY, Number.NaN),
+                placeLocked: window.BimLvaDebug.mapBuilderState?.placeLocked
+            };
+        }, [SITE.lat, SITE.lon]);
+        if (!(world.tm.zone === 9 && world.tm.e > 9e6 && world.tm.e < 1e7
+            && world.tm.n > 6e6 && world.tm.n < 6.4e6)) {
+            problems.push(`ГК Челны странные: ${JSON.stringify(world.tm)}`);
+        }
+        if (!world.origin || world.origin.frame !== 'external') {
+            problems.push(`режим «мировые» не задал origin external: ${JSON.stringify(world.origin)}`);
+        }
+        if (world.origin && Math.hypot(world.origin.x - world.tm.e, world.origin.y - world.tm.n) > 1) {
+            problems.push(
+                `origin (${world.origin.x.toFixed(0)}, ${world.origin.y.toFixed(0)}) ` +
+                `≠ TM (${world.tm.e.toFixed(0)}, ${world.tm.n.toFixed(0)})`
+            );
+        }
+        if (!(world.sceneXY < 50)) {
+            problems.push(`режим «мировые»: центр сцены ${world.sceneXY.toFixed(1)} м — float32 без origin?`);
+        }
+        if (!(Math.hypot(world.absX - world.tm.e, world.absY - world.tm.n) < 5)) {
+            problems.push(
+                `режим «мировые»: абс (${world.absX.toFixed(1)}, ${world.absY.toFixed(1)}), ` +
+                `ждали TM (${world.tm.e.toFixed(1)}, ${world.tm.n.toFixed(1)})`
+            );
+        }
+        if (!(Math.abs(world.absZ - TERRARIUM_Z) < 5)) {
+            problems.push(`режим «мировые»: Z=${world.absZ?.toFixed?.(2)}, ждали DEM ${TERRARIUM_Z}`);
+        }
+        if (!(Number.isFinite(world.sample) && Math.abs(world.sample - TERRARIUM_Z) < 5)) {
+            problems.push(`режим «мировые»: sampleTerrainZ=${world.sample}`);
+        }
+        console.log(
+            `A-l. мировые: зона ${world.tm.zone}, ` +
+            `абс (${world.absX.toFixed(0)}, ${world.absY.toFixed(0)}), ` +
+            `сцена ${world.sceneXY.toFixed(1)} м, DEM ${Number.isFinite(world.sample) ? world.sample.toFixed(1) : 'NaN'}`
+        );
+        await clearMapScene();
+    }
+
     await page.setInputFiles('#localFileInput', file);
     await page.waitForFunction(
         () => window.BimLvaDebug?.modelCount === 1 && (window.BimLvaDebug?.modelBounds || []).length === 1,
@@ -786,7 +926,10 @@ try {
         problems.push(`рамка 1×1 км дала ${mOk.areaHa?.toFixed?.(2)} га, ожидалось ~100`);
     }
     if (!mOk.loadEnabled) problems.push('«Загрузить» выкл на 100 га (лимит 200)');
-    console.log(`M1. рамка 1 км: ${mOk.areaHa?.toFixed?.(1)} га, Загрузить ${mOk.loadEnabled ? 'вкл' : 'выкл'}`);
+    if (!mOk.placeLocked) {
+        problems.push('при загруженной модели выбор «нули / мировые» не заблокирован');
+    }
+    console.log(`M1. рамка 1 км: ${mOk.areaHa?.toFixed?.(1)} га, Загрузить ${mOk.loadEnabled ? 'вкл' : 'выкл'}, координаты ${mOk.placeLocked ? 'по модели' : 'свободны'}`);
 
     const mOver = await page.evaluate(([a, b]) => {
         window.BimLvaDebug.mapBuilderDrawRect(a, b);
@@ -817,6 +960,7 @@ try {
     console.log(`M3. контур: ${mPoly.areaHa?.toFixed?.(2)} га, ${mPoly.points} вершин`);
 
     await page.evaluate(([a, b]) => {
+        window.BimLvaDebug.mapBuilderSetPlace('world');
         window.BimLvaDebug.mapBuilderDrawRect(a, b);
     }, haAround(SITE, 800));
     await page.evaluate(() => document.getElementById('mapBuilderLoad').click());
@@ -840,6 +984,13 @@ try {
         const side = Math.min(layers.bm.sizeX, layers.bm.sizeY);
         if (!(side > 700 && side < 1400)) {
             problems.push(`охват после «Загрузить» ${layers.bm.sizeX.toFixed(0)}×${layers.bm.sizeY.toFixed(0)} м, ждали ~800–1130`);
+        }
+        const mapVsModel = Math.hypot(layers.bm.centerX - modelBounds.centerX, layers.bm.centerY - modelBounds.centerY);
+        if (!(mapVsModel < 300)) {
+            problems.push(
+                `при модели режим «мировые» увёл карту на ${mapVsModel.toFixed(0)} м ` +
+                `(должна сесть в координаты модели, не в ГК рамки)`
+            );
         }
         console.log(
             `M4. Загрузить: подложка ${layers.bm.sizeX.toFixed(0)}×${layers.bm.sizeY.toFixed(0)} м, ` +
