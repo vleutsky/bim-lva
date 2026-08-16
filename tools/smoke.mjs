@@ -2030,7 +2030,7 @@ async function checkRoadCrossSections(page) {
     if (!got.res || got.res.stations !== 3) {
         problems.push(`поперечники: сечений ${got.res?.stations} вместо 3 (0 / 1.5 / 3)`);
     } else {
-        if ((got.res.corridorTris || 0) < 8) {
+        if ((got.res.corridorTris || 0) < 20) {
             problems.push(`поперечники: полотно ${got.res.corridorTris} граней — «Построить» не протянуло шаблон`);
         }
         if ((got.res.template?.points?.length || 0) < 5) {
@@ -2200,6 +2200,50 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: новая ось без ширины дала ${planEdit.defL}/${planEdit.defR} вместо 3.25/3.25`);
     }
 
+    const labels = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 21, y: 19, z: g + 0.5 },
+                { x: 24, y: 19, z: g + 0.5 },
+                { x: 24, y: 22, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-подписи', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, { step: 20, widthL: 2, widthR: 2, sampleStep: 1, live: false });
+        const defl0 = D.polylineDeflection(id, 1);
+        D.openRoadProfile(id);
+        D.fitRoadPlan();
+        D.editPolyline(id, 'defl', 1, 45);
+        const defl1 = D.polylineDeflection(id, 1);
+        D.editPolyline(id, 'defl', 1, 90);
+        D.editPolyline(id, 'radius', 1, 2);
+        return { id, defl0, defl1, deflBack: D.polylineDeflection(id, 1) };
+    }, groundZ);
+    await page.waitForTimeout(250);
+    const labelUi = await page.evaluate(() => window.BimLvaDebug.chartAnnot());
+    if (Math.abs((labels.defl0 || 0) - 90) > 0.05) {
+        problems.push(`поперечники: угол L-оси ${labels.defl0}° вместо 90`);
+    }
+    if (Math.abs((labels.defl1 || 0) - 45) > 0.05) {
+        problems.push(`поперечники: правка угла поворота дала ${labels.defl1}° вместо 45`);
+    }
+    if (Math.abs((labels.deflBack || 0) - 90) > 0.05) {
+        problems.push(`поперечники: возврат угла поворота дал ${labels.deflBack}° вместо 90`);
+    }
+    if ((labelUi.planAng || 0) < 1 || !/Δ90|Δ\+?90/.test(labelUi.plan || '')) {
+        problems.push(`поперечники: на плане нет угла поворота Δ90° (${JSON.stringify(labelUi)})`);
+    }
+    if ((labelUi.planLen || 0) < 2 || !/3\.00\s*м/.test(labelUi.plan || '')) {
+        problems.push(`поперечники: на плане нет длин звеньев 3.00 м (${JSON.stringify(labelUi)})`);
+    }
+    if ((labelUi.planR || 0) < 1 || !/R\s*2/.test(labelUi.plan || '')) {
+        problems.push(`поперечники: на плане нет радиуса R 2 (${JSON.stringify(labelUi)})`);
+    }
+    if ((labelUi.profZ || 0) < 3 || (labelUi.profSeg || 0) < 2) {
+        problems.push(`поперечники: на профиле L-оси нет отметок/уклонов (${JSON.stringify(labelUi)})`);
+    }
+
     // Короткое плечо + R больше ширины: радиус сожмётся, внутренность без
     // правки выворачивается (кромка идёт назад, полотно — «ёжик»).
     const tightFillet = await page.evaluate((g) => {
@@ -2314,7 +2358,8 @@ async function checkRoadCrossSections(page) {
             planVerts: document.querySelectorAll('#roadPlanChart .pkvert').length,
             planEdges: document.querySelectorAll('#roadPlanChart .pkedge').length,
             cornerMode: !!document.getElementById('roadCornerMode'),
-            profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80
+            profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80,
+            annot: window.BimLvaDebug.chartAnnot()
         };
     });
     if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
@@ -2325,6 +2370,12 @@ async function checkRoadCrossSections(page) {
     }
     if ((chart.planVerts || 0) < 2 || (chart.planEdges || 0) < 2 || !chart.cornerMode) {
         problems.push(`поперечники: на плане нет ручек вершин/кромок (${JSON.stringify({ verts: chart.planVerts, edges: chart.planEdges, corner: chart.cornerMode })})`);
+    }
+    if ((chart.annot?.planLen || 0) < 1 || !/м/.test(chart.annot?.plan || '')) {
+        problems.push(`поперечники: на плане нет подписи длины (${JSON.stringify(chart.annot)})`);
+    }
+    if ((chart.annot?.profZ || 0) < 2 || (chart.annot?.profSeg || 0) < 1) {
+        problems.push(`поперечники: на профиле нет отметок или длины/уклона (${JSON.stringify(chart.annot)})`);
     }
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
@@ -2445,7 +2496,7 @@ async function checkRoadCrossSections(page) {
     if (!live.ok || Math.abs((live.dz || 0) - 0.4) > 1e-6) {
         problems.push(`поперечники: правка точки шаблона не сработала (${JSON.stringify(live)})`);
     }
-    if ((live.tris || 0) < 8) {
+    if ((live.tris || 0) < 20) {
         problems.push(`поперечники: после правки точки полотно пропало (${live.tris})`);
     }
     if (!live.profile) {
