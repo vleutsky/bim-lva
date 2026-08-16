@@ -56,7 +56,7 @@
 - `assets/vendor/**` — самохостинг зависимостей, **коммитится**. Шага сборки при
   деплое нет и не должно появиться.
 - `sw-composer.js` — service worker; при правках вьювера поднимать `CACHE`
-  (сейчас `bimlva-composer-shell-v168`). Вендоры — cache-first, свой JS/CSS —
+  (сейчас `bimlva-composer-shell-v169`). Вендоры — cache-first, свой JS/CSS —
   network-first.
 - `ui-style-preview.html` — **прототип оформления**, отдельный файл, рабочий
   вьювер не трогает. Смотреть через Pages или открывать локально.
@@ -658,6 +658,11 @@ null` обычный пользователь не видит, а админ в�
   Фикс: min zoom 6, при `zoom < 10` восстанавливаем lastGood / привязку / СПб;
   «Санкт-Петербург» и «Москва» — локальные алиасы до fetch. Закреплено в
   `npm run test-basemap` (A-h reopen, A-i поиск СПб против мока Челны).
+- **Версия в шапке «не меняется».** `#brandVersionLabel` жил как «Composer IFC · v…»
+  и прятался CSS при ширине ≤1100 px и в `tb-compact` — после деплоя лента
+  выглядела как раньше, хотя `COMPOSER_ABOUT` уже новый. Держать ту же строку
+  в HTML шапки и в `<title>`, не скрывать `.brand small`. Сверка —
+  `npm run check-site` (штамп = ABOUT) и `npm run smoke` (видно на 1000 px).
 - Тайл-серверы из песочницы **закрыты прокси** (OSM, ESRI, Яндекс, S3 — все FAIL,
   npm при этом отвечает). Поэтому `npm run test-basemap` мокает тайлы через
   `page.route` и проверяет математику, а не сеть. Terrarium — сплошной PNG

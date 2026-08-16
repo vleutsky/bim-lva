@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · Сводные модели</title>
+    <title>BIM.LVA Composer IFC · v2026.08.16 · header-ver</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -275,11 +275,14 @@
         }
         .brand small {
             display: block;
-            font-size: 9px;
+            font-size: 10px;
             font-weight: 600;
             color: var(--txt-mute);
-            letter-spacing: .08em;
-            text-transform: uppercase;
+            letter-spacing: .02em;
+            white-space: nowrap;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         /* Двухрядная лента: вкладки + именованные панели, как в Civil 3D. */
@@ -1021,8 +1024,8 @@
             border-color: var(--line);
         }
 
-        /* Density / overflow helpers */
-        body.tb-compact .brand small { display: none; }
+        /* Density / overflow helpers — версию в шапке не прячем: иначе после
+           деплоя кажется, что номер сборки «не меняется». */
         body.tb-compact .tb-auth .bimlva-auth-user { max-width: 72px !important; }
         body.tb-compact .tb-auth .bimlva-auth-stats-label { display: none; }
         body.tb-compact .tb-main .tb-txt { display: none; }
@@ -1033,7 +1036,6 @@
         }
 
         @media (max-width: 1100px) {
-            .brand small { display: none; }
             .tb-auth { max-width: 140px; }
             .bimlva-auth-user { max-width: 84px !important; }
         }
@@ -3599,7 +3601,7 @@
                 <div class="dot"></div>
                 <div>
                     <b>BIM.LVA</b>
-                    <small id="brandVersionLabel">Composer IFC · v…</small>
+                    <small id="brandVersionLabel">v2026.08.16 · header-ver</small>
                 </div>
             </div>
             <button type="button" class="rtab on" data-rp="file">Файл</button>
@@ -5891,6 +5893,13 @@
          * иначе не посмотреть: ни «сколько мешей», ни «построен ли BVH».
          */
         window.BimLvaDebug = Object.freeze({
+            get composerAbout() {
+                return {
+                    version: COMPOSER_ABOUT.version,
+                    buildId: COMPOSER_ABOUT.buildId,
+                    label: composerVersionLabel()
+                };
+            },
             get meshCount() { return allMeshes.length; },
             get bvhCount() {
                 let n = 0;
@@ -36228,7 +36237,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'map-search',
+            buildId: 'header-ver',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -36237,6 +36246,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: версия сборки в шапке ленты и во вкладке браузера — не прячется на узком окне и совпадает с «О продукте».',
                 '2026.08.16: повторное открытие карты не оставляет вид «весь мир»; поиск СПб и Москвы работает без Nominatim.',
                 '2026.08.16: рельеф с карты совмещается по отметке уже загруженной модели; если космоснимок не открылся — схема OSM.',
                 '2026.08.16: глобус открывается на Санкт-Петербурге; после «Загрузить» рельеф и подложка в дереве, без предложения сразу добавить модели.',
@@ -36320,14 +36330,18 @@ ${componentXml || '    '}
 
         (function initAboutUi() {
             const label = $('brandVersionLabel');
-            if (label) label.textContent = composerVersionLabel();
-            document.title = `${COMPOSER_ABOUT.product} · ${composerVersionLabel()}`;
-            console.info(`[BIM.LVA] ${COMPOSER_ABOUT.product} ${composerVersionLabel()}`);
+            const text = composerVersionLabel();
+            if (label) {
+                label.textContent = text;
+                label.title = `${COMPOSER_ABOUT.product} ${text}`;
+            }
+            document.title = `${COMPOSER_ABOUT.product} · ${text}`;
+            console.info(`[BIM.LVA] ${COMPOSER_ABOUT.product} ${text}`);
         })();
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=118').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=119').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
