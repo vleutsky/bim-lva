@@ -2130,12 +2130,20 @@ async function checkRoadCrossSections(page) {
         return {
             found: !!btn,
             shown: document.getElementById('roadXsModal')?.classList.contains('show'),
-            tabs: [...(card?.querySelectorAll('.rstabs .ptab') || [])].map((t) => t.textContent.trim()),
+            titles: [...(card?.querySelectorAll('.rs-pane-title') || [])].map((t) => t.textContent.trim()),
+            plan: !!document.getElementById('roadPlanChart'),
+            splitH: !!document.getElementById('rsSplitH'),
+            splitV: !!document.getElementById('rsSplitV'),
+            grips: [...(card?.querySelectorAll('.rs-win-grip') || [])].map((g) => g.dataset.dir),
+            applyTpl: (document.getElementById('roadXsApplyTpl')?.textContent || '').trim(),
+            tpls: [...(card?.querySelectorAll('#roadXsTpls .rs-tpl') || [])].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
             palMin: !!card?.querySelector('.pal-min'),
             palDock: !!card?.querySelector('.pal-dock'),
             clashChrome: !!document.querySelector('#clashModalCard .pal-min'),
             left: cr?.left ?? -1,
             vw: innerWidth,
+            w: Math.round(cr?.width || 0),
+            h: Math.round(cr?.height || 0),
             btns
         };
     });
@@ -2148,8 +2156,17 @@ async function checkRoadCrossSections(page) {
         if (!apply || apply.w < 4 || apply.left < -1) {
             problems.push(`поперечники: кнопка «Построить» не видна (${JSON.stringify(apply)})`);
         }
-        if (!ui.tabs.includes('План') || !ui.tabs.includes('Профиль') || !ui.tabs.includes('Поперечник')) {
-            problems.push(`поперечники: нет вкладок План/Профиль/Поперечник (${JSON.stringify(ui.tabs)})`);
+        if (!ui.titles.includes('План') || !ui.titles.includes('Профиль') || !ui.titles.includes('Поперечник')) {
+            problems.push(`поперечники: нет панелей План/Профиль/Поперечник (${JSON.stringify(ui.titles)})`);
+        }
+        if (!ui.plan || !ui.splitH || !ui.splitV || ui.grips.join(',') !== 'e,s,se') {
+            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, grips: ui.grips })})`);
+        }
+        if (ui.applyTpl !== 'Применить на ось' || ui.tpls.length < 5) {
+            problems.push(`поперечники: нет каталога шаблонов (${JSON.stringify({ applyTpl: ui.applyTpl, tpls: ui.tpls })})`);
+        }
+        if ((ui.w || 0) < 700 || (ui.h || 0) < 360) {
+            problems.push(`поперечники: окно слишком маленькое для трёх чертежей (${ui.w}×${ui.h})`);
         }
         if (!ui.palMin || !ui.palDock) {
             problems.push('поперечники: нет кнопок свернуть/закрепить на палитре');
@@ -2172,11 +2189,16 @@ async function checkRoadCrossSections(page) {
             hasShape: /class="xs-shape"/.test(html),
             hasSlope: /class="xs-slope"/.test(html),
             profileBtn: !!document.getElementById('roadXsProfile'),
-            slopeBtn: !!document.getElementById('roadXsSlope')
+            slopeBtn: !!document.getElementById('roadXsSlope'),
+            planPoly: /<polyline /.test(document.getElementById('roadPlanChart')?.innerHTML || ''),
+            profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80
         };
     });
     if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
         problems.push(`поперечники: чертёж в окне пустой или без полосы дороги (${JSON.stringify(chart)})`);
+    }
+    if (!chart.planPoly || !chart.profSvg) {
+        problems.push(`поперечники: план или профиль пустой (${JSON.stringify({ planPoly: chart.planPoly, profSvg: chart.profSvg })})`);
     }
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
@@ -2285,12 +2307,15 @@ async function checkRoadCrossSections(page) {
         const moved = after?.points?.find((p) => p.id === left.id);
         const opened = D.openRoadProfile();
         const profilePane = document.getElementById('rstab-profile');
+        const planPane = document.getElementById('rstab-plan');
+        const xsPane = document.getElementById('rstab-xs');
         return {
             ok: true,
             dz: moved?.dz,
             tris: D.roadXs[0]?.corridorTris || 0,
             profile: !!document.getElementById('roadXsModal')?.classList.contains('show')
                 && profilePane && !profilePane.hidden,
+            panes: !!(planPane && xsPane && !planPane.hidden && !xsPane.hidden),
             alias: !!document.getElementById('polyProfileModal')?.classList.contains('show')
         };
     });
@@ -2302,6 +2327,9 @@ async function checkRoadCrossSections(page) {
     }
     if (!live.profile) {
         problems.push('поперечники: «Профиль» не открыл продольный профиль оси');
+    }
+    if (!live.panes) {
+        problems.push('поперечники: план и поперечник пропали, когда открыли профиль');
     }
 
     await page.waitForTimeout(250);
@@ -2319,16 +2347,16 @@ async function checkRoadCrossSections(page) {
             profOn: prof && !prof.hidden,
             planOn: plan && !plan.hidden,
             chartH: Math.round(chart?.getBoundingClientRect().height || 0),
-            cardH: Math.round(cr?.height || 0),
-            tabs: [...(card?.querySelectorAll('.rstabs .ptab.on') || [])].map((t) => t.dataset.rstab)
+            planH: Math.round(document.getElementById('roadPlanChart')?.getBoundingClientRect().height || 0),
+            cardH: Math.round(cr?.height || 0)
         };
     });
     if (!pair.ok) {
-        problems.push('поперечники: нет вкладок палитры Трасса');
-    } else if (!pair.xsOn || pair.profOn || pair.planOn) {
-        problems.push(`поперечники: «⊟ сечение» не открыло вкладку поперечника (${JSON.stringify(pair)})`);
-    } else if (pair.chartH < 80 || pair.cardH < 160) {
-        problems.push(`поперечники: чертёж сечения слишком мал (${JSON.stringify(pair)})`);
+        problems.push('поперечники: нет панелей палитры трассы');
+    } else if (!pair.xsOn || !pair.profOn || !pair.planOn) {
+        problems.push(`поперечники: «⊟ сечение» спрятало одну из панелей (${JSON.stringify(pair)})`);
+    } else if (pair.chartH < 80 || pair.planH < 60 || pair.cardH < 280) {
+        problems.push(`поперечники: чертежи слишком малы (${JSON.stringify(pair)})`);
     }
 
     const slopes = await page.evaluate(() => {
@@ -2428,6 +2456,34 @@ async function checkRoadCrossSections(page) {
     if (extras.applies !== true || Math.abs((extras.base ?? -1)) > 1e-6
         || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
         problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
+    }
+
+    const studio = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const snap = D.applyRoadXsPreset('curb');
+        const plan0 = D.roadPlanViewSpan();
+        D.zoomRoadPlan(1 / 1.18);
+        const mid = D.roadPlanViewSpan();
+        D.fitRoadPlan();
+        const after = D.roadPlanViewSpan();
+        return {
+            hasCurb: (snap?.shapes || []).some((s) => s.code === 'CURB'),
+            curbN: (snap?.shapes || []).filter((s) => s.code === 'CURB').length,
+            pts: snap?.points?.length || 0,
+            plan0: plan0?.span,
+            mid: mid?.span,
+            after: after?.span,
+            applyBtn: (document.getElementById('roadXsApplyTpl')?.textContent || '').trim()
+        };
+    });
+    if (studio.applyBtn !== 'Применить на ось' || !studio.hasCurb || studio.curbN < 2) {
+        problems.push(`поперечники: шаблон «С бордюром» не применился (${JSON.stringify(studio)})`);
+    }
+    if (!(studio.mid < studio.plan0 * 0.92)) {
+        problems.push(`поперечники: зум плана не сузил окно (${JSON.stringify(studio)})`);
+    }
+    if (Math.abs((studio.after ?? 0) - (studio.plan0 ?? 0)) > Math.max(0.4, (studio.plan0 || 0) * 0.08)) {
+        problems.push(`поперечники: ⤢ плана не вернул масштаб (${JSON.stringify(studio)})`);
     }
 
     await page.evaluate(() => document.getElementById('polyProfileClose')?.click());
