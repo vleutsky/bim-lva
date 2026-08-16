@@ -2169,6 +2169,86 @@ async function checkRoadCrossSections(page) {
         }
     }
 
+    // Внутренний уголок: сечения до PI перпендикулярны оси, а на PI —
+    // биссектриса. Бордюр/обочина без подрезки заходят в соседнее звено.
+    const innerClip = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 18, z: g + 0.5 },
+                { x: 28, y: 18, z: g + 0.5 },
+                { x: 28, y: 26, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-внутренний-угол', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, {
+            step: 1, widthL: 3.25, widthR: 3.25, sampleStep: 1, live: false
+        });
+        D.addRoadXsFigureBoth('curb');
+        D.addRoadXsFigureBoth('shoulder');
+        const ov = D.corridorInnerOverlap(id);
+        const row = (D.roadXs || []).find((m) => m.polylineId === id);
+        return { ov, tris: row?.corridorTris || 0 };
+    }, groundZ);
+    if (!(innerClip.ov?.raw > 0.02)) {
+        problems.push(`поперечники: на внутреннем угле нет вылета до клипа (${JSON.stringify(innerClip)})`);
+    }
+    if (!((innerClip.ov?.clipped ?? 1) < 1e-3)) {
+        problems.push(`поперечники: после клипа вылет ${innerClip.ov?.clipped} вместо ≈0`);
+    }
+    if ((innerClip.tris || 0) < 20) {
+        problems.push(`поперечники: на внутреннем угле полотно ${innerClip.tris} граней`);
+    }
+
+    // Внешний угол откоса: веер давал фаску у земли, нужен прямой угол.
+    // L 3+3 м, ширина 2, 1:1.5, ось на 0.5 м → reach 0.75.
+    // PI (24,17), бровка справа (26,15), прямой угол выхода (26.75, 14.25).
+    // Фаска на биссектрисе была бы ≈(26.53, 14.47).
+    const outerMiter = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 21, y: 17, z: g + 0.5 },
+                { x: 24, y: 17, z: g + 0.5 },
+                { x: 24, y: 20, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-внешний-угол', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, { step: 20, widthL: 2, widthR: 2, sampleStep: 1, live: false });
+        D.buildRoadXsSlopes({ mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        const axis = (D.drawn || []).find((d) => d.name === 'Ось-тест-внешний-угол');
+        const pi = axis?.vertsAbs?.[1];
+        const lines = (D.drawn || []).filter((d) =>
+            /насыпь/.test(d.name || '') && /вправо/.test(d.name || '')
+        );
+        const pts = [];
+        lines.forEach((ln) => (ln.vertsAbs || ln.abs || []).forEach((p) => pts.push(p)));
+        const want = pi ? { x: pi.x + 2.75, y: pi.y - 2.75 } : null;
+        const chamfer = pi ? { x: pi.x + 2 + 0.75 * Math.SQRT1_2, y: pi.y - 2 - 0.75 * Math.SQRT1_2 } : null;
+        let best = Infinity, hit = null;
+        if (want) {
+            pts.forEach((p) => {
+                const d = Math.hypot(p.x - want.x, p.y - want.y);
+                if (d < best) { best = d; hit = p; }
+            });
+        }
+        const chamferD = (hit && chamfer)
+            ? Math.hypot(hit.x - chamfer.x, hit.y - chamfer.y)
+            : null;
+        return {
+            n: pts.length,
+            best,
+            chamferD,
+            want,
+            names: lines.map((l) => l.name)
+        };
+    }, groundZ);
+    if (!((outerMiter.best ?? 1) < 0.15)) {
+        problems.push(`поперечники: внешний угол откоса не прямой (${JSON.stringify(outerMiter)})`);
+    } else if (outerMiter.chamferD != null && outerMiter.chamferD < outerMiter.best) {
+        problems.push(`поперечники: внешний угол откоса сел на фаску, не на прямой (${JSON.stringify(outerMiter)})`);
+    }
+
     const planEdit = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
         const id = D.createPolylineFromPoints(
@@ -2676,8 +2756,18 @@ async function checkRoadCrossSections(page) {
         );
     }
 
-    const slopes = await page.evaluate(() => {
+    const slopes = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20.5, y: 16, z: g + 0.5 },
+                { x: 23.5, y: 16, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-объём-откосов', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, {
+            step: 1.5, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
         const left = D.roadXsTemplate()?.points?.find((p) => p.code === 'L');
         if (left) D.setRoadXsPoint(left.id, { dz: 0 });
         const res = D.buildRoadXsSlopes({ mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
@@ -2693,7 +2783,7 @@ async function checkRoadCrossSections(page) {
             n: res?.sides?.length || 0,
             ground: D.roadXsChartGround()
         };
-    });
+    }, groundZ);
     if (!slopes.hasBtn) problems.push('поперечники: нет кнопки «Откосы»');
     if (!slopes.hasRay) problems.push('поперечники: на чертеже нет лучей откоса до земли');
     if (!slopes.hasGroundClass) problems.push('поперечники: на чертеже нет линии земли xs-ground');

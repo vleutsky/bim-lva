@@ -7247,6 +7247,19 @@
                     added: { code: added.shape.code, kind: added.kind, anchor: added.anchor.code }
                 };
             },
+            addRoadXsFigureBoth(kind) {
+                const model = currentRoadXsModel();
+                if (!model?.template) return null;
+                addFigureBothSides(model.template, kind);
+                applyRoadTemplateChange(model, { relink: false });
+                return snapshotRoadTemplate(model.template);
+            },
+            corridorInnerOverlap(id) {
+                const model = id != null
+                    ? (typeof roadXsModels !== 'undefined' ? roadXsModels : []).find((m) => m.polylineId === id || m.id === id)
+                    : currentRoadXsModel();
+                return measureCorridorInnerOverlap(model);
+            },
             removeRoadXsShape(id) {
                 const model = currentRoadXsModel();
                 if (!model?.template) return null;
@@ -10852,9 +10865,11 @@
          * По каждому ребру бровки идём наружу по нормали ребра (не биссектрисе
          * угла) с шагом slopeStep, пока отметка откоса (постоянный уклон 1:m)
          * не сойдётся с целевой поверхностью: сначала уже построенные откосы
-         * и площадки, иначе sampleTerrainZ. На выпуклом углу — веер нормалей
-         * между двумя рёбрами, плюс вершины чужой площадки, которые попали в
-         * этот сектор: иначе линия выхода режет соседнюю площадку по диагонали
+         * и площадки, иначе sampleTerrainZ. На выпуклом углу площадки — веер
+         * нормалей между двумя рёбрами; у откоса дороги (`corner:'miter'`)
+         * внешний угол прямой: две плоскости сходятся в P+d0·n0+d1·n1, без
+         * срезанного треугольника. Плюс вершины чужой площадки, которые попали
+         * в сектор веера: иначе линия выхода режет соседнюю площадку по диагонали
          * и не описывает её угол. Своя середина замкнутого контура — тоже
          * поверхность: внутрь контура откос не идёт. Выше земли на
          * бровке — насыпь (вниз по 1:mFill), ниже — выемка (вверх по 1:mCut).
@@ -11139,8 +11154,10 @@
             const tokens = [];
             for (let i = 0; i < n; i++) {
                 const s = sections[i];
-                if (s.valid) tokens.push({ kind: 'exit', mode: s.mode, pt: s.exit });
-                else tokens.push({ kind: 'break' });
+                if (s.valid) {
+                    tokens.push({ kind: 'exit', mode: s.mode, pt: s.exit });
+                    if (s.miterExit) tokens.push({ kind: 'exit', mode: s.mode, pt: s.miterExit });
+                } else tokens.push({ kind: 'break' });
                 if (!closed && i === n - 1) break;
                 const j = (i + 1) % n;
                 const a = sections[i], b = sections[j];
@@ -12106,6 +12123,35 @@
             return da;
         }
 
+        /**
+         * Внешний угол бровки: правая сторона на левом повороте оси (и наоборот).
+         * Там откос должен дать прямой угол, а не веер-фаску.
+         */
+        function slopeIsOuterCorner(tIn, tOut, side) {
+            if (!tIn || !tOut) return false;
+            const cross = tIn.x * tOut.y - tIn.y * tOut.x;
+            if (Math.abs(cross) < 1e-8) return false;
+            return side === 'right' ? cross > 0 : cross < 0;
+        }
+
+        /**
+         * Точка выхода на внешнем прямом угле: пересечение линий выхода
+         * двух соседних сечений (P + d0·n0 + d1·n1). На плоской земле это
+         * прямой угол, как у полотна сверху.
+         */
+        function slopeMiterExitPoint(P, n0, n1, exit0, exit1, sampleZ) {
+            if (!P || !n0 || !n1 || !exit0 || !exit1) return null;
+            const d0 = (exit0.x - P.x) * n0.x + (exit0.y - P.y) * n0.y;
+            const d1 = (exit1.x - P.x) * n1.x + (exit1.y - P.y) * n1.y;
+            if (!(d0 > 1e-4) || !(d1 > 1e-4)) return null;
+            const x = P.x + n0.x * d0 + n1.x * d1;
+            const y = P.y + n0.y * d0 + n1.y * d1;
+            const MISS = Number.NEGATIVE_INFINITY;
+            const g = sampleZ ? sampleZ(x, y, MISS) : MISS;
+            const z = (g !== MISS && Number.isFinite(g)) ? g : Math.min(exit0.z, exit1.z);
+            return { x, y, z };
+        }
+
         /** Вектор w от угла лежит в наружном секторе между нормалями n0→n1. */
         function slopeVecInFan(w, n0, n1) {
             const da = slopeSignedAngle(n0, n1);
@@ -12119,7 +12165,7 @@
          * Станции откоса: вдоль каждого ребра по его нормали, на выпуклом
          * угле — веер, плюс вершины чужих площадок в этом веере.
          */
-        function buildSlopeStationLoop(ring, closed, side, step, maxReach, pads) {
+        function buildSlopeStationLoop(ring, closed, side, step, maxReach, pads, corner) {
             const n = ring.length;
             const last = closed ? n : n - 1;
             const edges = [];
@@ -12203,6 +12249,7 @@
                     stations.push({
                         brow: slopeLerpPt(ed.A, ed.B, t),
                         normal: ed.nrm,
+                        dir: ed.dir,
                         kind: 'edge',
                         edge: e,
                         t
@@ -12211,7 +12258,7 @@
                 const hasNext = closed || e < edges.length - 1;
                 if (!hasNext) continue;
                 const next = edges[(e + 1) % edges.length];
-                pushFanAt(ed.B, ed.nrm, next.nrm, e);
+                if (corner !== 'miter') pushFanAt(ed.B, ed.nrm, next.nrm, e);
             }
             return stations;
         }
@@ -12226,7 +12273,7 @@
             const pads = collectOtherPadRings(record.id);
             const look = 0.05;
             const raw = buildSlopeStationLoop(
-                ring, closed, side, opts.step, opts.maxReach, pads
+                ring, closed, side, opts.step, opts.maxReach, pads, opts.corner
             );
             const stations = [];
             raw.forEach((st) => {
@@ -12300,10 +12347,23 @@
                 const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
                 const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
                 if (dist < 1e-6) {
-                    // Веер с одного угла: если хоть одно сечение выемка —
-                    // кладём в оверлей, иначе треугольник прячется под рельефом.
+                    // Один угол бровки, два нормали: у площадки это веер (треугольник
+                    // бровка–выход–выход), у дороги на внешнем угле — прямой угол.
                     const mode = (a.mode === 'cut' || b.mode === 'cut') ? 'cut' : 'fill';
-                    pushMode(mode, edgeA, exitA, exitB);
+                    const n0 = stations[i].normal || a.n;
+                    const n1 = stations[j].normal || b.n;
+                    const tIn = stations[i].dir, tOut = stations[j].dir;
+                    const M = (opts.corner === 'miter' && slopeIsOuterCorner(tIn, tOut, side))
+                        ? slopeMiterExitPoint(edgeA, n0, n1, a.exit, b.exit, sampleZ)
+                        : null;
+                    if (M) {
+                        const Mv = new THREE.Vector3(M.x, M.y, M.z);
+                        pushMode(mode, edgeA, exitA, Mv);
+                        pushMode(mode, edgeA, Mv, exitB);
+                        a.miterExit = M;
+                    } else {
+                        pushMode(mode, edgeA, exitA, exitB);
+                    }
                     continue;
                 }
                 if (a.mode !== 'flat' && b.mode === 'flat') {
@@ -17241,6 +17301,12 @@
             };
         }
 
+        function templateMaxAbsOffset(tpl) {
+            let m = 0;
+            (tpl?.points || []).forEach((p) => { m = Math.max(m, Math.abs(Number(p.off) || 0)); });
+            return m;
+        }
+
         function templatePoint(tpl, id) {
             return (tpl?.points || []).find((p) => p.id === id) || null;
         }
@@ -18443,11 +18509,16 @@
 
         function pruneStationsNearCorners(stations, turns, width) {
             if (!turns.length) return stations;
+            const w = Math.max(0.5, Number(width) || 0.5);
             return stations.filter((s) => {
                 for (const v of turns) {
                     if (Math.abs(s - v.sta) <= 0.08) return true;
-                    const keepOff = Math.max(0.5, width * v.tanHalf);
-                    if (Math.abs(s - v.sta) < keepOff * 0.85) return false;
+                    /* keepOff = width·tan(δ/2): ближе к PI перпендикуляр
+                     * уже заходит за биссектрису внутреннего уголка. Коэффициент
+                     * 0.85 оставлял станции, с которых бордюр/обочина торчали
+                     * в соседнее звено. */
+                    const keepOff = Math.max(0.5, w * v.tanHalf);
+                    if (Math.abs(s - v.sta) < keepOff) return false;
                 }
                 return true;
             });
@@ -18500,7 +18571,8 @@
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
             const turns = roadVertexTurns(record, stn);
             let stationsPk = roadXsStationList(stn, step, stepCurve, polylineVertexStations(record, stn));
-            stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
+            const pruneW = Math.max(widthL, widthR, Number(opts.templateMaxOff) || 0);
+            stationsPk = pruneStationsNearCorners(stationsPk, turns, pruneW);
             const MISS = Number.NEGATIVE_INFINITY;
             let missed = 0, hits = 0;
             const stations = stationsPk.map((sta) => {
@@ -18582,7 +18654,91 @@
             model.corridorTris = 0;
         }
 
-        function corridorLoftPush(positions, placed, pairs, capIds) {
+        function stationTravelXY(st) {
+            const tx = -(st?.ry || 0), ty = st?.rx || 0;
+            const len = Math.hypot(tx, ty) || 1;
+            return { x: tx / len, y: ty / len };
+        }
+
+        /**
+         * Точка сечения не должна заходить за плоскость соседней станции:
+         * иначе на внутреннем уголке бордюр/обочина предыдущего звена торчит
+         * в объём следующего. Режем лучом от оси станции на плоскость соседа.
+         */
+        function clipCorridorPointToNeighborPlane(pt, st, neighbor) {
+            if (!pt || !st || !neighbor) return pt;
+            const nT = stationTravelXY(neighbor);
+            const cRel = (st.x - neighbor.x) * nT.x + (st.y - neighbor.y) * nT.y;
+            if (Math.abs(cRel) < 1e-9) return pt;
+            const rel = (pt.x - neighbor.x) * nT.x + (pt.y - neighbor.y) * nT.y;
+            if (rel * cRel >= -1e-9) return pt;
+            const dx = pt.x - st.x, dy = pt.y - st.y;
+            const den = dx * nT.x + dy * nT.y;
+            if (Math.abs(den) < 1e-12) return pt;
+            const s = -cRel / den;
+            if (!(s >= 0) || s > 1 + 1e-9) return pt;
+            const t = Math.min(1, s);
+            return new THREE.Vector3(st.x + t * dx, st.y + t * dy, pt.z);
+        }
+
+        function clipCorridorSectionMap(map, st, neighbor) {
+            const out = new Map();
+            (map || new Map()).forEach((pt, id) => {
+                out.set(id, clipCorridorPointToNeighborPlane(pt, st, neighbor));
+            });
+            return out;
+        }
+
+        function corridorPointPlaneOvershoot(pt, st, neighbor) {
+            if (!pt || !st || !neighbor) return 0;
+            const nT = stationTravelXY(neighbor);
+            const cRel = (st.x - neighbor.x) * nT.x + (st.y - neighbor.y) * nT.y;
+            const rel = (pt.x - neighbor.x) * nT.x + (pt.y - neighbor.y) * nT.y;
+            if (rel * cRel >= -1e-9) return 0;
+            return Math.abs(rel);
+        }
+
+        function placeCorridorStations(model) {
+            const tpl = model?.template;
+            const stations = model?.stations;
+            if (!tpl || !stations) return [];
+            return stations.map((st) => {
+                const map = new Map();
+                resolveTemplatePoints(tpl, st).forEach((r) => {
+                    if (r.hide) return;
+                    map.set(r.id, placeTemplateAtStation(st, r));
+                });
+                return map;
+            });
+        }
+
+        function measureCorridorInnerOverlap(model) {
+            const stations = model?.stations;
+            const placed = placeCorridorStations(model);
+            if (!stations || stations.length < 2 || placed.length < 2) {
+                return { raw: 0, clipped: 0, n: 0, stations: stations?.length || 0 };
+            }
+            let raw = 0, clipped = 0, n = 0;
+            const acc = (map, st, neighbor, into) => {
+                map.forEach((pt) => {
+                    n += into === 'raw' ? 1 : 0;
+                    const v = corridorPointPlaneOvershoot(pt, st, neighbor);
+                    if (into === 'raw') raw = Math.max(raw, v);
+                    else clipped = Math.max(clipped, v);
+                });
+            };
+            for (let i = 0; i < placed.length - 1; i++) {
+                acc(placed[i], stations[i], stations[i + 1], 'raw');
+                acc(placed[i + 1], stations[i + 1], stations[i], 'raw');
+                const mapA = clipCorridorSectionMap(placed[i], stations[i], stations[i + 1]);
+                const mapB = clipCorridorSectionMap(placed[i + 1], stations[i + 1], stations[i]);
+                acc(mapA, stations[i], stations[i + 1], 'clip');
+                acc(mapB, stations[i + 1], stations[i], 'clip');
+            }
+            return { raw, clipped, n, stations: stations.length };
+        }
+
+        function corridorLoftPush(positions, placed, pairs, capIds, stations) {
             /* Вырожденность — в 3D, не по площади в плане. Бока одежды (R–RB)
              * и торцы сечения стоят вертикально: areaXY у них ноль, и при
              * проверке в XY формы становились открытыми листами без торцов. */
@@ -18595,21 +18751,27 @@
                 if ((nx * nx + ny * ny + nz * nz) < 1e-16) return;
                 positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
             };
-            (pairs || []).forEach((link) => {
-                for (let i = 0; i < placed.length - 1; i++) {
-                    const a0 = placed[i].get(link.a);
-                    const b0 = placed[i].get(link.b);
-                    const a1 = placed[i + 1].get(link.a);
-                    const b1 = placed[i + 1].get(link.b);
-                    if (!a0 || !b0 || !a1 || !b1) continue;
+            for (let i = 0; i < placed.length - 1; i++) {
+                const mapA = stations
+                    ? clipCorridorSectionMap(placed[i], stations[i], stations[i + 1])
+                    : placed[i];
+                const mapB = stations
+                    ? clipCorridorSectionMap(placed[i + 1], stations[i + 1], stations[i])
+                    : placed[i + 1];
+                (pairs || []).forEach((link) => {
+                    const a0 = mapA.get(link.a);
+                    const b0 = mapA.get(link.b);
+                    const a1 = mapB.get(link.a);
+                    const b1 = mapB.get(link.b);
+                    if (!a0 || !b0 || !a1 || !b1) return;
                     const A = new THREE.Vector3(a0.x, a0.y, a0.z);
                     const B = new THREE.Vector3(b0.x, b0.y, b0.z);
                     const C = new THREE.Vector3(a1.x, a1.y, a1.z);
                     const D = new THREE.Vector3(b1.x, b1.y, b1.z);
                     push(A, B, D);
                     push(A, D, C);
-                }
-            });
+                });
+            }
             const ids = capIds || [];
             if (ids.length >= 3 && placed.length) {
                 const cap = (map, reverse) => {
@@ -18666,14 +18828,7 @@
             const tpl = model?.template;
             const stations = model?.stations;
             if (!tpl || !stations || stations.length < 2) return null;
-            const placed = stations.map((st) => {
-                const map = new Map();
-                resolveTemplatePoints(tpl, st).forEach((r) => {
-                    if (r.hide) return;
-                    map.set(r.id, placeTemplateAtStation(st, r));
-                });
-                return map;
-            });
+            const placed = placeCorridorStations(model);
             const meshes = [];
             let tris = 0;
             const closed = (tpl.shapes || []).filter((sh) => (sh.pts || []).length >= 3);
@@ -18681,7 +18836,7 @@
                 closed.forEach((sh, idx) => {
                     const ids = sh.pts || [];
                     const pairs = ids.map((id, i) => ({ a: id, b: ids[(i + 1) % ids.length] }));
-                    const positions = corridorLoftPush([], placed, pairs, ids);
+                    const positions = corridorLoftPush([], placed, pairs, ids, stations);
                     const style = roadShapeStyle(sh.code);
                     const mesh = makeRoadCorridorMesh(positions, style.fill, 'RoadCorridor:' + (sh.code || sh.id), {
                         modelId: model.id,
@@ -18696,7 +18851,7 @@
                 });
             }
             if (!meshes.length && (tpl.links || []).length) {
-                const positions = corridorLoftPush([], placed, tpl.links, null);
+                const positions = corridorLoftPush([], placed, tpl.links, null, stations);
                 const mesh = makeRoadCorridorMesh(positions, ROAD_DECK_COLOR, 'RoadCorridor', {
                     modelId: model.id
                 });
@@ -18822,11 +18977,14 @@
         function buildRoadCrossSections(record, opts = {}) {
             if (!record || record.renderPts.length < 2) return null;
             if (!allMeshes.length) return null;
-            const sampled = sampleRoadCrossSections(record, opts);
-            if (!sampled) return null;
             let model = roadXsModels.find((m) => m.polylineId === record.id);
             const prevW = { widthL: model?.widthL, widthR: model?.widthR };
             const keptTpl = model?.template;
+            const sampled = sampleRoadCrossSections(record, {
+                ...opts,
+                templateMaxOff: templateMaxAbsOffset(keptTpl)
+            });
+            if (!sampled) return null;
             if (!model) {
                 model = { id: ++roadXsSeq, polylineId: record.id, lines: [] };
                 roadXsModels.push(model);
@@ -19032,7 +19190,7 @@
                 if (pts.length < 2) return;
                 const rec = ensureRoadSlopeBrow(model, side, pts);
                 if (!rec) return;
-                const sm = buildSlopeToTerrain(rec, { ...full, side });
+                const sm = buildSlopeToTerrain(rec, { ...full, side, corner: 'miter' });
                 if (sm) built.push({ side, rec, sm });
             };
             addSide('left');
@@ -38569,7 +38727,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'xs-ground-extent',
+            buildId: 'xs-outer-miter',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38578,6 +38736,8 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: внешний угол откоса дороги — прямой, как полотно: без веера-фаски у земли.',
+                '2026.08.16: на внутреннем уголке слои полотна подрезаются плоскостью соседнего сечения — бордюр и обочина не входят друг в друга.',
                 '2026.08.16: земля на поперечнике доходит до края шаблона (бордюр/кювет) и до выхода откоса на рельеф, а не обрывается на ширине покрытия.',
                 '2026.08.16: фигуры на поперечнике тащатся жёстко: отрыв от якоря целиком, при отпускании примагничивание ближайшей вершиной.',
                 '2026.08.16: шаг поперечников раздельный: на прямых крупнее, на кривых (сопряжения) мельче — меньше сечений и работы ЦПУ.',
@@ -38682,7 +38842,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=132').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=134').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
