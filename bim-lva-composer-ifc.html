@@ -3165,23 +3165,29 @@
         .pal-card.rs-studio {
             position: relative;
             width: min(1100px, 92vw);
-            height: min(660px, 72vh);
-            max-height: none !important;
+            height: 660px;
+            max-height: calc(100vh - 48px);
+            overflow: auto;
         }
         .pal-card.rs-studio.dock-bottom {
-            height: min(70vh, 740px) !important;
-            max-height: none !important;
+            height: auto !important;
+            max-height: calc(100vh - var(--top-bar-h) - var(--status) - 24px) !important;
         }
         .pal-card.rs-studio.dock-left,
         .pal-card.rs-studio.dock-right {
             width: min(420px, 46vw) !important;
             height: auto !important;
+            max-height: none;
         }
         .rs-split {
             display: flex;
             flex: 1;
             min-height: 0;
             min-width: 0;
+            align-items: stretch;
+        }
+        .pal-card.rs-studio.rs-locked .rs-split {
+            flex: 0 0 auto;
         }
         .rs-col-left {
             display: flex;
@@ -3206,8 +3212,18 @@
             min-width: 0;
             overflow: hidden;
         }
-        .rs-col-left > #rstab-plan { flex: var(--rs-plan, 1.05) 1 0; }
-        .rs-col-left > #rstab-profile { flex: var(--rs-prof, 1) 1 0; }
+        .rs-col-left > #rstab-plan { flex: 1.05 1 0; }
+        .rs-col-left > #rstab-profile { flex: 1 1 0; }
+        .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-plan {
+            flex: 0 0 var(--rs-plan, 240px);
+            height: var(--rs-plan, 240px);
+            min-height: 90px;
+        }
+        .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-profile {
+            flex: 0 0 var(--rs-prof, 220px);
+            height: var(--rs-prof, 220px);
+            min-height: 90px;
+        }
         .rs-pane-head {
             display: flex;
             align-items: center;
@@ -5097,7 +5113,7 @@
                         <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
                     </div>
                 </details>
-                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручки на стыках меняют доли окон, угол окна — размер палитры. Шаблон: выберите карточку и «Применить на ось».">?</button>
+                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет их высоту; размер палитры чертежи по вертикали не тянет. Шаблон: выберите карточку и «Применить на ось».">?</button>
             </div>
             <div class="rs-split" id="roadStudioSplit">
                 <div class="rs-col-left">
@@ -7090,6 +7106,19 @@
                 if (!roadPlanFrame) renderRoadPlanView();
                 const f = roadPlanFrame;
                 return f ? { span: f.span, cx: f.cx, cy: f.cy } : null;
+            },
+            roadStudioPaneBox() {
+                const box = (id) => {
+                    const r = document.getElementById(id)?.getBoundingClientRect();
+                    return r ? { h: Math.round(r.height), w: Math.round(r.width) } : null;
+                };
+                return {
+                    plan: box('rstab-plan'),
+                    prof: box('rstab-profile'),
+                    xs: box('rstab-xs'),
+                    card: box('roadXsCard'),
+                    locked: !!document.getElementById('roadXsCard')?.classList.contains('rs-locked')
+                };
             },
             applyRoadXsPreset(id) {
                 return applyRoadStudioPreset(id);
@@ -18866,11 +18895,39 @@
         }
 
         function redrawRoadStudio() {
+            lockRoadStudioPaneHeights();
             syncRoadStudioProfile();
             syncProfileViewBox();
             renderPolylineProfile();
             renderRoadPlanView();
             renderRoadXsView();
+        }
+
+        /**
+         * Высоты плана/профиля/поперечника — в пикселях после первого кадра.
+         * Иначе flex-grow тянет все три вместе с палитрой и с окном браузера.
+         * Менять вертикаль можно только ручкой между планом и профилем.
+         */
+        function lockRoadStudioPaneHeights() {
+            const card = $('roadXsCard');
+            const plan = $('rstab-plan');
+            const prof = $('rstab-profile');
+            if (!card || !plan || !prof || !roadStudioIsOpen()) return;
+            if (card.classList.contains('rs-locked')) return;
+            const h0 = Math.round(plan.getBoundingClientRect().height);
+            const h1 = Math.round(prof.getBoundingClientRect().height);
+            if (h0 < 80 || h1 < 80) return;
+            card.style.setProperty('--rs-plan', h0 + 'px');
+            card.style.setProperty('--rs-prof', h1 + 'px');
+            card.classList.add('rs-locked');
+        }
+
+        function unlockRoadStudioPaneHeights() {
+            const card = $('roadXsCard');
+            if (!card) return;
+            card.classList.remove('rs-locked');
+            card.style.removeProperty('--rs-plan');
+            card.style.removeProperty('--rs-prof');
         }
 
         /** Имя вкладки больше не прячет панели: все три чертежа на экране. */
@@ -18895,10 +18952,11 @@
             document.querySelector(`#paletteTray [data-pal="${card.id}"]`)?.remove();
             if (!wasOpen) {
                 card.classList.remove('dock-left', 'dock-right', 'dock-bottom');
+                unlockRoadStudioPaneHeights();
                 const w = Math.min(1100, Math.max(640, window.innerWidth - 32));
-                const h = Math.min(660, Math.max(420, window.innerHeight - 96));
+                const h = Math.min(660, window.innerHeight - 96);
                 card.style.width = w + 'px';
-                card.style.height = h + 'px';
+                card.style.height = Math.max(420, h) + 'px';
                 roadXsPanel.setPosition(Math.max(8, (window.innerWidth - w) / 2), 64);
             }
             showRoadStudioTab(tab || 'plan');
@@ -18910,6 +18968,7 @@
             const card = $('roadXsCard');
             if (card) {
                 card.classList.remove('pal-min', 'dock-left', 'dock-right', 'dock-bottom');
+                unlockRoadStudioPaneHeights();
                 card.style.width = '';
                 card.style.height = '';
                 document.querySelector(`#paletteTray [data-pal="${card.id}"]`)?.remove();
@@ -19218,8 +19277,9 @@
                 const startY = ev.clientY;
                 const move = (e) => {
                     const a = Math.max(90, Math.min(total - 90, h0 + (e.clientY - startY)));
-                    card.style.setProperty('--rs-plan', String(a));
-                    card.style.setProperty('--rs-prof', String(total - a));
+                    card.style.setProperty('--rs-plan', a + 'px');
+                    card.style.setProperty('--rs-prof', (total - a) + 'px');
+                    card.classList.add('rs-locked');
                 };
                 const up = () => {
                     split.classList.remove('is-drag');
@@ -37864,7 +37924,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'xs-solid-labels',
+            buildId: 'rs-pane-lock',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37873,6 +37933,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: высоты плана, профиля и поперечника не едут за окном — только ручка между планом и профилем.',
                 '2026.08.16: полотно слоёв — замкнутые формы с торцами (вертикальные грани больше не отбрасываются); на плане длины / углы / радиусы, на профиле отметки и длина·уклон — клик вписывает число.',
                 '2026.08.16: формы поперечника — свои цвета (асфальт / щебень / бетон / кювет); заливку можно тянуть; Alt+клик или ✕ удаляет форму и её точки; галочка «откосы» снимает откосы.',
                 '2026.08.16: на узком скруглении внутреннюю кромку не выворачивает за центр дуги — полотно без «ёжика».',
@@ -37968,7 +38029,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=123').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=124').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

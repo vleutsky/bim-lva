@@ -2533,6 +2533,29 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: чертежи слишком малы (${JSON.stringify(pair)})`);
     }
 
+    const paneLock = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const before = D.roadStudioPaneBox();
+        const card = document.getElementById('roadXsCard');
+        const h0 = card?.getBoundingClientRect().height || 0;
+        if (card) card.style.height = Math.round(h0 + 140) + 'px';
+        const afterGrow = D.roadStudioPaneBox();
+        if (card) card.style.height = Math.round(h0) + 'px';
+        const afterBack = D.roadStudioPaneBox();
+        return { before, afterGrow, afterBack, h0 };
+    });
+    const dPlan = Math.abs((paneLock.afterGrow?.plan?.h || 0) - (paneLock.before?.plan?.h || 0));
+    const dProf = Math.abs((paneLock.afterGrow?.prof?.h || 0) - (paneLock.before?.prof?.h || 0));
+    const dXs = Math.abs((paneLock.afterGrow?.xs?.h || 0) - (paneLock.before?.xs?.h || 0));
+    if (!paneLock.before?.locked) {
+        problems.push(`поперечники: высоты панелей не зафиксировались (${JSON.stringify(paneLock.before)})`);
+    } else if (dPlan > 2 || dProf > 2 || dXs > 2) {
+        problems.push(
+            `поперечники: высота плана/профиля/сечения уехала при росте окна ` +
+            `(Δ план ${dPlan}, профиль ${dProf}, сечение ${dXs})`
+        );
+    }
+
     const slopes = await page.evaluate(() => {
         const D = window.BimLvaDebug;
         const left = D.roadXsTemplate()?.points?.find((p) => p.code === 'L');
