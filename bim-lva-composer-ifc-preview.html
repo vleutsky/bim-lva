@@ -3898,7 +3898,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · bdb9b83</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 0a53645</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5097,8 +5097,11 @@
                 <label data-tip="Ось трассы — начерченная полилиния. Пикетаж по плану, с дугами.">ось
                     <select class="editInput" id="roadXsSelect"></select>
                 </label>
-                <label data-tip="Шаг пикетов вдоль оси, м. Вершины оси всегда попадают в список.">шаг
+                <label data-tip="Шаг поперечников на прямых, м. Вершины оси всегда в списке.">шаг прям.
                     <input class="editInput" id="roadXsStep" type="number" min="0.5" step="1" value="20">
+                </label>
+                <label data-tip="Шаг на кривых (сопряжения и плавные повороты), м. Мельче прямого — на прямых меньше сечений, на дуге качество то же.">крив.
+                    <input class="editInput" id="roadXsStepCurve" type="number" min="0.5" step="0.5" value="5">
                 </label>
                 <label data-tip="Ширина шаблона влево от оси, м. На плане кромку можно тянуть курсором.">←
                     <input class="editInput" id="roadXsWidthL" type="number" min="0.5" step="0.05" value="3.25">
@@ -7011,6 +7014,7 @@
                     widthL: model.widthL,
                     widthR: model.widthR,
                     step: model.step,
+                    stepCurve: model.stepCurve,
                     lines: model.lines.length,
                     corridorTris: model.corridorTris || 0,
                     template: snapshotRoadTemplate(model.template),
@@ -7035,6 +7039,7 @@
                         x: model.stations[model.stations.length - 1].x,
                         y: model.stations[model.stations.length - 1].y
                     },
+                    pk: model.stations.map((s) => s.sta),
                     corner: model.stations.filter((s) => s.atVertex).map((s) => ({
                         sta: s.sta, x: s.x, y: s.y, rx: s.rx, ry: s.ry, miterScale: s.miterScale
                     })),
@@ -15696,14 +15701,7 @@
                 if ($('roadCornerMode')?.value === 'fillet') {
                     applyRoadAxisCorners(finishedRoad, 'fillet', $('roadCornerRadius')?.value);
                 }
-                const model = buildRoadCrossSections(finishedRoad, {
-                    step: Number($('roadXsStep')?.value) || 20,
-                    widthL: roadWidthOrDefault($('roadXsWidthL')?.value),
-                    widthR: roadWidthOrDefault($('roadXsWidthR')?.value),
-                    sampleStep: Number($('roadXsSample')?.value) || 1,
-                    color: $('roadXsColor')?.value || '#2a7de1',
-                    live: $('roadXsLive') ? !!$('roadXsLive').checked : true
-                });
+                const model = buildRoadCrossSections(finishedRoad, roadXsOptsFromUi());
                 if (model) {
                     notify(
                         `Полотно по «${finishedRoad.name}»: ${model.stations.length} сечений, ` +
@@ -18164,11 +18162,61 @@
             return { pts, cum, total, loc };
         }
 
-        function roadXsStationList(total, step, extra) {
-            const st = Math.max(0.5, Number(step) || 20);
+        /**
+         * Кривая в пикетаже — короткие хорды с конечным радиусом (тесселяция
+         * сопряжения). Помечаем только саму вершину дуги, не соседей: иначе BC
+         * получает метку с первой хорды дуги и весь предыдущий тангент
+         * (десятки метров) идёт с шагом кривой.
+         */
+        function roadXsCurveMask(stn, stepTan) {
+            const pts = stn?.pts;
+            const n = pts?.length || 0;
+            const mask = new Array(n).fill(false);
+            const maxChord = Math.max(0.5, Number(stepTan) || 20) + 1e-6;
+            for (let i = 1; i < n - 1; i++) {
+                const r = planSignedRadius(pts[i - 1], pts[i], pts[i + 1]);
+                if (!Number.isFinite(r)) continue;
+                const c1 = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+                const c2 = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+                if (c1 > maxChord || c2 > maxChord) continue;
+                mask[i] = true;
+            }
+            return mask;
+        }
+
+        function roadXsAlignSpans(stn, stepTan) {
+            const n = stn?.pts?.length || 0;
+            if (n < 2 || !stn.cum) return [];
+            const mask = roadXsCurveMask(stn, stepTan);
+            const spans = [];
+            let i = 0;
+            while (i < n - 1) {
+                const curve = !!(mask[i] || mask[i + 1]);
+                let j = i + 1;
+                while (j < n - 1 && !!(mask[j] || mask[j + 1]) === curve) j++;
+                spans.push({ from: stn.cum[i], to: stn.cum[j], curve });
+                i = j;
+            }
+            return spans;
+        }
+
+        function roadXsStationList(stn, step, stepCurve, extra) {
+            const total = stn?.total;
+            if (!(total > 0)) return [0];
+            const dTan = Math.max(0.5, Number(step) || 20);
+            const dCrv = Math.max(0.5, Number(stepCurve) || dTan);
             const raw = [];
-            for (let s = 0; s < total - 1e-9; s += st) raw.push(s);
-            raw.push(total);
+            const spans = roadXsAlignSpans(stn, dTan);
+            if (!spans.length) {
+                for (let s = 0; s < total - 1e-9; s += dTan) raw.push(s);
+                raw.push(total);
+            } else {
+                spans.forEach((sp) => {
+                    raw.push(sp.from, sp.to);
+                    const d = sp.curve ? dCrv : dTan;
+                    for (let s = sp.from + d; s < sp.to - 1e-6; s += d) raw.push(s);
+                });
+            }
             (extra || []).forEach((s) => {
                 if (s >= -1e-9 && s <= total + 1e-9) raw.push(s);
             });
@@ -18298,20 +18346,22 @@
         }
 
         /**
-         * Снять поперечники. opts: step, widthL, widthR, sampleStep.
+         * Снять поперечники. opts: step, stepCurve, widthL, widthR, sampleStep.
          * samples[].off > 0 — вправо по ходу оси, вдоль секущей.
          * На переломе секущая — биссектриса, диапазон смещений умножается на
          * miterScale, чтобы кромка попала в сечение.
+         * На прямой шаг `step`, на кривой (сопряжение) — `stepCurve`.
          */
         function sampleRoadCrossSections(record, opts = {}) {
             const stn = polylineStationing(record);
             if (!stn) return null;
             const step = Math.max(0.5, Number(opts.step) || 20);
+            const stepCurve = Math.max(0.5, Number(opts.stepCurve) || step);
             const widthL = roadWidthOrDefault(opts.widthL);
             const widthR = roadWidthOrDefault(opts.widthR);
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
             const turns = roadVertexTurns(record, stn);
-            let stationsPk = roadXsStationList(stn.total, step, polylineVertexStations(record, stn));
+            let stationsPk = roadXsStationList(stn, step, stepCurve, polylineVertexStations(record, stn));
             stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
             const MISS = Number.NEGATIVE_INFINITY;
             let missed = 0, hits = 0;
@@ -18350,7 +18400,7 @@
             });
             return {
                 stations, total: stn.total, missed, hits,
-                step, widthL, widthR, sampleStep
+                step, stepCurve, widthL, widthR, sampleStep
             };
         }
 
@@ -18617,6 +18667,20 @@
             }
         }
 
+        function roadXsOptsFromUi() {
+            const step = Math.max(0.5, Number($('roadXsStep')?.value) || 20);
+            const crv = Number($('roadXsStepCurve')?.value);
+            return {
+                step,
+                stepCurve: Math.max(0.5, Number.isFinite(crv) && crv > 0 ? crv : step),
+                widthL: roadWidthOrDefault($('roadXsWidthL')?.value),
+                widthR: roadWidthOrDefault($('roadXsWidthR')?.value),
+                sampleStep: Math.max(0.1, Number($('roadXsSample')?.value) || 1),
+                color: $('roadXsColor')?.value || '#2a7de1',
+                live: $('roadXsLive') ? !!$('roadXsLive').checked : true
+            };
+        }
+
         function buildRoadCrossSections(record, opts = {}) {
             if (!record || record.renderPts.length < 2) return null;
             if (!allMeshes.length) return null;
@@ -18665,7 +18729,8 @@
             const rec = drawnPolylines.find((r) => r.id === polylineId);
             if (!rec) { clearRoadXsModels(polylineId); return; }
             buildRoadCrossSections(rec, {
-                step: model.step, widthL: model.widthL, widthR: model.widthR,
+                step: model.step, stepCurve: model.stepCurve,
+                widthL: model.widthL, widthR: model.widthR,
                 sampleStep: model.sampleStep, color: model.color, live: true
             });
         }
@@ -19572,14 +19637,7 @@
             }
             let model = roadXsModels.find((m) => m.polylineId === rec.id);
             if (!model) {
-                model = buildRoadCrossSections(rec, {
-                    step: Number($('roadXsStep')?.value),
-                    widthL: Number($('roadXsWidthL')?.value),
-                    widthR: Number($('roadXsWidthR')?.value),
-                    sampleStep: Number($('roadXsSample')?.value),
-                    color: $('roadXsColor')?.value,
-                    live: $('roadXsLive')?.checked !== false
-                });
+                model = buildRoadCrossSections(rec, roadXsOptsFromUi());
             }
             if (!model) {
                 if (!allMeshes.length) notifyError('Нет загруженной геометрии — рельефа под поперечниками нет.');
@@ -19928,6 +19986,9 @@
             const existing = roadXsModels.find((m) => m.polylineId === target.id);
             if (existing) {
                 $('roadXsStep').value = existing.step;
+                if ($('roadXsStepCurve')) {
+                    $('roadXsStepCurve').value = existing.stepCurve || existing.step;
+                }
                 $('roadXsWidthL').value = existing.widthL;
                 $('roadXsWidthR').value = existing.widthR;
                 $('roadXsSample').value = existing.sampleStep;
@@ -19947,14 +20008,7 @@
             const id = Number($('roadXsSelect')?.value);
             const rec = drawnPolylines.find((r) => r.id === id);
             if (!rec) return notifyError('Выберите ось.');
-            const model = buildRoadCrossSections(rec, {
-                step: Number($('roadXsStep').value),
-                widthL: Number($('roadXsWidthL').value),
-                widthR: Number($('roadXsWidthR').value),
-                sampleStep: Number($('roadXsSample').value),
-                color: $('roadXsColor').value,
-                live: !!$('roadXsLive')?.checked
-            });
+            const model = buildRoadCrossSections(rec, roadXsOptsFromUi());
             if (!model) notifyError('Не удалось построить поперечники.');
             else {
                 showRoadStudioTab('xs');
@@ -38287,7 +38341,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: 'bdb9b83-preview',
+            buildId: '0a53645-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38296,6 +38350,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: шаг поперечников раздельный: на прямых крупнее, на кривых (сопряжения) мельче — меньше сечений и работы ЦПУ.',
                 '2026.08.16: таблица профиля выше и тянется ручкой; на вершине правится отметка (красное), уклон — в середине звена.',
                 '2026.08.16: после «Загрузить» с глобуса на площадке можно чертить ось, площадки и тела — лента больше не остаётся выключенной.',
                 '2026.08.16: площадка с карты — два режима координат: в нули сцены или мировые Гаусс–Крюгер (WGS84, 6°, восток с номером зоны). Если модель уже в сцене, карта садится в её координаты.',
