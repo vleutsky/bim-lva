@@ -2427,7 +2427,7 @@ async function checkRoadCrossSections(page) {
         const html = document.getElementById('roadXsChart')?.innerHTML || '';
         return {
             hasBg: /fill="#f7f9fb"/.test(html),
-            hasGround: /<polyline /.test(html),
+            hasGround: /class="xs-ground"/.test(html),
             hasFill: /<path d=/.test(html),
             hasRoad: /fill="#e8c48a"/.test(html),
             hasEdge: /кромка/.test(html),
@@ -2685,15 +2685,35 @@ async function checkRoadCrossSections(page) {
         return {
             res,
             hasRay: /class="xs-slope"/.test(html),
+            hasGroundClass: /class="xs-ground"/.test(html),
             hasBtn: !!document.getElementById('roadXsSlope'),
             tin: res?.tinFaces || 0,
             fill: (res?.sides || []).reduce((n, s) => n + (s.fill || 0), 0),
             cut: (res?.sides || []).reduce((n, s) => n + (s.cut || 0), 0),
-            n: res?.sides?.length || 0
+            n: res?.sides?.length || 0,
+            ground: D.roadXsChartGround()
         };
     });
     if (!slopes.hasBtn) problems.push('поперечники: нет кнопки «Откосы»');
     if (!slopes.hasRay) problems.push('поперечники: на чертеже нет лучей откоса до земли');
+    if (!slopes.hasGroundClass) problems.push('поперечники: на чертеже нет линии земли xs-ground');
+    const gSlope = slopes.ground;
+    if (!gSlope || gSlope.minOff == null) {
+        problems.push(`поперечники: земля на сечении не снялась (${JSON.stringify(gSlope)})`);
+    } else {
+        if (gSlope.slopeL != null && gSlope.minOff > gSlope.slopeL + 0.05) {
+            problems.push(`поперечники: земля слева ${gSlope.minOff} не дошла до откоса ${gSlope.slopeL}`);
+        }
+        if (gSlope.slopeR != null && gSlope.maxOff < gSlope.slopeR - 0.05) {
+            problems.push(`поперечники: земля справа ${gSlope.maxOff} не дошла до откоса ${gSlope.slopeR}`);
+        }
+        if (gSlope.edgeL != null && gSlope.minOff > gSlope.edgeL + 0.05) {
+            problems.push(`поперечники: земля слева ${gSlope.minOff} короче края шаблона ${gSlope.edgeL}`);
+        }
+        if (gSlope.edgeR != null && gSlope.maxOff < gSlope.edgeR - 0.05) {
+            problems.push(`поперечники: земля справа ${gSlope.maxOff} короче края шаблона ${gSlope.edgeR}`);
+        }
+    }
     if (slopes.n !== 2) {
         problems.push(`поперечники: откосы сторон ${slopes.n} вместо 2 (${JSON.stringify(slopes.res)})`);
     }
@@ -2715,6 +2735,7 @@ async function checkRoadCrossSections(page) {
         const r = before?.points?.find((p) => p.code === 'R');
         const fig = D.addRoadXsFigure('curb', r?.id);
         const afterFig = D.roadXsTemplate();
+        const groundCurb = D.roadXsChartGround();
         const curbT = afterFig?.points?.find((p) => p.code === 'CURBT');
         const curbO = afterFig?.points?.find((p) => p.code === 'CURBO');
         D.setRoadXsPoint(r.id, { dz: 0.4 });
@@ -2749,7 +2770,8 @@ async function checkRoadCrossSections(page) {
             base: ev?.baseDz,
             dz: ev?.dz,
             applies: ev?.applies,
-            barShown: !!(bar && !bar.hidden)
+            barShown: !!(bar && !bar.hidden),
+            groundCurb
         };
     });
     if (extras.afterPts !== extras.beforePts + 3 || extras.afterShapes !== extras.beforeShapes + 1) {
@@ -2773,6 +2795,13 @@ async function checkRoadCrossSections(page) {
     if (extras.applies !== true || Math.abs((extras.base ?? -1)) > 1e-6
         || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
         problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
+    }
+    const gCurb = extras.groundCurb;
+    if (!gCurb || gCurb.edgeR == null || gCurb.maxOff < gCurb.edgeR - 0.05) {
+        problems.push(`поперечники: земля не дошла до края бордюра (${JSON.stringify(gCurb)})`);
+    }
+    if (gCurb?.slopeR != null && gCurb.maxOff < gCurb.slopeR - 0.05) {
+        problems.push(`поперечники: земля не дошла до откоса за бордюром (${JSON.stringify(gCurb)})`);
     }
 
     const shapeUx = await page.evaluate(() => {
@@ -2820,11 +2849,13 @@ async function checkRoadCrossSections(page) {
             chk.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const htmlOff = document.getElementById('roadXsChart')?.innerHTML || '';
+        const groundOff = D.roadXsChartGround();
         if (chk) {
             chk.checked = true;
             chk.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const htmlOn = document.getElementById('roadXsChart')?.innerHTML || '';
+        const groundOn = D.roadXsChartGround();
         return {
             fills,
             pvmt: byCode.PVMT || '',
@@ -2845,6 +2876,8 @@ async function checkRoadCrossSections(page) {
             slopeBefore: /class="xs-slope"/.test(html0),
             slopeOff: /class="xs-slope"/.test(htmlOff),
             slopeOn: /class="xs-slope"/.test(htmlOn),
+            groundOff,
+            groundOn,
             hasRemove: typeof D.removeRoadXsShape === 'function',
             hasTranslate: typeof D.translateRoadXsShape === 'function'
         };
@@ -2877,6 +2910,12 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: галочка «откосы» не убирает/не возвращает лучи (${JSON.stringify({
             before: shapeUx.slopeBefore, off: shapeUx.slopeOff, on: shapeUx.slopeOn
         })})`);
+    }
+    if (shapeUx.groundOff?.edgeR != null && shapeUx.groundOff.maxOff < shapeUx.groundOff.edgeR - 0.05) {
+        problems.push(`поперечники: без откоса земля короче края шаблона (${JSON.stringify(shapeUx.groundOff)})`);
+    }
+    if (shapeUx.groundOn?.slopeR != null && shapeUx.groundOn.maxOff < shapeUx.groundOn.slopeR - 0.05) {
+        problems.push(`поперечники: с откосом земля короче выхода на рельеф (${JSON.stringify(shapeUx.groundOn)})`);
     }
 
     const studio = await page.evaluate(() => {

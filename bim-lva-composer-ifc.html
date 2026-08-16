@@ -7084,6 +7084,49 @@
             roadXsTemplate() {
                 return snapshotRoadTemplate(currentRoadXsModel()?.template);
             },
+            /**
+             * Земля на чертеже сечения: крайние смещения линии и чего она
+             * должна хватать (край шаблона, выход откоса).
+             */
+            roadXsChartGround() {
+                const model = currentRoadXsModel();
+                const st = model?.stations?.[roadXsActive.index];
+                if (!st) return null;
+                const resolved = model.template
+                    ? resolveTemplatePoints(model.template, st).filter((p) => !p.hide)
+                    : [];
+                const slopeOn = !!$('roadXsSlopeOn')?.checked;
+                const slopeSecs = [];
+                if (slopeOn) {
+                    const opts = readRoadXsSlopeOpts();
+                    const edgePts = templateEdgePoints({ points: resolved });
+                    [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
+                        if (!pt) return;
+                        const sec = roadXsSlopeSection(st, pt, side, opts);
+                        slopeSecs.push({ side, pt, sec });
+                    });
+                }
+                const need = roadXsGroundNeedRange(st, resolved, slopeSecs);
+                const samples = roadXsGroundSamples(st, need.minO, need.maxO, model.sampleStep);
+                const hits = samples.filter((s) => s.hit);
+                const offs = hits.map((s) => s.off);
+                const slopeOff = (side) => {
+                    const row = slopeSecs.find((s) => s.side === side);
+                    return row?.sec?.valid ? roadXsSlopeExitOff(st, row.sec) : null;
+                };
+                const visOff = resolved.map((p) => p.off);
+                return {
+                    minOff: offs.length ? Math.min(...offs) : null,
+                    maxOff: offs.length ? Math.max(...offs) : null,
+                    n: hits.length,
+                    edgeL: visOff.length ? Math.min(...visOff) : null,
+                    edgeR: visOff.length ? Math.max(...visOff) : null,
+                    slopeL: slopeOff('left'),
+                    slopeR: slopeOff('right'),
+                    needMin: need.minO,
+                    needMax: need.maxO
+                };
+            },
             setRoadXsPoint(pointId, patch) {
                 const model = currentRoadXsModel();
                 const pt = model?.template?.points.find((p) => p.id === pointId);
@@ -19006,6 +19049,76 @@
             return built;
         }
 
+        function sampleRoadXsOff(st, off) {
+            const x = st.x + (st.rx || 0) * off;
+            const y = st.y + (st.ry || 0) * off;
+            const MISS = Number.NEGATIVE_INFINITY;
+            const zHit = sampleTerrainZ(x, y, MISS);
+            const hit = zHit !== MISS;
+            const scene = new THREE.Vector3(x, y, hit ? zHit : st.z);
+            const abs = worldPointToAbsoluteXYZ(scene) || scene;
+            return {
+                off, x, y,
+                z: hit ? zHit : null,
+                hit,
+                abs: { x: abs.x, y: abs.y, z: abs.z },
+                work: hit && st.axisAbs ? st.axisAbs.z - abs.z : null
+            };
+        }
+
+        /**
+         * Земля на чертеже — до края шаблона (бордюр/кювет), а если откос
+         * вышел на рельеф — до его конца, а не только до ширины покрытия.
+         */
+        function roadXsGroundNeedRange(st, resolved, slopeSecs) {
+            let minO = 0, maxO = 0;
+            (st?.samples || []).forEach((s) => {
+                if (s.off < minO) minO = s.off;
+                if (s.off > maxO) maxO = s.off;
+            });
+            (resolved || []).forEach((p) => {
+                if (!p || p.hide) return;
+                if (p.off < minO) minO = p.off;
+                if (p.off > maxO) maxO = p.off;
+            });
+            (slopeSecs || []).forEach(({ sec }) => {
+                if (!sec?.valid || !sec.exit || !st) return;
+                const off = roadXsSlopeExitOff(st, sec);
+                if (off == null) return;
+                if (off < minO) minO = off;
+                if (off > maxO) maxO = off;
+            });
+            return { minO, maxO };
+        }
+
+        function roadXsGroundSamples(st, minO, maxO, sampleStep) {
+            const ds = Math.max(0.1, Number(sampleStep) || 1);
+            const key = `${Number(minO).toFixed(4)}|${Number(maxO).toFixed(4)}|${ds.toFixed(3)}`;
+            if (st._groundDraw?.key === key) return st._groundDraw.samples;
+            const byOff = new Map();
+            const put = (s) => {
+                const k = +Number(s.off).toFixed(6);
+                if (!byOff.has(k)) byOff.set(k, s);
+            };
+            (st.samples || []).forEach(put);
+            const have = [...byOff.keys()].sort((a, b) => a - b);
+            const coveredMin = have.length ? have[0] : 0;
+            const coveredMax = have.length ? have[have.length - 1] : 0;
+            const want = [];
+            if (minO < coveredMin - 1e-6) {
+                want.push(minO);
+                for (let o = coveredMin - ds; o > minO + 1e-6; o -= ds) want.push(o);
+            }
+            if (maxO > coveredMax + 1e-6) {
+                want.push(maxO);
+                for (let o = coveredMax + ds; o < maxO - 1e-6; o += ds) want.push(o);
+            }
+            want.forEach((off) => put(sampleRoadXsOff(st, off)));
+            const samples = [...byOff.values()].sort((a, b) => a.off - b.off);
+            st._groundDraw = { key, samples };
+            return samples;
+        }
+
         function renderRoadXsView() {
             const svg = $('roadXsChart');
             const meta = $('roadXsMeta');
@@ -19038,17 +19151,9 @@
                 return;
             }
             if (pk) pk.textContent = `PK ${st.sta.toFixed(2)}`;
-            const hits = st.samples.filter((s) => s.hit);
             const zAxis = st.axisAbs.z;
-            const zGround = hits.map((s) => s.abs.z);
-            let zMin = zAxis, zMax = zAxis;
-            zGround.forEach((z) => { zMin = Math.min(zMin, z); zMax = Math.max(zMax, z); });
             const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
             const resolved = resolveTemplatePoints(tpl, st);
-            resolved.forEach((p) => {
-                zMin = Math.min(zMin, zAxis + p.dz);
-                zMax = Math.max(zMax, zAxis + p.dz);
-            });
             const slopeOpts = readRoadXsSlopeOpts();
             const edgePts = templateEdgePoints({ points: resolved.filter((p) => !p.hide) });
             const slopeSecs = [];
@@ -19057,21 +19162,31 @@
                     if (!pt) return;
                     const sec = roadXsSlopeSection(st, pt, side, slopeOpts);
                     slopeSecs.push({ side, pt, sec });
-                    if (sec?.valid && sec.exit) {
-                        const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z;
-                        zMin = Math.min(zMin, ez, zAxis + (pt.dz || 0));
-                        zMax = Math.max(zMax, ez, zAxis + (pt.dz || 0));
-                    }
                 });
             }
             const slopeOffs = slopeSecs
                 .map((s) => (s.sec?.valid ? roadXsSlopeExitOff(st, s.sec) : null))
                 .filter((v) => v != null);
+            const need = roadXsGroundNeedRange(st, resolved, slopeSecs);
+            const groundSamples = roadXsGroundSamples(st, need.minO, need.maxO, model.sampleStep);
+            const hits = groundSamples.filter((s) => s.hit);
+            let zMin = zAxis, zMax = zAxis;
+            hits.forEach((s) => { zMin = Math.min(zMin, s.abs.z); zMax = Math.max(zMax, s.abs.z); });
+            resolved.forEach((p) => {
+                zMin = Math.min(zMin, zAxis + p.dz);
+                zMax = Math.max(zMax, zAxis + p.dz);
+            });
+            slopeSecs.forEach(({ pt, sec }) => {
+                if (!sec?.valid || !sec.exit) return;
+                const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z;
+                zMin = Math.min(zMin, ez, zAxis + (pt.dz || 0));
+                zMax = Math.max(zMax, ez, zAxis + (pt.dz || 0));
+            });
             const relief = zMax - zMin;
             let spanZ = Math.max(3, relief * 1.6, 0.12 * (model.widthL + model.widthR));
             let z0 = (zMin + zMax) / 2;
-            let offMin = Math.min(-model.widthL, ...(st.samples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
-            let offMax = Math.max(model.widthR, ...(st.samples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
+            let offMin = Math.min(-model.widthL, need.minO, ...(groundSamples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
+            let offMax = Math.max(model.widthR, need.maxO, ...(groundSamples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
             if (roadXsView.offMin != null && roadXsView.offMax != null && roadXsView.spanZ) {
                 offMin = roadXsView.offMin;
                 offMax = roadXsView.offMax;
@@ -19084,7 +19199,7 @@
             const groundPts = [];
             const groundPaths = [];
             let run = [];
-            st.samples.forEach((s) => {
+            groundSamples.forEach((s) => {
                 if (!s.hit) {
                     if (run.length > 1) groundPaths.push(run.join(' '));
                     run = [];
@@ -19192,7 +19307,7 @@
                       stroke="#e8442a" stroke-width="1.8" stroke-dasharray="6 3"/>
                 <line x1="${axisTick.toFixed(1)}" y1="${pad.t}" x2="${axisTick.toFixed(1)}" y2="${pad.h - pad.b}"
                       stroke="#e8442a" stroke-width="1.2"/>
-                ${groundPaths.map((d) => `<polyline fill="none" stroke="#1d6fb0" stroke-width="2.4" points="${d}"/>`).join('')}
+                ${groundPaths.map((d) => `<polyline class="xs-ground" fill="none" stroke="#1d6fb0" stroke-width="2.4" points="${d}"/>`).join('')}
                 ${shapeDraw}
                 ${linkDraw}
                 ${knotDraw}
@@ -38454,7 +38569,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'xs-shape-rigid',
+            buildId: 'xs-ground-extent',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38463,6 +38578,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: земля на поперечнике доходит до края шаблона (бордюр/кювет) и до выхода откоса на рельеф, а не обрывается на ширине покрытия.',
                 '2026.08.16: фигуры на поперечнике тащатся жёстко: отрыв от якоря целиком, при отпускании примагничивание ближайшей вершиной.',
                 '2026.08.16: шаг поперечников раздельный: на прямых крупнее, на кривых (сопряжения) мельче — меньше сечений и работы ЦПУ.',
                 '2026.08.16: таблица профиля выше и тянется ручкой; на вершине правится отметка (красное), уклон — в середине звена.',
@@ -38566,7 +38682,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=131').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=132').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
