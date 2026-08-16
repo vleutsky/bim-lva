@@ -129,6 +129,115 @@ await fs.writeFile(file, makeGeoIfc({ ...MODEL, count: 60, cols: 10, seed: 3, na
 try {
     await page.goto(`http://127.0.0.1:${port}/bim-lva-composer-ifc.html`, { waitUntil: 'load' });
     await page.waitForTimeout(1500);
+
+    // A-g. Глобус без сохранённой площадки открывается на Санкт-Петербурге.
+    const globeHome = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 400));
+        const st = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        return st;
+    });
+    const SPB = { lat: 59.9343, lon: 30.3351 };
+    if (Math.abs(globeHome.lat - SPB.lat) > 0.05 || Math.abs(globeHome.lon - SPB.lon) > 0.05) {
+        problems.push(
+            `глобус открылся на ${globeHome.lat?.toFixed?.(4)}, ${globeHome.lon?.toFixed?.(4)}, ` +
+            `ждали Санкт-Петербург (${SPB.lat}, ${SPB.lon})`
+        );
+    }
+    if (!(globeHome.zoom >= 10 && globeHome.zoom <= 13)) {
+        problems.push(`зум глобуса ${globeHome.zoom}, ждали ~11 (город, не страна)`);
+    }
+    console.log(
+        `A-g. глобус: ${globeHome.lat?.toFixed?.(4)}, ${globeHome.lon?.toFixed?.(4)}, зум ${globeHome.zoom}`
+    );
+
+    // A-h. Повторное открытие после зума «весь мир» возвращает город, а не планету.
+    const globeReopen = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 200));
+        window.BimLvaDebug.mapBuilderSetView(10, 20, 2);
+        const lost = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 400));
+        const restored = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        return { lost, restored };
+    });
+    if (!(globeReopen.lost.zoom < 10)) {
+        problems.push(`зум «весь мир» не выставился: ${globeReopen.lost.zoom}`);
+    }
+    if (!(globeReopen.restored.zoom >= 10 && globeReopen.restored.zoom <= 13)) {
+        problems.push(`повторное открытие: зум ${globeReopen.restored.zoom}, ждали город (~11)`);
+    }
+    if (Math.abs(globeReopen.restored.lat - SPB.lat) > 0.05 || Math.abs(globeReopen.restored.lon - SPB.lon) > 0.05) {
+        problems.push(
+            `повторное открытие уехало на ${globeReopen.restored.lat?.toFixed?.(4)}, ` +
+            `${globeReopen.restored.lon?.toFixed?.(4)}, ждали Санкт-Петербург`
+        );
+    }
+    console.log(
+        `A-h. reopen: потерянный зум ${globeReopen.lost.zoom?.toFixed?.(1)} → ` +
+        `${globeReopen.restored.lat?.toFixed?.(4)}, ${globeReopen.restored.lon?.toFixed?.(4)}, ` +
+        `зум ${globeReopen.restored.zoom}`
+    );
+
+    // A-i. Поиск «Санкт-Петербург» бьёт в HOME даже если Nominatim отдаёт Челны.
+    const globeSearch = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 200));
+        window.BimLvaDebug.mapBuilderSetView(10, 20, 6);
+        const q = document.getElementById('mapBuilderSearch');
+        q.value = 'Санкт-Петербург';
+        document.getElementById('mapBuilderSearchGo').click();
+        await new Promise((r) => setTimeout(r, 400));
+        const st = window.BimLvaDebug.mapBuilderState;
+        const hint = document.getElementById('mapBuilderHint')?.textContent || '';
+        document.getElementById('mapBuilderCancel').click();
+        return { ...st, hint };
+    });
+    if (Math.abs(globeSearch.lat - SPB.lat) > 0.05 || Math.abs(globeSearch.lon - SPB.lon) > 0.05) {
+        problems.push(
+            `поиск СПб дал ${globeSearch.lat?.toFixed?.(4)}, ${globeSearch.lon?.toFixed?.(4)} — ` +
+            `уехал в ответ Nominatim?`
+        );
+    }
+    if (!(globeSearch.zoom >= 12)) {
+        problems.push(`поиск СПб оставил зум ${globeSearch.zoom}, ждали город`);
+    }
+    if (!/Санкт-Петербург/i.test(globeSearch.hint)) {
+        problems.push(`подпись после поиска СПб: «${globeSearch.hint.slice(0, 80)}»`);
+    }
+    console.log(
+        `A-i. поиск СПб: ${globeSearch.lat?.toFixed?.(4)}, ${globeSearch.lon?.toFixed?.(4)}, ` +
+        `зум ${globeSearch.zoom}, «${globeSearch.hint.slice(0, 40)}»`
+    );
+
+    // A-j. Без алиаса — Nominatim (мок = Набережные Челны).
+    const globeNom = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 200));
+        const q = document.getElementById('mapBuilderSearch');
+        q.value = 'Набережные Челны';
+        document.getElementById('mapBuilderSearchGo').click();
+        await new Promise((r) => setTimeout(r, 500));
+        const st = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        return st;
+    });
+    if (Math.abs(globeNom.lat - 55.7) > 0.05 || Math.abs(globeNom.lon - 52.4) > 0.05) {
+        problems.push(
+            `поиск без алиаса: ${globeNom.lat?.toFixed?.(4)}, ${globeNom.lon?.toFixed?.(4)}, ` +
+            `ждали мок Челны (55.7, 52.4)`
+        );
+    }
+    if (!(globeNom.zoom >= 12)) problems.push(`поиск Челны зум ${globeNom.zoom}`);
+    console.log(
+        `A-j. поиск Челны (Nominatim): ${globeNom.lat?.toFixed?.(4)}, ${globeNom.lon?.toFixed?.(4)}, ` +
+        `зум ${globeNom.zoom}`
+    );
+
     await page.setInputFiles('#localFileInput', file);
     await page.waitForFunction(
         () => window.BimLvaDebug?.modelCount === 1 && (window.BimLvaDebug?.modelBounds || []).length === 1,
@@ -644,6 +753,16 @@ try {
     if (!removed) problems.push('подложка не убралась по кнопке');
     console.log(`F. удаление подложки: ${removed ? 'ок' : 'СБОЙ'}`);
 
+    // Дальше Terrarium нарочно ниже модели: без сдвига по Z сетка сядет
+    // на высоте тайла (~10 м), а площадка IFC на 60 м — как у владельца
+    // «отметка не та» (30 м с карты против 141 м в файле).
+    const PNG_TERRARIUM_10 = pngRgba(128, 10, 0, 255);
+    await page.unroute('**/elevation-tiles-prod/terrarium/**');
+    await page.route('**/elevation-tiles-prod/terrarium/**', (route) => {
+        demUrls.push(route.request().url());
+        route.fulfill({ status: 200, contentType: 'image/png', headers: CORS, body: PNG_TERRARIUM_10 });
+    });
+
     // M. Model Builder: рамка / контур, лимит 200 га, «Загрузить»
     const haAround = (site, sideM) => {
         const mLat = 111320;
@@ -725,6 +844,53 @@ try {
         console.log(
             `M4. Загрузить: подложка ${layers.bm.sizeX.toFixed(0)}×${layers.bm.sizeY.toFixed(0)} м, ` +
             `рельеф ${layers.dem.sizeX.toFixed(0)}×${layers.dem.sizeY.toFixed(0)} м`
+        );
+        const siteChrome = await page.evaluate(() => {
+            const hint = document.getElementById('hint');
+            return {
+                hintDisplay: hint ? hint.style.display : '',
+                treeText: document.getElementById('tree')?.innerText || '',
+                mapSite: window.BimLvaDebug.mapSite
+            };
+        });
+        if (siteChrome.hintDisplay !== 'none') {
+            problems.push('после загрузки карты висит подсказка «добавьте модели»');
+        }
+        if (!/Площадка с карты/.test(siteChrome.treeText) || !/Рельеф/.test(siteChrome.treeText)) {
+            problems.push(`в дереве нет рельефа с карты: «${siteChrome.treeText.slice(0, 240)}»`);
+        }
+        if (!siteChrome.mapSite?.hasTerrain || !siteChrome.mapSite?.hasBasemap) {
+            problems.push(`map-site неполный: ${JSON.stringify(siteChrome.mapSite)}`);
+        }
+        console.log(
+            `M4b. дерево: ${/Рельеф/.test(siteChrome.treeText) ? 'рельеф есть' : 'НЕТ'}, ` +
+            `hint=${siteChrome.hintDisplay || 'visible'}`
+        );
+        const zFit = await page.evaluate(() => {
+            const dem = window.BimLvaDebug.mapTerrainLayer;
+            const mb = (window.BimLvaDebug.modelBounds || []).find((m) => m.format !== 'MAP')
+                || window.BimLvaDebug.modelBounds[0];
+            return {
+                demZ: dem.centerZ,
+                modelZ: mb.centerZ,
+                zShift: dem.zShift,
+                sample: window.BimLvaDebug.sampleTerrainZ(dem.centerX, dem.centerY, Number.NaN)
+            };
+        });
+        if (!(zFit.zShift > 20)) {
+            problems.push(
+                `рельеф не совмещён с моделью: zShift=${zFit.zShift?.toFixed?.(1)} ` +
+                `(Terrarium 10 м, модель ~60 м — ждали сдвиг ~50 м)`
+            );
+        }
+        if (!(Math.abs(zFit.demZ - zFit.modelZ) < 8)) {
+            problems.push(
+                `после совмещения DEM z=${zFit.demZ?.toFixed?.(2)}, модель z=${zFit.modelZ?.toFixed?.(2)}`
+            );
+        }
+        console.log(
+            `M4c. отметка: zShift ${zFit.zShift?.toFixed?.(1)} м, ` +
+            `DEM ${zFit.demZ?.toFixed?.(2)} / модель ${zFit.modelZ?.toFixed?.(2)}`
         );
     }
 

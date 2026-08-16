@@ -3611,7 +3611,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 94d8430</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 9f389ee</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4562,7 +4562,7 @@
                 <span class="fill"></span>
             </div>
             <div class="mb-toolbar">
-                <input type="search" id="mapBuilderSearch" placeholder="Найти место — город, площадка…" autocomplete="off">
+                <input type="search" id="mapBuilderSearch" placeholder="Найти место — Санкт-Петербург, площадка…" autocomplete="off">
                 <button type="button" class="btn" id="mapBuilderSearchGo">Найти</button>
                 <button type="button" class="btn on" id="mapBuilderPan" data-mbtool="pan" title="Двигать карту">↕ Карта</button>
                 <button type="button" class="btn" id="mapBuilderRect" data-mbtool="rect" title="Прямоугольная рамка, как в InfraWorks">▭ Рамка</button>
@@ -5973,7 +5973,8 @@
                     centerY: (box.min.y + box.max.y) / 2,
                     centerZ: (box.min.z + box.max.z) / 2,
                     isGeoRaster: !!mesh.userData?.isGeoRaster,
-                    isMapTerrain: !!mesh.userData?.isMapTerrain
+                    isMapTerrain: !!mesh.userData?.isMapTerrain,
+                    zShift: mapTerrain.zShift || 0
                 };
             },
             decodeDemHeight(encoding, r, g, b, a) {
@@ -5991,11 +5992,22 @@
             openMapBuilder() { openMapBuilderModal(); },
             closeMapBuilder() { closeMapBuilderModal(); },
             mapBuilderSetView: (lat, lon, zoom) => { mapBuilderSetView(lat, lon, zoom); },
+            mapBuilderSearch: (q) => mapBuilderSearchGo(q),
             mapBuilderDrawRect: (a, b) => { mapBuilderDrawRect(a, b); },
             mapBuilderDrawPolygon: (pts) => { mapBuilderDrawPolygon(pts); },
             mapBuilderClear: () => { mapBuilderClearSelection(); },
             get mapBuilderAreaHa() { return polygonAreaM2(mbSelectionRing()) / 10_000; },
             get mapBuilderState() { return mapBuilderDebugState(); },
+            get mapSite() {
+                const mod = typeof loadedModels !== 'undefined' ? loadedModels.get('map-site') : null;
+                if (!mod?.isMapSite) return null;
+                return {
+                    filename: mod.filename,
+                    ids: [...mod.meshesByID.keys()],
+                    hasTerrain: mod.meshesByID.has('terrain'),
+                    hasBasemap: mod.meshesByID.has('basemap')
+                };
+            },
             get mapBuilderTiles() {
                 let loaded = 0, failed = 0, pending = 0;
                 for (const rec of mapBld.tiles.values()) {
@@ -7534,6 +7546,31 @@
         }
 
         /**
+         * Отметка уже загруженной модели (сцена, Z-up), без DEM с карты.
+         * Terrarium даёт высоту в своей вертикальной системе (часто у моря),
+         * а площадка Civil — в отметках проекта: без этой пробы сетка садится
+         * на десятки метров ниже модели, и космоснимок уезжает вместе с ней.
+         */
+        function sampleModelGroundZ(sceneX, sceneY) {
+            const raycaster = new THREE.Raycaster();
+            raycaster.set(new THREE.Vector3(sceneX, sceneY, 1e7), new THREE.Vector3(0, 0, -1));
+            const targets = collectRaycastTargets(
+                _terrainRayTargets,
+                (m) => !m.userData?.isGeoRaster && !m.userData?.isMapTerrain && !m.userData?.isOverlay
+            );
+            if (!targets.length) return NaN;
+            const hits = raycaster.intersectObjects(targets, false);
+            return hits.length ? hits[0].point.z : NaN;
+        }
+
+        function sceneHasLoadedModel() {
+            for (const mod of loadedModels.values()) {
+                if (!mod.isMapSite && mod.group) return true;
+            }
+            return false;
+        }
+
+        /**
          * Высоты рельефа под сеткой драпировки.
          *
          * Промахи луча (за краем поверхности, в дырах модели) помечаем NaN и
@@ -8045,6 +8082,7 @@
             basemapLayerId = null;
             updateGeoRasterListUI();
             markNeedsRender();
+            syncMapSiteModel();
             return true;
         }
 
@@ -8205,6 +8243,7 @@
             mesh.material?.dispose();
             mapTerrain = null;
             markNeedsRender();
+            syncMapSiteModel();
             return true;
         }
 
@@ -8262,6 +8301,7 @@
             for (let k = 0; k < zGrid.length; k++) {
                 if (Number.isNaN(zGrid[k])) zGrid[k] = avg;
             }
+            const zShift = alignMapTerrainGridToModel(zGrid, minX, minY, w, h, seg);
             const positions = [];
             const indices = [];
             for (let j = 0; j <= seg; j++) {
@@ -8288,10 +8328,57 @@
             const mesh = new THREE.Mesh(geometry, material);
             mesh.name = 'MapTerrain';
             mesh.userData.isMapTerrain = true;
-            mesh.userData.isOverlay = true;
+            mesh.userData.isOverlay = false;
             mesh.userData.isGeoRaster = false;
             mesh.receiveShadow = true;
-            return { mesh, bounds: { minX, maxX, minY, maxY }, segments: seg, hits: hitCount };
+            return { mesh, bounds: { minX, maxX, minY, maxY }, segments: seg, hits: hitCount, zShift };
+        }
+
+        /**
+         * Сдвигает сетку Terrarium по Z, чтобы центр совпал с поверхностью
+         * уже загруженной модели. Без сдвига отметка с карты — это высота
+         * тайла (СПб у моря ~30 м), а не отметка площадки в файле.
+         */
+        function alignMapTerrainGridToModel(zGrid, minX, minY, w, h, seg) {
+            if (!sceneHasLoadedModel()) return 0;
+            const n = seg + 1;
+            const en = currentWorldShiftEN();
+            const box = new THREE.Box3();
+            for (const mod of loadedModels.values()) {
+                if (!mod.group || mod.isMapSite) continue;
+                try {
+                    const b = new THREE.Box3().setFromObject(mod.group);
+                    if (!b.isEmpty()) box.union(b);
+                } catch (_) {}
+            }
+            const probes = [];
+            const cx = minX + w / 2;
+            const cy = minY + h / 2;
+            probes.push([cx - en.e, cy - en.n]);
+            if (!box.isEmpty()) {
+                probes.push(
+                    [box.getCenter(new THREE.Vector3()).x, box.getCenter(new THREE.Vector3()).y],
+                    [box.min.x, box.min.y],
+                    [box.max.x, box.max.y],
+                    [(box.min.x + box.max.x) / 2, box.min.y],
+                    [(box.min.x + box.max.x) / 2, box.max.y]
+                );
+            }
+            let modelSceneZ = NaN;
+            for (const [x, y] of probes) {
+                const z = sampleModelGroundZ(x, y);
+                if (Number.isFinite(z)) { modelSceneZ = z; break; }
+            }
+            if (!Number.isFinite(modelSceneZ) && !box.isEmpty()) modelSceneZ = box.max.z;
+            if (!Number.isFinite(modelSceneZ)) return 0;
+            const modelAbsZ = modelSceneZ + en.h;
+            const mid = Math.floor(seg / 2);
+            const terrAbsZ = zGrid[mid * n + mid];
+            if (!Number.isFinite(terrAbsZ)) return 0;
+            const dz = modelAbsZ - terrAbsZ;
+            if (!Number.isFinite(dz) || Math.abs(dz) < 0.05) return 0;
+            for (let k = 0; k < zGrid.length; k++) zGrid[k] += dz;
+            return dz;
         }
 
         async function applyMapTerrainLayer(settings) {
@@ -8329,18 +8416,23 @@
                     zoom: tiles.zoom,
                     tiles: tiles.tiles,
                     failed: tiles.failed,
-                    bounds: built.bounds
+                    bounds: built.bounds,
+                    zShift: built.zShift || 0
                 };
                 markNeedsRender();
                 activeBasemapBinding = { ...(activeBasemapBinding || {}), ...settings };
                 saveBasemapSettings({ ...(loadBasemapSettings() || {}), ...settings });
                 const mPerPx = 156543.03392 * Math.cos(binding.lat * Math.PI / 180) / Math.pow(2, tiles.zoom);
                 const note = tiles.failed ? ` Не отдалось тайлов: ${tiles.failed} из ${tiles.tiles}.` : '';
+                const zNote = Math.abs(built.zShift) >= 0.05
+                    ? ` Отметка совмещена с моделью (сдвиг ${built.zShift > 0 ? '+' : ''}${built.zShift.toFixed(1)} м).`
+                    : '';
                 notifyOk(
                     `Рельеф с карты: ${source.name}, зум ${tiles.zoom}, ~${mPerPx.toFixed(0)} м/пикс, сетка ${built.segments}×${built.segments}. ` +
-                    `Это глобальный DEM, не съёмка площадки.${note}`
+                    `Это глобальный DEM, не съёмка площадки.${zNote}${note}`
                 );
                 trackUsage('map_terrain_apply', { source: sourceKey, zoom: tiles.zoom });
+                syncMapSiteModel();
                 return mapTerrain;
             } finally {
                 hideLoader();
@@ -8401,6 +8493,7 @@
                 uvFor
             });
             geoRasterGroup.add(mesh);
+            syncGeoRasterToIfcOrigin();
             const layer = {
                 id: nextGeoRasterId++,
                 name: `Карта: ${provider.name}`,
@@ -8424,6 +8517,20 @@
                 `${provider.attribution}.${note}`
             );
             trackUsage('basemap_apply', { provider: settings.provider, zoom: tiles.zoom });
+            syncMapSiteModel();
+        }
+
+        async function applyBasemapLayerWithFallback(settings) {
+            try {
+                await applyBasemapLayer(settings);
+                return settings.provider;
+            } catch (err) {
+                if (settings.provider === 'osm' || settings.provider === 'custom') throw err;
+                console.warn('basemap fallback osm:', err);
+                notify('Космоснимок не загрузился — пробуем схему OSM.');
+                await applyBasemapLayer({ ...settings, provider: 'osm' });
+                return 'osm';
+            }
         }
 
         function saveBasemapSettings(settings) {
@@ -8465,7 +8572,7 @@
             const box = new THREE.Box3();
             let any = false;
             for (const mod of loadedModels.values()) {
-                if (!mod.group) continue;
+                if (!mod.group || mod.isMapSite) continue;
                 try {
                     const b = new THREE.Box3().setFromObject(mod.group);
                     if (!b.isEmpty()) { box.union(b); any = true; }
@@ -8482,10 +8589,41 @@
          */
         const MAP_BUILDER_MAX_HA = 200;
         const MAP_BUILDER_MAX_M2 = MAP_BUILDER_MAX_HA * 10_000;
+        const MAP_BUILDER_HOME = { lat: 59.9343, lon: 30.3351, zoom: 11 };
+        /** Ниже 6 виден почти весь мир — для площадки до 200 га это потеря точки. */
+        const MAP_BUILDER_MIN_ZOOM = 6;
+        const MAP_BUILDER_MAX_ZOOM = 18;
+        const MAP_BUILDER_SEARCH_ZOOM = 13;
+        const MAP_SITE_MODEL_ID = 'map-site';
+        /**
+         * Города без Nominatim: с github.io поиск OSM часто 403, а «Санкт-Петербург»
+         * должен попадать в город, а не в ответ первого попавшегося admin-bbox.
+         */
+        const MAP_BUILDER_PLACES = [
+            {
+                keys: [
+                    'санкт-петербург', 'санкт петербург', 'г санкт-петербург',
+                    'петербург', 'питер', 'spb', 'st petersburg', 'saint petersburg',
+                    'st. petersburg'
+                ],
+                lat: MAP_BUILDER_HOME.lat,
+                lon: MAP_BUILDER_HOME.lon,
+                zoom: 12,
+                name: 'Санкт-Петербург'
+            },
+            {
+                keys: ['москва', 'г москва', 'moscow'],
+                lat: 55.7558,
+                lon: 37.6173,
+                zoom: 11,
+                name: 'Москва'
+            }
+        ];
         const mapBld = {
-            lat: 55.75,
-            lon: 37.62,
-            zoom: 4,
+            lat: MAP_BUILDER_HOME.lat,
+            lon: MAP_BUILDER_HOME.lon,
+            zoom: MAP_BUILDER_HOME.zoom,
+            lastGood: { lat: MAP_BUILDER_HOME.lat, lon: MAP_BUILDER_HOME.lon, zoom: MAP_BUILDER_HOME.zoom },
             tool: 'pan',
             sel: null,
             draft: null,
@@ -8604,6 +8742,7 @@
                 lat: mapBld.lat,
                 lon: mapBld.lon,
                 zoom: mapBld.zoom,
+                lastGood: mapBld.lastGood ? { ...mapBld.lastGood } : null,
                 tool: mapBld.tool,
                 type: mapBld.sel?.type || mapBld.draft?.type || null,
                 points: ring.length,
@@ -8640,10 +8779,96 @@
             mapBuilderRedraw();
         }
 
+        function mapBuilderClampZoom(z) {
+            return Math.max(MAP_BUILDER_MIN_ZOOM, Math.min(MAP_BUILDER_MAX_ZOOM, z));
+        }
+
+        function mapBuilderViewIsLost() {
+            return !Number.isFinite(mapBld.lat) || !Number.isFinite(mapBld.lon) ||
+                !Number.isFinite(mapBld.zoom) || mapBld.zoom < 10;
+        }
+
+        function mapBuilderRememberView() {
+            if (mapBuilderViewIsLost()) return;
+            mapBld.lastGood = { lat: mapBld.lat, lon: mapBld.lon, zoom: mapBld.zoom };
+        }
+
+        function mapBuilderHomeView() {
+            const bind = currentBasemapBinding();
+            if (bind) {
+                return { lat: bind.lat, lon: bind.lon, zoom: Math.max(MAP_BUILDER_SEARCH_ZOOM, MAP_BUILDER_HOME.zoom) };
+            }
+            if (mapBld.lastGood && mapBld.lastGood.zoom >= 10) {
+                return { lat: mapBld.lastGood.lat, lon: mapBld.lastGood.lon, zoom: mapBld.lastGood.zoom };
+            }
+            return { lat: MAP_BUILDER_HOME.lat, lon: MAP_BUILDER_HOME.lon, zoom: MAP_BUILDER_HOME.zoom };
+        }
+
+        function mapBuilderRestoreIfLost() {
+            if (!mapBuilderViewIsLost()) {
+                mapBuilderRememberView();
+                return;
+            }
+            const v = mapBuilderHomeView();
+            mapBuilderSetView(v.lat, v.lon, v.zoom);
+            mapBld.tiles.clear();
+        }
+
+        function mapBuilderJumpTo(lat, lon, zoom, hint) {
+            mapBuilderSetView(lat, lon, zoom);
+            mapBld.tiles.clear();
+            mapBuilderRememberView();
+            if (hint) mapBuilderHint(hint);
+            requestAnimationFrame(() => {
+                mapBuilderResize();
+                mapBuilderRedraw();
+            });
+        }
+
+        function mapBuilderNormalizeQuery(q) {
+            return String(q || '').trim().toLowerCase().replace(/ё/g, 'е')
+                .replace(/[.,]/g, ' ').replace(/\s+/g, ' ');
+        }
+
+        function mapBuilderPlaceAlias(q) {
+            const s = mapBuilderNormalizeQuery(q);
+            if (!s) return null;
+            for (const p of MAP_BUILDER_PLACES) {
+                if (p.keys.some((k) => s === k || s.startsWith(k + ' '))) return p;
+            }
+            return null;
+        }
+
+        /** Координаты — только если в строке нет букв («район 5 корпус 12» не широта). */
+        function mapBuilderCoordsFromQuery(raw) {
+            if (/[A-Za-zА-Яа-яЁё]/.test(raw)) return null;
+            const pair = parseLatLonPair(raw);
+            if (!pair) return null;
+            if (Math.abs(pair.lat) > 85 || Math.abs(pair.lon) > 180) return null;
+            return pair;
+        }
+
+        function mapBuilderPickNominatim(rows) {
+            if (!Array.isArray(rows) || !rows.length) return null;
+            const scored = rows.map((r) => {
+                const bb = r.boundingbox;
+                const span = bb
+                    ? Math.abs(Number(bb[0]) - Number(bb[1])) + Math.abs(Number(bb[2]) - Number(bb[3]))
+                    : 40;
+                const cls = `${r.class || ''} ${r.type || ''} ${r.addresstype || ''}`.toLowerCase();
+                let score = Number.isFinite(span) ? span : 40;
+                if (/city|town|village|hamlet|suburb|municipality/.test(cls)) score *= 0.25;
+                if (/administrative|state|country|region|boundary/.test(cls)) score *= 3;
+                return { r, score };
+            });
+            scored.sort((a, b) => a.score - b.score);
+            return scored[0].r;
+        }
+
         function mapBuilderSetView(lat, lon, zoom) {
             if (Number.isFinite(lat)) mapBld.lat = Math.max(-85, Math.min(85, lat));
             if (Number.isFinite(lon)) mapBld.lon = ((lon + 540) % 360) - 180;
-            if (Number.isFinite(zoom)) mapBld.zoom = Math.max(2, Math.min(18, zoom));
+            if (Number.isFinite(zoom)) mapBld.zoom = mapBuilderClampZoom(zoom);
             mapBuilderRedraw();
         }
 
@@ -8853,16 +9078,12 @@
 
         function openMapBuilderModal() {
             const saved = loadBasemapSettings() || {};
-            if (Number.isFinite(saved.lat) && Number.isFinite(saved.lon)) {
-                mapBld.lat = saved.lat;
-                mapBld.lon = saved.lon;
-                if (mapBld.zoom < 10) mapBld.zoom = 12;
-            }
             fillMapBuilderLayers();
             if (BASEMAP_PROVIDERS[saved.provider] && saved.provider !== 'custom') {
                 const layer = $('mapBuilderLayer');
                 if (layer) layer.value = saved.provider;
             }
+            mapBuilderRestoreIfLost();
             mapBuilderSyncLayerAttr();
             mapBuilderSetTool(mapBld.tool || 'pan');
             mapBuilderRefreshArea();
@@ -8874,33 +9095,39 @@
         }
 
         function closeMapBuilderModal() {
+            mapBuilderRememberView();
             $('mapBuilderModal')?.classList.remove('show');
             mapBld.dragging = false;
             mapBuilderCanvasEl()?.classList.remove('is-drag');
         }
 
-        async function mapBuilderSearchGo() {
-            const raw = ($('mapBuilderSearch')?.value || '').trim();
+        async function mapBuilderSearchGo(query) {
+            const raw = String(query ?? $('mapBuilderSearch')?.value ?? '').trim();
             if (!raw) return;
-            const pair = parseLatLonPair(raw);
-            if (pair && Math.abs(pair.lat) <= 85 && Math.abs(pair.lon) <= 180) {
-                mapBuilderSetView(pair.lat, pair.lon, Math.max(mapBld.zoom, 13));
-                mapBuilderHint(`Место: ${pair.lat.toFixed(5)}, ${pair.lon.toFixed(5)}`);
+            const pair = mapBuilderCoordsFromQuery(raw);
+            if (pair) {
+                mapBuilderJumpTo(pair.lat, pair.lon, MAP_BUILDER_SEARCH_ZOOM,
+                    `Место: ${pair.lat.toFixed(5)}, ${pair.lon.toFixed(5)}`);
+                return;
+            }
+            const alias = mapBuilderPlaceAlias(raw);
+            if (alias) {
+                mapBuilderJumpTo(alias.lat, alias.lon, alias.zoom || MAP_BUILDER_SEARCH_ZOOM, alias.name);
                 return;
             }
             try {
-                const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(raw);
-                const res = await fetch(url, { headers: { Accept: 'application/json' } });
+                const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=0&q='
+                    + encodeURIComponent(raw);
+                const res = await fetch(url, { headers: { Accept: 'application/json', 'Accept-Language': 'ru' } });
                 if (!res.ok) throw new Error('поиск недоступен');
                 const rows = await res.json();
-                const hit = rows?.[0];
+                const hit = mapBuilderPickNominatim(rows);
                 const lat = parseFloat(hit?.lat), lon = parseFloat(hit?.lon);
                 if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
                     notifyError('Место не найдено: «' + raw + '»');
                     return;
                 }
-                mapBuilderSetView(lat, lon, 13);
-                mapBuilderHint(hit.display_name || raw);
+                mapBuilderJumpTo(lat, lon, MAP_BUILDER_SEARCH_ZOOM, hit.display_name || raw);
             } catch (err) {
                 notifyError('Поиск по карте: ' + (err?.message || err) + '. Можно вставить широту и долготу в поле поиска.');
             }
@@ -8922,7 +9149,9 @@
             const btn = $('mapBuilderLoad');
             if (btn) btn.disabled = true;
             const sceneWasEmpty = loadedModels.size === 0 && !mapTerrain && !geoRasterLayers.length;
+            const hadModel = sceneHasLoadedModel();
             let demOk = false;
+            let usedProvider = settings.provider;
             try {
                 try {
                     await applyMapTerrainLayer(settings);
@@ -8931,14 +9160,25 @@
                     console.error(err);
                     notifyError('Рельеф с карты: ' + (err?.message || err));
                 }
-                await applyBasemapLayer({ ...settings, drape: demOk });
+                try {
+                    usedProvider = await applyBasemapLayerWithFallback({
+                        ...settings,
+                        drape: demOk || hadModel
+                    });
+                } catch (err) {
+                    console.error(err);
+                    if (!demOk) throw err;
+                    notifyError('Снимок не загрузился: ' + (err?.message || err) + '. Рельеф с карты в сцене остался.');
+                }
                 closeMapBuilderModal();
                 const fitBtn = $('fit');
                 if (fitBtn) fitBtn.disabled = false;
                 if (sceneWasEmpty) fitView();
+                syncEmptySceneChrome();
+                const layerName = usedProvider === 'osm' ? 'схема OSM' : 'космоснимок ESRI';
                 notifyOk(
                     `Площадка с карты: ${(m2 / 10_000).toFixed(1)} га, ` +
-                    `${settings.provider === 'osm' ? 'схема OSM' : 'космоснимок ESRI'}` +
+                    (geoRasterLayers.some((l) => l.id === basemapLayerId) ? layerName : 'без снимка') +
                     (demOk ? ' и рельеф Terrarium.' : '.')
                 );
             } catch (err) {
@@ -8948,6 +9188,128 @@
             } finally {
                 mapBuilderRefreshArea();
             }
+        }
+
+        function sceneHasMapSite() {
+            return !!mapTerrain?.mesh || geoRasterLayers.some((l) => l.id === basemapLayerId);
+        }
+
+        function sceneHasContent() {
+            return loadedModels.size > 0 || sceneHasMapSite();
+        }
+
+        function syncEmptySceneChrome() {
+            const has = sceneHasContent();
+            const hint = $('hint');
+            if (hint) hint.style.display = has ? 'none' : '';
+            ['fit', 'clear', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnMeasure', 'btnDraw'].forEach((id) => {
+                const el = $(id);
+                if (el) el.disabled = !has;
+            });
+        }
+
+        function rebuildMapSiteTree(mod) {
+            treeBox.querySelector('.empty')?.remove();
+            let fileRoot = $('mapSiteTree');
+            if (!fileRoot) {
+                fileRoot = document.createElement('div');
+                fileRoot.id = 'mapSiteTree';
+                fileRoot.className = 'tnode file-root';
+                treeBox.prepend(fileRoot);
+            }
+            fileRoot.replaceChildren();
+            const fRow = document.createElement('div');
+            fRow.className = 'trow';
+            fRow.dataset.mid = MAP_SITE_MODEL_ID;
+            fRow.dataset.fileRoot = 'true';
+            fRow.innerHTML = `<span class="caret">▾</span><span class="tlabel" style="font-weight:600;color:var(--blue)">${esc(mod.filename)}</span><span class="ttype">карта</span>`;
+            fileRoot.appendChild(fRow);
+            const ch = document.createElement('div');
+            ch.className = 'children';
+            const allItems = [];
+            const addRow = (eid, label, type) => {
+                const items = [{ modelID: MAP_SITE_MODEL_ID, expressID: eid }];
+                allItems.push(...items);
+                const node = document.createElement('div');
+                node.className = 'tnode';
+                const row = document.createElement('div');
+                row.className = 'trow';
+                row.dataset.mid = MAP_SITE_MODEL_ID;
+                row.dataset.eid = eid;
+                row._selectionItems = items;
+                row.innerHTML = `<span class="caret empty">▾</span><span class="tlabel">${esc(label)}</span><span class="ttype">${esc(type)}</span>`;
+                row.addEventListener('click', (e) => handleTreeSelection(row, items, e));
+                row.addEventListener('dblclick', () => focusOnList(items));
+                node.appendChild(row);
+                ch.appendChild(node);
+            };
+            if (mod.meshesByID.has('terrain')) addRow('terrain', 'Рельеф', mapTerrain?.name || 'Terrarium');
+            if (mod.meshesByID.has('basemap')) {
+                const layer = geoRasterLayers.find((l) => l.id === basemapLayerId);
+                addRow('basemap', 'Подложка', layer?.name || 'карта');
+            }
+            fRow._selectionItems = allItems;
+            fRow.addEventListener('click', (e) => {
+                if (e.target.classList.contains('caret')) {
+                    fileRoot.classList.toggle('collapsed');
+                    return;
+                }
+                handleTreeSelection(fRow, allItems, e);
+            });
+            fRow.addEventListener('dblclick', () => { if (allItems.length) focusOnList(allItems); });
+            fileRoot.appendChild(ch);
+        }
+
+        function syncMapSiteModel() {
+            const terrainMesh = mapTerrain?.mesh || null;
+            const bmLayer = geoRasterLayers.find((l) => l.id === basemapLayerId);
+            const bmMesh = bmLayer?.mesh || null;
+            if (!terrainMesh && !bmMesh) {
+                if (loadedModels.has(MAP_SITE_MODEL_ID)) loadedModels.delete(MAP_SITE_MODEL_ID);
+                $('mapSiteTree')?.remove();
+                if (!treeBox.querySelector('.file-root')) {
+                    treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF, LandXML, FBX, GLB, OBJ или STL</div>';
+                }
+                if (typeof refreshFilesPane === 'function') refreshFilesPane();
+                $('sFile').textContent = loadedModels.size;
+                $('sElems').textContent = totalElements.toLocaleString('ru-RU');
+                syncEmptySceneChrome();
+                return;
+            }
+            let mod = loadedModels.get(MAP_SITE_MODEL_ID);
+            if (!mod) {
+                mod = {
+                    modelID: MAP_SITE_MODEL_ID,
+                    filename: 'Площадка с карты',
+                    format: 'MAP',
+                    isFBX: true,
+                    isMapSite: true,
+                    group: new THREE.Group(),
+                    meshesByID: new Map(),
+                    hiddenIds: new Set(),
+                    searchCache: new Map(),
+                    childrenOf: new Map(),
+                    parentOf: new Map()
+                };
+                loadedModels.set(MAP_SITE_MODEL_ID, mod);
+            }
+            mod.meshesByID.clear();
+            if (terrainMesh) {
+                terrainMesh.userData.modelID = MAP_SITE_MODEL_ID;
+                terrainMesh.userData.expressID = 'terrain';
+                terrainMesh.userData.isOverlay = false;
+                mod.meshesByID.set('terrain', [terrainMesh]);
+            }
+            if (bmMesh) {
+                bmMesh.userData.modelID = MAP_SITE_MODEL_ID;
+                bmMesh.userData.expressID = 'basemap';
+                mod.meshesByID.set('basemap', [bmMesh]);
+            }
+            rebuildMapSiteTree(mod);
+            $('sFile').textContent = loadedModels.size;
+            $('sElems').textContent = (totalElements + mod.meshesByID.size).toLocaleString('ru-RU');
+            if (typeof refreshFilesPane === 'function') refreshFilesPane();
+            syncEmptySceneChrome();
         }
 
         function mapBuilderRectFromCorners(a, b) {
@@ -9089,7 +9451,7 @@
                 const pt = mapBuilderEventPt(e);
                 const before = mapBuilderPxToLonLat(pt.x, pt.y);
                 const dir = e.deltaY > 0 ? -1 : 1;
-                mapBld.zoom = Math.max(2, Math.min(18, mapBld.zoom + dir * (e.deltaMode === 1 ? 0.35 : 0.12)));
+                mapBld.zoom = mapBuilderClampZoom(mapBld.zoom + dir * (e.deltaMode === 1 ? 0.35 : 0.12));
                 const after = mapBuilderPxToLonLat(pt.x, pt.y);
                 mapBld.lon += before.lon - after.lon;
                 mapBld.lat += before.lat - after.lat;
@@ -26264,7 +26626,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             syncSelectionSceneHighlight(items);
 
             const mod0 = loadedModels.get(items[0].modelID);
-            if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
+            if (mod0?.isMapSite) {
+                const kind = items[0].expressID === 'terrain' ? 'Рельеф с карты' : 'Подложка';
+                if (psetBox) psetBox.innerHTML = '<div class="empty">Pset есть только у IFC.</div>';
+                propsBox.innerHTML = `<span class="tag">ВЫДЕЛЕНО: ${items.length} шт.</span>` +
+                    propRow('Тип', kind) +
+                    propRow('Файл', mod0.filename) +
+                    propRow('Формат', 'Карта');
+            } else if (mod0 && mod0.isFBX) showFBXProps(items[0].modelID, items[0].expressID, items.length);
             else showProps(items[0].modelID, items[0].expressID, items.length);
             
             const revealed = syncTreeSelectionHighlight({ reveal: true });
@@ -26342,7 +26711,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             raycaster.setFromCamera(pointer, camera);
             raycaster.params.Line = { threshold: 0.5 };
             raycaster.params.Points = { threshold: 0.5 };
-            const hits = raycaster.intersectObjects(collectRaycastTargets(_pickRayTargets), false);
+            const hits = raycaster.intersectObjects(collectRaycastTargets(_pickRayTargets, isPickableGeometry), false);
             const validHits = isClipping ? hits.filter(h => pointPassesClipping(h.point)) : hits;
             return validHits[0] || null;
         }
@@ -31915,6 +32284,20 @@ ${componentXml || '    '}
             const modData = loadedModels.get(modelID);
             if (!modData) return;
 
+            if (modData.isMapSite) {
+                removeBasemapLayer();
+                removeMapTerrainLayer();
+                selectMultiple(selectedItems.filter((item) => String(item.modelID) !== String(MAP_SITE_MODEL_ID)));
+                if (typeof refreshClassesPane === 'function') refreshClassesPane();
+                updateIfcToolButtons();
+                if (loadedModels.size === 0) {
+                    if (isClipping) $('btnClip').click();
+                    if (isMeasuring) $('btnMeasure').click();
+                    if (isBoxSelecting) $('btnBoxSelect').click();
+                }
+                return;
+            }
+
             if (modData.appearanceByID) {
                 for (const appearance of modData.appearanceByID.values()) {
                     if (appearance.texture) disposeAppearanceTexture(appearance.texture);
@@ -32648,6 +33031,7 @@ ${componentXml || '    '}
         
         $('clear').addEventListener('click', () => {
             for (const [id, m] of loadedModels) {
+                if (m.isMapSite) continue;
                 if (m.appearanceByID) {
                     for (const appearance of m.appearanceByID.values()) {
                         if (appearance.texture) disposeAppearanceTexture(appearance.texture);
@@ -32702,6 +33086,7 @@ ${componentXml || '    '}
             tourRecording = false;
             
             treeBox.innerHTML = '<div class="empty">Добавьте IFC, DXF или распространённые 3D-файлы</div>';
+            syncEmptySceneChrome();
             ['sFile', 'sElems', 'sSelected'].forEach(id => $(id).textContent = '0');
             ['fit', 'clear', 'btnHide', 'btnIsolate', 'btnShowAll', 'btnClearSelection', 'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash', 'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView', 'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw', 'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect', 'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile', 'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'].forEach(id => $(id).disabled = true);
             $('clipModeSelect').disabled = true;
@@ -35684,6 +36069,7 @@ ${componentXml || '    '}
 
         function modelFormatLabel(mod) {
             if (!mod) return '';
+            if (mod.isMapSite || mod.format === 'MAP') return 'Карта';
             if (mod.isFBX) return mod.format || 'FBX';
             return mod.ifcSchema || 'IFC';
         }
@@ -35860,9 +36246,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.15',
-            buildId: '94d8430-preview',
-            released: '2026-08-15',
+            version: '2026.08.16',
+            buildId: '9f389ee-preview',
+            released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -35870,6 +36256,9 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: повторное открытие карты не оставляет вид «весь мир»; поиск СПб и Москвы работает без Nominatim.',
+                '2026.08.16: рельеф с карты совмещается по отметке уже загруженной модели; если космоснимок не открылся — схема OSM.',
+                '2026.08.16: глобус открывается на Санкт-Петербурге; после «Загрузить» рельеф и подложка в дереве, без предложения сразу добавить модели.',
                 '2026.08.16: площадка с карты — окно-глобус как в InfraWorks: поиск, слои (снимок / схема / топо / отмывка), рамка или контур до 200 га, «Загрузить».',
                 '2026.08.15: «Рельеф с карты» — сетка высот Terrarium / Terrain-RGB в том же охвате, что подложка; луч сверлит меш, картинка землю не считает.',
                 '2026.08.15: точки фигуры едут за якорем; условие «скрыть» прячет точку и детей на пикете (бордюр в насыпи / нет в выемке).',
