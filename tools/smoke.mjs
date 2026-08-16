@@ -2309,6 +2309,56 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: узкий филет без радиуса (${JSON.stringify(tightFillet.radii)})`);
     }
 
+    // Прямая и кривая — разный шаг: на 80 м прямой не ставим сечение каждые 4 м.
+    const splitStep = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 17, z: g + 0.5 },
+                { x: 100, y: 17, z: g + 0.5 },
+                { x: 100, y: 50, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-шаг-кривой', role: 'road-axis' }
+        );
+        D.applyRoadCorners(id, 'fillet', 12);
+        const dense = D.buildRoadXs(id, {
+            step: 4, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        const split = D.buildRoadXs(id, {
+            step: 20, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        const pk = split?.pk || [];
+        const tan = pk.filter((s) => s > 1 && s < 55);
+        const gaps = [];
+        for (let i = 1; i < tan.length; i++) gaps.push(tan[i] - tan[i - 1]);
+        const med = gaps.length
+            ? [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+            : 0;
+        return {
+            denseN: dense?.stations || 0,
+            splitN: split?.stations || 0,
+            stepCurve: split?.stepCurve,
+            tanN: tan.length,
+            medGap: med,
+            pk: pk.map((s) => +s.toFixed(2))
+        };
+    }, groundZ);
+    if ((splitStep.splitN || 0) >= (splitStep.denseN || 0)) {
+        problems.push(
+            `поперечники: раздельный шаг не сэкономил сечения ` +
+            `(${splitStep.splitN} при шаге 20/4 против ${splitStep.denseN} при 4/4)`
+        );
+    }
+    if ((splitStep.medGap || 0) < 12) {
+        problems.push(
+            `поперечники: на прямой шаг ${splitStep.medGap} м, ждали ≈20 ` +
+            `(${JSON.stringify(splitStep)})`
+        );
+    }
+    if ((splitStep.splitN || 0) < 8) {
+        problems.push(`поперечники: раздельный шаг дал слишком мало сечений (${JSON.stringify(splitStep)})`);
+    }
+
     const ui = await page.evaluate(() => {
         document.getElementById('btnPolylineList')?.click();
         const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
@@ -2329,6 +2379,7 @@ async function checkRoadCrossSections(page) {
             splitH: !!document.getElementById('rsSplitH'),
             splitTable: !!document.getElementById('rsSplitProfileTable'),
             splitV: !!document.getElementById('rsSplitV'),
+            stepCurve: !!document.getElementById('roadXsStepCurve'),
             grips: [...(card?.querySelectorAll('.rs-win-grip') || [])].map((g) => g.dataset.dir),
             applyTpl: (document.getElementById('roadXsApplyTpl')?.textContent || '').trim(),
             tpls: [...(card?.querySelectorAll('#roadXsTpls .rs-tpl') || [])].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
@@ -2354,8 +2405,8 @@ async function checkRoadCrossSections(page) {
         if (!ui.titles.includes('План') || !ui.titles.includes('Профиль') || !ui.titles.includes('Поперечник')) {
             problems.push(`поперечники: нет панелей План/Профиль/Поперечник (${JSON.stringify(ui.titles)})`);
         }
-        if (!ui.plan || !ui.splitH || !ui.splitV || !ui.splitTable || ui.grips.join(',') !== 'e,s,se') {
-            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, splitTable: ui.splitTable, grips: ui.grips })})`);
+        if (!ui.plan || !ui.splitH || !ui.splitV || !ui.splitTable || !ui.stepCurve || ui.grips.join(',') !== 'e,s,se') {
+            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, splitTable: ui.splitTable, stepCurve: ui.stepCurve, grips: ui.grips })})`);
         }
         if (ui.applyTpl !== 'Применить на ось' || ui.tpls.length < 5) {
             problems.push(`поперечники: нет каталога шаблонов (${JSON.stringify({ applyTpl: ui.applyTpl, tpls: ui.tpls })})`);
