@@ -238,6 +238,77 @@ try {
         `зум ${globeNom.zoom}`
     );
 
+    // A-k. Площадка с карты на пустой сцене: лента черчения должна включиться.
+    // Раньше syncEmptySceneChrome открывал только «Полилинию» и «Замер».
+    const emptyTools = await page.evaluate(() => ({
+        draw: !!document.getElementById('btnDraw')?.disabled,
+        axis: !!document.getElementById('btnRoadAxis')?.disabled,
+        pad: !!document.getElementById('btnPadList')?.disabled,
+        sweep: !!document.getElementById('btnSweep')?.disabled
+    }));
+    if (!emptyTools.draw || !emptyTools.axis || !emptyTools.pad || !emptyTools.sweep) {
+        problems.push(`на пустой сцене инструменты уже включены: ${JSON.stringify(emptyTools)}`);
+    }
+    const mLat0 = 111320;
+    const mLon0 = 111320 * Math.cos((SITE.lat * Math.PI) / 180);
+    const dLat0 = (400) / mLat0;
+    const dLon0 = (400) / mLon0;
+    await page.evaluate(([site, a, b]) => {
+        document.getElementById('btnMapBuilder').click();
+        window.BimLvaDebug.mapBuilderSetView(site.lat, site.lon, 14);
+        window.BimLvaDebug.mapBuilderDrawRect(a, b);
+        document.getElementById('mapBuilderLoad').click();
+    }, [SITE, { lat: SITE.lat - dLat0, lon: SITE.lon - dLon0 }, { lat: SITE.lat + dLat0, lon: SITE.lon + dLon0 }]);
+    const mapOnlyOk = await page
+        .waitForFunction(() => window.BimLvaDebug?.mapTerrainLayer != null, { timeout: 90_000 })
+        .then(() => true).catch(() => false);
+    if (!mapOnlyOk) {
+        problems.push('карта на пустой сцене не загрузила рельеф');
+    } else {
+        const mapTools = await page.evaluate(() => {
+            const ids = [
+                'btnDraw', 'drawModeSelect', 'btnRoadAxis', 'btnRoadXs',
+                'btnPadList', 'btnSweep', 'btnMeasure', 'btnPolylineList'
+            ];
+            const disabled = Object.fromEntries(ids.map((id) => [id, !!document.getElementById(id)?.disabled]));
+            document.getElementById('btnDraw')?.click();
+            const drawing = document.getElementById('btnDraw')?.classList.contains('on');
+            if (drawing) document.getElementById('btnDraw')?.click();
+            document.getElementById('btnRoadAxis')?.click();
+            const axisOn = document.getElementById('btnRoadAxis')?.classList.contains('on');
+            if (axisOn) document.getElementById('btnRoadAxis')?.click();
+            return {
+                disabled,
+                drawing,
+                axisOn,
+                tools: window.BimLvaDebug.mapSite?.tools || null
+            };
+        });
+        const blocked = Object.entries(mapTools.disabled).filter(([, d]) => d).map(([id]) => id);
+        if (blocked.length) {
+            problems.push(`после карты на пустой сцене заблокированы: ${blocked.join(', ')}`);
+        }
+        if (!mapTools.drawing) problems.push('после карты «Полилиния» не включилась');
+        if (!mapTools.axisOn) problems.push('после карты «Ось трассы» не включилась');
+        console.log(
+            `A-k. лента на карте: ${blocked.length ? 'блок ' + blocked.join(',') : 'вкл'}, ` +
+            `чертёж ${mapTools.drawing ? 'ок' : 'НЕТ'}, ось ${mapTools.axisOn ? 'ок' : 'НЕТ'}`
+        );
+        await page.evaluate(() => document.getElementById('clear')?.click());
+        await page.waitForTimeout(400);
+        const afterClear = await page.evaluate(() => ({
+            models: window.BimLvaDebug.modelCount,
+            dem: window.BimLvaDebug.mapTerrainLayer != null,
+            axis: !!document.getElementById('btnRoadAxis')?.disabled
+        }));
+        if (afterClear.models !== 0 || afterClear.dem) {
+            problems.push(`очистка после карты не сняла сцену: ${JSON.stringify(afterClear)}`);
+        }
+        if (!afterClear.axis) {
+            problems.push('после очистки оси трассы осталась включённой');
+        }
+    }
+
     await page.setInputFiles('#localFileInput', file);
     await page.waitForFunction(
         () => window.BimLvaDebug?.modelCount === 1 && (window.BimLvaDebug?.modelBounds || []).length === 1,
@@ -861,6 +932,10 @@ try {
         }
         if (!siteChrome.mapSite?.hasTerrain || !siteChrome.mapSite?.hasBasemap) {
             problems.push(`map-site неполный: ${JSON.stringify(siteChrome.mapSite)}`);
+        }
+        if (!siteChrome.mapSite?.tools?.draw || !siteChrome.mapSite?.tools?.axis
+            || !siteChrome.mapSite?.tools?.pad || !siteChrome.mapSite?.tools?.sweep) {
+            problems.push(`после карты лента не включилась: ${JSON.stringify(siteChrome.mapSite?.tools)}`);
         }
         console.log(
             `M4b. дерево: ${/Рельеф/.test(siteChrome.treeText) ? 'рельеф есть' : 'НЕТ'}, ` +
