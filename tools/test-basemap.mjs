@@ -129,6 +129,29 @@ await fs.writeFile(file, makeGeoIfc({ ...MODEL, count: 60, cols: 10, seed: 3, na
 try {
     await page.goto(`http://127.0.0.1:${port}/bim-lva-composer-ifc.html`, { waitUntil: 'load' });
     await page.waitForTimeout(1500);
+
+    // A-g. Глобус без сохранённой площадки открывается на Санкт-Петербурге.
+    const globeHome = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 400));
+        const st = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        return st;
+    });
+    const SPB = { lat: 59.9343, lon: 30.3351 };
+    if (Math.abs(globeHome.lat - SPB.lat) > 0.05 || Math.abs(globeHome.lon - SPB.lon) > 0.05) {
+        problems.push(
+            `глобус открылся на ${globeHome.lat?.toFixed?.(4)}, ${globeHome.lon?.toFixed?.(4)}, ` +
+            `ждали Санкт-Петербург (${SPB.lat}, ${SPB.lon})`
+        );
+    }
+    if (!(globeHome.zoom >= 10 && globeHome.zoom <= 13)) {
+        problems.push(`зум глобуса ${globeHome.zoom}, ждали ~11 (город, не страна)`);
+    }
+    console.log(
+        `A-g. глобус: ${globeHome.lat?.toFixed?.(4)}, ${globeHome.lon?.toFixed?.(4)}, зум ${globeHome.zoom}`
+    );
+
     await page.setInputFiles('#localFileInput', file);
     await page.waitForFunction(
         () => window.BimLvaDebug?.modelCount === 1 && (window.BimLvaDebug?.modelBounds || []).length === 1,
@@ -725,6 +748,27 @@ try {
         console.log(
             `M4. Загрузить: подложка ${layers.bm.sizeX.toFixed(0)}×${layers.bm.sizeY.toFixed(0)} м, ` +
             `рельеф ${layers.dem.sizeX.toFixed(0)}×${layers.dem.sizeY.toFixed(0)} м`
+        );
+        const siteChrome = await page.evaluate(() => {
+            const hint = document.getElementById('hint');
+            return {
+                hintDisplay: hint ? hint.style.display : '',
+                treeText: document.getElementById('tree')?.innerText || '',
+                mapSite: window.BimLvaDebug.mapSite
+            };
+        });
+        if (siteChrome.hintDisplay !== 'none') {
+            problems.push('после загрузки карты висит подсказка «добавьте модели»');
+        }
+        if (!/Площадка с карты/.test(siteChrome.treeText) || !/Рельеф/.test(siteChrome.treeText)) {
+            problems.push(`в дереве нет рельефа с карты: «${siteChrome.treeText.slice(0, 240)}»`);
+        }
+        if (!siteChrome.mapSite?.hasTerrain || !siteChrome.mapSite?.hasBasemap) {
+            problems.push(`map-site неполный: ${JSON.stringify(siteChrome.mapSite)}`);
+        }
+        console.log(
+            `M4b. дерево: ${/Рельеф/.test(siteChrome.treeText) ? 'рельеф есть' : 'НЕТ'}, ` +
+            `hint=${siteChrome.hintDisplay || 'visible'}`
         );
     }
 
