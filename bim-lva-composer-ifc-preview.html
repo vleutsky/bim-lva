@@ -1097,8 +1097,72 @@
            Таблица показывает ВЕРШИНЫ, а не пикеты с шагом: промежуточные
            точки на прямой между вершинами ничего не сообщают, а список
            раздувают. */
-        #polyProfileChart { height: 260px; }
+        #polyProfileChart { height: 100%; }
         #roadXsChart { height: 240px; background: var(--panel-2); }
+        /* Подписи отметок и уклонов на оси профиля — HTML-слой поверх SVG:
+           у чертежа preserveAspectRatio="none", SVG-текст растянулся бы, а
+           поле ввода в нём не посадить. Слой не внутри SVG, чтобы клик по
+           подписи не начинал сдвиг окна и не вставлял вершину. */
+        .profile-chart-wrap {
+            position: relative;
+            height: 260px;
+            margin-top: 8px;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .profile-chart-wrap #polyProfileChart {
+            height: 100%;
+            width: 100%;
+            margin-top: 0;
+            display: block;
+        }
+        #polyProfileAnnot {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: 2;
+        }
+        .prof-vz-label,
+        .prof-i-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 10px;
+            line-height: 1.3;
+            white-space: nowrap;
+            padding: 1px 5px;
+            border-radius: 3px;
+            box-shadow: 0 1px 3px rgba(10, 20, 32, .28);
+            pointer-events: auto;
+            cursor: text;
+            user-select: none;
+        }
+        .prof-vz-label {
+            background: rgba(31, 111, 139, .94);
+            border: 1px solid #16556c;
+            color: var(--on-fill);
+        }
+        .prof-vz-label:hover { background: rgba(23, 88, 111, .97); }
+        .prof-i-label {
+            background: var(--glass-solid);
+            border: 1px solid var(--ok);
+            color: #10321f;
+        }
+        .prof-i-label:hover { filter: brightness(0.97); }
+        .prof-vz-label.is-editing,
+        .prof-i-label.is-editing { padding: 0; border-color: #f06424; }
+        .prof-vz-label input,
+        .prof-i-label input {
+            width: 72px;
+            font: inherit;
+            padding: 1px 4px;
+            border: 0;
+            border-radius: 2px;
+            background: var(--panel);
+            color: var(--txt);
+        }
         #roadXsChart .xs-slope { pointer-events: none; }
         .road-xs-nav {
             display: flex;
@@ -3046,13 +3110,22 @@
         }
             .rstab-pane[hidden] { display: none !important; }
         .pal-card.rs-studio .rstab-pane[hidden] { display: flex !important; }
-        .pal-card #polyProfileChart,
+        .pal-card #polyProfileChartWrap,
         .pal-card #roadXsChart,
         .pal-card #roadPlanChart {
             height: auto;
             flex: 1;
             min-height: 80px;
             background: #f7f9fb;
+        }
+        .pal-card .profile-chart-wrap {
+            margin-top: 0;
+        }
+        .pal-card #polyProfileChart {
+            height: 100%;
+            width: 100%;
+            margin-top: 0;
+            display: block;
         }
         .rstab-pane .profile-table {
             max-height: 72px;
@@ -3213,7 +3286,7 @@
             top: 50%; left: 1px; width: 3px; height: 28px; margin-top: -14px;
         }
         .pal-card.rs-studio #roadXsTable { max-height: 52px; }
-        .pal-card.dock-bottom #polyProfileChart,
+        .pal-card.dock-bottom #polyProfileChartWrap,
         .pal-card.dock-bottom #roadXsChart,
         .pal-card.dock-bottom #roadPlanChart {
             flex: 1;
@@ -3768,7 +3841,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · a472f78</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 6461e73</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5040,8 +5113,11 @@
                             <button class="btn" id="polyProfileXs" data-tip="Перейти к чертежу поперечника">⊟ сечение</button>
                         </div>
                         <div class="pal-status" id="polyProfileMeta">—</div>
-                        <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 260"
-                             preserveAspectRatio="none" style="touch-action:none;cursor:grab"></svg>
+                        <div class="profile-chart-wrap" id="polyProfileChartWrap">
+                            <svg class="align-profile-svg" id="polyProfileChart" viewBox="0 0 760 260"
+                                 preserveAspectRatio="none" style="touch-action:none;cursor:grab"></svg>
+                            <div id="polyProfileAnnot"></div>
+                        </div>
                         <div id="polyProfileTable" class="profile-table"></div>
                     </div>
                 </div>
@@ -15737,6 +15813,12 @@
          * вертикальным растяжением. exag = null — вписать всё. */
         let polyProfileView = { from: 0, to: 0, exag: null, zCentre: null };
         let polyProfileActiveVertex = -1;
+        let profileVzLabels = [];
+        let profileSlopeLabels = [];
+        let profileVzEditing = null;
+        let profileSlopeEditing = null;
+        let profileAnnotKey = '';
+        const PROF_SEG_LABEL_MIN_PX = 40;
 
         /**
          * Пересчёт профиля после правки геометрии. Зовётся из renderPolylinesList,
@@ -15750,6 +15832,7 @@
             if (polyProfileRecordId == null) return;
             if (!drawnPolylines.some((r) => r.id === polyProfileRecordId)) {
                 polyProfileData = null;
+                clearProfileChartLabels();
                 return;
             }
             renderPolylineProfile();
@@ -15830,7 +15913,10 @@
             const table = $('polyProfileTable');
             if (!svg) return;
             const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
-            if (!rec) return;
+            if (!rec) {
+                clearProfileChartLabels();
+                return;
+            }
 
             // Земля рисуется по частому опросу — иначе линия срежет все складки
             // рельефа между вершинами. Шаг подбирается сам от длины: наружу его
@@ -15845,6 +15931,7 @@
 
             if (!data || !rows) {
                 svg.innerHTML = '';
+                clearProfileChartLabels();
                 if (meta) meta.textContent = 'Полилиния слишком короткая для профиля.';
                 if (table) table.innerHTML = '<div class="profile-empty">Нет данных.</div>';
                 return;
@@ -15938,6 +16025,196 @@
             }
 
             renderProfileTable(rec, rows);
+            syncProfileChartLabels(rows, f);
+        }
+
+        /* Подписи на красной оси профиля: отметка у вершины, уклон на звене.
+           Кликом открывается то же число, что в таблице — setPolylineVertexElevation
+           / setPolylineSegmentSlope. Пока в поле набирают, текст этой подписи
+           не перезаписываем (как у таблицы и у 3D-подписей). */
+        function clearProfileChartLabels() {
+            const layer = $('polyProfileAnnot');
+            if (layer) layer.innerHTML = '';
+            profileVzLabels = [];
+            profileSlopeLabels = [];
+            profileVzEditing = null;
+            profileSlopeEditing = null;
+            profileAnnotKey = '';
+        }
+
+        /** SVG viewBox → пиксели обёртки (у SVG есть рамка, % от wrap врёт). */
+        function profileChartToOverlay(svgX, svgY) {
+            const svg = $('polyProfileChart');
+            const wrap = $('polyProfileChartWrap');
+            if (!svg || !wrap) return { x: svgX, y: svgY };
+            const sb = svg.getBoundingClientRect();
+            const wb = wrap.getBoundingClientRect();
+            return {
+                x: (svgX / PROFILE_W) * sb.width + (sb.left - wb.left),
+                y: (svgY / PROFILE_H) * sb.height + (sb.top - wb.top)
+            };
+        }
+
+        function rebuildProfileChartLabels(rows, rec) {
+            const layer = $('polyProfileAnnot');
+            if (!layer) return;
+            layer.innerHTML = '';
+            profileVzLabels = [];
+            profileSlopeLabels = [];
+            profileVzEditing = null;
+            profileSlopeEditing = null;
+            profileAnnotKey = rec ? `${rec.id}:${rows.length}` : '';
+            if (!rec) return;
+
+            rows.forEach((r) => {
+                const el = document.createElement('div');
+                el.className = 'prof-vz-label';
+                el.dataset.idx = String(r.idx);
+                el.title = 'Отметка оси в этой вершине, м. Нажмите, чтобы изменить';
+                el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                el.addEventListener('dblclick', (e) => e.stopPropagation());
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    startProfileElevationEdit(r.idx);
+                });
+                layer.appendChild(el);
+                profileVzLabels.push({ el, idx: r.idx });
+            });
+            for (let i = 0; i < rows.length - 1; i++) {
+                if (rows[i].slope == null) continue;
+                const el = document.createElement('div');
+                el.className = 'prof-i-label';
+                el.dataset.idx = String(i);
+                el.title = 'Уклон до следующей вершины, ‰. Нажмите, чтобы изменить';
+                el.addEventListener('pointerdown', (e) => e.stopPropagation());
+                el.addEventListener('dblclick', (e) => e.stopPropagation());
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    startProfileSlopeEdit(i);
+                });
+                layer.appendChild(el);
+                profileSlopeLabels.push({ el, idx: i });
+            }
+        }
+
+        function syncProfileChartLabels(rows, f) {
+            const layer = $('polyProfileAnnot');
+            if (!layer || !rows || !f) { clearProfileChartLabels(); return; }
+            const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
+            const key = rec ? `${rec.id}:${rows.length}` : '';
+            if (key !== profileAnnotKey) rebuildProfileChartLabels(rows, rec);
+
+            const clipL = PROFILE_PAD.l;
+            const clipR = PROFILE_W - PROFILE_PAD.r;
+            for (const slot of profileVzLabels) {
+                const r = rows[slot.idx];
+                if (!r) { slot.el.hidden = true; continue; }
+                const x = f.px(r.sta);
+                if (x < clipL - 8 || x > clipR + 8) { slot.el.hidden = true; continue; }
+                slot.el.hidden = false;
+                const p = profileChartToOverlay(x, f.py(r.axis));
+                if (profileVzEditing !== slot.idx) slot.el.textContent = r.axis.toFixed(3);
+                // Отметка под кружком — сам кружок остаётся тем, за что тянут.
+                slot.el.style.transform = `translate(-50%, 8px) translate(${p.x}px, ${p.y}px)`;
+            }
+            for (const slot of profileSlopeLabels) {
+                const a = rows[slot.idx];
+                const b = rows[slot.idx + 1];
+                if (!a || !b || a.slope == null) { slot.el.hidden = true; continue; }
+                const x0 = f.px(a.sta);
+                const x1 = f.px(b.sta);
+                const midX = (x0 + x1) / 2;
+                if (midX < clipL || midX > clipR || Math.abs(x1 - x0) < PROF_SEG_LABEL_MIN_PX) {
+                    slot.el.hidden = true;
+                    continue;
+                }
+                slot.el.hidden = false;
+                const p = profileChartToOverlay(midX, (f.py(a.axis) + f.py(b.axis)) / 2);
+                if (profileSlopeEditing !== slot.idx) {
+                    const s = a.slope;
+                    slot.el.textContent = `${s > 0 ? '+' : ''}${s.toFixed(1)} ‰`;
+                }
+                slot.el.style.transform =
+                    `translate(-50%, calc(-100% - 6px)) translate(${p.x}px, ${p.y}px)`;
+            }
+        }
+
+        function startProfileElevationEdit(idx) {
+            const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
+            const slot = profileVzLabels.find((v) => v.idx === idx);
+            const row = polyProfileData?.vertices?.[idx];
+            if (!rec || !slot || !row || profileVzEditing === idx) return;
+            profileVzEditing = idx;
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = '0.01';
+            input.value = row.axis.toFixed(3);
+            slot.el.classList.add('is-editing');
+            slot.el.textContent = '';
+            slot.el.appendChild(input);
+            input.focus();
+            input.select();
+            let closed = false;
+            const finish = (apply) => {
+                if (closed) return;
+                closed = true;
+                const v = Number(input.value);
+                profileVzEditing = null;
+                slot.el.classList.remove('is-editing');
+                if (apply && Number.isFinite(v)) {
+                    setPolylineVertexElevation(rec, idx, v);
+                    trackUsage('profile_vertex_z_inline', {});
+                } else {
+                    const rows = polyProfileData?.vertices;
+                    const fr = profileCurrentFrame();
+                    if (rows && fr) syncProfileChartLabels(rows, fr);
+                }
+            };
+            input.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', () => finish(true));
+        }
+
+        function startProfileSlopeEdit(idx) {
+            const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
+            const slot = profileSlopeLabels.find((v) => v.idx === idx);
+            const row = polyProfileData?.vertices?.[idx];
+            if (!rec || !slot || !row || row.slope == null || profileSlopeEditing === idx) return;
+            profileSlopeEditing = idx;
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = '1';
+            input.value = row.slope.toFixed(2);
+            slot.el.classList.add('is-editing');
+            slot.el.textContent = '';
+            slot.el.appendChild(input);
+            input.focus();
+            input.select();
+            let closed = false;
+            const finish = (apply) => {
+                if (closed) return;
+                closed = true;
+                const v = Number(input.value);
+                profileSlopeEditing = null;
+                slot.el.classList.remove('is-editing');
+                if (apply && Number.isFinite(v)) {
+                    setPolylineSegmentSlope(rec, idx, v);
+                    trackUsage('profile_slope_inline', {});
+                } else {
+                    const rows = polyProfileData?.vertices;
+                    const fr = profileCurrentFrame();
+                    if (rows && fr) syncProfileChartLabels(rows, fr);
+                }
+            };
+            input.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', () => finish(true));
         }
 
         /** Компактная таблица вершин с правкой отметки и уклона на месте. */
@@ -18172,6 +18449,14 @@
         window.addEventListener('resize', () => {
             if (roadStudioIsOpen()) dockProfileAndXs();
         });
+        if (typeof ResizeObserver !== 'undefined' && $('polyProfileChartWrap')) {
+            let profResizeTick = 0;
+            new ResizeObserver(() => {
+                if (!roadStudioIsOpen() || !polyProfileData) return;
+                cancelAnimationFrame(profResizeTick);
+                profResizeTick = requestAnimationFrame(() => renderPolylineProfile());
+            }).observe($('polyProfileChartWrap'));
+        }
 
         function roadPlanSource() {
             const id = Number($('roadXsSelect')?.value) || polyProfileRecordId;
@@ -36824,7 +37109,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: 'a472f78-preview',
+            buildId: '6461e73-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -36833,6 +37118,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: на продольном профиле отметки вершин и уклоны звеньев подписаны на оси — клик правит число, как в таблице.',
                 '2026.08.16: палитра «План, профиль, поперечник» — одно окно: план сверху, профиль под ним, поперечник справа; зум в каждом чертеже, ручки стыков и угла окна; шаблоны дороги и «Применить на ось».',
                 '2026.08.16: повторное открытие карты не оставляет вид «весь мир»; поиск СПб и Москвы работает без Nominatim.',
                 '2026.08.16: рельеф с карты совмещается по отметке уже загруженной модели; если космоснимок не открылся — схема OSM.',
