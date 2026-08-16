@@ -3898,7 +3898,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 6e75712</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 34edbda</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -10884,9 +10884,11 @@
          * По каждому ребру бровки идём наружу по нормали ребра (не биссектрисе
          * угла) с шагом slopeStep, пока отметка откоса (постоянный уклон 1:m)
          * не сойдётся с целевой поверхностью: сначала уже построенные откосы
-         * и площадки, иначе sampleTerrainZ. На выпуклом углу — веер нормалей
-         * между двумя рёбрами, плюс вершины чужой площадки, которые попали в
-         * этот сектор: иначе линия выхода режет соседнюю площадку по диагонали
+         * и площадки, иначе sampleTerrainZ. На выпуклом углу площадки — веер
+         * нормалей между двумя рёбрами; у откоса дороги (`corner:'miter'`)
+         * внешний угол прямой: две плоскости сходятся в P+d0·n0+d1·n1, без
+         * срезанного треугольника. Плюс вершины чужой площадки, которые попали
+         * в сектор веера: иначе линия выхода режет соседнюю площадку по диагонали
          * и не описывает её угол. Своя середина замкнутого контура — тоже
          * поверхность: внутрь контура откос не идёт. Выше земли на
          * бровке — насыпь (вниз по 1:mFill), ниже — выемка (вверх по 1:mCut).
@@ -11171,8 +11173,10 @@
             const tokens = [];
             for (let i = 0; i < n; i++) {
                 const s = sections[i];
-                if (s.valid) tokens.push({ kind: 'exit', mode: s.mode, pt: s.exit });
-                else tokens.push({ kind: 'break' });
+                if (s.valid) {
+                    tokens.push({ kind: 'exit', mode: s.mode, pt: s.exit });
+                    if (s.miterExit) tokens.push({ kind: 'exit', mode: s.mode, pt: s.miterExit });
+                } else tokens.push({ kind: 'break' });
                 if (!closed && i === n - 1) break;
                 const j = (i + 1) % n;
                 const a = sections[i], b = sections[j];
@@ -12138,6 +12142,35 @@
             return da;
         }
 
+        /**
+         * Внешний угол бровки: правая сторона на левом повороте оси (и наоборот).
+         * Там откос должен дать прямой угол, а не веер-фаску.
+         */
+        function slopeIsOuterCorner(tIn, tOut, side) {
+            if (!tIn || !tOut) return false;
+            const cross = tIn.x * tOut.y - tIn.y * tOut.x;
+            if (Math.abs(cross) < 1e-8) return false;
+            return side === 'right' ? cross > 0 : cross < 0;
+        }
+
+        /**
+         * Точка выхода на внешнем прямом угле: пересечение линий выхода
+         * двух соседних сечений (P + d0·n0 + d1·n1). На плоской земле это
+         * прямой угол, как у полотна сверху.
+         */
+        function slopeMiterExitPoint(P, n0, n1, exit0, exit1, sampleZ) {
+            if (!P || !n0 || !n1 || !exit0 || !exit1) return null;
+            const d0 = (exit0.x - P.x) * n0.x + (exit0.y - P.y) * n0.y;
+            const d1 = (exit1.x - P.x) * n1.x + (exit1.y - P.y) * n1.y;
+            if (!(d0 > 1e-4) || !(d1 > 1e-4)) return null;
+            const x = P.x + n0.x * d0 + n1.x * d1;
+            const y = P.y + n0.y * d0 + n1.y * d1;
+            const MISS = Number.NEGATIVE_INFINITY;
+            const g = sampleZ ? sampleZ(x, y, MISS) : MISS;
+            const z = (g !== MISS && Number.isFinite(g)) ? g : Math.min(exit0.z, exit1.z);
+            return { x, y, z };
+        }
+
         /** Вектор w от угла лежит в наружном секторе между нормалями n0→n1. */
         function slopeVecInFan(w, n0, n1) {
             const da = slopeSignedAngle(n0, n1);
@@ -12151,7 +12184,7 @@
          * Станции откоса: вдоль каждого ребра по его нормали, на выпуклом
          * угле — веер, плюс вершины чужих площадок в этом веере.
          */
-        function buildSlopeStationLoop(ring, closed, side, step, maxReach, pads) {
+        function buildSlopeStationLoop(ring, closed, side, step, maxReach, pads, corner) {
             const n = ring.length;
             const last = closed ? n : n - 1;
             const edges = [];
@@ -12235,6 +12268,7 @@
                     stations.push({
                         brow: slopeLerpPt(ed.A, ed.B, t),
                         normal: ed.nrm,
+                        dir: ed.dir,
                         kind: 'edge',
                         edge: e,
                         t
@@ -12243,7 +12277,7 @@
                 const hasNext = closed || e < edges.length - 1;
                 if (!hasNext) continue;
                 const next = edges[(e + 1) % edges.length];
-                pushFanAt(ed.B, ed.nrm, next.nrm, e);
+                if (corner !== 'miter') pushFanAt(ed.B, ed.nrm, next.nrm, e);
             }
             return stations;
         }
@@ -12258,7 +12292,7 @@
             const pads = collectOtherPadRings(record.id);
             const look = 0.05;
             const raw = buildSlopeStationLoop(
-                ring, closed, side, opts.step, opts.maxReach, pads
+                ring, closed, side, opts.step, opts.maxReach, pads, opts.corner
             );
             const stations = [];
             raw.forEach((st) => {
@@ -12332,10 +12366,23 @@
                 const exitA = new THREE.Vector3(a.exit.x, a.exit.y, a.exit.z);
                 const exitB = new THREE.Vector3(b.exit.x, b.exit.y, b.exit.z);
                 if (dist < 1e-6) {
-                    // Веер с одного угла: если хоть одно сечение выемка —
-                    // кладём в оверлей, иначе треугольник прячется под рельефом.
+                    // Один угол бровки, два нормали: у площадки это веер (треугольник
+                    // бровка–выход–выход), у дороги на внешнем угле — прямой угол.
                     const mode = (a.mode === 'cut' || b.mode === 'cut') ? 'cut' : 'fill';
-                    pushMode(mode, edgeA, exitA, exitB);
+                    const n0 = stations[i].normal || a.n;
+                    const n1 = stations[j].normal || b.n;
+                    const tIn = stations[i].dir, tOut = stations[j].dir;
+                    const M = (opts.corner === 'miter' && slopeIsOuterCorner(tIn, tOut, side))
+                        ? slopeMiterExitPoint(edgeA, n0, n1, a.exit, b.exit, sampleZ)
+                        : null;
+                    if (M) {
+                        const Mv = new THREE.Vector3(M.x, M.y, M.z);
+                        pushMode(mode, edgeA, exitA, Mv);
+                        pushMode(mode, edgeA, Mv, exitB);
+                        a.miterExit = M;
+                    } else {
+                        pushMode(mode, edgeA, exitA, exitB);
+                    }
                     continue;
                 }
                 if (a.mode !== 'flat' && b.mode === 'flat') {
@@ -19162,7 +19209,7 @@
                 if (pts.length < 2) return;
                 const rec = ensureRoadSlopeBrow(model, side, pts);
                 if (!rec) return;
-                const sm = buildSlopeToTerrain(rec, { ...full, side });
+                const sm = buildSlopeToTerrain(rec, { ...full, side, corner: 'miter' });
                 if (sm) built.push({ side, rec, sm });
             };
             addSide('left');
@@ -38699,7 +38746,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: '6e75712-preview',
+            buildId: '34edbda-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38708,6 +38755,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: внешний угол откоса дороги — прямой, как полотно: без веера-фаски у земли.',
                 '2026.08.16: на внутреннем уголке слои полотна подрезаются плоскостью соседнего сечения — бордюр и обочина не входят друг в друга.',
                 '2026.08.16: земля на поперечнике доходит до края шаблона (бордюр/кювет) и до выхода откоса на рельеф, а не обрывается на ширине покрытия.',
                 '2026.08.16: фигуры на поперечнике тащатся жёстко: отрыв от якоря целиком, при отпускании примагничивание ближайшей вершиной.',
