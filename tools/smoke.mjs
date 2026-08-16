@@ -2787,10 +2787,28 @@ async function checkRoadCrossSections(page) {
         const tpl0 = D.roadXsTemplate();
         const curb = (tpl0?.shapes || []).find((s) => s.code === 'CURB');
         const curbT0 = (tpl0?.points || []).find((p) => p.code === 'CURBT');
+        const curbO0 = (tpl0?.points || []).find((p) => p.code === 'CURBO');
         const r0 = (tpl0?.points || []).find((p) => p.code === 'R');
+        const box0 = curb && curbT0 && curbO0 ? {
+            w: Math.abs(curbO0.off - curbT0.off),
+            h: Math.abs(curbT0.dz - (tpl0.points.find((p) => p.id === curb.pts[0])?.dz ?? 0)),
+            n: curb.pts.length,
+            onR: curb.pts.includes(r0?.id)
+        } : null;
         const moved = curb ? D.translateRoadXsShape(curb.id, 0.5, 0) : null;
+        const curb1 = (moved?.shapes || []).find((s) => s.code === 'CURB');
         const curbT1 = (moved?.points || []).find((p) => p.code === 'CURBT');
+        const curbO1 = (moved?.points || []).find((p) => p.code === 'CURBO');
         const r1 = (moved?.points || []).find((p) => p.code === 'R');
+        const box1 = curb1 && curbT1 && curbO1 ? {
+            w: Math.abs(curbO1.off - curbT1.off),
+            h: Math.abs(curbT1.dz - (moved.points.find((p) => p.id === curb1.pts[0])?.dz ?? 0)),
+            n: curb1.pts.length,
+            onR: curb1.pts.includes(r1?.id)
+        } : null;
+        const back = curb ? D.translateRoadXsShape(curb.id, -0.5, 0) : null;
+        const curb2 = (back?.shapes || []).find((s) => s.code === 'CURB');
+        const r2 = (back?.points || []).find((p) => p.code === 'R');
         const afterDel = curb ? D.removeRoadXsShape(curb.id) : null;
         const stillCurb = (afterDel?.shapes || []).some((s) => s.code === 'CURB');
         const stillT = (afterDel?.points || []).some((p) => p.code === 'CURBT');
@@ -2817,6 +2835,9 @@ async function checkRoadCrossSections(page) {
             curbT1: curbT1?.off,
             r0: r0?.off,
             r1: r1?.off,
+            box0,
+            box1,
+            snappedBack: !!(curb2 && r2 && curb2.pts.includes(r2.id)),
             stillCurb,
             stillT,
             stillR,
@@ -2840,6 +2861,14 @@ async function checkRoadCrossSections(page) {
     if (!(Math.abs((shapeUx.curbT1 ?? 0) - (shapeUx.curbT0 ?? 0) - 0.5) < 1e-6)
         || Math.abs((shapeUx.r1 ?? 0) - (shapeUx.r0 ?? 0)) > 1e-6) {
         problems.push(`поперечники: сдвиг бордюра сдвинул кромку или не сдвинул CURBT (${JSON.stringify(shapeUx)})`);
+    }
+    if (shapeUx.box0 && (Math.abs(shapeUx.box1?.w - shapeUx.box0.w) > 1e-6
+        || Math.abs(shapeUx.box1?.h - shapeUx.box0.h) > 1e-6
+        || shapeUx.box1?.onR !== false)) {
+        problems.push(`поперечники: сдвиг бордюра сломал жёсткость или не оторвал от R (${JSON.stringify({ box0: shapeUx.box0, box1: shapeUx.box1 })})`);
+    }
+    if (shapeUx.snappedBack !== true) {
+        problems.push(`поперечники: возврат бордюра не примагнитился к R (${JSON.stringify({ snappedBack: shapeUx.snappedBack })})`);
     }
     if (shapeUx.stillCurb || shapeUx.stillT || !shapeUx.stillR) {
         problems.push(`поперечники: удаление бордюра не унесло форму/CURBT или сняло кромку R (${JSON.stringify(shapeUx)})`);

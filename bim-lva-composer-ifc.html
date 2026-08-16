@@ -7216,9 +7216,15 @@
             translateRoadXsShape(id, dOff, dZ) {
                 const model = currentRoadXsModel();
                 if (!model?.template) return null;
-                const ids = shapeDragPointIds(model.template, Number(id));
+                const sid = Number(id);
+                const sh = (model.template.shapes || []).find((s) => s.id === sid);
+                detachShapeAnchors(model.template, sid);
+                const ids = sh && isRoadXsFigureShape(sh)
+                    ? [...new Set(sh.pts || [])]
+                    : shapeDragPointIds(model.template, sid);
                 if (!ids.length) return snapshotRoadTemplate(model.template);
                 translateTemplatePoints(model.template, ids, Number(dOff) || 0, Number(dZ) || 0);
+                snapShapeToNearestPoint(model.template, sid, 0.30);
                 applyRoadTemplateChange(model, { relink: false });
                 return snapshotRoadTemplate(model.template);
             },
@@ -17587,6 +17593,114 @@
             return sh ? { shape: sh, anchor, kind } : null;
         }
 
+        function isRoadXsFigureShape(sh) {
+            const figCodes = new Set(Object.values(ROAD_XS_FIGURES).map((s) => s.code));
+            return figCodes.has(String(sh?.code || '').toUpperCase());
+        }
+
+        /**
+         * Общий якорь (кромка L/R, точка другой формы) клонируем в состав фигуры
+         * и выдёргиваем связи: дальше фигура жёсткая, без растяжения за якорь.
+         */
+        function detachShapeAnchors(tpl, shapeId) {
+            const sh = (tpl?.shapes || []).find((s) => s.id === shapeId);
+            if (!sh || !isRoadXsFigureShape(sh)) return false;
+            const exclusive = new Set(shapeExclusivePointIds(tpl, shapeId));
+            const shared = [...new Set(sh.pts || [])].filter((id) => !exclusive.has(id));
+            if (!shared.length) return false;
+            const oldPts = new Set(sh.pts || []);
+            const idMap = Object.create(null);
+            shared.forEach((id) => {
+                const src = templatePoint(tpl, id);
+                if (!src) return;
+                tpl.seq = (tpl.seq || (tpl.points || []).length) + 1;
+                const clone = {
+                    id: tpl.seq,
+                    code: 'P' + tpl.seq,
+                    off: src.off,
+                    dz: src.dz
+                };
+                tpl.points = tpl.points || [];
+                tpl.points.push(clone);
+                idMap[id] = clone.id;
+            });
+            sh.pts = (sh.pts || []).map((id) => idMap[id] || id);
+            (tpl.links || []).forEach((ln) => {
+                if (!oldPts.has(ln.a) || !oldPts.has(ln.b)) return;
+                if (idMap[ln.a]) ln.a = idMap[ln.a];
+                if (idMap[ln.b]) ln.b = idMap[ln.b];
+            });
+            (tpl.points || []).forEach((p) => {
+                if (p.parent == null || idMap[p.parent] == null) return;
+                if (!exclusive.has(p.id) && !Object.values(idMap).includes(p.id)) return;
+                const par = templatePoint(tpl, idMap[p.parent]);
+                p.parent = par.id;
+                p.relOff = p.off - par.off;
+                p.relDz = p.dz - par.dz;
+            });
+            return true;
+        }
+
+        function mergeShapePointOnto(tpl, shapeId, fromId, toId) {
+            const sh = (tpl?.shapes || []).find((s) => s.id === shapeId);
+            const from = templatePoint(tpl, fromId);
+            const to = templatePoint(tpl, toId);
+            if (!sh || !from || !to || fromId === toId) return false;
+            const dOff = to.off - from.off;
+            const dZ = to.dz - from.dz;
+            if (Math.abs(dOff) > 1e-9 || Math.abs(dZ) > 1e-9) {
+                translateTemplatePoints(tpl, sh.pts, dOff, dZ);
+            }
+            sh.pts = [...new Set((sh.pts || []).map((id) => (id === fromId ? toId : id)))];
+            (tpl.links || []).forEach((ln) => {
+                if (ln.a === fromId) ln.a = toId;
+                if (ln.b === fromId) ln.b = toId;
+            });
+            tpl.links = (tpl.links || []).filter((ln) => ln.a !== ln.b);
+            (tpl.points || []).forEach((p) => {
+                if (p.parent !== fromId) return;
+                p.parent = toId;
+                p.relOff = p.off - to.off;
+                p.relDz = p.dz - to.dz;
+            });
+            const still = (tpl.shapes || []).some((s) => (s.pts || []).includes(fromId))
+                || (tpl.links || []).some((ln) => ln.a === fromId || ln.b === fromId)
+                || (tpl.points || []).some((p) => p.parent === fromId);
+            if (!still && (tpl.points || []).some((p) => p.id === fromId)) {
+                removeTemplatePoint(tpl, fromId);
+            }
+            return true;
+        }
+
+        /** Ближайшая вершина фигуры → ближайшая чужая точка шаблона. */
+        function snapShapeToNearestPoint(tpl, shapeId, maxDist) {
+            const sh = (tpl?.shapes || []).find((s) => s.id === shapeId);
+            if (!sh || !isRoadXsFigureShape(sh)) return null;
+            const own = new Set(sh.pts || []);
+            const foreign = (tpl.points || []).filter((p) => !own.has(p.id));
+            if (!foreign.length) return null;
+            const lim = Number.isFinite(maxDist) && maxDist > 0 ? maxDist : 0.30;
+            let best = null;
+            (sh.pts || []).forEach((sid) => {
+                const sp = templatePoint(tpl, sid);
+                if (!sp) return;
+                foreign.forEach((fp) => {
+                    const d = Math.hypot(sp.off - fp.off, sp.dz - fp.dz);
+                    if (!best || d < best.d) best = { from: sid, to: fp.id, d };
+                });
+            });
+            if (!best || best.d > lim) return null;
+            return mergeShapePointOnto(tpl, shapeId, best.from, best.to) ? best : null;
+        }
+
+        function roadXsShapeSnapLimit() {
+            const f = roadXsChartFrame;
+            if (!f) return 0.30;
+            const mOff = (f.offMax - f.offMin) / Math.max(1, f.w - f.pad.l - f.pad.r);
+            const mZ = f.spanZ / Math.max(1, f.h - f.pad.t - f.pad.b);
+            return Math.max(0.18, Math.min(0.80, 14 * Math.max(mOff, mZ)));
+        }
+
         function cloneRoadTemplate(tpl) {
             const snap = snapshotRoadTemplate(tpl);
             if (!snap) return null;
@@ -19148,7 +19262,7 @@
                                 </tr>`).join('') || '<tr><td colspan="3">Нет форм — «＋ форма»</td></tr>'}
                         </tbody>
                     </table>
-                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочка «откосы»: снять — убрать откосы. Колесо — зум к курсору, Shift+колесо — по высоте, ПКМ — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
+                    <div class="bulk-note" style="margin:4px 0 0">Заливку фигуры можно тянуть — форма жёсткая: отрывается от якоря целиком и при отпускании примагничивается ближайшей вершиной. Alt+клик по заливке или ✕ — удалить форму и её точки (якорь, общий с другой формой, остаётся). Галочка «откосы»: снять — убрать откосы. Колесо — зум к курсору, Shift+колесо — по высоте, ПКМ — сдвиг, ⤢ — вписать. Двойной клик — точка, Shift+две точки — связь, Alt — удалить. Шаблон: карточка + «Применить на ось». Фигуры — кнопки под чертежом. Условие если/то на точке; «скрыть» прячет её и детей на пикете.</div>`;
             }
             fillRoadXsRuleBar();
             renderRoadPlanView();
@@ -20293,14 +20407,18 @@
                     const sid = Number(shapeEl.dataset.sid);
                     roadXsActive.shapeId = sid;
                     roadXsActive.linkKey = null;
-                    const dragIds = shapeDragPointIds(tpl, sid);
-                    if (!dragIds.length) {
+                    const sh0 = (tpl.shapes || []).find((s) => s.id === sid);
+                    const figure = !!(sh0 && isRoadXsFigureShape(sh0));
+                    let dragIds = shapeDragPointIds(tpl, sid);
+                    if (!figure && !dragIds.length) {
                         renderRoadXsView();
                         return;
                     }
                     ev.preventDefault();
                     const startAt = roadXsClientToOffZ(ev);
-                    const snap = dragIds.map((id) => {
+                    const startX = ev.clientX, startY = ev.clientY;
+                    let detached = false;
+                    let snap = dragIds.map((id) => {
                         const p = tpl.points.find((q) => q.id === id);
                         return p ? { id, off: p.off, dz: p.dz } : null;
                     }).filter(Boolean);
@@ -20309,6 +20427,17 @@
                     const move = (e) => {
                         const at = roadXsClientToOffZ(e);
                         if (!at || !startAt) return;
+                        if (figure && !detached) {
+                            if (Math.hypot(e.clientX - startX, e.clientY - startY) < 5) return;
+                            detachShapeAnchors(tpl, sid);
+                            detached = true;
+                            const sh = (tpl.shapes || []).find((s) => s.id === sid);
+                            snap = (sh?.pts || []).map((id) => {
+                                const p = tpl.points.find((q) => q.id === id);
+                                return p ? { id, off: p.off, dz: p.dz } : null;
+                            }).filter(Boolean);
+                        }
+                        if (!snap.length) return;
                         applyTemplatePointSnapshot(tpl, snap, at.off - startAt.off, at.dz - startAt.dz);
                         applyRoadTemplateChange(model, { relink: false, preview: true });
                         renderRoadXsView();
@@ -20316,8 +20445,11 @@
                     const up = () => {
                         window.removeEventListener('pointermove', move);
                         window.removeEventListener('pointerup', up);
+                        if (figure && detached) {
+                            snapShapeToNearestPoint(tpl, sid, roadXsShapeSnapLimit());
+                        }
                         applyRoadTemplateChange(model, { relink: false });
-                        trackUsage('road_xs_shape_drag', {});
+                        if (detached) trackUsage('road_xs_shape_drag', {});
                     };
                     window.addEventListener('pointermove', move);
                     window.addEventListener('pointerup', up);
@@ -38322,7 +38454,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'xs-step-curve',
+            buildId: 'xs-shape-rigid',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38331,6 +38463,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: фигуры на поперечнике тащатся жёстко: отрыв от якоря целиком, при отпускании примагничивание ближайшей вершиной.',
                 '2026.08.16: шаг поперечников раздельный: на прямых крупнее, на кривых (сопряжения) мельче — меньше сечений и работы ЦПУ.',
                 '2026.08.16: таблица профиля выше и тянется ручкой; на вершине правится отметка (красное), уклон — в середине звена.',
                 '2026.08.16: после «Загрузить» с глобуса на площадке можно чертить ось, площадки и тела — лента больше не остаётся выключенной.',
@@ -38433,7 +38566,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=130').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=131').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
