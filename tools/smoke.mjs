@@ -669,6 +669,36 @@ async function checkDrawDxf(page) {
     if (!has('2Д') || !has('3Д')) problems.push('в DXF нет слоёв 2Д/3Д');
     if (!has('SEQEND')) problems.push('в DXF полилиния не закрыта SEQEND');
     if (!has('EOF')) problems.push('DXF без EOF');
+    // Civil: «Ошибка в таблице APPID» на строке 242 — это слой 2Д в LAYER,
+    // не APPID. R2010 без owner 330 и файл в 1251 вместо UTF-8 ломают импорт.
+    if (!/\r\n0\r\nTABLE\r\n2\r\nAPPID\r\n5\r\n[0-9A-F]+\r\n330\r\n0\r\n/.test(dxf)) {
+        problems.push('таблица APPID без owner 330 — Civil 3D не откроет R2010');
+    }
+    if (!/\r\n0\r\nAPPID\r\n5\r\n[0-9A-F]+\r\n330\r\n[0-9A-F]+\r\n/.test(dxf)) {
+        problems.push('запись APPID без owner 330');
+    }
+    if (!has('ACAD_PLOTSTYLENAME')) problems.push('в DXF нет ACAD_PLOTSTYLENAME');
+    if (!/\r\n370\r\n-3\r\n390\r\n/.test(dxf)) {
+        problems.push('у LAYER нет lineweight/plotstyle (370/390)');
+    }
+    const dxfBytes = await page.evaluate(() => window.BimLvaDebug.dxfDownloadBytes());
+    const utf8De = [0x32, 0xD0, 0x94]; // «2Д» в UTF-8
+    const cp1251De = [0x32, 0xC4];     // «2Д» в Windows-1251
+    const hasSeq = (hay, needle) => {
+        outer: for (let i = 0; i <= hay.length - needle.length; i++) {
+            for (let j = 0; j < needle.length; j++) {
+                if (hay[i + j] !== needle[j]) continue outer;
+            }
+            return true;
+        }
+        return false;
+    };
+    if (!hasSeq(dxfBytes, utf8De)) {
+        problems.push('скачиваемый DXF не содержит UTF-8 «2Д» — Civil 2010+ не откроет кириллические слои');
+    }
+    if (hasSeq(dxfBytes, cp1251De) && !hasSeq(dxfBytes, utf8De)) {
+        problems.push('скачиваемый DXF в Windows-1251 — Civil читает AC1024 как UTF-8 и падает в APPID');
+    }
 
     const vertexCount = (dxf.match(/\r\nVERTEX\r\n/g) || []).length;
     const wantVertex = drawn.reduce((n, d) => n + d.abs.length, 0);
