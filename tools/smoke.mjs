@@ -2329,9 +2329,6 @@ async function checkRoadCrossSections(page) {
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
     }
-    if (!chart.hasSlope) {
-        problems.push('поперечники: на чертеже нет лучей откоса до земли');
-    }
     if (!chart.profileBtn) {
         problems.push('поперечники: нет кнопки «Профиль»');
     }
@@ -2582,6 +2579,79 @@ async function checkRoadCrossSections(page) {
     if (extras.applies !== true || Math.abs((extras.base ?? -1)) > 1e-6
         || Math.abs((extras.dz ?? 0) - 0.2) > 1e-6) {
         problems.push(`поперечники: условие на точке L не дало ΔZ 0.2 при рабочей > 0 (${JSON.stringify(extras)})`);
+    }
+
+    const shapeUx = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const fills = [...document.querySelectorAll('#roadXsChart .xs-shape')].map((el) => ({
+            code: el.getAttribute('data-code') || '',
+            fill: el.getAttribute('fill') || ''
+        }));
+        const byCode = Object.fromEntries(fills.map((f) => [f.code, f.fill]));
+        const tpl0 = D.roadXsTemplate();
+        const curb = (tpl0?.shapes || []).find((s) => s.code === 'CURB');
+        const curbT0 = (tpl0?.points || []).find((p) => p.code === 'CURBT');
+        const r0 = (tpl0?.points || []).find((p) => p.code === 'R');
+        const moved = curb ? D.translateRoadXsShape(curb.id, 0.5, 0) : null;
+        const curbT1 = (moved?.points || []).find((p) => p.code === 'CURBT');
+        const r1 = (moved?.points || []).find((p) => p.code === 'R');
+        const afterDel = curb ? D.removeRoadXsShape(curb.id) : null;
+        const stillCurb = (afterDel?.shapes || []).some((s) => s.code === 'CURB');
+        const stillT = (afterDel?.points || []).some((p) => p.code === 'CURBT');
+        const stillR = (afterDel?.points || []).some((p) => p.code === 'R');
+        const html0 = document.getElementById('roadXsChart')?.innerHTML || '';
+        const chk = document.getElementById('roadXsSlopeOn');
+        if (chk) {
+            chk.checked = false;
+            chk.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const htmlOff = document.getElementById('roadXsChart')?.innerHTML || '';
+        if (chk) {
+            chk.checked = true;
+            chk.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const htmlOn = document.getElementById('roadXsChart')?.innerHTML || '';
+        return {
+            fills,
+            pvmt: byCode.PVMT || '',
+            curb: byCode.CURB || '',
+            base: byCode.BASE || '',
+            unique: [...new Set(fills.map((f) => f.fill))].length,
+            curbT0: curbT0?.off,
+            curbT1: curbT1?.off,
+            r0: r0?.off,
+            r1: r1?.off,
+            stillCurb,
+            stillT,
+            stillR,
+            afterPts: afterDel?.points?.length || 0,
+            slopeBefore: /class="xs-slope"/.test(html0),
+            slopeOff: /class="xs-slope"/.test(htmlOff),
+            slopeOn: /class="xs-slope"/.test(htmlOn),
+            hasRemove: typeof D.removeRoadXsShape === 'function',
+            hasTranslate: typeof D.translateRoadXsShape === 'function'
+        };
+    });
+    if (!shapeUx.hasRemove || !shapeUx.hasTranslate) {
+        problems.push('поперечники: нет API удаления/сдвига формы');
+    }
+    if (shapeUx.unique < 2 || !shapeUx.pvmt || !shapeUx.curb || shapeUx.pvmt === shapeUx.curb) {
+        problems.push(`поперечники: формы одного цвета (${JSON.stringify(shapeUx)})`);
+    }
+    if (shapeUx.base && (shapeUx.base === shapeUx.pvmt || shapeUx.base === shapeUx.curb)) {
+        problems.push(`поперечники: слой BASE того же цвета, что покрытие или бордюр (${JSON.stringify(shapeUx)})`);
+    }
+    if (!(Math.abs((shapeUx.curbT1 ?? 0) - (shapeUx.curbT0 ?? 0) - 0.5) < 1e-6)
+        || Math.abs((shapeUx.r1 ?? 0) - (shapeUx.r0 ?? 0)) > 1e-6) {
+        problems.push(`поперечники: сдвиг бордюра сдвинул кромку или не сдвинул CURBT (${JSON.stringify(shapeUx)})`);
+    }
+    if (shapeUx.stillCurb || shapeUx.stillT || !shapeUx.stillR) {
+        problems.push(`поперечники: удаление бордюра не унесло форму/CURBT или сняло кромку R (${JSON.stringify(shapeUx)})`);
+    }
+    if (!shapeUx.slopeBefore || shapeUx.slopeOff || !shapeUx.slopeOn) {
+        problems.push(`поперечники: галочка «откосы» не убирает/не возвращает лучи (${JSON.stringify({
+            before: shapeUx.slopeBefore, off: shapeUx.slopeOff, on: shapeUx.slopeOn
+        })})`);
     }
 
     const studio = await page.evaluate(() => {
