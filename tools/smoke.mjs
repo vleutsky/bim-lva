@@ -2327,6 +2327,7 @@ async function checkRoadCrossSections(page) {
             titles: [...(card?.querySelectorAll('.rs-pane-title') || [])].map((t) => t.textContent.trim()),
             plan: !!document.getElementById('roadPlanChart'),
             splitH: !!document.getElementById('rsSplitH'),
+            splitTable: !!document.getElementById('rsSplitProfileTable'),
             splitV: !!document.getElementById('rsSplitV'),
             grips: [...(card?.querySelectorAll('.rs-win-grip') || [])].map((g) => g.dataset.dir),
             applyTpl: (document.getElementById('roadXsApplyTpl')?.textContent || '').trim(),
@@ -2353,8 +2354,8 @@ async function checkRoadCrossSections(page) {
         if (!ui.titles.includes('План') || !ui.titles.includes('Профиль') || !ui.titles.includes('Поперечник')) {
             problems.push(`поперечники: нет панелей План/Профиль/Поперечник (${JSON.stringify(ui.titles)})`);
         }
-        if (!ui.plan || !ui.splitH || !ui.splitV || ui.grips.join(',') !== 'e,s,se') {
-            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, grips: ui.grips })})`);
+        if (!ui.plan || !ui.splitH || !ui.splitV || !ui.splitTable || ui.grips.join(',') !== 'e,s,se') {
+            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, splitTable: ui.splitTable, grips: ui.grips })})`);
         }
         if (ui.applyTpl !== 'Применить на ось' || ui.tpls.length < 5) {
             problems.push(`поперечники: нет каталога шаблонов (${JSON.stringify({ applyTpl: ui.applyTpl, tpls: ui.tpls })})`);
@@ -2406,6 +2407,44 @@ async function checkRoadCrossSections(page) {
     }
     if ((chart.annot?.profZ || 0) < 2 || (chart.annot?.profSeg || 0) < 1) {
         problems.push(`поперечники: на профиле нет отметок или длины/уклона (${JSON.stringify(chart.annot)})`);
+    }
+    const profileTable = await page.evaluate(() => {
+        const table = document.getElementById('polyProfileTable');
+        const z = document.querySelector('#polyProfileAnnot .prof-vz-label');
+        const axis0 = document.querySelector('#polyProfileTable input[data-edit="axis"]');
+        const before = axis0 ? Number(axis0.value) : NaN;
+        if (z) {
+            z.click();
+            const input = z.querySelector('input');
+            if (input) {
+                input.value = (before + 1.25).toFixed(3);
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+            }
+        }
+        const axis1 = document.querySelector('#polyProfileTable input[data-edit="axis"]');
+        const h0 = Math.round(table?.getBoundingClientRect().height || 0);
+        document.getElementById('roadXsCard')?.style.setProperty('--rs-prof-table', '180px');
+        const h1 = Math.round(table?.getBoundingClientRect().height || 0);
+        return {
+            tableH: h0,
+            tableH180: h1,
+            zCount: document.querySelectorAll('#polyProfileAnnot .prof-vz-label').length,
+            zTitle: z?.title || '',
+            before,
+            after: axis1 ? Number(axis1.value) : NaN
+        };
+    });
+    if ((profileTable.tableH || 0) < 96) {
+        problems.push(`профиль: таблица слишком низкая (${JSON.stringify(profileTable)})`);
+    }
+    if ((profileTable.tableH180 || 0) < 170) {
+        problems.push(`профиль: ручка таблицы не растягивает (${JSON.stringify(profileTable)})`);
+    }
+    if ((profileTable.zCount || 0) < 2 || !/отметк/i.test(profileTable.zTitle || '')) {
+        problems.push(`профиль: на вершинах нет подписи отметки (${JSON.stringify(profileTable)})`);
+    }
+    if (!(Math.abs((profileTable.after || 0) - (profileTable.before + 1.25)) < 0.02)) {
+        problems.push(`профиль: клик по отметке на вершине не сменил Z (${JSON.stringify(profileTable)})`);
     }
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);

@@ -1120,6 +1120,8 @@
             z-index: 2;
             overflow: hidden;
         }
+        /* Отметки сидят НАД вершиной — clip по краю низкого профиля их съедал. */
+        #polyProfileAnnot.chart-annot { overflow: visible; }
         .plan-len-label,
         .plan-ang-label,
         .plan-r-label,
@@ -1161,7 +1163,9 @@
             background: rgba(232, 68, 42, .94);
             border: 1px solid #c2341e;
             color: var(--on-fill, #fff);
-            transform: translate(-50%, 7px);
+            /* Над вершиной: под линией подпись уезжает за край низкого чертежа
+               и clip оверлея её съедает — остаётся только зелёный уклон. */
+            transform: translate(-50%, calc(-100% - 6px));
         }
         .plan-len-label:hover,
         .prof-seg-label:hover { filter: brightness(1.06); }
@@ -3157,15 +3161,17 @@
             background: #f7f9fb;
         }
         .rstab-pane .profile-table {
-            max-height: 72px;
+            height: var(--rs-prof-table, 136px);
+            min-height: 96px;
+            max-height: none;
             overflow: auto;
             flex: none;
-            margin: 4px 8px 0;
+            margin: 0 8px 6px;
         }
         .pal-card.rs-studio {
             position: relative;
             width: min(1100px, 92vw);
-            height: 660px;
+            height: 700px;
             max-height: calc(100vh - 48px);
             overflow: auto;
         }
@@ -3212,17 +3218,17 @@
             min-width: 0;
             overflow: hidden;
         }
-        .rs-col-left > #rstab-plan { flex: 1.05 1 0; }
-        .rs-col-left > #rstab-profile { flex: 1 1 0; }
+        .rs-col-left > #rstab-plan { flex: 0.9 1 0; }
+        .rs-col-left > #rstab-profile { flex: 1.2 1 0; }
         .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-plan {
-            flex: 0 0 var(--rs-plan, 240px);
-            height: var(--rs-plan, 240px);
+            flex: 0 0 var(--rs-plan, 220px);
+            height: var(--rs-plan, 220px);
             min-height: 90px;
         }
         .pal-card.rs-studio.rs-locked .rs-col-left > #rstab-profile {
-            flex: 0 0 var(--rs-prof, 220px);
-            height: var(--rs-prof, 220px);
-            min-height: 90px;
+            flex: 0 0 var(--rs-prof, 280px);
+            height: var(--rs-prof, 280px);
+            min-height: 220px;
         }
         .rs-pane-head {
             display: flex;
@@ -5122,7 +5128,7 @@
                         <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
                     </div>
                 </details>
-                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет их высоту; размер палитры чертежи по вертикали не тянет. Шаблон: выберите карточку и «Применить на ось».">?</button>
+                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет их высоту; ручка над таблицей профиля — её высоту. Размер палитры чертежи по вертикали не тянет. На профиле клик по отметке (красное) правит Z вершины, по длине·уклону (зелёное) — уклон звена. Шаблон: выберите карточку и «Применить на ось».">?</button>
             </div>
             <div class="rs-split" id="roadStudioSplit">
                 <div class="rs-col-left">
@@ -5169,6 +5175,7 @@
                                  preserveAspectRatio="none" style="touch-action:none;cursor:default"></svg>
                             <div class="chart-annot" id="polyProfileAnnot"></div>
                         </div>
+                        <div class="rs-split-h" id="rsSplitProfileTable" title="Потяните — высота таблицы профиля"></div>
                         <div id="polyProfileTable" class="profile-table"></div>
                     </div>
                 </div>
@@ -16283,8 +16290,13 @@
             const svg = $('polyProfileChart');
             if (!svg) return;
             const box = svg.getBoundingClientRect();
-            PROFILE_W = Math.max(320, Math.round(box.width) || 760);
-            PROFILE_H = Math.max(180, Math.round(box.height) || 260);
+            // Не завышать viewBox: пол 180 px при чертеже ~90 отдаёт подписи
+            // в координатах, которых нет у HTML-оверлея — красные отметки
+            // вершин пропадают, зелёный уклон в середине кадра остаётся.
+            if (box.width >= 40) PROFILE_W = Math.round(box.width);
+            if (box.height >= 40) PROFILE_H = Math.round(box.height);
+            PROFILE_W = Math.max(160, PROFILE_W || 760);
+            PROFILE_H = Math.max(80, PROFILE_H || 260);
             svg.setAttribute('viewBox', `0 0 ${PROFILE_W} ${PROFILE_H}`);
         }
 
@@ -16366,9 +16378,10 @@
             const finish = (apply) => {
                 if (done) return;
                 done = true;
-                el.classList.remove('is-editing');
                 const raw = String(input.value).trim().replace(',', '.').replace('−', '-');
                 const v = Number(raw);
+                el.classList.remove('is-editing');
+                input.remove();
                 if (apply && Number.isFinite(v)) opts.apply(v);
                 else if (opts.redraw) opts.redraw();
             };
@@ -16384,13 +16397,21 @@
 
         function placeChartLabel(host, className, x, y, text, opts) {
             const w = host.clientWidth, h = host.clientHeight;
-            if (!(x > 10 && y > 10 && x < w - 10 && y < h - 10)) return null;
+            if (w < 8 || h < 8) return null;
+            const m = opts?.margin ?? 10;
+            if (opts?.clamp) {
+                x = Math.min(w - m, Math.max(m, x));
+                y = Math.min(h - m, Math.max(m, y));
+            } else if (!(x > m && y > m && x < w - m && y < h - m)) {
+                return null;
+            }
             const el = document.createElement('div');
             el.className = className;
             el.textContent = text;
             el.style.left = x.toFixed(1) + 'px';
             el.style.top = y.toFixed(1) + 'px';
             if (opts?.title) el.title = opts.title;
+            if (opts?.idx != null) el.dataset.idx = String(opts.idx);
             if (opts?.onClick) {
                 el.addEventListener('pointerdown', (e) => e.stopPropagation());
                 el.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -16481,6 +16502,9 @@
                     : { z: r.axis };
                 placeChartLabel(host, 'prof-vz-label', x, y, abs.z.toFixed(3), {
                     title: 'Отметка вершины, м. Нажмите, чтобы изменить',
+                    clamp: true,
+                    margin: 22,
+                    idx: r.idx,
                     onClick: (el) => beginChartValueEdit(el, {
                         value: abs.z.toFixed(3),
                         step: '0.01',
@@ -16590,6 +16614,7 @@
             const meta = $('polyProfileMeta');
             const table = $('polyProfileTable');
             if (!svg) return;
+            syncProfileViewBox();
             const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
             if (!rec) return;
 
@@ -16831,6 +16856,33 @@
             return profileFrame(polyProfileData.vertices, polyProfileData.samples);
         }
 
+        /** Клик по красной подписи или по кружку без сдвига — правка Z. */
+        function startProfileVertexElevEdit(idx) {
+            const rec = profileRecord();
+            if (!rec || rec.kind === '2d' || idx < 0 || !rec.pts[idx]) return;
+            const host = $('polyProfileAnnot');
+            if (!host) return;
+            let el = host.querySelector(`.prof-vz-label[data-idx="${idx}"]`);
+            if (!el) {
+                const abs = worldPointToAbsoluteXYZ(rec.pts[idx]) || rec.pts[idx];
+                el = placeChartLabel(host, 'prof-vz-label', host.clientWidth / 2, 18, abs.z.toFixed(3), {
+                    clamp: true,
+                    idx,
+                    title: 'Отметка вершины, м. Нажмите, чтобы изменить',
+                    onClick: (node) => beginChartValueEdit(node, {
+                        value: abs.z.toFixed(3),
+                        step: '0.01',
+                        apply: (v) => {
+                            setPolylineVertexElevation(rec, idx, v);
+                            trackUsage('profile_z_inline', {});
+                        },
+                        redraw: () => renderPolylineProfile()
+                    })
+                });
+            }
+            el?.click();
+        }
+
         /** Вписать весь профиль обратно. */
         function profileFitAll() {
             const rec = profileRecord();
@@ -16900,8 +16952,11 @@
                 // viewBox равен размеру элемента, поэтому метры-на-пиксель
                 // кадра — это сразу метры на пиксель экрана.
                 const mPerPx = f.mPerPxY;
+                let dragged = false;
                 const move = (e) => {
                     if (rec.kind === '2d') return;
+                    if (Math.abs(e.clientY - startY) <= 3 && !dragged) return;
+                    dragged = true;
                     rec.pts[idx].z = startZ + (startY - e.clientY) * mPerPx;
                     rebuildPolylineGeometry(rec);
                     renderPolylineProfile();
@@ -16911,7 +16966,8 @@
                     window.removeEventListener('pointerup', up);
                     renderPolylinePointsEditor(rec);
                     renderPolylinesList();
-                    trackUsage('profile_vertex_drag', {});
+                    if (dragged) trackUsage('profile_vertex_drag', {});
+                    else startProfileVertexElevEdit(idx);
                 };
                 window.addEventListener('pointermove', move);
                 window.addEventListener('pointerup', up);
@@ -16942,11 +16998,17 @@
             };
         });
 
-        // Двойной клик по полю — новая вершина на этом пикете.
+        // Двойной клик по кружку — правка отметки; по полю — новая вершина.
         $('polyProfileChart')?.addEventListener('dblclick', (ev) => {
             const rec = profileRecord();
             const f = profileCurrentFrame();
-            if (!rec || !f || ev.target.closest?.('.pknot')) return;
+            if (!rec || !f) return;
+            const knot = ev.target.closest?.('.pknot');
+            if (knot) {
+                ev.preventDefault();
+                startProfileVertexElevEdit(Number(knot.dataset.idx));
+                return;
+            }
             ev.preventDefault();
             const sta = f.staAt(profilePointerXY(ev).x);
             const at = insertPolylineVertexAtStation(rec, sta);
@@ -19546,12 +19608,41 @@
                 const plan = $('rstab-plan'), prof = $('rstab-profile');
                 const h0 = plan?.offsetHeight || 0, h1 = prof?.offsetHeight || 0;
                 const total = h0 + h1;
+                const tableH = $('polyProfileTable')?.offsetHeight || 136;
+                const profMin = Math.max(220, tableH + 128);
                 const startY = ev.clientY;
                 const move = (e) => {
-                    const a = Math.max(90, Math.min(total - 90, h0 + (e.clientY - startY)));
+                    const a = Math.max(90, Math.min(total - profMin, h0 + (e.clientY - startY)));
                     card.style.setProperty('--rs-plan', a + 'px');
                     card.style.setProperty('--rs-prof', (total - a) + 'px');
                     card.classList.add('rs-locked');
+                };
+                const up = () => {
+                    split.classList.remove('is-drag');
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                    dockProfileAndXs();
+                };
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+            });
+            $('rsSplitProfileTable')?.addEventListener('pointerdown', (ev) => {
+                if (ev.button !== 0) return;
+                ev.preventDefault();
+                const split = ev.currentTarget;
+                split.classList.add('is-drag');
+                const table = $('polyProfileTable');
+                const prof = $('rstab-profile');
+                const startY = ev.clientY;
+                const startH = table?.offsetHeight || 136;
+                const profH = prof?.offsetHeight || 280;
+                const chartH = $('polyProfileChartWrap')?.offsetHeight || 80;
+                const splitH = split.offsetHeight || 5;
+                const chrome = Math.max(48, profH - chartH - startH - splitH);
+                const maxH = Math.max(96, profH - chrome - 80 - splitH);
+                const move = (e) => {
+                    const h = Math.max(96, Math.min(maxH, startH - (e.clientY - startY)));
+                    card.style.setProperty('--rs-prof-table', h + 'px');
                 };
                 const up = () => {
                     split.classList.remove('is-drag');
@@ -38177,7 +38268,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'map-draw-on',
+            buildId: 'profile-table-z',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -38186,6 +38277,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: таблица профиля выше и тянется ручкой; на вершине правится отметка (красное), уклон — в середине звена.',
                 '2026.08.16: после «Загрузить» с глобуса на площадке можно чертить ось, площадки и тела — лента больше не остаётся выключенной.',
                 '2026.08.16: площадка с карты — два режима координат: в нули сцены или мировые Гаусс–Крюгер (WGS84, 6°, восток с номером зоны). Если модель уже в сцене, карта садится в её координаты.',
                 '2026.08.16: план, профиль и поперечник сдвигаются зажатым ПКМ; ЛКМ правит вершины и формы.',
@@ -38286,7 +38378,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=128').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=129').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
