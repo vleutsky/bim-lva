@@ -17080,6 +17080,24 @@
             return off < 0 ? -cap : cap;
         }
 
+        function localArcRadius(pts, i, n, closed) {
+            const at = (k) => {
+                if (closed) return pts[(k + n) % n];
+                return (k >= 0 && k < n) ? pts[k] : null;
+            };
+            const here = at(i);
+            if (!here) return Infinity;
+            let best = Infinity;
+            for (const mid of [i - 1, i, i + 1]) {
+                const a = at(mid - 1), b = at(mid), c = at(mid + 1);
+                if (!a || !b || !c) continue;
+                if (Math.hypot(b.x - here.x, b.y - here.y) > 0.75) continue;
+                const r = planSignedRadius(a, b, c);
+                if (Number.isFinite(r) && Math.abs(r) < Math.abs(best)) best = r;
+            }
+            return best;
+        }
+
         function stationSignedRadius(stn, sta) {
             const pts = stn?.pts, cum = stn?.cum;
             if (!pts || pts.length < 3 || !cum) return Infinity;
@@ -17088,8 +17106,8 @@
                 const mid = (lo + hi) >> 1;
                 if (cum[mid] <= sta) lo = mid; else hi = mid;
             }
-            const i = Math.max(1, Math.min(pts.length - 2, (sta - cum[lo] <= cum[hi] - sta) ? lo : hi));
-            return planSignedRadius(pts[i - 1], pts[i], pts[i + 1]);
+            const i = Math.max(0, Math.min(pts.length - 1, (sta - cum[lo] <= cum[hi] - sta) ? lo : hi));
+            return localArcRadius(pts, i, pts.length, false);
         }
 
         function countOffsetReversals(src, off) {
@@ -17160,8 +17178,8 @@
                         rx = tOut.y;
                         ry = -tOut.x;
                     }
-                    if (Math.abs(defl) > ROAD_ARC_MIN_DEFL && Math.abs(defl) < ROAD_ARC_MAX_DEFL) {
-                        const rho = planSignedRadius(pts[prev], pts[i], pts[next]);
+                    const rho = localArcRadius(pts, i, n, closed);
+                    if (Number.isFinite(rho) && Math.abs(rho) < 1e5) {
                         const used = clampPlanOffset(width * scale, rho);
                         out.push(new THREE.Vector3(
                             pts[i].x + rx * used,
