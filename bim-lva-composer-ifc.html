@@ -5973,6 +5973,7 @@
             openMapBuilder() { openMapBuilderModal(); },
             closeMapBuilder() { closeMapBuilderModal(); },
             mapBuilderSetView: (lat, lon, zoom) => { mapBuilderSetView(lat, lon, zoom); },
+            mapBuilderSearch: (q) => mapBuilderSearchGo(q),
             mapBuilderDrawRect: (a, b) => { mapBuilderDrawRect(a, b); },
             mapBuilderDrawPolygon: (pts) => { mapBuilderDrawPolygon(pts); },
             mapBuilderClear: () => { mapBuilderClearSelection(); },
@@ -8570,11 +8571,40 @@
         const MAP_BUILDER_MAX_HA = 200;
         const MAP_BUILDER_MAX_M2 = MAP_BUILDER_MAX_HA * 10_000;
         const MAP_BUILDER_HOME = { lat: 59.9343, lon: 30.3351, zoom: 11 };
+        /** Ниже 6 виден почти весь мир — для площадки до 200 га это потеря точки. */
+        const MAP_BUILDER_MIN_ZOOM = 6;
+        const MAP_BUILDER_MAX_ZOOM = 18;
+        const MAP_BUILDER_SEARCH_ZOOM = 13;
         const MAP_SITE_MODEL_ID = 'map-site';
+        /**
+         * Города без Nominatim: с github.io поиск OSM часто 403, а «Санкт-Петербург»
+         * должен попадать в город, а не в ответ первого попавшегося admin-bbox.
+         */
+        const MAP_BUILDER_PLACES = [
+            {
+                keys: [
+                    'санкт-петербург', 'санкт петербург', 'г санкт-петербург',
+                    'петербург', 'питер', 'spb', 'st petersburg', 'saint petersburg',
+                    'st. petersburg'
+                ],
+                lat: MAP_BUILDER_HOME.lat,
+                lon: MAP_BUILDER_HOME.lon,
+                zoom: 12,
+                name: 'Санкт-Петербург'
+            },
+            {
+                keys: ['москва', 'г москва', 'moscow'],
+                lat: 55.7558,
+                lon: 37.6173,
+                zoom: 11,
+                name: 'Москва'
+            }
+        ];
         const mapBld = {
             lat: MAP_BUILDER_HOME.lat,
             lon: MAP_BUILDER_HOME.lon,
             zoom: MAP_BUILDER_HOME.zoom,
+            lastGood: { lat: MAP_BUILDER_HOME.lat, lon: MAP_BUILDER_HOME.lon, zoom: MAP_BUILDER_HOME.zoom },
             tool: 'pan',
             sel: null,
             draft: null,
@@ -8693,6 +8723,7 @@
                 lat: mapBld.lat,
                 lon: mapBld.lon,
                 zoom: mapBld.zoom,
+                lastGood: mapBld.lastGood ? { ...mapBld.lastGood } : null,
                 tool: mapBld.tool,
                 type: mapBld.sel?.type || mapBld.draft?.type || null,
                 points: ring.length,
@@ -8729,10 +8760,96 @@
             mapBuilderRedraw();
         }
 
+        function mapBuilderClampZoom(z) {
+            return Math.max(MAP_BUILDER_MIN_ZOOM, Math.min(MAP_BUILDER_MAX_ZOOM, z));
+        }
+
+        function mapBuilderViewIsLost() {
+            return !Number.isFinite(mapBld.lat) || !Number.isFinite(mapBld.lon) ||
+                !Number.isFinite(mapBld.zoom) || mapBld.zoom < 10;
+        }
+
+        function mapBuilderRememberView() {
+            if (mapBuilderViewIsLost()) return;
+            mapBld.lastGood = { lat: mapBld.lat, lon: mapBld.lon, zoom: mapBld.zoom };
+        }
+
+        function mapBuilderHomeView() {
+            const bind = currentBasemapBinding();
+            if (bind) {
+                return { lat: bind.lat, lon: bind.lon, zoom: Math.max(MAP_BUILDER_SEARCH_ZOOM, MAP_BUILDER_HOME.zoom) };
+            }
+            if (mapBld.lastGood && mapBld.lastGood.zoom >= 10) {
+                return { lat: mapBld.lastGood.lat, lon: mapBld.lastGood.lon, zoom: mapBld.lastGood.zoom };
+            }
+            return { lat: MAP_BUILDER_HOME.lat, lon: MAP_BUILDER_HOME.lon, zoom: MAP_BUILDER_HOME.zoom };
+        }
+
+        function mapBuilderRestoreIfLost() {
+            if (!mapBuilderViewIsLost()) {
+                mapBuilderRememberView();
+                return;
+            }
+            const v = mapBuilderHomeView();
+            mapBuilderSetView(v.lat, v.lon, v.zoom);
+            mapBld.tiles.clear();
+        }
+
+        function mapBuilderJumpTo(lat, lon, zoom, hint) {
+            mapBuilderSetView(lat, lon, zoom);
+            mapBld.tiles.clear();
+            mapBuilderRememberView();
+            if (hint) mapBuilderHint(hint);
+            requestAnimationFrame(() => {
+                mapBuilderResize();
+                mapBuilderRedraw();
+            });
+        }
+
+        function mapBuilderNormalizeQuery(q) {
+            return String(q || '').trim().toLowerCase().replace(/ё/g, 'е')
+                .replace(/[.,]/g, ' ').replace(/\s+/g, ' ');
+        }
+
+        function mapBuilderPlaceAlias(q) {
+            const s = mapBuilderNormalizeQuery(q);
+            if (!s) return null;
+            for (const p of MAP_BUILDER_PLACES) {
+                if (p.keys.some((k) => s === k || s.startsWith(k + ' '))) return p;
+            }
+            return null;
+        }
+
+        /** Координаты — только если в строке нет букв («район 5 корпус 12» не широта). */
+        function mapBuilderCoordsFromQuery(raw) {
+            if (/[A-Za-zА-Яа-яЁё]/.test(raw)) return null;
+            const pair = parseLatLonPair(raw);
+            if (!pair) return null;
+            if (Math.abs(pair.lat) > 85 || Math.abs(pair.lon) > 180) return null;
+            return pair;
+        }
+
+        function mapBuilderPickNominatim(rows) {
+            if (!Array.isArray(rows) || !rows.length) return null;
+            const scored = rows.map((r) => {
+                const bb = r.boundingbox;
+                const span = bb
+                    ? Math.abs(Number(bb[0]) - Number(bb[1])) + Math.abs(Number(bb[2]) - Number(bb[3]))
+                    : 40;
+                const cls = `${r.class || ''} ${r.type || ''} ${r.addresstype || ''}`.toLowerCase();
+                let score = Number.isFinite(span) ? span : 40;
+                if (/city|town|village|hamlet|suburb|municipality/.test(cls)) score *= 0.25;
+                if (/administrative|state|country|region|boundary/.test(cls)) score *= 3;
+                return { r, score };
+            });
+            scored.sort((a, b) => a.score - b.score);
+            return scored[0].r;
+        }
+
         function mapBuilderSetView(lat, lon, zoom) {
             if (Number.isFinite(lat)) mapBld.lat = Math.max(-85, Math.min(85, lat));
             if (Number.isFinite(lon)) mapBld.lon = ((lon + 540) % 360) - 180;
-            if (Number.isFinite(zoom)) mapBld.zoom = Math.max(2, Math.min(18, zoom));
+            if (Number.isFinite(zoom)) mapBld.zoom = mapBuilderClampZoom(zoom);
             mapBuilderRedraw();
         }
 
@@ -8947,6 +9064,7 @@
                 const layer = $('mapBuilderLayer');
                 if (layer) layer.value = saved.provider;
             }
+            mapBuilderRestoreIfLost();
             mapBuilderSyncLayerAttr();
             mapBuilderSetTool(mapBld.tool || 'pan');
             mapBuilderRefreshArea();
@@ -8958,33 +9076,39 @@
         }
 
         function closeMapBuilderModal() {
+            mapBuilderRememberView();
             $('mapBuilderModal')?.classList.remove('show');
             mapBld.dragging = false;
             mapBuilderCanvasEl()?.classList.remove('is-drag');
         }
 
-        async function mapBuilderSearchGo() {
-            const raw = ($('mapBuilderSearch')?.value || '').trim();
+        async function mapBuilderSearchGo(query) {
+            const raw = String(query ?? $('mapBuilderSearch')?.value ?? '').trim();
             if (!raw) return;
-            const pair = parseLatLonPair(raw);
-            if (pair && Math.abs(pair.lat) <= 85 && Math.abs(pair.lon) <= 180) {
-                mapBuilderSetView(pair.lat, pair.lon, Math.max(mapBld.zoom, 13));
-                mapBuilderHint(`Место: ${pair.lat.toFixed(5)}, ${pair.lon.toFixed(5)}`);
+            const pair = mapBuilderCoordsFromQuery(raw);
+            if (pair) {
+                mapBuilderJumpTo(pair.lat, pair.lon, MAP_BUILDER_SEARCH_ZOOM,
+                    `Место: ${pair.lat.toFixed(5)}, ${pair.lon.toFixed(5)}`);
+                return;
+            }
+            const alias = mapBuilderPlaceAlias(raw);
+            if (alias) {
+                mapBuilderJumpTo(alias.lat, alias.lon, alias.zoom || MAP_BUILDER_SEARCH_ZOOM, alias.name);
                 return;
             }
             try {
-                const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(raw);
-                const res = await fetch(url, { headers: { Accept: 'application/json' } });
+                const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=0&q='
+                    + encodeURIComponent(raw);
+                const res = await fetch(url, { headers: { Accept: 'application/json', 'Accept-Language': 'ru' } });
                 if (!res.ok) throw new Error('поиск недоступен');
                 const rows = await res.json();
-                const hit = rows?.[0];
+                const hit = mapBuilderPickNominatim(rows);
                 const lat = parseFloat(hit?.lat), lon = parseFloat(hit?.lon);
                 if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
                     notifyError('Место не найдено: «' + raw + '»');
                     return;
                 }
-                mapBuilderSetView(lat, lon, 13);
-                mapBuilderHint(hit.display_name || raw);
+                mapBuilderJumpTo(lat, lon, MAP_BUILDER_SEARCH_ZOOM, hit.display_name || raw);
             } catch (err) {
                 notifyError('Поиск по карте: ' + (err?.message || err) + '. Можно вставить широту и долготу в поле поиска.');
             }
@@ -9308,7 +9432,7 @@
                 const pt = mapBuilderEventPt(e);
                 const before = mapBuilderPxToLonLat(pt.x, pt.y);
                 const dir = e.deltaY > 0 ? -1 : 1;
-                mapBld.zoom = Math.max(2, Math.min(18, mapBld.zoom + dir * (e.deltaMode === 1 ? 0.35 : 0.12)));
+                mapBld.zoom = mapBuilderClampZoom(mapBld.zoom + dir * (e.deltaMode === 1 ? 0.35 : 0.12));
                 const after = mapBuilderPxToLonLat(pt.x, pt.y);
                 mapBld.lon += before.lon - after.lon;
                 mapBld.lat += before.lat - after.lat;
@@ -36104,7 +36228,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.16',
-            buildId: 'map-z',
+            buildId: 'map-search',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -36113,6 +36237,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: повторное открытие карты не оставляет вид «весь мир»; поиск СПб и Москвы работает без Nominatim.',
                 '2026.08.16: рельеф с карты совмещается по отметке уже загруженной модели; если космоснимок не открылся — схема OSM.',
                 '2026.08.16: глобус открывается на Санкт-Петербурге; после «Загрузить» рельеф и подложка в дереве, без предложения сразу добавить модели.',
                 '2026.08.16: площадка с карты — окно-глобус как в InfraWorks: поиск, слои (снимок / схема / топо / отмывка), рамка или контур до 200 га, «Загрузить».',
@@ -36202,7 +36327,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=117').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=118').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

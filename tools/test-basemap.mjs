@@ -152,6 +152,92 @@ try {
         `A-g. глобус: ${globeHome.lat?.toFixed?.(4)}, ${globeHome.lon?.toFixed?.(4)}, зум ${globeHome.zoom}`
     );
 
+    // A-h. Повторное открытие после зума «весь мир» возвращает город, а не планету.
+    const globeReopen = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 200));
+        window.BimLvaDebug.mapBuilderSetView(10, 20, 2);
+        const lost = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 400));
+        const restored = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        return { lost, restored };
+    });
+    if (!(globeReopen.lost.zoom < 10)) {
+        problems.push(`зум «весь мир» не выставился: ${globeReopen.lost.zoom}`);
+    }
+    if (!(globeReopen.restored.zoom >= 10 && globeReopen.restored.zoom <= 13)) {
+        problems.push(`повторное открытие: зум ${globeReopen.restored.zoom}, ждали город (~11)`);
+    }
+    if (Math.abs(globeReopen.restored.lat - SPB.lat) > 0.05 || Math.abs(globeReopen.restored.lon - SPB.lon) > 0.05) {
+        problems.push(
+            `повторное открытие уехало на ${globeReopen.restored.lat?.toFixed?.(4)}, ` +
+            `${globeReopen.restored.lon?.toFixed?.(4)}, ждали Санкт-Петербург`
+        );
+    }
+    console.log(
+        `A-h. reopen: потерянный зум ${globeReopen.lost.zoom?.toFixed?.(1)} → ` +
+        `${globeReopen.restored.lat?.toFixed?.(4)}, ${globeReopen.restored.lon?.toFixed?.(4)}, ` +
+        `зум ${globeReopen.restored.zoom}`
+    );
+
+    // A-i. Поиск «Санкт-Петербург» бьёт в HOME даже если Nominatim отдаёт Челны.
+    const globeSearch = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 200));
+        window.BimLvaDebug.mapBuilderSetView(10, 20, 6);
+        const q = document.getElementById('mapBuilderSearch');
+        q.value = 'Санкт-Петербург';
+        document.getElementById('mapBuilderSearchGo').click();
+        await new Promise((r) => setTimeout(r, 400));
+        const st = window.BimLvaDebug.mapBuilderState;
+        const hint = document.getElementById('mapBuilderHint')?.textContent || '';
+        document.getElementById('mapBuilderCancel').click();
+        return { ...st, hint };
+    });
+    if (Math.abs(globeSearch.lat - SPB.lat) > 0.05 || Math.abs(globeSearch.lon - SPB.lon) > 0.05) {
+        problems.push(
+            `поиск СПб дал ${globeSearch.lat?.toFixed?.(4)}, ${globeSearch.lon?.toFixed?.(4)} — ` +
+            `уехал в ответ Nominatim?`
+        );
+    }
+    if (!(globeSearch.zoom >= 12)) {
+        problems.push(`поиск СПб оставил зум ${globeSearch.zoom}, ждали город`);
+    }
+    if (!/Санкт-Петербург/i.test(globeSearch.hint)) {
+        problems.push(`подпись после поиска СПб: «${globeSearch.hint.slice(0, 80)}»`);
+    }
+    console.log(
+        `A-i. поиск СПб: ${globeSearch.lat?.toFixed?.(4)}, ${globeSearch.lon?.toFixed?.(4)}, ` +
+        `зум ${globeSearch.zoom}, «${globeSearch.hint.slice(0, 40)}»`
+    );
+
+    // A-j. Без алиаса — Nominatim (мок = Набережные Челны).
+    const globeNom = await page.evaluate(async () => {
+        document.getElementById('btnMapBuilder').click();
+        await new Promise((r) => setTimeout(r, 200));
+        const q = document.getElementById('mapBuilderSearch');
+        q.value = 'Набережные Челны';
+        document.getElementById('mapBuilderSearchGo').click();
+        await new Promise((r) => setTimeout(r, 500));
+        const st = window.BimLvaDebug.mapBuilderState;
+        document.getElementById('mapBuilderCancel').click();
+        return st;
+    });
+    if (Math.abs(globeNom.lat - 55.7) > 0.05 || Math.abs(globeNom.lon - 52.4) > 0.05) {
+        problems.push(
+            `поиск без алиаса: ${globeNom.lat?.toFixed?.(4)}, ${globeNom.lon?.toFixed?.(4)}, ` +
+            `ждали мок Челны (55.7, 52.4)`
+        );
+    }
+    if (!(globeNom.zoom >= 12)) problems.push(`поиск Челны зум ${globeNom.zoom}`);
+    console.log(
+        `A-j. поиск Челны (Nominatim): ${globeNom.lat?.toFixed?.(4)}, ${globeNom.lon?.toFixed?.(4)}, ` +
+        `зум ${globeNom.zoom}`
+    );
+
     await page.setInputFiles('#localFileInput', file);
     await page.waitForFunction(
         () => window.BimLvaDebug?.modelCount === 1 && (window.BimLvaDebug?.modelBounds || []).length === 1,
