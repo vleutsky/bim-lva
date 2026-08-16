@@ -3890,7 +3890,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b9b46b5</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · ffcbdde</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -7393,6 +7393,10 @@
             /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
             dxfPreview() {
                 return buildDxf(drawnPolylines, coordPins);
+            },
+            /** Байты скачиваемого DXF (UTF-8) — ловит регресс Windows-1251. */
+            dxfDownloadBytes() {
+                return Array.from(new TextEncoder().encode(buildDxf(drawnPolylines, coordPins)));
             },
             /** Единичный вектор «куда смотрит камера» — для проверки видов. */
             get cameraDir() {
@@ -12501,30 +12505,15 @@
         }
 
         /**
-         * DXF объявлен как $DWGCODEPAGE ANSI_1251 — Civil читает имена слоёв
-         * в этой кодировке. Blob из JS-строки иначе уедет UTF-8, и кириллица
-         * в слоях станет кракозябрами.
+         * R2010 (AC1024) пишется UTF-8 — так AutoCAD 2007+ и Civil читают DXF.
+         * Windows-1251 давал «Ошибка в таблице APPID» на первом кириллическом
+         * слое (у пустого чертежа строка 242 — «2Д»): байт 0xC4 для UTF-8-читателя
+         * порченый, а APPID в файле ещё ниже. $DWGCODEPAGE оставляем ANSI_1251,
+         * как сам AutoCAD — на декодирование строк R2010 он не влияет.
          */
-        function encodeWindows1251(str) {
-            const s = String(str);
-            const out = new Uint8Array(s.length);
-            for (let i = 0; i < s.length; i++) {
-                const c = s.charCodeAt(i);
-                let b = 0x5F;
-                if (c < 0x80) b = c;
-                else if (c >= 0x0410 && c <= 0x044F) b = c - 0x0410 + 0xC0;
-                else if (c === 0x0401) b = 0xA8;
-                else if (c === 0x0451) b = 0xB8;
-                else if (c === 0x2116) b = 0xB9;
-                else if (c === 0x00A0) b = 0xA0;
-                else if (c === 0x00A7) b = 0xA7;
-                out[i] = b;
-            }
-            return out;
-        }
-
         function downloadDxfFile(text, filename) {
-            const blob = new Blob([encodeWindows1251(text)], { type: 'application/dxf' });
+            const bytes = new TextEncoder().encode(String(text));
+            const blob = new Blob([bytes], { type: 'application/dxf' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -15198,6 +15187,8 @@
             const dictH = allocHandle();
             const dictGroupH = allocHandle();
             const dictLayoutH = allocHandle();
+            const dictPlotH = allocHandle();
+            const plotStyleH = allocHandle();
             const layoutModelH = allocHandle();
             const layoutPaperH = allocHandle();
             const tblVport = allocHandle();
@@ -15299,49 +15290,59 @@
             g(0, 'ENDSEC');
 
             g(0, 'SECTION'); g(2, 'TABLES');
-            g(0, 'TABLE'); g(2, 'VPORT'); g(5, tblVport); g(100, 'AcDbSymbolTable'); g(70, 1);
-            g(0, 'VPORT'); g(5, vportH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbViewportTableRecord');
+            const tableOpen = (name, handle, count, extra) => {
+                g(0, 'TABLE'); g(2, name); g(5, handle); g(330, 0);
+                g(100, 'AcDbSymbolTable'); g(70, count);
+                if (extra) g(100, extra);
+            };
+            const recOpen = (type, handle, tableHandle, subclass, handleCode = 5) => {
+                g(0, type); g(handleCode, handle); g(330, tableHandle);
+                g(100, 'AcDbSymbolTableRecord'); g(100, subclass);
+            };
+            tableOpen('VPORT', tblVport, 1);
+            recOpen('VPORT', vportH, tblVport, 'AcDbViewportTableRecord');
             g(2, '*ACTIVE'); g(70, 0); g(10, 0); g(20, 0); g(11, 1); g(21, 1);
             g(12, 0); g(22, 0); g(13, 0); g(23, 0); g(14, 10); g(24, 10); g(15, 10); g(25, 10);
             g(16, 0); g(26, 0); g(36, 1); g(17, 0); g(27, 0); g(37, 0);
             g(40, 50); g(41, 1.5); g(42, 50); g(43, 0); g(44, 0); g(50, 0); g(51, 0);
             g(71, 0); g(72, 100); g(73, 1); g(74, 3); g(75, 0); g(76, 0); g(77, 0); g(78, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'LTYPE'); g(5, tblLtype); g(100, 'AcDbSymbolTable'); g(70, 2);
-            g(0, 'LTYPE'); g(5, ltypeH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLinetypeTableRecord');
+            tableOpen('LTYPE', tblLtype, 2);
+            recOpen('LTYPE', ltypeH, tblLtype, 'AcDbLinetypeTableRecord');
             g(2, 'CONTINUOUS'); g(70, 0); g(3, 'Solid line'); g(72, 65); g(73, 0); g(40, 0);
-            g(0, 'LTYPE'); g(5, dashedH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLinetypeTableRecord');
+            recOpen('LTYPE', dashedH, tblLtype, 'AcDbLinetypeTableRecord');
             g(2, 'DASHED'); g(70, 0); g(3, 'Dashed __ __'); g(72, 65); g(73, 2); g(40, 0.75);
             g(49, 0.5); g(74, 0); g(49, -0.25); g(74, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'LAYER'); g(5, tblLayer); g(100, 'AcDbSymbolTable'); g(70, layers.length);
+            tableOpen('LAYER', tblLayer, layers.length);
             layers.forEach((name, i) => {
-                g(0, 'LAYER'); g(5, layerH[name]); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbLayerTableRecord');
+                recOpen('LAYER', layerH[name], tblLayer, 'AcDbLayerTableRecord');
                 g(2, name); g(70, 0); g(62, layerColors[i]);
                 g(6, dashedLayers.has(name) ? 'DASHED' : 'CONTINUOUS');
+                g(370, -3); g(390, plotStyleH);
             });
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'STYLE'); g(5, tblStyle); g(100, 'AcDbSymbolTable'); g(70, 1);
-            g(0, 'STYLE'); g(5, styleH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbTextStyleTableRecord');
+            tableOpen('STYLE', tblStyle, 1);
+            recOpen('STYLE', styleH, tblStyle, 'AcDbTextStyleTableRecord');
             g(2, 'STANDARD'); g(70, 0); g(40, 0); g(41, 1); g(50, 0); g(71, 0); g(42, 2.5);
             g(3, 'txt'); g(4, '');
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'VIEW'); g(5, tblView); g(100, 'AcDbSymbolTable'); g(70, 0);
+            tableOpen('VIEW', tblView, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'UCS'); g(5, tblUcs); g(100, 'AcDbSymbolTable'); g(70, 0);
+            tableOpen('UCS', tblUcs, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'APPID'); g(5, tblAppid); g(100, 'AcDbSymbolTable'); g(70, 1);
-            g(0, 'APPID'); g(5, appidH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbRegAppTableRecord');
+            tableOpen('APPID', tblAppid, 1);
+            recOpen('APPID', appidH, tblAppid, 'AcDbRegAppTableRecord');
             g(2, 'ACAD'); g(70, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'DIMSTYLE'); g(5, tblDimstyle); g(100, 'AcDbSymbolTable'); g(70, 1); g(100, 'AcDbDimStyleTable');
-            g(0, 'DIMSTYLE'); g(105, dimstyleH); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbDimStyleTableRecord');
+            tableOpen('DIMSTYLE', tblDimstyle, 1, 'AcDbDimStyleTable');
+            recOpen('DIMSTYLE', dimstyleH, tblDimstyle, 'AcDbDimStyleTableRecord', 105);
             g(2, 'STANDARD'); g(70, 0);
             g(0, 'ENDTAB');
-            g(0, 'TABLE'); g(2, 'BLOCK_RECORD'); g(5, tblBlockRec); g(100, 'AcDbSymbolTable'); g(70, 2);
-            g(0, 'BLOCK_RECORD'); g(5, blockRecModel); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
+            tableOpen('BLOCK_RECORD', tblBlockRec, 2);
+            recOpen('BLOCK_RECORD', blockRecModel, tblBlockRec, 'AcDbBlockTableRecord');
             g(2, '*MODEL_SPACE'); g(340, layoutModelH);
-            g(0, 'BLOCK_RECORD'); g(5, blockRecPaper); g(100, 'AcDbSymbolTableRecord'); g(100, 'AcDbBlockTableRecord');
+            recOpen('BLOCK_RECORD', blockRecPaper, tblBlockRec, 'AcDbBlockTableRecord');
             g(2, '*PAPER_SPACE'); g(340, layoutPaperH);
             g(0, 'ENDTAB');
             g(0, 'ENDSEC');
@@ -15363,10 +15364,14 @@
             g(0, 'DICTIONARY'); g(5, dictH); g(330, 0); g(100, 'AcDbDictionary'); g(281, 1);
             g(3, 'ACAD_GROUP'); g(350, dictGroupH);
             g(3, 'ACAD_LAYOUT'); g(350, dictLayoutH);
+            g(3, 'ACAD_PLOTSTYLENAME'); g(350, dictPlotH);
             g(0, 'DICTIONARY'); g(5, dictGroupH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
             g(0, 'DICTIONARY'); g(5, dictLayoutH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
             g(3, 'Model'); g(350, layoutModelH);
             g(3, 'Layout1'); g(350, layoutPaperH);
+            g(0, 'DICTIONARY'); g(5, dictPlotH); g(330, dictH); g(100, 'AcDbDictionary'); g(281, 1);
+            g(3, 'Normal'); g(350, plotStyleH);
+            g(0, 'PLACEHOLDER'); g(5, plotStyleH); g(330, dictPlotH); g(100, 'AcDbPlaceHolder');
             const writeLayout = (handle, name, tab, blockRec) => {
                 g(0, 'LAYOUT'); g(5, handle); g(330, dictLayoutH);
                 g(100, 'AcDbPlotSettings');
@@ -37943,7 +37948,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.16',
-            buildId: 'b9b46b5-preview',
+            buildId: 'ffcbdde-preview',
             released: '2026-08-16',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -37952,6 +37957,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.16: DXF R2010 уходит UTF-8 (не Windows-1251) — Civil больше не падает «ошибка в таблице APPID» на слое 2Д.',
                 '2026.08.16: высоты плана, профиля и поперечника не едут за окном — только ручка между планом и профилем.',
                 '2026.08.16: полотно слоёв — замкнутые формы с торцами (вертикальные грани больше не отбрасываются); на плане длины / углы / радиусы, на профиле отметки и длина·уклон — клик вписывает число.',
                 '2026.08.16: формы поперечника — свои цвета (асфальт / щебень / бетон / кювет); заливку можно тянуть; Alt+клик или ✕ удаляет форму и её точки; галочка «откосы» снимает откосы.',
@@ -37973,7 +37979,7 @@ ${componentXml || '    '}
                 '2026.08.14: боковые панели — палитры Civil 3D (рамка 3 px, зазор до сцены), не плиты конкурента на всю высоту.',
                 '2026.08.14: лента как в Civil 3D — вкладки Файл / Вид / Измерения / Черчение / Рельеф / Анализ / IFC и именованные панели; кнопки на виду, без выпадающих меню.',
                 'Файлы с диска не уходят на сервер Composer — парсятся в памяти вкладки.',
-                '2026.08.14: слои DXF по-русски — Ось, Кромка, Поперечник, Откос, КДО, 2Д, 3Д, Точки, Тело; файл в ANSI_1251, как ждёт Civil.',
+                '2026.08.14: слои DXF по-русски — Ось, Кромка, Поперечник, Откос, КДО, 2Д, 3Д, Точки, Тело; R2010 — UTF-8.',
                 '2026.08.14: окно поперечников открывается кнопкой «⊟ Поперечники»; профиль садится рядом.',
                 '2026.08.13: окна профиля и поперечника садятся рядом; откосы от кромок шаблона до земли — на чертеже сечения и TIN в модели (тот же движок, что у площадки).',
                 '2026.08.13: Tekla на заводской сетке (~1200 м) больше не садится в ноль из-за вырезов: старый кэш со сбросом отбрасывается, после CSG положение возвращается по координатам файла.',
