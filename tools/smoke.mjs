@@ -2763,6 +2763,8 @@ async function checkRoadCrossSections(page) {
     const dXs = (paneLock.afterGrow?.xs?.h || 0) - (paneLock.before?.xs?.h || 0);
     if (!paneLock.before?.locked) {
         problems.push(`поперечники: высоты панелей не зафиксировались (${JSON.stringify(paneLock.before)})`);
+    } else if ((paneLock.unused0 || 0) > 48) {
+        problems.push(`профиль: под чертежами пустое место ${paneLock.unused0} px, панель не забрала остаток`);
     } else if (dPlan > 2) {
         problems.push(`поперечники: высота плана уехала при росте окна (Δ ${dPlan})`);
     } else if (dProf < 80 || dXs < 80) {
