@@ -2498,6 +2498,7 @@ async function checkRoadCrossSections(page) {
             hasKnots: /class="xs-pt"/.test(html),
             hasShape: /class="xs-shape"/.test(html),
             hasSlope: /class="xs-slope"/.test(html),
+            hasDim: /class="xs-dim"/.test(html),
             profileBtn: !!document.getElementById('roadXsProfile'),
             slopeBtn: !!document.getElementById('roadXsSlope'),
             planPoly: /<polyline /.test(document.getElementById('roadPlanChart')?.innerHTML || ''),
@@ -2510,6 +2511,9 @@ async function checkRoadCrossSections(page) {
     });
     if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
         problems.push(`поперечники: чертёж в окне пустой или без полосы дороги (${JSON.stringify(chart)})`);
+    }
+    if (!chart.hasDim) {
+        problems.push('поперечники: на чертеже нет размерной цепочки');
     }
     if (!chart.planPoly || !chart.profSvg) {
         problems.push(`поперечники: план или профиль пустой (${JSON.stringify({ planPoly: chart.planPoly, profSvg: chart.profSvg })})`);
@@ -3053,18 +3057,58 @@ async function checkRoadCrossSections(page) {
             const n = (c) => (snap.shapes || []).filter((s) => s.code === c).length;
             const curbT = (snap.points || []).find((p) => p.code === 'CURBT');
             const curbB = (snap.points || []).find((p) => p.code === 'CURBB');
+            const shldOuter = [...new Set((snap.points || [])
+                .filter((p) => p.code === 'SHLDO' || p.code === 'SHLDUO')
+                .map((p) => Math.round(Math.abs(p.off) * 100) / 100))]
+                .sort((a, b) => a - b);
+            const dbi = (snap.points || []).find((p) => p.code === 'DBI');
+            const dbix = (snap.points || []).find((p) => p.code === 'DBIX'
+                && dbi && Math.sign(p.off) === Math.sign(dbi.off || 1));
+            const ditchThk = dbi && dbix ? Math.hypot(dbi.off - dbix.off, dbi.dz - dbix.dz) : null;
+            const ditchSh = (snap.shapes || []).find((s) => s.code === 'DITCH');
+            const ditchPts = (ditchSh || {}).pts || [];
+            const ditchRing = ditchPts.map((id) => (snap.points || []).find((p) => p.id === id)).filter(Boolean);
+            const dbo = ditchRing.find((p) => p.code === 'DBO');
+            const pip = (ring, off, dz) => {
+                let n = 0;
+                for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                    const a = ring[i], b = ring[j];
+                    if (((a.dz > dz) !== (b.dz > dz))
+                        && (off < (b.off - a.off) * (dz - a.dz) / ((b.dz - a.dz) || 1e-12) + a.off)) n++;
+                }
+                return n % 2 === 1;
+            };
+            /* Точка в канале (над днищем, внутри V) не должна попадать в полигон слоя. */
+            const ditchFillsChannel = dbi && dbo
+                ? pip(ditchRing, (dbi.off + dbo.off) / 2, (dbi.dz + dbo.dz) / 2 + 0.20)
+                : null;
+            const subb = (snap.shapes || []).find((s) => s.code === 'SUBB');
+            const trough = (snap.shapes || []).find((s) => s.code === 'TROUGH');
+            const troughShare = subb && trough
+                ? (subb.pts || []).filter((id) => (trough.pts || []).includes(id)).length
+                : 0;
             return {
                 id,
                 L: by.L?.off, R: by.R?.off,
-                shld: n('SHLD'), ditch: n('DITCH'), curb: n('CURB'),
+                shld: n('SHLD') + n('SHLDU'), ditch: n('DITCH'), curb: n('CURB'),
                 walk: n('WALK'), median: n('MEDIAN'),
                 base: n('BASE'), subb: n('SUBB'), pvmt: n('PVMT'),
                 wedge: n('WEDGE'), trough: n('TROUGH'), slope: n('SLOPE'), bed: n('BED'),
+                embk: n('EMBK'),
                 curbH: curbT && by.R ? curbT.dz - by.R.dz : null,
-                curbBuried: curbB && by.R ? by.R.dz - curbB.dz : 0
+                curbBuried: curbB && by.R ? by.R.dz - curbB.dz : 0,
+                shldOuter, ditchThk, ditchPts: ditchPts.length, ditchFillsChannel, troughShare
             };
         };
         const applied = D.applyRoadXsPreset('gost-iii');
+        const html = document.getElementById('roadXsChart')?.innerHTML || '';
+        const shldDrop = (snap, from, to) => {
+            const a = (snap.points || []).find((p) => p.code === from);
+            const b = (snap.points || []).find((p) => p.code === to && Math.sign(p.off) === Math.sign(a?.off || 1));
+            if (!a || !b) return null;
+            return (a.dz - b.dz) / Math.abs(b.off - a.off);
+        };
+        const iiiSnap = D.buildRoadXsPreset('gost-iii');
         return {
             ids: D.roadXsPresetIds(),
             cards: document.querySelectorAll('#roadXsTpls .rs-tpl').length,
@@ -3073,8 +3117,31 @@ async function checkRoadCrossSections(page) {
             ia: sum('gost-ia'),
             street: sum('gost-local'),
             appliedDitch: (applied?.shapes || []).filter((s) => s.code === 'DITCH').length,
-            appliedShld: (applied?.shapes || []).filter((s) => s.code === 'SHLD').length,
-            widthL: Number(document.getElementById('roadXsWidthL')?.value)
+            appliedShld: (applied?.shapes || []).filter((s) => s.code === 'SHLD' || s.code === 'SHLDU').length,
+            widthL: Number(document.getElementById('roadXsWidthL')?.value),
+            corridorShared: D.roadXs[0]?.corridorSharedEdges,
+            corridorTris: D.roadXs[0]?.corridorTris,
+            dim350: /3,50/.test(html),
+            perm20: /20‰/.test(html),
+            perm40: /40‰/.test(html),
+            ratio15: /1:1,5/.test(html),
+            embkLab: /Земляное полотно/.test(html) || /id="xs-embk"/.test(html),
+            shldGrade: shldDrop(iiiSnap, 'L', 'SHLDO'),
+            ditchCapFills: (() => {
+                if (typeof D.ditchCapTris !== 'function') return null;
+                const U = [
+                    { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: -1 }, { x: 2, y: 0, z: -1 }, { x: 3, y: 0, z: 0 },
+                    { x: 3, y: 0, z: -0.2 }, { x: 2, y: 0, z: -1.2 }, { x: 1, y: 0, z: -1.2 }, { x: 0, y: 0, z: -0.2 }
+                ];
+                const p = { x: 1.5, z: -0.45 };
+                const s = (a, b, q) => (b.x - a.x) * (q.z - a.z) - (b.z - a.z) * (q.x - a.x);
+                const inTri = (a, b, c) => {
+                    const d0 = s(a, b, p), d1 = s(b, c, p), d2 = s(c, a, p);
+                    return (d0 >= -1e-9 && d1 >= -1e-9 && d2 >= -1e-9)
+                        || (d0 <= 1e-9 && d1 <= 1e-9 && d2 <= 1e-9);
+                };
+                return D.ditchCapTris(U).some((tri) => inTri(tri[0], tri[1], tri[2]));
+            })()
         };
     });
     const near = (a, b, eps = 1e-3) => Math.abs((a ?? 0) - b) <= eps;
@@ -3087,9 +3154,39 @@ async function checkRoadCrossSections(page) {
     if (!near(gost.iii?.L, -3.5) || !near(gost.iii?.R, 3.5)
         || (gost.iii?.shld || 0) < 4 || (gost.iii?.ditch || 0) < 2
         || !gost.iii?.base || !gost.iii?.subb || !gost.iii?.pvmt
-        || !gost.iii?.wedge || !gost.iii?.trough || (gost.iii?.slope || 0) < 2
+        || !gost.iii?.wedge || !gost.iii?.trough
+        || (gost.iii?.embk || 0) < 2
         || gost.appliedDitch < 2 || gost.appliedShld < 4 || !near(gost.widthL, 3.5)) {
         problems.push(`поперечники: шаблон III по СП 34 (${JSON.stringify(gost.iii)} appliedDitch=${gost.appliedDitch} shld=${gost.appliedShld} widthL=${gost.widthL})`);
+    }
+    if (!(gost.iii?.shldOuter || []).some((o) => near(o, 4.0, 0.05))
+        || !(gost.iii?.shldOuter || []).some((o) => near(o, 6.0, 0.05))) {
+        problems.push(`поперечники: обочина III не цепочкой 0,50+2,00 (${JSON.stringify(gost.iii?.shldOuter)})`);
+    }
+    if (!gost.dim350 || !gost.perm20 || !gost.perm40 || !gost.ratio15) {
+        problems.push(`поперечники: нет размеров/уклонов типового чертежа (${JSON.stringify({
+            dim350: gost.dim350, perm20: gost.perm20, perm40: gost.perm40, ratio15: gost.ratio15
+        })})`);
+    }
+    if (!near(gost.shldGrade, 0.04, 0.005)) {
+        problems.push(`поперечники: уклон обочины III не 40‰ (${gost.shldGrade})`);
+    }
+    if (!(gost.iii?.ditchPts >= 8) || !near(gost.iii?.ditchThk, 0.15, 0.04)
+        || gost.iii?.ditchFillsChannel) {
+        problems.push(`поперечники: кювет не слой (${JSON.stringify({
+            pts: gost.iii?.ditchPts, thk: gost.iii?.ditchThk, fills: gost.iii?.ditchFillsChannel
+        })})`);
+    }
+    if ((gost.iii?.troughShare || 0) < 2) {
+        problems.push(`поперечники: корыто не стыкуется с низом одежды (share=${gost.iii?.troughShare})`);
+    }
+    if ((gost.corridorShared || 0) < 4 || (gost.corridorTris || 0) < 40) {
+        problems.push(`поперечники: лофт полотна (${JSON.stringify({
+            shared: gost.corridorShared, tris: gost.corridorTris
+        })})`);
+    }
+    if (!gost.embkLab) {
+        problems.push('поперечники: на чертеже нет земляного полотна');
     }
     if ((gost.ia?.median || 0) < 1 || !near(gost.ia?.L, -10.5) || (gost.ia?.ditch || 0) < 2) {
         problems.push(`поперечники: шаблон IA (${JSON.stringify(gost.ia)})`);
