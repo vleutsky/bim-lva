@@ -20207,6 +20207,7 @@
         function syncRoadStudioProfile(rec) {
             const axis = rec || listedPolylines().find((r) => r.id === Number($('roadXsSelect')?.value));
             if (!axis) return;
+            const switched = polyProfileRecordId !== axis.id;
             polyProfileRecordId = axis.id;
             const sel = $('polyProfileSelect');
             if (sel) {
@@ -20214,9 +20215,12 @@
                     .map((r) => `<option value="${r.id}"${r.id === axis.id ? ' selected' : ''}>${esc(r.name)}</option>`)
                     .join('');
             }
-            if (!polyProfileView.to) {
+            // Чужой зум с прошлой оси: короткая линия в длинном окне теряет
+            // подпись звена (порог в пикселях), хотя вершины ещё видны.
+            if (switched || !(polyProfileView.to > polyProfileView.from)) {
                 polyProfileView.from = 0;
                 polyProfileView.to = Math.max(1e-6, axis.length2d || 1);
+                polyProfileView.zCentre = null;
             }
         }
 

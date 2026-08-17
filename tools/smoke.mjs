@@ -2744,12 +2744,19 @@ async function checkRoadCrossSections(page) {
         const D = window.BimLvaDebug;
         const before = D.roadStudioPaneBox();
         const card = document.getElementById('roadXsCard');
+        const split = document.getElementById('roadStudioSplit');
+        const cr0 = card?.getBoundingClientRect();
+        const sr0 = split?.getBoundingClientRect();
+        const unused0 = cr0 && sr0 ? Math.round(cr0.bottom - sr0.bottom) : null;
         const h0 = card?.getBoundingClientRect().height || 0;
-        if (card) card.style.height = Math.round(h0 + 140) + 'px';
+        if (card) {
+            card.style.maxHeight = 'none';
+            card.style.height = Math.round(h0 + 140) + 'px';
+        }
         const afterGrow = D.roadStudioPaneBox();
         if (card) card.style.height = Math.round(h0) + 'px';
         const afterBack = D.roadStudioPaneBox();
-        return { before, afterGrow, afterBack, h0 };
+        return { before, afterGrow, afterBack, h0, unused0 };
     });
     const dPlan = Math.abs((paneLock.afterGrow?.plan?.h || 0) - (paneLock.before?.plan?.h || 0));
     const dProf = (paneLock.afterGrow?.prof?.h || 0) - (paneLock.before?.prof?.h || 0);
