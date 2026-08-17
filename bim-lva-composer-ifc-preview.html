@@ -1544,7 +1544,14 @@
             position: fixed;
             z-index: 60;
             width: 300px;
-            height: 460px;
+            /* Высота была жёстко 460 px. С лентой (116 px) и статус-баром на
+               ноутбуке панель свисала за нижний край, и добраться до кнопок
+               внизу было нельзя. Теперь потолок считается от окна; dvh — ради
+               мобильных браузеров, где адресная строка съедает часть vh. */
+            height: min(460px, calc(100vh - 132px));
+            height: min(460px, calc(100dvh - 132px));
+            max-height: calc(100vh - 108px);
+            max-height: calc(100dvh - 108px);
             margin: 0;
             border: 1px solid var(--line);
             box-shadow: none;
@@ -3908,7 +3915,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 503bb54</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 240e3cb</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -32562,6 +32569,14 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             handle.addEventListener('pointerup', stop);
             handle.addEventListener('pointercancel', stop);
 
+            // Окно уменьшили (или повернули планшет) — панель могла оказаться
+            // за краем. Прижимаем обратно тем же clamp, что и при перетаскивании.
+            window.addEventListener('resize', () => {
+                const el = card();
+                if (!el || !el.offsetParent) return;      // закрыта — не трогаем
+                setPosition(parseFloat(el.style.left) || 0, parseFloat(el.style.top) || 0);
+            });
+
             const api = { setPosition, reset, park, setMinimized, cycleDock, hide };
             el0.dataset.palReady = '1';
             el0._palApi = api;
@@ -39784,7 +39799,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.17',
-            buildId: '503bb54-preview',
+            buildId: '240e3cb-preview',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
