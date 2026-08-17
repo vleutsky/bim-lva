@@ -13118,24 +13118,29 @@
                 '    <Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter" temperatureUnit="celsius" pressureUnit="HPA"/>',
                 '  </Units>',
                 `  <Application name="BIM.LVA Composer IFC" version="${COMPOSER_ABOUT.version}" manufacturer="LVA"/>`,
-                '  <Project name="Polylines"/>',
+                '  <Project name="Design"/>',
                 '  <Alignments>'
             ];
+
             drawnPolylines.forEach((poly, idx) => {
                 if (!poly.pts || poly.pts.length < 2) return;
-                const name = escXml(poly.name || `Polyline ${idx + 1}`);
-                lines.push(`    <Alignment name="${name}" staStart="0" length="${poly.length?.toFixed(2) || '?'}">`);
+                const name = escXml(poly.name || `Alignment ${idx + 1}`);
+                const pts = poly.pts.map((p) => scenePointToAbs(p) || p);
+                const polyLength = poly.length || pts.reduce((sum, p, i, arr) =>
+                    sum + (i ? Math.hypot(p.x-arr[i-1].x, p.y-arr[i-1].y) : 0), 0);
+
+                lines.push(`    <Alignment name="${name}" staStart="0" length="${n(polyLength)}">`);
                 lines.push('      <CoordGeom>');
                 let sta = 0;
-                const pts = poly.pts.map((p) => scenePointToAbs(p) || p);
                 for (let i = 0; i < pts.length; i++) {
                     const p = pts[i];
                     if (i > 0) {
                         const prev = pts[i - 1];
-                        const dx = p.x - prev.x, dy = p.y - prev.y;
+                        const dx = p.x - prev.x, dy = p.y - prev.y, dz = p.z - prev.z;
                         const dist = Math.hypot(dx, dy);
                         if (dist > 1e-6) {
                             const bearing = Math.atan2(dx, dy) * 180 / Math.PI;
+                            const grade = dist > 0 ? (dz / dist * 100).toFixed(4) : '0';
                             lines.push(`        <Line length="${n(dist)}" dir="${n(bearing)}" staStart="${n(sta)}">`);
                             lines.push(`          <Start>${n(prev.y)} ${n(prev.x)} ${n(prev.z)}</Start>`);
                             lines.push(`          <End>${n(p.y)} ${n(p.x)} ${n(p.z)}</End>`);
@@ -13152,11 +13157,68 @@
                 lines.push('      </PntList>');
                 lines.push('    </Alignment>');
             });
-            lines.push(
-                '  </Alignments>',
-                '</LandXML>',
-                ''
-            );
+            lines.push('  </Alignments>');
+
+            // Профили по каждой оси
+            if (drawnPolylines.some(p => p.kind === '3d')) {
+                lines.push('  <Profiles>');
+                drawnPolylines.forEach((poly, idx) => {
+                    if (!poly.pts || poly.pts.length < 2 || poly.kind !== '3d') return;
+                    const name = escXml(poly.name || `Profile ${idx + 1}`);
+                    const pts = poly.pts.map((p) => scenePointToAbs(p) || p);
+                    let sta = 0;
+
+                    lines.push(`    <Profile name="Terrain along ${name}" alignmentName="${name}">`);
+                    lines.push('      <ProfAlign staStart="0" staEnd="9999" slopePercent="0"/>');
+                    lines.push('      <PntList>');
+                    for (let i = 0; i < pts.length; i++) {
+                        const p = pts[i];
+                        if (i > 0) {
+                            const prev = pts[i - 1];
+                            const dist = Math.hypot(p.x-prev.x, p.y-prev.y);
+                            sta += dist;
+                        }
+                        lines.push(`        <P>${n(sta)} ${n(p.z)}</P>`);
+                    }
+                    lines.push('      </PntList>');
+                    lines.push('    </Profile>');
+                });
+                lines.push('  </Profiles>');
+            }
+
+            // Поверхности (откосы если есть)
+            if (slopeModels.length) {
+                lines.push('  <Surfaces>');
+                slopeModels.forEach((sm, idx) => {
+                    if (!sm.tin?.faces?.length) return;
+                    const name = escXml(sm.name || `Surface ${idx + 1}`);
+                    const tin = sm.tin;
+                    const absPts = tin.points.map((p) => scenePointToAbs(p) || p);
+                    let zMin = Infinity, zMax = -Infinity;
+                    absPts.forEach((p) => {
+                        zMin = Math.min(zMin, p.z);
+                        zMax = Math.max(zMax, p.z);
+                    });
+
+                    lines.push(`    <Surface name="${name}">`);
+                    lines.push(`      <Definition surfType="TIN" elevMin="${n(zMin)}" elevMax="${n(zMax)}">`);
+                    lines.push('        <Pnts>');
+                    absPts.forEach((p, i) => {
+                        lines.push(`          <P id="${i + 1}">${n(p.y)} ${n(p.x)} ${n(p.z)}</P>`);
+                    });
+                    lines.push('        </Pnts>');
+                    lines.push('        <Faces>');
+                    tin.faces.forEach((f) => {
+                        lines.push(`          <F>${f[0] + 1} ${f[1] + 1} ${f[2] + 1}</F>`);
+                    });
+                    lines.push('        </Faces>');
+                    lines.push('      </Definition>');
+                    lines.push('    </Surface>');
+                });
+                lines.push('  </Surfaces>');
+            }
+
+            lines.push('</LandXML>', '');
             return lines.join('\n');
         }
 
