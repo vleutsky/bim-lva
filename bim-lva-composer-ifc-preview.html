@@ -3908,7 +3908,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 492656e</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 503bb54</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -19531,6 +19531,19 @@
                 };
                 cap(placed[0], false);
                 cap(placed[placed.length - 1], true);
+                /* Пропуск лофта на остром угле — один торец на границу зоны,
+                 * не два на одной станции (z-fighting на PI). */
+                if (skipInterval) {
+                    let i = 0;
+                    while (i < placed.length - 1) {
+                        if (!skipInterval[i]) { i++; continue; }
+                        const startSta = i;
+                        while (i < placed.length - 1 && skipInterval[i]) i++;
+                        const endSta = i;
+                        if (startSta > 0) cap(placed[startSta], true);
+                        if (endSta < placed.length - 1) cap(placed[endSta], false);
+                    }
+                }
             }
             return positions;
         }
@@ -19607,7 +19620,6 @@
                 const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
                 return dot < 0.82;
             });
-            const skipWide = new Set(['EMBK', 'DITCH', 'SHLD', 'SHLDU', 'SLOPE']);
             const meshes = [];
             let tris = 0;
             let sharedEdges = 0;
@@ -19644,7 +19656,7 @@
                     /* Земля объемлет обочину: торец по полному кольцу снова
                      * кладёт те же треугольники, что и SHLD — клинья на торце. */
                     const capIds = codeU === 'EMBK' ? null : ids;
-                    const skip = skipWide.has(codeU) ? twistSkip : null;
+                    const skip = twistSkip;
                     if (!pairs.length && !capIds) return;
                     const positions = corridorLoftPush([], placed, pairs, capIds, skip);
                     const style = roadShapeStyle(sh.code);
@@ -39772,7 +39784,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.17',
-            buildId: '492656e-preview',
+            buildId: '503bb54-preview',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
