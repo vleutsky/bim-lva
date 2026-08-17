@@ -3908,7 +3908,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 503bb54</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 229d4d0</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4003,6 +4003,14 @@
                             <button class="btn on rbtn-sm" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
                             <button class="btn rbtn-sm" id="btnSelectionContour" title="Контур рёбер выделения">◇ Контур</button>
                             <button class="btn rbtn-sm" id="btnPerfMode" title="Быстрый режим для больших IFC">⚡ Быстрый</button>
+                        </div>
+                        <div class="col">
+                            <select class="editInput" id="modelDisplayMode" disabled title="Стиль отображения модели: каркас, тонированный, с кромками, реалистичный">
+                                <option value="shaded">Тонированный</option>
+                                <option value="shaded-edges">С кромками</option>
+                                <option value="wireframe">Каркас</option>
+                                <option value="realistic">Реалистичный</option>
+                            </select>
                         </div>
                     </div>
                     <div class="cap">Сцена</div>
@@ -6614,6 +6622,23 @@
                     if (it && !it.done) return { modelID, expressID: it.value };
                 }
                 return null;
+            },
+            get modelDisplayMode() { return modelDisplayMode; },
+            setModelDisplayMode(mode) {
+                setModelDisplayMode(mode);
+                return modelDisplayMode;
+            },
+            modelDisplaySample() {
+                const mesh = allMeshes.find(isModelDisplayMesh);
+                const mat = mesh && (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material);
+                return {
+                    mode: modelDisplayMode,
+                    mesh: !!mesh,
+                    wireframe: !!mat?.wireframe,
+                    standard: !!mat?.isMeshStandardMaterial,
+                    lambert: !!mat?.isMeshLambertMaterial,
+                    edges: !!(mesh?.userData?._displayEdgeLine)
+                };
             },
             /** Покрасить элемент тем же путём, что и кнопка «Применить оформление». */
             paintElement(modelID, expressID, hex) {
@@ -9991,7 +10016,7 @@
             'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw',
             'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'drawModeSelect',
             'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile',
-            'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'
+            'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView', 'modelDisplayMode'
         ];
 
         function setSceneContentToolsEnabled(on) {
@@ -23727,6 +23752,181 @@
             });
         }
 
+        const MODEL_DISPLAY_LS_KEY = 'bimlva_model_display_mode';
+        const MODEL_DISPLAY_EDGE_LIMIT = 12000;
+        let modelDisplayMode = 'shaded';
+        let modelDisplayEdgeMat = null;
+
+        function readModelDisplayMode() {
+            try {
+                const v = localStorage.getItem(MODEL_DISPLAY_LS_KEY);
+                if (v === 'wireframe' || v === 'shaded-edges' || v === 'realistic' || v === 'shaded') return v;
+            } catch (_) {}
+            return 'shaded';
+        }
+        function persistModelDisplayMode(mode) {
+            try { localStorage.setItem(MODEL_DISPLAY_LS_KEY, mode); } catch (_) {}
+        }
+
+        function isModelDisplayMesh(mesh) {
+            if (!mesh?.isMesh) return false;
+            const u = mesh.userData || {};
+            if (u.isOverlay || u.isGeoRaster || u.isSlopeCutOverlay || u.isSlopePadOverlay) return false;
+            if (u.isSlopeSurface || u.roadCorridor || u.isMapTerrain) return false;
+            return true;
+        }
+
+        function modelDisplayEdgeColor() {
+            return document.documentElement.dataset.theme === 'dark' ? 0xc8d0da : 0x3a4654;
+        }
+
+        function getModelDisplayEdgeMaterial() {
+            if (!modelDisplayEdgeMat) {
+                modelDisplayEdgeMat = new THREE.LineBasicMaterial({
+                    color: modelDisplayEdgeColor(),
+                    transparent: true,
+                    opacity: 0.88,
+                    depthTest: true
+                });
+                modelDisplayEdgeMat.userData.outlineShared = true;
+            } else {
+                modelDisplayEdgeMat.color.setHex(modelDisplayEdgeColor());
+            }
+            return modelDisplayEdgeMat;
+        }
+
+        function meshDisplayAppearance(mesh) {
+            const orig = mesh.userData?._origAppearance;
+            const modelID = mesh.userData?.modelID;
+            const expressID = mesh.userData?.expressID;
+            const stored = (modelID != null && expressID != null)
+                ? loadedModels.get(modelID)?.appearanceByID?.get(expressID) : null;
+            const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+            const color = stored?.color ?? orig?.color ?? (mat?.color ? mat.color.getHex() : 0xaaaaaa);
+            const opacity = stored?.opacity ?? orig?.opacity ?? mat?.opacity ?? 1;
+            return {
+                color,
+                transparent: stored?.opacity != null ? stored.opacity < 0.999 : !!(orig?.transparent || (mat?.transparent && (mat.opacity ?? 1) < 0.999)),
+                opacity,
+                appearance: stored
+            };
+        }
+
+        function copyBatchSelectionMaterialState(fromMat, toMat) {
+            if (!fromMat?.userData?.batchSelInstalled || !toMat) return;
+            installBatchSelectionShader(toMat);
+            if (fromMat.userData.batchSelIds && toMat.userData.batchSelIds) {
+                toMat.userData.batchSelIds.set(fromMat.userData.batchSelIds);
+            }
+            toMat.userData._batchSelCountPending = fromMat.userData._batchSelCountPending || 0;
+            const u = toMat.userData._batchSelUniforms;
+            if (u) u.uBatchSelCount.value = toMat.userData._batchSelCountPending;
+        }
+
+        function replaceModelDisplayMaterial(mesh, newMat) {
+            const old = mesh.material;
+            if (mesh.userData?.isBatch) copyBatchSelectionMaterialState(old, newMat);
+            newMat.clippingPlanes = getActiveClipPlanes();
+            mesh.material = newMat;
+            if (old && old !== newMat) old.dispose();
+        }
+
+        function buildModelDisplayMaterial(mode, color, opacity, transparent) {
+            if (mode === 'realistic') {
+                return new THREE.MeshStandardMaterial({
+                    color,
+                    side: THREE.DoubleSide,
+                    transparent,
+                    opacity,
+                    roughness: 0.52,
+                    metalness: 0.06,
+                    depthWrite: !transparent
+                });
+            }
+            const mat = createIfcMaterial(color, opacity);
+            mat.wireframe = mode === 'wireframe';
+            return mat;
+        }
+
+        function applyModelDisplayMaterial(mesh, mode) {
+            if (!isModelDisplayMesh(mesh)) return;
+            const { color, transparent, opacity, appearance } = meshDisplayAppearance(mesh);
+            const old = mesh.material;
+            const needType = mode === 'realistic' ? 'standard' : 'lambert';
+            const curType = old?.isMeshStandardMaterial ? 'standard' : (old?.isMeshLambertMaterial ? 'lambert' : '');
+            const wire = mode === 'wireframe';
+            if (curType === needType && !!old?.wireframe === wire) {
+                if (old.wireframe !== wire) old.wireframe = wire;
+                return;
+            }
+            const mat = buildModelDisplayMaterial(mode, color, opacity, transparent);
+            replaceModelDisplayMaterial(mesh, mat);
+            if (appearance) applyAppearanceToMesh(mesh, appearance);
+        }
+
+        function clearModelDisplayEdges() {
+            allMeshes.forEach((mesh) => {
+                const line = mesh.userData?._displayEdgeLine;
+                if (!line) return;
+                mesh.remove(line);
+                if (line.userData?.ownsGeometry && line.geometry) line.geometry.dispose();
+                delete mesh.userData._displayEdgeLine;
+            });
+        }
+
+        function buildModelDisplayEdges() {
+            clearModelDisplayEdges();
+            if (modelDisplayMode !== 'shaded-edges') return;
+            if (allMeshes.length > MODEL_DISPLAY_EDGE_LIMIT) return;
+            const mat = getModelDisplayEdgeMaterial();
+            allMeshes.forEach((mesh) => {
+                if (!isModelDisplayMesh(mesh)) return;
+                const geom = mesh.geometry;
+                if (!geom?.attributes?.position || geom.attributes.position.count < 3) return;
+                try {
+                    const edges = new THREE.EdgesGeometry(geom, 35);
+                    if (!edges.attributes.position || edges.attributes.position.count < 2) {
+                        edges.dispose();
+                        return;
+                    }
+                    const line = new THREE.LineSegments(edges, mat);
+                    line.userData.isModelDisplayEdge = true;
+                    line.userData.ownsGeometry = true;
+                    line.raycast = () => {};
+                    mesh.add(line);
+                    mesh.userData._displayEdgeLine = line;
+                } catch (_) {}
+            });
+        }
+
+        function applyModelDisplayMode(mode, { persist = true } = {}) {
+            const next = (mode === 'wireframe' || mode === 'shaded-edges' || mode === 'realistic') ? mode : 'shaded';
+            modelDisplayMode = next;
+            if (persist) persistModelDisplayMode(next);
+            const sel = $('modelDisplayMode');
+            if (sel && sel.value !== next) sel.value = next;
+            allMeshes.forEach((mesh) => applyModelDisplayMaterial(mesh, next));
+            buildModelDisplayEdges();
+            if (selectedItems.length) syncSelectionSceneHighlight(selectedItems);
+            markNeedsRender();
+        }
+
+        function setModelDisplayMode(mode) {
+            applyModelDisplayMode(mode, { persist: true });
+            trackUsage('model_display_mode', { mode: modelDisplayMode });
+        }
+
+        function initModelDisplayModeUi() {
+            modelDisplayMode = readModelDisplayMode();
+            const sel = $('modelDisplayMode');
+            if (sel) sel.value = modelDisplayMode;
+        }
+
+        function refreshModelDisplayAfterMeshesChanged() {
+            if (!allMeshes.length) return;
+            applyModelDisplayMode(modelDisplayMode, { persist: false });
+        }
+
         /** Подсветка выбранных expressID внутри батч-меша (без дублирования геометрии / «призрака»). */
         function installBatchSelectionShader(material) {
             if (!material || material.userData.batchSelInstalled) return;
@@ -24032,6 +24232,7 @@ uniform vec3 uBatchSelColor;
                 allMeshes.push(mesh);
                 list.forEach(frag => modData.meshesByID.get(frag.expressID).push(mesh));
             }
+            refreshModelDisplayAfterMeshesChanged();
             markNeedsRender();
         }
 
@@ -24074,6 +24275,7 @@ uniform vec3 uBatchSelColor;
                     if (meshes) meshes.forEach((m) => applyAppearanceToMesh(m, appearance));
                 });
             }
+            refreshModelDisplayAfterMeshesChanged();
             markNeedsRender();
         }
 
@@ -26627,6 +26829,7 @@ uniform vec3 uBatchSelColor;
                 await new Promise(r => setTimeout(r, 10));
                 buildTreeForModel(modData);
                 applyRenderQuality();
+                refreshModelDisplayAfterMeshesChanged();
                 markNeedsRender();
                 hideLoader();
 
@@ -26752,6 +26955,7 @@ uniform vec3 uBatchSelColor;
             }
 
             registerExternalRoot(modData, root);
+            refreshModelDisplayAfterMeshesChanged();
         }
 
         async function loadSingleFBX(file) {
@@ -36403,6 +36607,11 @@ ${componentXml || '    '}
             markNeedsRender();
         });
 
+        initModelDisplayModeUi();
+        $('modelDisplayMode')?.addEventListener('change', (e) => {
+            setModelDisplayMode(e.target.value);
+        });
+
         window.addEventListener('keydown', event => {
             if (event.target.closest('input, textarea, select, .editInput')) return;
             if (event.key === 'Escape' && vertTransitionPick) {
@@ -38155,7 +38364,11 @@ ${componentXml || '    '}
 
         // Здесь bgThemes и grid уже объявлены — только теперь можно связывать
         // тему с холстом (см. комментарий у applyTheme про TDZ).
-        onThemeChanged = applySceneBackground;
+        onThemeChanged = () => {
+            applySceneBackground();
+            if (modelDisplayEdgeMat) modelDisplayEdgeMat.color.setHex(modelDisplayEdgeColor());
+            markNeedsRender();
+        };
         applySceneBackground();
         $('btnTheme').addEventListener('click', () => {
             const now = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
@@ -39784,7 +39997,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.17',
-            buildId: '503bb54-preview',
+            buildId: '229d4d0-preview',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -39793,6 +40006,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.17: режимы отображения модели — тонированный, каркас, с кромками, реалистичный (вкладка «Вид»).',
                 '2026.08.17: полотно 3D без клиньев при зуме — общее ребро слоёв лофтится один раз; на остром угле внутреннюю сторону не раздувает биссектриса.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',

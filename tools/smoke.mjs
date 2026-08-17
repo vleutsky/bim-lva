@@ -3939,6 +3939,7 @@ async function checkModelDisplayModes(page) {
     return modes;
 }
 
+async function checkAddFileKeepsStateForModel(page) {
     const a = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-a.ifc');
     const b = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-b.ifc');
     const base = { worldX: 431_000, worldY: 6_171_000, worldZ: 40, count: 40, cols: 8 };
