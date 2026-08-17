@@ -3908,7 +3908,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 90301dc</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 47b6490</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -7292,6 +7292,9 @@
                 if (!spec) return null;
                 const tpl = spec.build(DEFAULT_ROAD_HALF_WIDTH, DEFAULT_ROAD_HALF_WIDTH);
                 return snapshotRoadTemplate(tpl);
+            },
+            ditchCapTris(ring) {
+                return triangulateRing3D(ring);
             },
             roadXsPresetIds() {
                 return ROAD_STUDIO_PRESETS.map((p) => p.id);
@@ -11352,6 +11355,37 @@
                 faces.push([ring[idx[0]], ring[idx[1]], ring[idx[2]]]);
             }
             return faces;
+        }
+
+        /**
+         * Ухо в плоскости кольца (не веер от первой вершины и не XY плана).
+         * Веер заливает вогнутость: кювет-слой превращался в призму по контуру.
+         */
+        function triangulateRing3D(ring) {
+            if (!ring || ring.length < 3) return [];
+            let nx = 0, ny = 0, nz = 0;
+            for (let i = 0; i < ring.length; i++) {
+                const a = ring[i], b = ring[(i + 1) % ring.length];
+                nx += (a.y - b.y) * (a.z + b.z);
+                ny += (a.z - b.z) * (a.x + b.x);
+                nz += (a.x - b.x) * (a.y + b.y);
+            }
+            const nL = Math.hypot(nx, ny, nz) || 1;
+            nx /= nL; ny /= nL; nz /= nL;
+            let ux, uy, uz;
+            if (Math.abs(nz) < 0.9) { ux = ny; uy = -nx; uz = 0; }
+            else { ux = 0; uy = nz; uz = -ny; }
+            const uL = Math.hypot(ux, uy, uz) || 1;
+            ux /= uL; uy /= uL; uz /= uL;
+            const vx = ny * uz - nz * uy;
+            const vy = nz * ux - nx * uz;
+            const vz = nx * uy - ny * ux;
+            const pts2 = ring.map((p) => ({
+                x: p.x * ux + p.y * uy + p.z * uz,
+                y: p.x * vx + p.y * vy + p.z * vz,
+                src: p
+            }));
+            return triangulateRingXY(pts2).map((tri) => tri.map((q) => q.src));
         }
 
         function signedAreaXY(ring) {
@@ -17473,6 +17507,7 @@
             BED: { fill: '#b8b4ac', stroke: '#6e6a64' },
             WEDGE: { fill: '#c4b070', stroke: '#8a7038' },
             TROUGH: { fill: '#8c6a48', stroke: '#5a4028' },
+            EMBK: { fill: '#d2c2a0', stroke: '#8a6848' },
             SLOPE: { fill: '#c49a6c', stroke: '#8a6848' },
             SHLD: { fill: '#b8956a', stroke: '#7a5a38' },
             SHLDU: { fill: '#c4b49a', stroke: '#8a7860' },
@@ -17509,7 +17544,7 @@
         const ROAD_XS_SHAPE_CAPTION = {
             PVMT: 'Покрытие', BASE: 'Основание', SUBB: 'Песок',
             SUB2: 'Слой 2', SUB3: 'Слой 3', SUB4: 'Слой 4',
-            WEDGE: 'Расклин', TROUGH: 'Корыто', CURB: 'Бордюр', BED: 'Постель',
+            WEDGE: 'Расклин', TROUGH: 'Корыто', EMBK: 'Земляное полотно', CURB: 'Бордюр', BED: 'Постель',
             SHLD: 'Укрепл. обочина', SHLDU: 'Присыпная', DITCH: 'Кювет', WALK: 'Тротуар', MEDIAN: 'Разделительная',
             SLOPE: 'Откос', BOX: 'Прямоугольник', TRAP: 'Трапеция', TRI: 'Треугольник'
         };
@@ -17839,7 +17874,7 @@
 
         const ROAD_LAYER_CODES = ['PVMT', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4'];
         const ROAD_XS_LAYER_CODES = new Set(['PVMT', 'WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4']);
-        /** Одежда и корыто не якоря для бордюра/обочины — иначе расклин уводит фигуру с кромки. */
+        /** Одежда, корыто и земляное полотно не якоря для бордюра/обочины. */
         const ROAD_XS_STRUCT_CODES = new Set(['PVMT', 'WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4', 'TROUGH', 'BED']);
 
         /** Нижние левая и правая точки шаблона — от них наращивается слой одежды. */
@@ -17905,11 +17940,47 @@
             return { shape: sh, left: pL, right: pR, thickness: h };
         }
 
-        /** Корыто под одеждой: трапеция шире низа слоёв, откосы 1:m. */
+        /**
+         * Параллель открытой цепи (off, dz) на толщину. Митра на вершинах —
+         * стык как в AutoCAD, не скругление. Сторона: в грунт (низ кювета
+         * уезжает вниз); если уехала в пустоту — переворачиваем.
+         */
+        function offsetOpenChain(pts, thk) {
+            if (!pts || pts.length < 2 || !(thk > 0)) return (pts || []).map((p) => ({ off: p.off, dz: p.dz }));
+            const units = [];
+            for (let i = 0; i < pts.length - 1; i++) {
+                const dx = pts[i + 1].off - pts[i].off;
+                const dz = pts[i + 1].dz - pts[i].dz;
+                const L = Math.hypot(dx, dz) || 1;
+                units.push({ nx: dz / L, nz: -dx / L });
+            }
+            const out = pts.map((p, i) => {
+                const nA = units[Math.max(0, i - 1)];
+                const nB = units[Math.min(units.length - 1, i)];
+                let nx = nA.nx + nB.nx, nz = nA.nz + nB.nz;
+                const nL = Math.hypot(nx, nz);
+                if (nL < 1e-9) { nx = nB.nx; nz = nB.nz; }
+                else { nx /= nL; nz /= nL; }
+                const dot = nx * nB.nx + nz * nB.nz;
+                const m = Math.abs(dot) > 0.12 ? (thk / dot) : thk;
+                return { off: p.off + nx * m, dz: p.dz + nz * m };
+            });
+            const mid = pts[Math.floor(pts.length / 2)];
+            const midO = out[Math.floor(out.length / 2)];
+            if (midO.dz > mid.dz) {
+                return out.map((p, i) => ({
+                    off: 2 * pts[i].off - p.off,
+                    dz: 2 * pts[i].dz - p.dz
+                }));
+            }
+            return out;
+        }
+
+        /** Корыто под одеждой: верх — те же точки, что низ слоёв (стык без щели). */
         function addRoadTemplateTrough(tpl, spec) {
             if (!tpl) return null;
             spec = spec || {};
-            const extra = spec.extra == null ? 0.25 : Number(spec.extra);
+            const extra = spec.extra == null ? 0 : Number(spec.extra);
             const depth = spec.depth == null ? 0.20 : Number(spec.depth);
             const m = spec.m == null ? 1 : Number(spec.m);
             if (!(depth > 0.01)) return null;
@@ -17920,23 +17991,27 @@
                 tpl.seq = (tpl.seq || tpl.points.length) + 1;
                 return tpl.seq;
             };
-            const iTL = next(), iTR = next(), iBR = next(), iBL = next();
-            tpl.points.push(
-                { id: iTL, code: 'TRTL', off: bot.left.off - extra, dz: bot.zBot },
-                { id: iTR, code: 'TRTR', off: bot.right.off + extra, dz: bot.zBot },
-                { id: iBR, code: 'TRBR', off: bot.right.off + extra + run, dz: bot.zBot - depth },
-                { id: iBL, code: 'TRBL', off: bot.left.off - extra - run, dz: bot.zBot - depth }
-            );
+            let topL = bot.left, topR = bot.right;
+            if (extra > 1e-9) {
+                const iTL = next(), iTR = next();
+                topL = { id: iTL, code: 'TRTL', off: bot.left.off - extra, dz: bot.zBot };
+                topR = { id: iTR, code: 'TRTR', off: bot.right.off + extra, dz: bot.zBot };
+                tpl.points.push(topL, topR);
+            }
+            const iBR = next(), iBL = next();
+            const pBR = { id: iBR, code: 'TRBR', off: topR.off + run, dz: bot.zBot - depth };
+            const pBL = { id: iBL, code: 'TRBL', off: topL.off - run, dz: bot.zBot - depth };
+            tpl.points.push(pBR, pBL);
             tpl.links = tpl.links || [];
             const link = (a, b, code) => {
                 if (!templateHasLink(tpl, a, b)) tpl.links.push({ a, b, code });
             };
-            link(iTL, iTR, 'TRTOP');
-            link(iTR, iBR, 'TRRS');
+            if (extra > 1e-9 && !templateHasLink(tpl, topL.id, topR.id)) link(topL.id, topR.id, 'TRTOP');
+            link(topR.id, iBR, 'TRRS');
             link(iBR, iBL, 'TRBOT');
-            link(iBL, iTL, 'TRLS');
+            link(iBL, topL.id, 'TRLS');
             tpl.shapeSeq = (tpl.shapeSeq || (tpl.shapes?.length || 0)) + 1;
-            const sh = { id: tpl.shapeSeq, code: 'TROUGH', pts: [iTL, iTR, iBR, iBL] };
+            const sh = { id: tpl.shapeSeq, code: 'TROUGH', pts: [topL.id, topR.id, iBR, iBL] };
             tpl.shapes = tpl.shapes || [];
             tpl.shapes.push(sh);
             return { shape: sh };
@@ -17948,7 +18023,7 @@
             slope: { code: 'SLOPE', w: 1.80, h: 1.20, m: 1.5 },
             trough: { code: 'TROUGH', w: 4.00, h: 0.20 },
             shoulder: { code: 'SHLD', w: 0.75, h: 0.15, slope: 0.04 },
-            ditch: { code: 'DITCH', w: 0.50, h: 0.40, berm: 0.30 },
+            ditch: { code: 'DITCH', w: 0.50, h: 0.40, berm: 0.30, thk: 0.15 },
             walk: { code: 'WALK', w: 1.50, h: 0.12 },
             median: { code: 'MEDIAN', w: 5.00, h: 0.15 },
             box: { code: 'BOX', w: 0.40, h: 0.30 },
@@ -18099,16 +18174,28 @@
             } else if (kind === 'ditch') {
                 const h = spec.h, w = spec.w, berm = spec.berm;
                 const run = Number.isFinite(Number(spec.run)) ? Number(spec.run) : h * 1;
-                const [i1, i2, i3, i4] = nextIds(4);
-                addPt(i1, 'DH', aOff + sign * berm, aDz, anchor.id);
-                addPt(i2, 'DBI', aOff + sign * (berm + run), aDz - h, i1);
-                addPt(i3, 'DBO', aOff + sign * (berm + run + w), aDz - h, i2);
-                addPt(i4, 'DO', aOff + sign * (berm + run + w + run), aDz, i3);
-                link(anchor.id, i1, 'D1');
+                const thk = spec.thk == null ? 0.15 : Math.max(0.04, Number(spec.thk));
+                const surf = [
+                    { off: aOff + sign * berm, dz: aDz },
+                    { off: aOff + sign * (berm + run), dz: aDz - h },
+                    { off: aOff + sign * (berm + run + w), dz: aDz - h },
+                    { off: aOff + sign * (berm + run + w + run), dz: aDz }
+                ];
+                const back = offsetOpenChain(surf, thk);
+                const [i1, i2, i3, i4, i5, i6, i7, i8] = nextIds(8);
+                addPt(i1, 'DH', surf[0].off, surf[0].dz, anchor.id);
+                addPt(i2, 'DBI', surf[1].off, surf[1].dz, i1);
+                addPt(i3, 'DBO', surf[2].off, surf[2].dz, i2);
+                addPt(i4, 'DO', surf[3].off, surf[3].dz, i3);
+                addPt(i5, 'DOX', back[3].off, back[3].dz, i4);
+                addPt(i6, 'DBOX', back[2].off, back[2].dz, i5);
+                addPt(i7, 'DBIX', back[1].off, back[1].dz, i6);
+                addPt(i8, 'DHX', back[0].off, back[0].dz, i7);
+                link(anchor.id, i1, 'D0');
                 link(i1, i2, 'D2');
                 link(i2, i3, 'D3');
                 link(i3, i4, 'D4');
-                sh = shape(spec.code, [anchor.id, i1, i2, i3, i4]);
+                sh = shape(spec.code, [i1, i2, i3, i4, i5, i6, i7, i8]);
             }
             return sh ? { shape: sh, anchor, kind } : null;
         }
@@ -18338,11 +18425,67 @@
         }
 
         /**
+         * Земляное полотно: тело от низа одежды/корыта под обочину к откосу.
+         * Вершины — уже существующие точки шаблона, без дублей координат.
+         */
+        function addRoadEarthwork(tpl) {
+            const bot = templateBottomEdges(tpl, ROAD_XS_LAYER_CODES);
+            if (!bot) return 0;
+            const trL = (tpl.points || []).find((p) => p.code === 'TRBL');
+            const trR = (tpl.points || []).find((p) => p.code === 'TRBR');
+            let made = 0;
+            [-1, 1].forEach((sign) => {
+                const inner = sign < 0 ? bot.left : bot.right;
+                const tr = sign < 0 ? trL : trR;
+                const on = (code) => (tpl.points || []).filter((p) => p.code === code && p.off * sign > 1e-9);
+                const outerMost = (code) => {
+                    const a = on(code);
+                    if (!a.length) return null;
+                    return a.reduce((best, p) => (p.off * sign > best.off * sign ? p : best));
+                };
+                const shld = [];
+                ['SHLDI', 'SHLDB', 'SHLDUI', 'SHLDUB'].forEach((c) => {
+                    on(c).forEach((p) => {
+                        if (!shld.some((q) => q.id === p.id)) shld.push(p);
+                    });
+                });
+                shld.sort((a, b) => (a.off - b.off) * sign);
+                let slopeO = outerMost('SLOPEO');
+                const shldO = outerMost('SHLDUO') || outerMost('SHLDO') || shld[shld.length - 1];
+                if (!slopeO && shldO) {
+                    const h = 1.20, m = 1.5;
+                    tpl.seq = (tpl.seq || (tpl.points || []).length) + 1;
+                    slopeO = {
+                        id: tpl.seq,
+                        code: 'SLOPEO',
+                        off: shldO.off + sign * h * m,
+                        dz: shldO.dz - h
+                    };
+                    tpl.points.push(slopeO);
+                }
+                const ids = [];
+                const push = (p) => { if (p && !ids.includes(p.id)) ids.push(p.id); };
+                push(inner);
+                push(tr);
+                push(slopeO);
+                push(outerMost('SHLDUO') || outerMost('SHLDO'));
+                shld.slice().reverse().forEach(push);
+                if (ids.length < 3) return;
+                tpl.shapeSeq = (tpl.shapeSeq || (tpl.shapes?.length || 0)) + 1;
+                const sh = { id: tpl.shapeSeq, code: 'EMBK', pts: ids };
+                tpl.shapes = tpl.shapes || [];
+                tpl.shapes.unshift(sh);
+                made += 1;
+            });
+            return made;
+        }
+
+        /**
          * Типовой поперечник: ширины — табл. 11.1 СП 34.13330.2012 /
          * СП 42.13330 (улицы). Одежда — ориентир, не расчёт ОДН:
          * покрытие, расклин, основание, песок, корыто 1:1; у бордюра постель;
          * обочина — продолжение верха с 40‰ (укреплённая, затем присыпная);
-         * снаружи откос 1:1,5.
+         * откос 1:1,5, кювет слоем (не заливка призмы), земляное полотно.
          */
         function buildGostRoadTemplate(cfg) {
             const nLanes = Math.max(1, Number(cfg.lanes) || 2);
@@ -18379,15 +18522,17 @@
                     code: 'SHLDU', w: shldW - strW, h: shldH, slope: shldSlope
                 });
             }
+            if (cfg.earth !== false) addRoadEarthwork(tpl);
             if (cfg.ditch) {
                 addFigureBothSides(tpl, 'ditch', {
                     h: cfg.ditchH || 0.50,
                     w: cfg.ditchW || 0.40,
                     berm: cfg.ditchBerm != null ? cfg.ditchBerm : 0.20,
-                    run: cfg.ditchRun != null ? cfg.ditchRun : 0.75
+                    run: cfg.ditchRun != null ? cfg.ditchRun : 0.75,
+                    thk: cfg.ditchThk == null ? 0.15 : cfg.ditchThk
                 });
             }
-            if (cfg.slope !== false) {
+            if (cfg.slope !== false && cfg.earth === false) {
                 addFigureBothSides(tpl, 'slope', {
                     h: cfg.slopeH || 1.20,
                     m: cfg.slopeM || 1.5
@@ -19331,15 +19476,13 @@
             const ids = capIds || [];
             if (ids.length >= 3 && placed.length) {
                 const cap = (map, reverse) => {
-                    const ring = ids.map((id) => map.get(id)).filter(Boolean);
+                    const ring = ids.map((id) => map.get(id)).filter(Boolean)
+                        .map((p) => new THREE.Vector3(p.x, p.y, p.z));
                     if (ring.length < 3) return;
-                    const origin = new THREE.Vector3(ring[0].x, ring[0].y, ring[0].z);
-                    for (let i = 1; i < ring.length - 1; i++) {
-                        const b = new THREE.Vector3(ring[i].x, ring[i].y, ring[i].z);
-                        const c = new THREE.Vector3(ring[i + 1].x, ring[i + 1].y, ring[i + 1].z);
-                        if (reverse) push(origin, c, b);
-                        else push(origin, b, c);
-                    }
+                    triangulateRing3D(ring).forEach((tri) => {
+                        if (reverse) push(tri[0], tri[2], tri[1]);
+                        else push(tri[0], tri[1], tri[2]);
+                    });
                 };
                 cap(placed[0], false);
                 cap(placed[placed.length - 1], true);
@@ -19926,7 +20069,7 @@
             }
             if (!best) return '';
             const pa = xyOf(best.a), pb = xyOf(best.b);
-            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) < 26) return '';
+            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) < 14) return '';
             return `<text class="xs-grade" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${((pa.y + pb.y) / 2 - 7).toFixed(1)}" text-anchor="middle" fill="#6a4020">${fmtRoadXsRatio(best.dOff, best.dZ)}</text>`;
         }
 
@@ -19951,6 +20094,21 @@
             rightSh.forEach((p) => {
                 parts.push(roadXsGradeLabelSvg(prevR, p, xyOf));
                 prevR = p;
+            });
+            const slopeO = all('SLOPEO');
+            const shldFace = [...all('SHLDUO'), ...all('SHLDO')];
+            slopeO.forEach((toe) => {
+                const side = Math.sign(toe.off) || 1;
+                const face = shldFace.filter((p) => Math.sign(p.off) === side)
+                    .sort((a, b) => Math.abs(b.off) - Math.abs(a.off))[0];
+                if (!face) return;
+                const run = Math.abs(toe.off - face.off);
+                const rise = Math.abs((toe.dz || 0) - (face.dz || 0));
+                if (run < 0.04 || rise < 0.04) return;
+                const pa = xyOf(face), pb = xyOf(toe);
+                parts.push(
+                    `<text class="xs-grade" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${((pa.y + pb.y) / 2 - 7).toFixed(1)}" text-anchor="middle" fill="#6a4020">${fmtRoadXsRatio(run, rise)}</text>`
+                );
             });
             const ratioCodes = new Set(['WEDGE', 'TROUGH', 'SLOPE']);
             (tpl?.shapes || []).forEach((sh) => {
@@ -20108,6 +20266,8 @@
                 }).join(' ') + ' Z';
                 const on = sh.id === roadXsActive.shapeId;
                 const sty = roadShapeStyle(sh.code);
+                const codeU = String(sh.code || '').toUpperCase();
+                const fill = codeU === 'EMBK' ? 'url(#xs-embk)' : sty.fill;
                 const qs = ring.map(xyOf);
                 let cx = 0, cy = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
                 qs.forEach((q) => {
@@ -20116,12 +20276,19 @@
                     if (q.y < minY) minY = q.y; if (q.y > maxY) maxY = q.y;
                 });
                 cx /= qs.length; cy /= qs.length;
+                /* Кювет-слой: подпись на днище укрепления, не в пустом канале. */
+                if (codeU === 'DITCH' && ring.length >= 8) {
+                    const bot = [ring[1], ring[2], ring[5], ring[6]].map(xyOf);
+                    cx = (bot[0].x + bot[1].x + bot[2].x + bot[3].x) / 4;
+                    cy = (bot[0].y + bot[1].y + bot[2].y + bot[3].y) / 4;
+                }
                 const caption = (maxX - minX > 22 && maxY - minY > 14)
                     ? `<text class="xs-shape-lab" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" text-anchor="middle" fill="#3d3320" pointer-events="none">${esc(roadXsShapeCaption(sh.code))}</text>`
                     : '';
+                const opac = codeU === 'EMBK' ? (on ? 1 : 0.92) : codeU === 'DITCH' ? (on ? 0.95 : 0.82) : (on ? 0.88 : 0.62);
                 return `<path class="xs-shape" data-sid="${sh.id}" data-code="${esc(sh.code || '')}" d="${d}"
-                    fill="${esc(sty.fill)}" fill-opacity="${on ? 0.88 : 0.62}"
-                    stroke="${esc(sty.stroke)}" stroke-width="${on ? 1.6 : 0.7}"/>${caption}`;
+                    fill="${esc(fill)}" fill-opacity="${opac}" fill-rule="nonzero"
+                    stroke="${esc(sty.stroke)}" stroke-width="${codeU === 'DITCH' ? 1.4 : (on ? 1.6 : 0.7)}"/>${caption}`;
             }).join('');
             const linkDraw = tpl.links.map((ln) => {
                 const a = ptById.get(ln.a), b = ptById.get(ln.b);
@@ -20138,10 +20305,13 @@
                 const q = xyOf(p);
                 const on = p.id === roadXsActive.pointId;
                 const ghost = p.hide;
+                const codeU = String(p.code || '').toUpperCase();
+                const skipLab = !/^(CL|L|R|SHLDO|SHLDUO|SLOPEO|DH|DO)$/.test(codeU);
+                const lab = skipLab ? '' : `<text x="${(q.x + 8).toFixed(1)}" y="${(q.y - 8).toFixed(1)}" fill="#6a5420">${esc(roadXsPointCaption(p.code))}${ghost ? ' ∅' : ''}</text>`;
                 return `<g class="xs-pt" data-id="${p.id}" style="cursor:grab;opacity:${ghost ? 0.35 : 1}">
                     <circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="${on ? 7 : 5.5}"
                         fill="${on ? '#c45a12' : '#8a7344'}" stroke="#fff" stroke-width="1.4"/>
-                    <text x="${(q.x + 8).toFixed(1)}" y="${(q.y - 8).toFixed(1)}" fill="#6a5420">${esc(roadXsPointCaption(p.code))}${ghost ? ' ∅' : ''}</text>
+                    ${lab}
                 </g>`;
             }).join('');
             const slopeDraw = slopeSecs.map(({ side, pt, sec }) => {
@@ -20164,6 +20334,12 @@
             svg.setAttribute('viewBox', `0 0 ${pad.w} ${pad.h}`);
             svg.innerHTML = `
                 <rect x="0" y="0" width="${pad.w}" height="${pad.h}" fill="#f7f9fb"/>
+                <defs>
+                    <pattern id="xs-embk" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                        <rect width="7" height="7" fill="#d2c2a0"/>
+                        <line x1="0" y1="0" x2="0" y2="7" stroke="#8a6848" stroke-width="1.2"/>
+                    </pattern>
+                </defs>
                 <style>text{font:10px 'IBM Plex Mono',monospace;fill:#5c6570}</style>
                 ${grid.join('')}
                 ${fillD ? `<path d="${fillD}" fill="#c5d8ea" fill-opacity="0.55"/>` : ''}
@@ -39489,7 +39665,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.17',
-            buildId: '90301dc-preview',
+            buildId: '47b6490-preview',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -39498,6 +39674,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.17: кювет — слой заданной толщины (канал пустой); торец полотна не заливает V веером от первой вершины.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
                 '2026.08.17: поперечник всегда в масштабе 1:1 (без растяжения по высоте); в шаблонах СП — расклин, корыто, откос 1:1,5 и постель под бортовым камнем.',
