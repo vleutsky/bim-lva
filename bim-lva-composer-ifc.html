@@ -19512,14 +19512,17 @@
                 };
                 cap(placed[0], false);
                 cap(placed[placed.length - 1], true);
-                /* Пропуск лофта на остром угле — торцы на стыке, иначе
-                 * открытый разрез и клинья при зуме. */
+                /* Пропуск лофта на остром угле — один торец на границу зоны,
+                 * не два на одной станции (z-fighting на PI). */
                 if (skipInterval) {
-                    for (let i = 0; i < placed.length; i++) {
-                        const prevSkip = i > 0 ? skipInterval[i - 1] : false;
-                        const nextSkip = i < placed.length - 1 ? skipInterval[i] : false;
-                        if (!prevSkip && nextSkip) cap(placed[i], true);
-                        if (prevSkip && !nextSkip) cap(placed[i], false);
+                    let i = 0;
+                    while (i < placed.length - 1) {
+                        if (!skipInterval[i]) { i++; continue; }
+                        const startSta = i;
+                        while (i < placed.length - 1 && skipInterval[i]) i++;
+                        const endSta = i;
+                        if (startSta > 0) cap(placed[startSta], true);
+                        if (endSta < placed.length - 1) cap(placed[endSta], false);
                     }
                 }
             }
