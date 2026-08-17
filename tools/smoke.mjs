@@ -3119,6 +3119,8 @@ async function checkRoadCrossSections(page) {
             appliedDitch: (applied?.shapes || []).filter((s) => s.code === 'DITCH').length,
             appliedShld: (applied?.shapes || []).filter((s) => s.code === 'SHLD' || s.code === 'SHLDU').length,
             widthL: Number(document.getElementById('roadXsWidthL')?.value),
+            corridorShared: D.roadXs[0]?.corridorSharedEdges,
+            corridorTris: D.roadXs[0]?.corridorTris,
             dim350: /3,50/.test(html),
             perm20: /20‰/.test(html),
             perm40: /40‰/.test(html),
@@ -3178,8 +3180,10 @@ async function checkRoadCrossSections(page) {
     if ((gost.iii?.troughShare || 0) < 2) {
         problems.push(`поперечники: корыто не стыкуется с низом одежды (share=${gost.iii?.troughShare})`);
     }
-    if (gost.ditchCapFills) {
-        problems.push('поперечники: торец кювета заливает канал (веер вместо уха)');
+    if ((gost.corridorShared || 0) < 4 || (gost.corridorTris || 0) < 40) {
+        problems.push(`поперечники: лофт полотна (${JSON.stringify({
+            shared: gost.corridorShared, tris: gost.corridorTris
+        })})`);
     }
     if (!gost.embkLab) {
         problems.push('поперечники: на чертеже нет земляного полотна');

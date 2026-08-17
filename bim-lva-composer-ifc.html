@@ -7111,6 +7111,7 @@
                     hits: m.hits, missed: m.missed, total: m.total,
                     widthL: m.widthL, widthR: m.widthR,
                     corridorTris: m.corridorTris || 0,
+                    corridorSharedEdges: m.corridorSharedEdges || 0,
                     templatePoints: m.template?.points?.length || 0,
                     templateLinks: m.template?.links?.length || 0,
                     templateShapes: m.template?.shapes?.length || 0
@@ -7118,6 +7119,21 @@
             },
             roadXsTemplate() {
                 return snapshotRoadTemplate(currentRoadXsModel()?.template);
+            },
+            frameRoadCorridor() {
+                if (typeof roadXsGroup === 'undefined' || !roadXsGroup) return null;
+                const box = new THREE.Box3().setFromObject(roadXsGroup);
+                if (box.isEmpty()) return null;
+                const c = box.getCenter(new THREE.Vector3());
+                const s = box.getSize(new THREE.Vector3());
+                const span = Math.max(s.x, s.y, 4);
+                camera.position.set(c.x, c.y - span * 0.85, c.z + span * 1.05);
+                camera.up.set(0, 0, 1);
+                controls.target.copy(c);
+                camera.lookAt(c);
+                if (typeof applyCameraNear === 'function') applyCameraNear(span);
+                markNeedsRender();
+                return { span, x: c.x, y: c.y, z: c.z };
             },
             /**
              * Земля на чертеже сечения: крайние смещения линии и чего она
@@ -19450,8 +19466,21 @@
                     const B = new THREE.Vector3(b0.x, b0.y, b0.z);
                     const C = new THREE.Vector3(a1.x, a1.y, a1.z);
                     const D = new THREE.Vector3(b1.x, b1.y, b1.z);
-                    push(A, B, D);
-                    push(A, D, C);
+                    /* Невырожденный квад: если диагональ A–D даёт бантик
+                     * (нормали треугольников смотрят врозь) — режем по A–C. */
+                    const n1x = (B.y - A.y) * (D.z - A.z) - (B.z - A.z) * (D.y - A.y);
+                    const n1y = (B.z - A.z) * (D.x - A.x) - (B.x - A.x) * (D.z - A.z);
+                    const n1z = (B.x - A.x) * (D.y - A.y) - (B.y - A.y) * (D.x - A.x);
+                    const n2x = (D.y - A.y) * (C.z - A.z) - (D.z - A.z) * (C.y - A.y);
+                    const n2y = (D.z - A.z) * (C.x - A.x) - (D.x - A.x) * (C.z - A.z);
+                    const n2z = (D.x - A.x) * (C.y - A.y) - (D.y - A.y) * (C.x - A.x);
+                    if (n1x * n2x + n1y * n2y + n1z * n2z >= -1e-14) {
+                        push(A, B, D);
+                        push(A, D, C);
+                    } else {
+                        push(A, B, C);
+                        push(B, D, C);
+                    }
                 }
             });
             const ids = capIds || [];
@@ -19500,8 +19529,29 @@
         }
 
         /**
+         * Чем выше ранг, тем ближе к камере (покрытие поверх земли).
+         * Нужен и для polygonOffset, и чтобы общее ребро лофтить один раз
+         * цветом верхнего слоя — иначе z-fight при зуме.
+         */
+        function roadXsDrawRank(code) {
+            const u = String(code || '').toUpperCase();
+            const rank = {
+                EMBK: 0, TROUGH: 1, SUB4: 2, SUB3: 3, SUB2: 4, SUBB: 5,
+                BASE: 6, WEDGE: 7, BED: 8, SHLD: 9, SHLDU: 10, SLOPE: 11,
+                BOX: 12, TRAP: 13, TRI: 14, DITCH: 15, CURB: 16, WALK: 17,
+                MEDIAN: 18, PVMT: 19
+            };
+            return rank[u] != null ? rank[u] : 10;
+        }
+
+        function roadXsEdgeKey(a, b) {
+            return a < b ? `${a}|${b}` : `${b}|${a}`;
+        }
+
+        /**
          * Полотно: каждая форма шаблона тянется вдоль станций своим цветом.
-         * Если форм нет — лофт по связям, как раньше.
+         * Общее ребро двух форм (низ одежды = верх следующего, земля ∩ обочина)
+         * лофтится один раз — иначе при зуме вспыхивают клинья z-fighting.
          */
         function buildRoadCorridor(model) {
             disposeRoadCorridor(model);
@@ -19518,20 +19568,52 @@
             });
             const meshes = [];
             let tris = 0;
+            let sharedEdges = 0;
             const closed = (tpl.shapes || []).filter((sh) => (sh.pts || []).length >= 3);
             if (closed.length) {
-                closed.forEach((sh, idx) => {
+                const owner = new Map();
+                closed.forEach((sh) => {
+                    const rank = roadXsDrawRank(sh.code);
                     const ids = sh.pts || [];
-                    const pairs = ids.map((id, i) => ({ a: id, b: ids[(i + 1) % ids.length] }));
-                    const positions = corridorLoftPush([], placed, pairs, ids);
+                    for (let i = 0; i < ids.length; i++) {
+                        const a = ids[i], b = ids[(i + 1) % ids.length];
+                        if (a == null || b == null || a === b) continue;
+                        const k = roadXsEdgeKey(a, b);
+                        const cur = owner.get(k);
+                        if (!cur) owner.set(k, { rank, shId: sh.id });
+                        else {
+                            sharedEdges += 1;
+                            if (rank > cur.rank) owner.set(k, { rank, shId: sh.id });
+                        }
+                    }
+                });
+                const byRank = closed.slice().sort((a, b) => roadXsDrawRank(a.code) - roadXsDrawRank(b.code));
+                byRank.forEach((sh) => {
+                    const ids = sh.pts || [];
+                    const pairs = [];
+                    for (let i = 0; i < ids.length; i++) {
+                        const a = ids[i], b = ids[(i + 1) % ids.length];
+                        if (a == null || b == null || a === b) continue;
+                        const own = owner.get(roadXsEdgeKey(a, b));
+                        if (!own || own.shId !== sh.id) continue;
+                        pairs.push({ a, b });
+                    }
+                    const codeU = String(sh.code || '').toUpperCase();
+                    /* Земля объемлет обочину: торец по полному кольцу снова
+                     * кладёт те же треугольники, что и SHLD — клинья на торце. */
+                    const capIds = codeU === 'EMBK' ? null : ids;
+                    if (!pairs.length && !capIds) return;
+                    const positions = corridorLoftPush([], placed, pairs, capIds);
                     const style = roadShapeStyle(sh.code);
                     const mesh = makeRoadCorridorMesh(positions, style.fill, 'RoadCorridor:' + (sh.code || sh.id), {
                         modelId: model.id,
                         shapeId: sh.id
                     });
                     if (!mesh) return;
-                    mesh.material.polygonOffsetFactor = -2 - idx;
-                    mesh.material.polygonOffsetUnits = -2 - idx;
+                    const rank = roadXsDrawRank(sh.code);
+                    mesh.material.polygonOffsetFactor = -(1 + rank);
+                    mesh.material.polygonOffsetUnits = -(4 + rank * 4);
+                    mesh.renderOrder = 3 + rank;
                     roadXsGroup.add(mesh);
                     meshes.push(mesh);
                     tris += positions.length / 9;
@@ -19551,6 +19633,7 @@
             model.corridorMeshes = meshes;
             model.corridor = meshes[0] || null;
             model.corridorTris = tris;
+            model.corridorSharedEdges = sharedEdges;
             return model.corridor;
         }
 
@@ -39646,7 +39729,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.17',
-            buildId: 'xs-ditch',
+            buildId: 'xs-zfight',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -39655,7 +39738,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.17: кювет — слой заданной толщины (канал пустой); торец полотна не заливает V веером от первой вершины.',
+                '2026.08.17: полотно 3D без клиньев при зуме — общее ребро слоёв лофтится один раз, земля не дублирует торец обочины.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
                 '2026.08.17: поперечник всегда в масштабе 1:1 (без растяжения по высоте); в шаблонах СП — расклин, корыто, откос 1:1,5 и постель под бортовым камнем.',
@@ -39764,7 +39847,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=138').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=139').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
