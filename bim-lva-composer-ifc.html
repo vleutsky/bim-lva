@@ -16358,9 +16358,10 @@
         }
 
         async function buildStep(polylines, slopeModels) {
+            let kernel;
             try {
                 const { OcctKernel } = await import('/assets/vendor/occt-wasm/index.js');
-                using kernel = await OcctKernel.init();
+                kernel = await OcctKernel.init();
 
                 const shapes = [];
 
@@ -16454,6 +16455,15 @@
             } catch (err) {
                 console.error('STEP build error:', err);
                 throw err;
+            } finally {
+                // Очистить ресурсы OCCT kernel
+                if (kernel && typeof kernel.dispose === 'function') {
+                    try {
+                        kernel.dispose();
+                    } catch (e) {
+                        console.warn('Error disposing OCCT kernel:', e);
+                    }
+                }
             }
         }
 
