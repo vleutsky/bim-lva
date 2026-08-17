@@ -2531,6 +2531,15 @@ async function checkRoadCrossSections(page) {
     if (Math.abs((zoom.after ?? 0) - (zoom.before ?? 0)) > 0.05) {
         problems.push(`поперечники: ⤢ не вернул масштаб сечения (${JSON.stringify(zoom)})`);
     }
+    const scale11 = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        D.fitRoadXs();
+        return D.roadXsViewSpan();
+    });
+    if (!scale11 || !(scale11.mPerPxOff > 0)
+        || Math.abs(scale11.mPerPxOff - scale11.mPerPxZ) / scale11.mPerPxOff > 0.05) {
+        problems.push(`поперечники: вертикальный масштаб не 1:1 (${JSON.stringify(scale11)})`);
+    }
 
     const layer = await page.evaluate(() => {
         const D = window.BimLvaDebug;
@@ -2961,6 +2970,7 @@ async function checkRoadCrossSections(page) {
                 shld: n('SHLD'), ditch: n('DITCH'), curb: n('CURB'),
                 walk: n('WALK'), median: n('MEDIAN'),
                 base: n('BASE'), subb: n('SUBB'), pvmt: n('PVMT'),
+                wedge: n('WEDGE'), trough: n('TROUGH'), slope: n('SLOPE'), bed: n('BED'),
                 curbH: curbT && by.R ? curbT.dz - by.R.dz : null,
                 curbBuried: curbB && by.R ? by.R.dz - curbB.dz : 0
             };
@@ -2988,6 +2998,7 @@ async function checkRoadCrossSections(page) {
     if (!near(gost.iii?.L, -3.5) || !near(gost.iii?.R, 3.5)
         || (gost.iii?.shld || 0) < 4 || (gost.iii?.ditch || 0) < 2
         || !gost.iii?.base || !gost.iii?.subb || !gost.iii?.pvmt
+        || !gost.iii?.wedge || !gost.iii?.trough || (gost.iii?.slope || 0) < 2
         || gost.appliedDitch < 2 || gost.appliedShld < 4 || !near(gost.widthL, 3.5)) {
         problems.push(`поперечники: шаблон III по СП 34 (${JSON.stringify(gost.iii)} appliedDitch=${gost.appliedDitch} shld=${gost.appliedShld} widthL=${gost.widthL})`);
     }
@@ -2995,7 +3006,8 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: шаблон IA (${JSON.stringify(gost.ia)})`);
     }
     if ((gost.street?.curb || 0) < 2 || (gost.street?.walk || 0) < 2
-        || !near(gost.street?.curbH, 0.15) || !near(gost.street?.curbBuried, 0.15)) {
+        || !near(gost.street?.curbH, 0.15) || !near(gost.street?.curbBuried, 0.15)
+        || (gost.street?.bed || 0) < 2 || !gost.street?.wedge || !gost.street?.trough) {
         problems.push(`поперечники: шаблон улицы ГОСТ 6665 (${JSON.stringify(gost.street)})`);
     }
 
