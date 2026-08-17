@@ -1192,6 +1192,7 @@
         }
         #roadXsChart { height: 240px; background: var(--panel-2); }
         #roadXsChart .xs-slope { pointer-events: none; }
+        #roadXsChart .xs-dim, #roadXsChart .xs-grade { pointer-events: none; }
         #roadXsChart .xs-shape { cursor: grab; }
         #roadXsChart .xs-shape:hover { filter: brightness(1.08); }
         .xs-swatch {
@@ -17434,7 +17435,7 @@
          */
         const ROAD_XS_MAX_STATIONS = 200;
         const ROAD_XS_MAX_SAMPLES = 201;
-        const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 14, t: 18, b: 28 };
+        const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 14, t: 44, b: 28 };
         const ROAD_XS_MITER_CAP = 8;
         /** Дуга (тесселяция сопряжения): не острый miter и не прямая. */
         const ROAD_ARC_MIN_DEFL = THREE.MathUtils.degToRad(3);
@@ -17455,6 +17456,7 @@
             TROUGH: { fill: '#8c6a48', stroke: '#5a4028' },
             SLOPE: { fill: '#c49a6c', stroke: '#8a6848' },
             SHLD: { fill: '#b8956a', stroke: '#7a5a38' },
+            SHLDU: { fill: '#c4b49a', stroke: '#8a7860' },
             DITCH: { fill: '#6e8b57', stroke: '#3d5a32' },
             WALK: { fill: '#c8c4bc', stroke: '#8a8680' },
             MEDIAN: { fill: '#6a8f5a', stroke: '#3d5a32' },
@@ -17476,7 +17478,8 @@
         const ROAD_XS_POINT_CAPTION = {
             CL: 'Ось', L: 'Л', R: 'П', LB: 'Лн', RB: 'Пн',
             CURBT: 'Брд.в', CURBO: 'Брд.н', CURBB: 'Брд.низ', CURBI: 'Брд.вн',
-            SHLDT: 'Обч.в', SHLDO: 'Обч.н', SHLDB: 'Обч.низ',
+            SHLDT: 'Обч.в', SHLDO: 'Обч.н', SHLDB: 'Обч.низ', SHLDI: 'Обч.вн',
+            SHLDUO: 'Прис.н', SHLDUB: 'Прис.низ', SHLDUI: 'Прис.вн',
             WALKT: 'Трт.в', WALKO: 'Трт.н', WALKB: 'Трт.низ',
             MEDL: 'Разд.л', MEDR: 'Разд.п', MEDLT: 'Разд.лв', MEDRT: 'Разд.пв',
             DH: 'Кюв', DBI: 'Кюв.вн', DBO: 'Кюв.н', DO: 'Кюв.нр',
@@ -17488,7 +17491,7 @@
             PVMT: 'Покрытие', BASE: 'Основание', SUBB: 'Песок',
             SUB2: 'Слой 2', SUB3: 'Слой 3', SUB4: 'Слой 4',
             WEDGE: 'Расклин', TROUGH: 'Корыто', CURB: 'Бордюр', BED: 'Постель',
-            SHLD: 'Обочина', DITCH: 'Кювет', WALK: 'Тротуар', MEDIAN: 'Разделительная',
+            SHLD: 'Укрепл. обочина', SHLDU: 'Присыпная', DITCH: 'Кювет', WALK: 'Тротуар', MEDIAN: 'Разделительная',
             SLOPE: 'Откос', BOX: 'Прямоугольник', TRAP: 'Трапеция', TRI: 'Треугольник'
         };
         function roadXsPointCaption(code) {
@@ -17925,7 +17928,7 @@
             bed: { code: 'BED', w: 0.15, h: 0.10 },
             slope: { code: 'SLOPE', w: 1.80, h: 1.20, m: 1.5 },
             trough: { code: 'TROUGH', w: 4.00, h: 0.20 },
-            shoulder: { code: 'SHLD', w: 0.75, h: 0.05 },
+            shoulder: { code: 'SHLD', w: 0.75, h: 0.15, slope: 0.04 },
             ditch: { code: 'DITCH', w: 0.50, h: 0.40, berm: 0.30 },
             walk: { code: 'WALK', w: 1.50, h: 0.12 },
             median: { code: 'MEDIAN', w: 5.00, h: 0.15 },
@@ -18007,7 +18010,22 @@
                     link(i6, i4, 'BEDIN');
                     shape('BED', [i4, i3, i5, i6]);
                 }
-            } else if (kind === 'curb' || kind === 'box' || kind === 'shoulder' || kind === 'walk' || kind === 'median') {
+            } else if (kind === 'shoulder') {
+                // Продолжение верха наружу с поперечным уклоном (40‰ по СП 34),
+                // а не коробка вверх от кромки — так на типовых поперечниках ОД.
+                const w = spec.w, h = spec.h;
+                const slope = spec.slope != null ? Number(spec.slope) : SP34_SHOULDER;
+                const drop = w * Math.max(0, Number.isFinite(slope) ? slope : SP34_SHOULDER);
+                const [i1, i2, i3] = nextIds(3);
+                addPt(i1, spec.code + 'O', aOff + sign * w, aDz - drop, anchor.id);
+                addPt(i2, spec.code + 'B', aOff + sign * w, aDz - drop - h, i1);
+                addPt(i3, spec.code + 'I', aOff, aDz - h, i1);
+                link(anchor.id, i1, spec.code + 'TOP');
+                link(i1, i2, spec.code + 'S');
+                link(i2, i3, spec.code + 'BOT');
+                link(i3, anchor.id, spec.code + 'IN');
+                sh = shape(spec.code, [anchor.id, i1, i2, i3]);
+            } else if (kind === 'curb' || kind === 'box' || kind === 'walk' || kind === 'median') {
                 const w = spec.w, h = spec.h;
                 const [i1, i2, i3] = nextIds(3);
                 addPt(i1, spec.code + 'T', aOff, aDz + h, anchor.id);
@@ -18224,6 +18242,8 @@
          * Бортовой камень БР 100.30.15 — ГОСТ 6665: 0,15×0,30, видимая часть ~0,15.
          */
         const SP34_CROWN = 0.02;
+        /** Поперечный уклон обочины 40‰ — СП 34.13330 табл. 11.7. */
+        const SP34_SHOULDER = 0.04;
         const GOST_CURB_BR = { w: 0.15, h: 0.15, buried: 0.15 };
 
         function gostPaveTemplate(widthL, widthR, paveH, crown) {
@@ -18302,6 +18322,7 @@
          * Типовой поперечник: ширины — табл. 11.1 СП 34.13330.2012 /
          * СП 42.13330 (улицы). Одежда — ориентир, не расчёт ОДН:
          * покрытие, расклин, основание, песок, корыто 1:1; у бордюра постель;
+         * обочина — продолжение верха с 40‰ (укреплённая, затем присыпная);
          * снаружи откос 1:1,5.
          */
         function buildGostRoadTemplate(cfg) {
@@ -18329,8 +18350,16 @@
             if (cfg.walkW > 0) addFigureBothSides(tpl, 'walk', { w: cfg.walkW, h: cfg.walkH || 0.12 });
             const strW = Math.max(0, Number(cfg.shldStrW) || 0);
             const shldW = Math.max(0, Number(cfg.shldW) || 0);
-            if (strW > 0) addFigureBothSides(tpl, 'shoulder', { w: strW, h: 0.04 });
-            if (shldW > strW + 1e-6) addFigureBothSides(tpl, 'shoulder', { w: shldW - strW, h: 0.06 });
+            const shldH = cfg.shldH == null ? 0.15 : Number(cfg.shldH);
+            const shldSlope = cfg.shldSlope == null ? SP34_SHOULDER : Number(cfg.shldSlope);
+            if (strW > 0) {
+                addFigureBothSides(tpl, 'shoulder', { w: strW, h: shldH, slope: shldSlope });
+            }
+            if (shldW > strW + 1e-6) {
+                addFigureBothSides(tpl, 'shoulder', {
+                    code: 'SHLDU', w: shldW - strW, h: shldH, slope: shldSlope
+                });
+            }
             if (cfg.ditch) {
                 addFigureBothSides(tpl, 'ditch', {
                     h: cfg.ditchH || 0.50,
@@ -19790,6 +19819,130 @@
             return samples;
         }
 
+        /** Ширина на размерной цепочке: 3,50 — как на типовых поперечниках. */
+        function fmtRoadXsMeters(m) {
+            return Math.abs(Number(m) || 0).toFixed(2).replace('.', ',');
+        }
+
+        function fmtRoadXsPermille(grade) {
+            return Math.round(Math.abs(Number(grade) || 0) * 1000) + '‰';
+        }
+
+        function fmtRoadXsRatio(run, rise) {
+            const m = Math.abs(run) / Math.max(1e-9, Math.abs(rise));
+            const txt = Math.abs(m - Math.round(m)) < 0.08
+                ? String(Math.round(m))
+                : m.toFixed(1).replace('.', ',');
+            return '1:' + txt;
+        }
+
+        /**
+         * Станции верхней размерной цепочки: ось, кромки, наружные точки
+         * обочины / бордюра / тротуара. Корыто и кювет не входят — на типовых
+         * сверху только пикетные ширины покрытия и обочины.
+         */
+        function roadXsDimStations(resolved) {
+            const want = /^(CL|L|R|SHLDO|SHLDUO|CURBO|WALKO|MEDL|MEDR)$/;
+            const offs = [];
+            (resolved || []).forEach((p) => {
+                if (p.hide) return;
+                const c = String(p.code || '').toUpperCase();
+                if (want.test(c)) offs.push(p.off);
+            });
+            offs.sort((a, b) => a - b);
+            const out = [];
+            offs.forEach((o) => {
+                if (!out.length || Math.abs(o - out[out.length - 1]) > 0.05) out.push(o);
+            });
+            return out;
+        }
+
+        function roadXsDimChainSvg(stations, px, pad) {
+            if (!stations || stations.length < 2) return '';
+            const y = Math.max(16, pad.t - 18);
+            const tick = 7;
+            const parts = [];
+            stations.forEach((o, i) => {
+                const x = px(o);
+                parts.push(
+                    `<line class="xs-dim" x1="${x.toFixed(1)}" y1="${(y - tick).toFixed(1)}" x2="${x.toFixed(1)}" y2="${(y + tick).toFixed(1)}" stroke="#3d4a58" stroke-width="0.9"/>`
+                );
+                if (i === 0) return;
+                const x0 = px(stations[i - 1]);
+                const mid = (x0 + x) / 2;
+                const span = Math.abs(x - x0);
+                parts.push(
+                    `<line class="xs-dim" x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#3d4a58" stroke-width="0.9"/>`
+                );
+                if (span < 22) return;
+                parts.push(
+                    `<text class="xs-dim" x="${mid.toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" fill="#2a3340">${fmtRoadXsMeters(o - stations[i - 1])}</text>`
+                );
+            });
+            return parts.join('');
+        }
+
+        function roadXsGradeLabelSvg(a, b, xyOf, klass) {
+            if (!a || !b) return '';
+            const dOff = b.off - a.off;
+            const dZ = (b.dz || 0) - (a.dz || 0);
+            if (Math.abs(dOff) < 0.15) return '';
+            const grade = dZ / dOff;
+            if (Math.abs(grade) < 0.008) return '';
+            const pa = xyOf(a), pb = xyOf(b);
+            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) < 18) return '';
+            return `<text class="xs-grade ${klass || ''}" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${(Math.min(pa.y, pb.y) - 8).toFixed(1)}" text-anchor="middle" fill="#1d4f7a">${fmtRoadXsPermille(grade)}</text>`;
+        }
+
+        function roadXsRatioLabelSvg(ring, xyOf) {
+            if (!ring || ring.length < 2) return '';
+            let best = null;
+            for (let i = 0; i < ring.length; i++) {
+                const a = ring[i], b = ring[(i + 1) % ring.length];
+                const dOff = Math.abs(b.off - a.off);
+                const dZ = Math.abs((b.dz || 0) - (a.dz || 0));
+                if (dZ < 0.03 || dOff < 0.05) continue;
+                const score = dOff + dZ;
+                if (!best || score > best.score) best = { a, b, dOff, dZ, score };
+            }
+            if (!best) return '';
+            const pa = xyOf(best.a), pb = xyOf(best.b);
+            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) < 26) return '';
+            return `<text class="xs-grade" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${((pa.y + pb.y) / 2 - 7).toFixed(1)}" text-anchor="middle" fill="#6a4020">${fmtRoadXsRatio(best.dOff, best.dZ)}</text>`;
+        }
+
+        function roadXsAnnotSvg(resolved, tpl, xyOf, px, pad) {
+            const byCode = (c) => (resolved || []).find((p) => !p.hide && String(p.code || '').toUpperCase() === c);
+            const all = (c) => (resolved || []).filter((p) => !p.hide && String(p.code || '').toUpperCase() === c)
+                .sort((a, b) => a.off - b.off);
+            const cl = byCode('CL'), L = byCode('L'), R = byCode('R');
+            const parts = [roadXsDimChainSvg(roadXsDimStations(resolved), px, pad)];
+            parts.push(roadXsGradeLabelSvg(cl, L, xyOf));
+            parts.push(roadXsGradeLabelSvg(cl, R, xyOf));
+            const leftSh = [...all('SHLDO'), ...all('SHLDUO')].filter((p) => L && p.off < L.off - 0.04)
+                .sort((a, b) => b.off - a.off);
+            let prevL = L;
+            leftSh.forEach((p) => {
+                parts.push(roadXsGradeLabelSvg(prevL, p, xyOf));
+                prevL = p;
+            });
+            const rightSh = [...all('SHLDO'), ...all('SHLDUO')].filter((p) => R && p.off > R.off + 0.04)
+                .sort((a, b) => a.off - b.off);
+            let prevR = R;
+            rightSh.forEach((p) => {
+                parts.push(roadXsGradeLabelSvg(prevR, p, xyOf));
+                prevR = p;
+            });
+            const ratioCodes = new Set(['WEDGE', 'TROUGH', 'SLOPE']);
+            (tpl?.shapes || []).forEach((sh) => {
+                if (!ratioCodes.has(String(sh.code || '').toUpperCase())) return;
+                const ring = (sh.pts || []).map((id) => (resolved || []).find((p) => p.id === id))
+                    .filter((p) => p && !p.hide);
+                parts.push(roadXsRatioLabelSvg(ring, xyOf));
+            });
+            return parts.join('');
+        }
+
         function renderRoadXsView() {
             const svg = $('roadXsChart');
             const meta = $('roadXsMeta');
@@ -20007,7 +20160,8 @@
                 ${linkDraw}
                 ${knotDraw}
                 ${slopeDraw}
-                <text x="${clipL + 4}" y="14">отм., м</text>
+                ${roadXsAnnotSvg(resolved, tpl, xyOf, px, pad)}
+                <text x="${clipL + 4}" y="${Math.max(12, pad.t - 28)}">отм., м</text>
                 <text x="${clipR}" y="${pad.h - 8}" text-anchor="end">смещ., м</text>
                 <text x="${clipL + 8}" y="${(axisY - 8).toFixed(1)}" fill="#e8442a">ось</text>
                 <text x="${leftTick.toFixed(1)}" y="${(axisY + 18).toFixed(1)}" text-anchor="middle" fill="#8a7344">кромка</text>
@@ -39316,7 +39470,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.17',
-            buildId: 'profile-vcurve',
+            buildId: 'xs-dims',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -39325,6 +39479,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
                 '2026.08.17: поперечник всегда в масштабе 1:1 (без растяжения по высоте); в шаблонах СП — расклин, корыто, откос 1:1,5 и постель под бортовым камнем.',
                 '2026.08.16: шаблоны дорог по СП 34.13330 (IA…V) и СП 42.13330 (магистраль / улица): одежда, обочина, кювет, разделительная, бордюр ГОСТ 6665, тротуар.',
@@ -39432,7 +39587,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=135').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=136').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
