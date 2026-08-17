@@ -20031,7 +20031,7 @@
                         while (i < placed.length - 1 && skipInterval[i]) i++;
                         const endSta = i;
                         if (startSta > 0) cap(placed[startSta], true);
-                        if (endSta < placed.length - 1) cap(placed[endSta], false);
+                        if (endSta < placed.length) cap(placed[endSta], false);
                     }
                 }
             }
@@ -38387,6 +38387,7 @@ ${componentXml || '    '}
 
         const RIGHT_DRAG_THRESHOLD = 6;
         let stageRightPointer = null;
+        let stageCtxAllowed = false;
 
         stage.addEventListener('pointerdown', e => {
             if (e.button !== 2) return;
@@ -38394,14 +38395,17 @@ ${componentXml || '    '}
                 pointerId: e.pointerId,
                 x: e.clientX,
                 y: e.clientY,
-                dragged: false
+                dragged: false,
+                time: Date.now()
             };
+            stageCtxAllowed = true;
         }, true);
 
         stage.addEventListener('pointermove', e => {
             if (!stageRightPointer || stageRightPointer.pointerId !== e.pointerId) return;
             if (Math.hypot(e.clientX - stageRightPointer.x, e.clientY - stageRightPointer.y) >= RIGHT_DRAG_THRESHOLD) {
                 stageRightPointer.dragged = true;
+                stageCtxAllowed = false;
             }
         }, true);
 
@@ -38416,16 +38420,19 @@ ${componentXml || '    '}
 
         stage.addEventListener('pointercancel', () => {
             stageRightPointer = null;
+            stageCtxAllowed = false;
         }, true);
 
         stage.addEventListener('contextmenu', e => {
             e.preventDefault();
-            const wasCameraDrag = !!(stageRightPointer && stageRightPointer.dragged);
-            stageRightPointer = null;
-            if (wasCameraDrag) {
+            if (!stageCtxAllowed || (stageRightPointer && stageRightPointer.dragged)) {
                 stageCtx.classList.remove('show');
+                stageRightPointer = null;
+                stageCtxAllowed = false;
                 return;
             }
+            stageRightPointer = null;
+            stageCtxAllowed = false;
             stageContextElementRef = resolveHitElementRef(pickStageHit(e.clientX, e.clientY));
             $('ctxSelectSimilar').classList.toggle('disabled', !stageContextElementRef);
             // Блок команд полилинии показываем, только если ПКМ пришёлся по ней.
