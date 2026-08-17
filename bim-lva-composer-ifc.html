@@ -16359,17 +16359,98 @@
 
         async function buildStep(polylines, slopeModels) {
             try {
-                // Динамическая загрузка occt-wasm при необходимости
-                const InitOCCT = (await import('/assets/vendor/occt-wasm/index.js')).default;
-                const occt = await InitOCCT();
+                const { OcctKernel } = await import('/assets/vendor/occt-wasm/index.js');
+                using kernel = await OcctKernel.init();
 
-                // Создание STEP документа
-                // TODO: Добавить полилинии как BSpline кривые
-                // TODO: Добавить поверхности как BRep solid
-                // TODO: Экспортировать через occt.exportStep()
+                const shapes = [];
 
-                notifyError('STEP-экспорт: в разработке');
-                return null;
+                // Добавить полилинии как линии
+                for (const rec of polylines) {
+                    if (!rec.pts?.length || rec.pts.length < 2) continue;
+
+                    const pts = rec.pts.map((p) => {
+                        const abs = worldPointToAbsoluteXYZ(p);
+                        return [abs.x, abs.y, abs.z];
+                    });
+
+                    // Создать wire из точек как линии
+                    const edges = [];
+                    for (let i = 0; i < pts.length - 1; i++) {
+                        const [x1, y1, z1] = pts[i];
+                        const [x2, y2, z2] = pts[i + 1];
+                        const edge = kernel.makeLine([x1, y1, z1], [x2, y2, z2]);
+                        edges.push(edge);
+                    }
+
+                    if (edges.length > 0) {
+                        try {
+                            const wire = kernel.makeWire(edges);
+                            shapes.push(wire);
+                        } catch (e) {
+                            console.warn('Failed to create wire for polyline:', e);
+                        }
+                    }
+                }
+
+                // Добавить поверхности как треугольные грани
+                for (const sm of slopeModels) {
+                    if (!sm?.tin?.faces?.length) continue;
+
+                    const pts = sm.tin.points;
+                    if (!pts?.length) continue;
+
+                    // Построить грани из треугольников
+                    const faces = [];
+                    for (const face of sm.tin.faces) {
+                        const [i0, i1, i2] = face;
+                        if (i0 < pts.length && i1 < pts.length && i2 < pts.length) {
+                            const p0 = worldPointToAbsoluteXYZ(pts[i0]);
+                            const p1 = worldPointToAbsoluteXYZ(pts[i1]);
+                            const p2 = worldPointToAbsoluteXYZ(pts[i2]);
+
+                            try {
+                                // Создать треугольную грань через wire
+                                const pts3 = [
+                                    [p0.x, p0.y, p0.z],
+                                    [p1.x, p1.y, p1.z],
+                                    [p2.x, p2.y, p2.z],
+                                    [p0.x, p0.y, p0.z]  // закрыть цикл
+                                ];
+
+                                const edges = [];
+                                for (let j = 0; j < pts3.length - 1; j++) {
+                                    edges.push(kernel.makeLine(pts3[j], pts3[j + 1]));
+                                }
+
+                                const wire = kernel.makeWire(edges);
+                                const face = kernel.makeFaceFromWire(wire);
+                                faces.push(face);
+                            } catch (e) {
+                                console.warn('Failed to create triangle face:', e);
+                            }
+                        }
+                    }
+
+                    if (faces.length > 0) {
+                        // Объединить грани в shell или solid
+                        try {
+                            const shell = kernel.makeShell(faces);
+                            shapes.push(shell);
+                        } catch (e) {
+                            // Если не удалось создать shell, добавить грани по отдельности
+                            shapes.push(...faces);
+                        }
+                    }
+                }
+
+                if (shapes.length === 0) {
+                    return null;
+                }
+
+                // Экспортировать compound всех shape'ов
+                const compound = kernel.makeCompound(shapes);
+                const stepText = kernel.exportStep(compound);
+                return stepText;
             } catch (err) {
                 console.error('STEP build error:', err);
                 throw err;
@@ -16379,16 +16460,95 @@
         async function buildDwg(polylines, pins, slopeModels) {
             try {
                 // Динамическая загрузка acad-ts при необходимости
-                const { CadDocument } = await import('/assets/vendor/acad-ts/index.js');
+                const acad = await import('/assets/vendor/acad-ts/index.js');
+                const { CadDocument } = acad;
                 const doc = new CadDocument();
 
-                // TODO: Добавить полилинии как POLYLINE 2D
-                // TODO: Добавить точки как POINT
-                // TODO: Добавить поверхности как 3DSOLID
-                // TODO: Экспортировать через doc.toDwgBuffer()
+                const modelSpace = doc.modelSpace;
 
-                notifyError('DWG-экспорт: в разработке');
-                return null;
+                // Добавить полилинии как POLYLINE 2D
+                for (const rec of polylines) {
+                    if (!rec.pts?.length || rec.pts.length < 2) continue;
+
+                    try {
+                        const pts = rec.pts.map((p) => {
+                            const abs = worldPointToAbsoluteXYZ(p);
+                            return { x: abs.x, y: abs.y, z: abs.z };
+                        });
+
+                        // Создать 2D полилинию
+                        const polyline = new acad.Polyline();
+                        for (const pt of pts) {
+                            polyline.addVertex({x: pt.x, y: pt.y}, 0);  // bulge = 0 для прямых линий
+                        }
+
+                        // Установить слой и цвет
+                        polyline.layer = rec.name || 'Полилиния';
+                        polyline.color = 256;  // By layer
+
+                        modelSpace.addEntity(polyline);
+                    } catch (e) {
+                        console.warn('Failed to create DWG polyline:', e);
+                    }
+                }
+
+                // Добавить координатные точки
+                for (const pin of pins) {
+                    if (!pin.abs) continue;
+
+                    try {
+                        const point = new acad.Point();
+                        point.position = {
+                            x: pin.abs.x,
+                            y: pin.abs.y,
+                            z: pin.abs.z
+                        };
+                        point.layer = 'Точки';
+                        modelSpace.addEntity(point);
+                    } catch (e) {
+                        console.warn('Failed to create DWG point:', e);
+                    }
+                }
+
+                // Добавить поверхности как 3DSOLID (если возможно через acad-ts)
+                // Упрощённый подход: экспортировать как LW-полилинии на разных высотах
+                for (const sm of slopeModels) {
+                    if (!sm?.tin?.faces?.length) continue;
+
+                    try {
+                        // Для каждого треугольника создать 3D-полилинию
+                        const pts = sm.tin.points;
+                        if (!pts?.length) continue;
+
+                        for (const face of sm.tin.faces) {
+                            const [i0, i1, i2] = face;
+                            if (i0 >= pts.length || i1 >= pts.length || i2 >= pts.length) continue;
+
+                            const p0 = worldPointToAbsoluteXYZ(pts[i0]);
+                            const p1 = worldPointToAbsoluteXYZ(pts[i1]);
+                            const p2 = worldPointToAbsoluteXYZ(pts[i2]);
+
+                            // Создать 3D-полилинию для треугольника
+                            // Это упрощение - в DWG есть 3DFACE, но acad-ts может не поддерживать
+                            const face3d = new acad.Polyline3D();
+                            face3d.addVertex({x: p0.x, y: p0.y, z: p0.z});
+                            face3d.addVertex({x: p1.x, y: p1.y, z: p1.z});
+                            face3d.addVertex({x: p2.x, y: p2.y, z: p2.z});
+                            face3d.addVertex({x: p0.x, y: p0.y, z: p0.z});  // закрыть
+
+                            face3d.layer = sm.name || 'Поверхность';
+                            face3d.closed = true;
+
+                            modelSpace.addEntity(face3d);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to create DWG surface:', e);
+                    }
+                }
+
+                // Экспортировать в DWG буфер
+                const buffer = doc.toDwgBuffer();
+                return buffer;
             } catch (err) {
                 console.error('DWG build error:', err);
                 throw err;
