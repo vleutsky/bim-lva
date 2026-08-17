@@ -4183,6 +4183,7 @@
                         <button class="btn rbtn-big" id="btnRailwayAxis" disabled title="Ось железной дороги: клики — вершины, Esc — поперечники"><span class="tb-ico">🚂</span><span class="tb-txt">Ось ЖД</span></button>
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
+                            <button class="btn rbtn-sm" id="btnIntersections" disabled title="Пересечения и примыкания дорог">⛔ Пересечения</button>
                             <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
                             <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
                             <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
@@ -5493,6 +5494,48 @@
                 <button class="btn" id="padsExcel" title="Сводка по площадкам: имя, площадь, объёмы, уклоны, грани TIN">⬇ Все в Excel</button>
                 <button class="btn" id="padsClear">Убрать все</button>
                 <button class="btn load-btn" id="padsClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="intersectionModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(500px,100%)">
+            <h3>Создать пересечение дорог</h3>
+            <div class="bulk-note">Выберите две оси для пересечения или примыкания</div>
+
+            <div class="prop small">
+                <div class="k">Первая ось</div>
+                <select id="intersectionPoly1" class="editInput">
+                    <option value="">-- выберите --</option>
+                </select>
+            </div>
+
+            <div class="prop small">
+                <div class="k">Вторая ось</div>
+                <select id="intersectionPoly2" class="editInput">
+                    <option value="">-- выберите --</option>
+                </select>
+            </div>
+
+            <div class="prop small">
+                <div class="k">Тип пересечения</div>
+                <select id="intersectionType" class="editInput">
+                    <option value="cross">Крестообразное (две дороги пересекаются)</option>
+                    <option value="t-junction">Т-образное примыкание</option>
+                    <option value="merge">Слияние (одна вливается в другую)</option>
+                </select>
+            </div>
+
+            <div class="prop small">
+                <div class="k">Радиус переходной кривой, м</div>
+                <input id="intersectionRadius" class="editInput" type="number" min="5" max="500" step="5" value="30">
+            </div>
+
+            <div class="bulk-note" id="intersectionStatus">—</div>
+
+            <div class="modal-actions">
+                <button class="btn" id="intersectionCancel">Отмена</button>
+                <button class="btn load-btn" id="intersectionCreate">Создать</button>
             </div>
         </div>
     </div>
@@ -14010,12 +14053,16 @@
         let drawMode = false;
         let drawPoints = [];
         let drawnPolylines = [];
+        let roadIntersections = [];
         const drawGroup = new THREE.Group();
         drawGroup.name = 'DrawnPolylines';
         scene.add(drawGroup);
         const roadXsGroup = new THREE.Group();
         roadXsGroup.name = 'RoadCrossSections';
         scene.add(roadXsGroup);
+        const intersectionGroup = new THREE.Group();
+        intersectionGroup.name = 'RoadIntersections';
+        scene.add(intersectionGroup);
         let roadXsModels = [];
         const DRAW_COLOR = '#1f8f5f';
         const DRAW_WIDTH = 2;
@@ -16109,12 +16156,14 @@
             const xmlBtn = $('btnDrawExportXml');
             const stepBtn = $('btnDrawExportStep');
             const dwgBtn = $('btnDrawExportDwg');
+            const intersectionsBtn = $('btnIntersections');
             const hasContent = drawnPolylines.length || coordPins.length || sweptSolids.length
                 || slopeModels.length || roadXsModels.length;
             if (btn) btn.disabled = !hasContent;
             if (xmlBtn) xmlBtn.disabled = !drawnPolylines.length;
             if (stepBtn) stepBtn.disabled = !hasContent;
             if (dwgBtn) dwgBtn.disabled = !hasContent;
+            if (intersectionsBtn) intersectionsBtn.disabled = drawnPolylines.length < 2;
             renderPolylinesList();
             renderPadsList();
         }
@@ -22349,6 +22398,154 @@
             };
         });
 
+        function openIntersectionsDialog() {
+            const candidates = listedPolylines();
+            if (candidates.length < 2) {
+                notifyError('Нужно минимум две оси для пересечения.');
+                return;
+            }
+
+            // Заполнить селекты списком осей
+            const select1 = $('intersectionPoly1');
+            const select2 = $('intersectionPoly2');
+            if (!select1 || !select2) return;
+
+            // Очистить и заполнить
+            select1.innerHTML = '<option value="">-- выберите --</option>';
+            select2.innerHTML = '<option value="">-- выберите --</option>';
+
+            for (const poly of candidates) {
+                const opt1 = document.createElement('option');
+                opt1.value = poly.id;
+                opt1.textContent = poly.name || `Ось ${poly.id.slice(0, 8)}`;
+                select1.appendChild(opt1);
+
+                const opt2 = opt1.cloneNode(true);
+                select2.appendChild(opt2);
+            }
+
+            // Предвыбрать разные оси
+            if (candidates.length >= 2) {
+                select1.value = candidates[0].id;
+                select2.value = candidates[1].id;
+            }
+
+            $('intersectionModal')?.showModal?.();
+        }
+
+        function createRoadIntersection() {
+            const poly1Id = $('intersectionPoly1')?.value;
+            const poly2Id = $('intersectionPoly2')?.value;
+            const type = $('intersectionType')?.value || 'cross';
+            const radius = parseFloat($('intersectionRadius')?.value || 30);
+
+            if (!poly1Id || !poly2Id) {
+                notifyError('Выберите обе оси.');
+                return;
+            }
+            if (poly1Id === poly2Id) {
+                notifyError('Оси не должны быть одинаковыми.');
+                return;
+            }
+
+            const poly1 = drawnPolylines.find((p) => p.id === poly1Id);
+            const poly2 = drawnPolylines.find((p) => p.id === poly2Id);
+
+            if (!poly1 || !poly2 || !poly1.pts?.length || !poly2.pts?.length) {
+                notifyError('Не найдены полилинии или они пусты.');
+                return;
+            }
+
+            // Создать пересечение
+            const intersection = {
+                id: 'ix-' + Math.random().toString(36).slice(2, 10),
+                poly1Id,
+                poly2Id,
+                type,
+                radius,
+                created: new Date(),
+                points: null // будет заполнено при расчёте
+            };
+
+            // Расчёт геометрии пересечения
+            const result = calculateIntersection(poly1, poly2, type, radius);
+            if (!result) {
+                notifyError('Не удалось расчитать пересечение на этих осях.');
+                return;
+            }
+
+            intersection.points = result;
+            roadIntersections.push(intersection);
+
+            // Визуализировать пересечение
+            visualizeIntersection(intersection);
+
+            notify(`Пересечение дорог создано: ${type}`);
+            $('intersectionModal')?.close?.();
+            trackUsage('create_road_intersection', { type });
+        }
+
+        function calculateIntersection(poly1, poly2, type, radius) {
+            // Простой расчёт точки пересечения двух прямых (через первую и последнюю точку каждой)
+            const p1start = poly1.pts[0];
+            const p1end = poly1.pts[poly1.pts.length - 1];
+            const p2start = poly2.pts[0];
+            const p2end = poly2.pts[poly2.pts.length - 1];
+
+            // Преобразовать в мировые координаты
+            const a1 = worldPointToAbsoluteXYZ(p1start);
+            const a2 = worldPointToAbsoluteXYZ(p1end);
+            const b1 = worldPointToAbsoluteXYZ(p2start);
+            const b2 = worldPointToAbsoluteXYZ(p2end);
+
+            // Найти пересечение 2D линий (проекция на XY)
+            const intersection = lineIntersection2D(
+                { x: a1.x, y: a1.y },
+                { x: a2.x, y: a2.y },
+                { x: b1.x, y: b1.y },
+                { x: b2.x, y: b2.y }
+            );
+
+            if (!intersection) {
+                return null;
+            }
+
+            return {
+                crossPoint: intersection, // точка пересечения в 2D
+                poly1: { start: a1, end: a2 },
+                poly2: { start: b1, end: b2 }
+            };
+        }
+
+        function lineIntersection2D(a1, a2, b1, b2) {
+            // Найти пересечение двух линий в 2D (использует параметрические уравнения)
+            const x1 = a1.x, y1 = a1.y, x2 = a2.x, y2 = a2.y;
+            const x3 = b1.x, y3 = b1.y, x4 = b2.x, y4 = b2.y;
+
+            const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.abs(denom) < 1e-6) return null; // линии параллельны
+
+            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+
+            return {
+                x: x1 + t * (x2 - x1),
+                y: y1 + t * (y2 - y1)
+            };
+        }
+
+        function visualizeIntersection(intersection) {
+            // Нарисовать пересечение в сцене (пока как простой маркер)
+            const { crossPoint } = intersection.points;
+            if (!crossPoint) return;
+
+            const geometry = new THREE.SphereGeometry(10, 8, 8);
+            const material = new THREE.MeshBasicMaterial({ color: 0xff6600 });
+            const marker = new THREE.Mesh(geometry, material);
+            marker.position.set(crossPoint.x, crossPoint.y, 0);
+            marker.userData.intersectionId = intersection.id;
+            intersectionGroup.add(marker);
+        }
+
         function fillRoadXsRuleBar() {
             const bar = $('roadXsRuleBar');
             const model = currentRoadXsModel();
@@ -23106,6 +23303,18 @@
         $('polylinesClear')?.addEventListener('click', () => {
             if (!drawnPolylines.length) return;
             clearDrawnPolylines();
+        });
+
+        $('btnIntersections')?.addEventListener('click', () => {
+            openIntersectionsDialog();
+        });
+
+        $('intersectionCreate')?.addEventListener('click', () => {
+            createRoadIntersection();
+        });
+
+        $('intersectionCancel')?.addEventListener('click', () => {
+            $('intersectionModal')?.close?.();
         });
 
         function addMeasureMarker(pt) {
