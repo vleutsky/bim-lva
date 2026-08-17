@@ -4010,7 +4010,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 4ca66e8</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · c29e750</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -18088,6 +18088,101 @@
             return { left, right, zBot };
         }
 
+        const ROAD_XS_SHOULDER_CLIP_CODES = new Set(['WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4', 'TROUGH']);
+
+        /**
+         * Слои с расклином не должны резать укреплённую обочину по диагонали:
+         * выше низа SHLD — вертикаль у внутренней кромки обочины, ниже — прежний уклон.
+         */
+        function clipStructLayersToShoulder(tpl) {
+            if (!tpl?.points?.length) return;
+            const ensureClipPt = (code, off, dz, refPt) => {
+                let pt = tpl.points.find((q) => q.code === code);
+                if (pt) return pt;
+                tpl.seq = (tpl.seq || tpl.points.length) + 1;
+                pt = { id: tpl.seq, code, off, dz };
+                const par = refPt?.parent != null ? templatePoint(tpl, refPt.parent) : null;
+                if (par) {
+                    pt.parent = par.id;
+                    pt.relOff = off - par.off;
+                    pt.relDz = dz - par.dz;
+                }
+                tpl.points.push(pt);
+                return pt;
+            };
+            const linkClip = (a, b, c) => {
+                if (!templateHasLink(tpl, a, b)) tpl.links.push({ a, b, code: c });
+            };
+            const syncOff = (pt) => {
+                const par = pt.parent != null ? templatePoint(tpl, pt.parent) : null;
+                if (par) pt.relOff = pt.off - par.off;
+            };
+            const clipSide = (sign, vertOff, kneeDz, sideTag, ids, p) => {
+                const topIdx = sign > 0 ? 1 : 0;
+                const botIdx = sign > 0 ? 2 : 3;
+                const top = p[topIdx];
+                const bot = p[botIdx];
+                if (!top || !bot) return null;
+                if (Math.max(top.dz, bot.dz) <= kneeDz + 1e-4) return null;
+                const slopedOut = sign > 0
+                    ? (top.off > vertOff + 1e-4 || bot.off > vertOff + 1e-4)
+                    : (top.off < vertOff - 1e-4 || bot.off < vertOff - 1e-4);
+                if (!slopedOut) return null;
+                if (bot.dz >= kneeDz - 1e-4) {
+                    top.off = vertOff;
+                    bot.off = vertOff;
+                    syncOff(top);
+                    syncOff(bot);
+                    return { mode: 'vert' };
+                }
+                const knee = ensureClipPt(`${top.code}K${sideTag}`, vertOff, kneeDz, top);
+                tpl.links = (tpl.links || []).filter((l) => !(
+                    (l.a === top.id && l.b === bot.id) || (l.a === bot.id && l.b === top.id)
+                ));
+                let tv = null;
+                if (Math.abs(top.off - vertOff) > 1e-4) {
+                    tv = ensureClipPt(`${top.code}V${sideTag}`, vertOff, top.dz, top);
+                    linkClip(top.id, tv.id, 'RSH');
+                    linkClip(tv.id, knee.id, 'RSV');
+                } else {
+                    linkClip(top.id, knee.id, 'RSV');
+                }
+                linkClip(knee.id, bot.id, 'RSB');
+                return { mode: 'knee', kneeId: knee.id, tvId: tv?.id || null };
+            };
+            const anchors = {};
+            [-1, 1].forEach((sign) => {
+                const edgeCode = sign > 0 ? 'R' : 'L';
+                const anchor = tpl.points.find((p) => p.code === edgeCode);
+                const shldI = tpl.points.find((p) => p.code === 'SHLDI' && Math.sign(p.off) === sign);
+                if (anchor && shldI) {
+                    anchors[sign] = { vertOff: anchor.off, kneeDz: shldI.dz, sideTag: sign > 0 ? 'R' : 'L' };
+                }
+            });
+            (tpl.shapes || []).forEach((sh) => {
+                const codeU = String(sh.code || '').toUpperCase();
+                if (!ROAD_XS_SHOULDER_CLIP_CODES.has(codeU)) return;
+                const ids = sh.pts || [];
+                if (ids.length !== 4) return;
+                const p = ids.map((id) => templatePoint(tpl, id)).filter(Boolean);
+                if (p.length !== 4) return;
+                const left = anchors[-1] ? clipSide(-1, anchors[-1].vertOff, anchors[-1].kneeDz, anchors[-1].sideTag, ids, p) : null;
+                const right = anchors[1] ? clipSide(1, anchors[1].vertOff, anchors[1].kneeDz, anchors[1].sideTag, ids, p) : null;
+                if (!left && !right) return;
+                if (left?.mode === 'knee' && right?.mode === 'knee') {
+                    sh.pts = [ids[0], ids[1], right.kneeId, ids[2], ids[3], left.kneeId];
+                } else if (right?.mode === 'knee') {
+                    sh.pts = right.tvId
+                        ? [ids[0], ids[1], right.tvId, right.kneeId, ids[2], ids[3]]
+                        : [ids[0], ids[1], right.kneeId, ids[2], ids[3]];
+                } else if (left?.mode === 'knee') {
+                    sh.pts = left.tvId
+                        ? [ids[0], left.tvId, left.kneeId, ids[3], ids[2], ids[1]]
+                        : [ids[0], left.kneeId, ids[3], ids[2], ids[1]];
+                }
+            });
+        }
+
         /**
          * Новый слой одежды вниз от низа шаблона: две точки, три связи, форма.
          * extra — расклинивание: низ шире верха на extra с каждой стороны (1:1 при extra = h).
@@ -18708,6 +18803,7 @@
                     code: 'SHLDU', w: shldW - strW, h: shldH, slope: shldSlope
                 });
             }
+            if (strW > 0) clipStructLayersToShoulder(tpl);
             if (cfg.earth !== false) addRoadEarthwork(tpl);
             if (cfg.ditch) {
                 addFigureBothSides(tpl, 'ditch', {
@@ -19375,10 +19471,34 @@
             return mask;
         }
 
-        function roadXsAlignSpans(stn, stepTan) {
+        /**
+         * Вертикальная кривая профиля: те же короткие хорды, что на плане.
+         * Без этого полотно на PVI идёт по хорде между редкими станциями.
+         */
+        function roadXsVerticalCurveMask(record, stn) {
+            const n = stn?.pts?.length || 0;
+            const mask = new Array(n).fill(false);
+            if (!record || !polylineHasVCurve(record) || n < 2) return mask;
+            ensurePolylineVRadii(record);
+            const vSta = polylineVertexPlanStations(record);
+            record.vRadii.forEach((rv, i) => {
+                if ((rv || 0) < 1e-6) return;
+                const vs = vSta[i];
+                if (!(vs >= 0)) return;
+                const reach = Math.max(0.5, rv * 1.2);
+                for (let k = 0; k < n; k++) {
+                    if (Math.abs(stn.cum[k] - vs) <= reach + 1e-6) mask[k] = true;
+                }
+            });
+            return mask;
+        }
+
+        function roadXsAlignSpans(stn, stepTan, record) {
             const n = stn?.pts?.length || 0;
             if (n < 2 || !stn.cum) return [];
-            const mask = roadXsCurveMask(stn, stepTan);
+            const planMask = roadXsCurveMask(stn, stepTan);
+            const vertMask = record ? roadXsVerticalCurveMask(record, stn) : [];
+            const mask = planMask.map((v, i) => v || !!vertMask[i]);
             const spans = [];
             let i = 0;
             while (i < n - 1) {
@@ -19391,13 +19511,13 @@
             return spans;
         }
 
-        function roadXsStationList(stn, step, stepCurve, extra) {
+        function roadXsStationList(stn, step, stepCurve, extra, record) {
             const total = stn?.total;
             if (!(total > 0)) return [0];
             const dTan = Math.max(0.5, Number(step) || 20);
             const dCrv = Math.max(0.5, Number(stepCurve) || dTan);
             const raw = [];
-            const spans = roadXsAlignSpans(stn, dTan);
+            const spans = roadXsAlignSpans(stn, dTan, record);
             if (!spans.length) {
                 for (let s = 0; s < total - 1e-9; s += dTan) raw.push(s);
                 raw.push(total);
@@ -19464,6 +19584,20 @@
                 }
                 return stn.cum[best];
             }).filter((s) => s != null);
+        }
+
+        /** PVI вертикальной кривой — отдельные станции, даже если на плане уже дуга. */
+        function polylineVerticalVertexStations(record, stn) {
+            if (!polylineHasVCurve(record)) return [];
+            ensurePolylineVRadii(record);
+            const vSta = polylineVertexPlanStations(record);
+            const last = record.pts.length - 1;
+            const out = [];
+            record.vRadii.forEach((rv, i) => {
+                if ((rv || 0) < 1e-6 || i === 0 || i === last) return;
+                out.push(vSta[i]);
+            });
+            return out;
         }
 
         function roadVertexTurns(record, stn) {
@@ -19556,7 +19690,12 @@
             const widthR = roadWidthOrDefault(opts.widthR);
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
             const turns = roadVertexTurns(record, stn);
-            let stationsPk = roadXsStationList(stn, step, stepCurve, polylineVertexStations(record, stn));
+            let extra = polylineVertexStations(record, stn);
+            if (polylineHasVCurve(record)) {
+                extra = extra.concat(polylineVerticalVertexStations(record, stn));
+            }
+            extra = [...new Set(extra.map((s) => Math.round(s * 1000) / 1000))];
+            let stationsPk = roadXsStationList(stn, step, stepCurve, extra, record);
             stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
             const MISS = Number.NEGATIVE_INFINITY;
             let missed = 0, hits = 0;
@@ -39966,7 +40105,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.17',
-            buildId: '4ca66e8-preview',
+            buildId: 'c29e750-preview',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -39975,7 +40114,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.17: полотно 3D без клиньев при зуме — общее ребро слоёв лофтится один раз; на остром угле внутреннюю сторону не раздувает биссектриса.',
+                '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
                 '2026.08.17: поперечник всегда в масштабе 1:1 (без растяжения по высоте); в шаблонах СП — расклин, корыто, откос 1:1,5 и постель под бортовым камнем.',
