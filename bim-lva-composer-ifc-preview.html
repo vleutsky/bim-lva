@@ -3899,7 +3899,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 8982af8</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 5b63a2e</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5213,7 +5213,7 @@
                             <span id="roadXsPk" class="pin-xyz">PK —</span>
                         </div>
                         <span class="fill"></span>
-                        <button class="btn" id="roadXsFit" data-tip="Вписать сечение. Колесо — зум к курсору, Shift+колесо — высота, ПКМ — сдвиг.">⤢</button>
+                        <button class="btn" id="roadXsFit" data-tip="Вписать сечение. Масштаб всегда 1:1. Колесо — зум к курсору, ПКМ — сдвиг.">⤢</button>
                         <button class="btn" id="roadXsProfile" data-tip="Продольный профиль этой оси">〰 профиль</button>
                         <button class="btn load-btn" id="roadXsSlope" data-tip="Откосы от кромок шаблона до рельефа">△ Откосы до рельефа</button>
                         <button class="btn" id="roadXsCsv" data-tip="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
@@ -5257,13 +5257,17 @@
                     <svg class="align-profile-svg" id="roadXsChart" viewBox="0 0 560 240"
                          preserveAspectRatio="none" style="touch-action:none;cursor:crosshair"></svg>
                     <div class="rs-catalog" id="roadXsCatalog">
-                        <div class="rs-catalog-label">Шаблоны — быстрые и по СП 34.13330 / СП 42.13330. Карточка, затем «Применить на ось»</div>
+                        <div class="rs-catalog-label">Шаблоны — быстрые и по СП 34.13330 / СП 42.13330. Одежда с расклином, корытом и откосом 1:1,5; у бордюра — постель. Карточка, затем «Применить на ось»</div>
                         <div class="rs-tpls" id="roadXsTpls"></div>
                         <button type="button" class="btn load-btn" id="roadXsApplyTpl"
                                 data-tip="Подставить выбранный шаблон на текущую ось: покрытие, кромки, фигуры. Если поперечников ещё нет — сначала построит их.">Применить на ось</button>
                         <div class="rs-figs" id="roadXsFigs">
                             <span class="rs-catalog-label">Фигуры к выбранной точке (иначе к правой кромке)</span>
                             <button type="button" class="btn" data-fig="curb">Бордюр</button>
+                            <button type="button" class="btn" data-fig="bed">Постель</button>
+                            <button type="button" class="btn" data-fig="wedge">Расклин</button>
+                            <button type="button" class="btn" data-fig="trough">Корыто</button>
+                            <button type="button" class="btn" data-fig="slope">Откос</button>
                             <button type="button" class="btn" data-fig="shoulder">Обочина</button>
                             <button type="button" class="btn" data-fig="ditch">Кювет</button>
                             <button type="button" class="btn" data-fig="walk">Тротуар</button>
@@ -5276,6 +5280,10 @@
                     <select class="editInput" id="roadXsFigure" hidden>
                         <option value="">＋ фигура…</option>
                         <option value="curb">Бордюр</option>
+                        <option value="bed">Постель</option>
+                        <option value="wedge">Расклин</option>
+                        <option value="trough">Корыто</option>
+                        <option value="slope">Откос</option>
                         <option value="shoulder">Обочина</option>
                         <option value="ditch">Кювет</option>
                         <option value="walk">Тротуар</option>
@@ -7187,14 +7195,13 @@
                 };
             },
             /** k < 1 — приблизить (меньше окно смещений). */
-            zoomRoadXs(k, zOnly) {
+            zoomRoadXs(k) {
                 if (!roadXsChartFrame) renderRoadXsView();
                 const f = roadXsChartFrame;
                 if (!f) return false;
                 return zoomRoadXsAt(
                     { off: (f.offMin + f.offMax) / 2, z: f.z0 },
-                    Number(k) || 1,
-                    !!zOnly
+                    Number(k) || 1
                 );
             },
             fitRoadXs() {
@@ -7210,7 +7217,9 @@
                     spanZ: f.spanZ,
                     offMin: f.offMin,
                     offMax: f.offMax,
-                    z0: f.z0
+                    z0: f.z0,
+                    mPerPxOff: f.mPerPxOff,
+                    mPerPxZ: f.mPerPxZ
                 };
             },
             zoomRoadPlan(k) {
@@ -17199,6 +17208,10 @@
             SUB3: { fill: '#bfb090', stroke: '#8e7e58' },
             SUB4: { fill: '#b5a682', stroke: '#84764e' },
             CURB: { fill: '#d8d4cc', stroke: '#9a968c' },
+            BED: { fill: '#b8b4ac', stroke: '#6e6a64' },
+            WEDGE: { fill: '#c4b070', stroke: '#8a7038' },
+            TROUGH: { fill: '#8c6a48', stroke: '#5a4028' },
+            SLOPE: { fill: '#c49a6c', stroke: '#8a6848' },
             SHLD: { fill: '#b8956a', stroke: '#7a5a38' },
             DITCH: { fill: '#6e8b57', stroke: '#3d5a32' },
             WALK: { fill: '#c8c4bc', stroke: '#8a8680' },
@@ -17528,10 +17541,22 @@
         }
 
         const ROAD_LAYER_CODES = ['PVMT', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4'];
+        const ROAD_XS_LAYER_CODES = new Set(['PVMT', 'WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4']);
+        /** Одежда и корыто не якоря для бордюра/обочины — иначе расклин уводит фигуру с кромки. */
+        const ROAD_XS_STRUCT_CODES = new Set(['PVMT', 'WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4', 'TROUGH', 'BED']);
 
         /** Нижние левая и правая точки шаблона — от них наращивается слой одежды. */
-        function templateBottomEdges(tpl) {
-            const pts = tpl?.points || [];
+        function templateBottomEdges(tpl, onlyCodes) {
+            const ptsAll = tpl?.points || [];
+            let pts = ptsAll;
+            if (onlyCodes && onlyCodes.size) {
+                const ids = new Set();
+                (tpl.shapes || []).forEach((sh) => {
+                    if (!onlyCodes.has(String(sh.code || '').toUpperCase())) return;
+                    (sh.pts || []).forEach((id) => ids.add(id));
+                });
+                pts = ptsAll.filter((p) => ids.has(p.id));
+            }
             if (pts.length < 2) return null;
             const zBot = Math.min(...pts.map((p) => p.dz));
             const bottom = pts.filter((p) => Math.abs(p.dz - zBot) < 1e-6);
@@ -17547,22 +17572,25 @@
 
         /**
          * Новый слой одежды вниз от низа шаблона: две точки, три связи, форма.
+         * extra — расклинивание: низ шире верха на extra с каждой стороны (1:1 при extra = h).
          * Точки добавляются вручную — addTemplatePoint режет ближайшую связь
          * и испортил бы покрытие сверху.
          */
-        function addRoadTemplateLayer(tpl, thickness) {
+        function addRoadTemplateLayer(tpl, thickness, opts) {
             if (!tpl) return null;
+            opts = opts || {};
             const h = Math.max(0.01, Number(thickness) || ROAD_PAVE_THICK);
-            const bot = templateBottomEdges(tpl);
+            const extra = Math.max(0, Number(opts.extra) || 0);
+            const bot = templateBottomEdges(tpl, opts.fromLayers ? ROAD_XS_LAYER_CODES : null);
             if (!bot) return null;
             const n = (tpl.shapes?.length || 0) + 1;
-            const code = ROAD_LAYER_CODES[n - 1] || ('LYR' + n);
+            const code = opts.code || ROAD_LAYER_CODES[n - 1] || ('LYR' + n);
             tpl.seq = (tpl.seq || tpl.points.length) + 1;
             const idL = tpl.seq;
             tpl.seq += 1;
             const idR = tpl.seq;
-            const pL = { id: idL, code: 'L' + n, off: bot.left.off, dz: bot.zBot - h };
-            const pR = { id: idR, code: 'R' + n, off: bot.right.off, dz: bot.zBot - h };
+            const pL = { id: idL, code: 'L' + n, off: bot.left.off - extra, dz: bot.zBot - h };
+            const pR = { id: idR, code: 'R' + n, off: bot.right.off + extra, dz: bot.zBot - h };
             tpl.points.push(pL, pR);
             tpl.links = tpl.links || [];
             if (!templateHasLink(tpl, bot.left.id, bot.right.id)) {
@@ -17580,8 +17608,48 @@
             return { shape: sh, left: pL, right: pR, thickness: h };
         }
 
+        /** Корыто под одеждой: трапеция шире низа слоёв, откосы 1:m. */
+        function addRoadTemplateTrough(tpl, spec) {
+            if (!tpl) return null;
+            spec = spec || {};
+            const extra = spec.extra == null ? 0.25 : Number(spec.extra);
+            const depth = spec.depth == null ? 0.20 : Number(spec.depth);
+            const m = spec.m == null ? 1 : Number(spec.m);
+            if (!(depth > 0.01)) return null;
+            const bot = templateBottomEdges(tpl, ROAD_XS_LAYER_CODES);
+            if (!bot) return null;
+            const run = depth * Math.max(0.2, m);
+            const next = () => {
+                tpl.seq = (tpl.seq || tpl.points.length) + 1;
+                return tpl.seq;
+            };
+            const iTL = next(), iTR = next(), iBR = next(), iBL = next();
+            tpl.points.push(
+                { id: iTL, code: 'TRTL', off: bot.left.off - extra, dz: bot.zBot },
+                { id: iTR, code: 'TRTR', off: bot.right.off + extra, dz: bot.zBot },
+                { id: iBR, code: 'TRBR', off: bot.right.off + extra + run, dz: bot.zBot - depth },
+                { id: iBL, code: 'TRBL', off: bot.left.off - extra - run, dz: bot.zBot - depth }
+            );
+            tpl.links = tpl.links || [];
+            const link = (a, b, code) => {
+                if (!templateHasLink(tpl, a, b)) tpl.links.push({ a, b, code });
+            };
+            link(iTL, iTR, 'TRTOP');
+            link(iTR, iBR, 'TRRS');
+            link(iBR, iBL, 'TRBOT');
+            link(iBL, iTL, 'TRLS');
+            tpl.shapeSeq = (tpl.shapeSeq || (tpl.shapes?.length || 0)) + 1;
+            const sh = { id: tpl.shapeSeq, code: 'TROUGH', pts: [iTL, iTR, iBR, iBL] };
+            tpl.shapes = tpl.shapes || [];
+            tpl.shapes.push(sh);
+            return { shape: sh };
+        }
+
         const ROAD_XS_FIGURES = {
             curb: { code: 'CURB', w: 0.15, h: 0.15 },
+            bed: { code: 'BED', w: 0.15, h: 0.10 },
+            slope: { code: 'SLOPE', w: 1.80, h: 1.20, m: 1.5 },
+            trough: { code: 'TROUGH', w: 4.00, h: 0.20 },
             shoulder: { code: 'SHLD', w: 0.75, h: 0.05 },
             ditch: { code: 'DITCH', w: 0.50, h: 0.40, berm: 0.30 },
             walk: { code: 'WALK', w: 1.50, h: 0.12 },
@@ -17654,6 +17722,16 @@
                 link(i3, i4, spec.code + 'BOT');
                 link(i4, i1, spec.code + 'IN');
                 sh = shape(spec.code, [i4, i1, i2, i3]);
+                const bedH = spec.bed == null ? 0.10 : Number(spec.bed);
+                if (bedH > 1e-9) {
+                    const [i5, i6] = nextIds(2);
+                    addPt(i5, 'BEDO', aOff + sign * w, aDz - buried - bedH, i3);
+                    addPt(i6, 'BEDI', aOff, aDz - buried - bedH, i4);
+                    link(i3, i5, 'BEDS');
+                    link(i5, i6, 'BEDBOT');
+                    link(i6, i4, 'BEDIN');
+                    shape('BED', [i4, i3, i5, i6]);
+                }
             } else if (kind === 'curb' || kind === 'box' || kind === 'shoulder' || kind === 'walk' || kind === 'median') {
                 const w = spec.w, h = spec.h;
                 const [i1, i2, i3] = nextIds(3);
@@ -17684,6 +17762,28 @@
                 link(i1, i2, spec.code + 'R');
                 link(i2, anchor.id, spec.code + 'BOT');
                 sh = shape(spec.code, [anchor.id, i1, i2]);
+            } else if (kind === 'slope') {
+                const h = spec.h || 1.20;
+                const ratio = spec.m || 1.5;
+                const w = spec.w || h * ratio;
+                const [i1, i2] = nextIds(2);
+                addPt(i1, spec.code + 'O', aOff + sign * w, aDz - h, anchor.id);
+                addPt(i2, spec.code + 'B', aOff, aDz - h, i1);
+                link(anchor.id, i1, spec.code + 'S');
+                link(i1, i2, spec.code + 'BOT');
+                link(i2, anchor.id, spec.code + 'IN');
+                sh = shape(spec.code, [anchor.id, i1, i2]);
+            } else if (kind === 'bed') {
+                const w = spec.w, h = spec.h;
+                const [i1, i2, i3] = nextIds(3);
+                addPt(i1, spec.code + 'O', aOff + sign * w, aDz, anchor.id);
+                addPt(i2, spec.code + 'OB', aOff + sign * w, aDz - h, i1);
+                addPt(i3, spec.code + 'IB', aOff, aDz - h, i1);
+                link(anchor.id, i1, spec.code + 'TOP');
+                link(i1, i2, spec.code + 'S');
+                link(i2, i3, spec.code + 'BOT');
+                link(i3, anchor.id, spec.code + 'IN');
+                sh = shape(spec.code, [anchor.id, i1, i2, i3]);
             } else if (kind === 'ditch') {
                 const h = spec.h, w = spec.w, berm = spec.berm;
                 const run = Number.isFinite(Number(spec.run)) ? Number(spec.run) : h * 1;
@@ -17818,9 +17918,17 @@
         }
 
         function templateOutermost(tpl, side) {
-            const pts = tpl?.points || [];
-            if (!pts.length) return null;
-            return pts.reduce((best, p) => {
+            const ptsAll = tpl?.points || [];
+            if (!ptsAll.length) return null;
+            const structIds = new Set();
+            (tpl.shapes || []).forEach((sh) => {
+                if (!ROAD_XS_STRUCT_CODES.has(String(sh.code || '').toUpperCase())) return;
+                (sh.pts || []).forEach((id) => structIds.add(id));
+            });
+            const keepCode = (p) => p.code === 'L' || p.code === 'R' || p.code === 'CL';
+            const pts = ptsAll.filter((p) => !structIds.has(p.id) || keepCode(p));
+            const pool = pts.length ? pts : ptsAll;
+            return pool.reduce((best, p) => {
                 if (!best) return p;
                 return side < 0
                     ? (p.off < best.off ? p : best)
@@ -17917,7 +18025,9 @@
 
         /**
          * Типовой поперечник: ширины — табл. 11.1 СП 34.13330.2012 /
-         * СП 42.13330 (улицы). Одежда — ориентир, не расчёт ОДН.
+         * СП 42.13330 (улицы). Одежда — ориентир, не расчёт ОДН:
+         * покрытие, расклин, основание, песок, корыто 1:1; у бордюра постель;
+         * снаружи откос 1:1,5.
          */
         function buildGostRoadTemplate(cfg) {
             const nLanes = Math.max(1, Number(cfg.lanes) || 2);
@@ -17928,8 +18038,11 @@
                 : (nLanes / 2) * laneW + medianW / 2;
             const crown = cfg.crown != null ? cfg.crown : SP34_CROWN;
             const tpl = gostPaveTemplate(halfPav, halfPav, cfg.paveH || 0.08, crown);
-            if (cfg.baseH > 0) addRoadTemplateLayer(tpl, cfg.baseH);
-            if (cfg.sandH > 0) addRoadTemplateLayer(tpl, cfg.sandH);
+            const wedgeH = cfg.wedgeH == null ? 0.05 : Number(cfg.wedgeH);
+            if (wedgeH > 0) addRoadTemplateLayer(tpl, wedgeH, { code: 'WEDGE', extra: wedgeH });
+            if (cfg.baseH > 0) addRoadTemplateLayer(tpl, cfg.baseH, { code: 'BASE', extra: cfg.baseH });
+            if (cfg.sandH > 0) addRoadTemplateLayer(tpl, cfg.sandH, { code: 'SUBB', extra: cfg.sandH });
+            if (cfg.trough !== false) addRoadTemplateTrough(tpl, cfg.troughSpec);
             if (medianW > 0) addCenteredMedian(tpl, medianW, cfg.medianH || 0.15);
             if (cfg.curb) {
                 addFigureBothSides(tpl, 'curb', {
@@ -17949,6 +18062,12 @@
                     w: cfg.ditchW || 0.40,
                     berm: cfg.ditchBerm != null ? cfg.ditchBerm : 0.20,
                     run: cfg.ditchRun != null ? cfg.ditchRun : 0.75
+                });
+            }
+            if (cfg.slope !== false) {
+                addFigureBothSides(tpl, 'slope', {
+                    h: cfg.slopeH || 1.20,
+                    m: cfg.slopeM || 1.5
                 });
             }
             return tpl;
@@ -18015,7 +18134,7 @@
             },
             {
                 id: 'gost-iii', group: 'sp34', name: 'III', sub: '2×3,50', normWidths: true,
-                title: 'Категория III по СП 34.13330: 2×3,50 м, обочина 2,50 (укрепл. 0,50), кювет.',
+                title: 'Категория III по СП 34.13330: 2×3,50 м, обочина 2,50 (укрепл. 0,50), кювет, расклин, корыто, откос 1:1,5.',
                 build: () => buildGostRoadTemplate({
                     lanes: 2, laneW: 3.50, shldW: 2.50, shldStrW: 0.50,
                     ditch: true, paveH: 0.06, baseH: 0.16, sandH: 0.20
@@ -18047,7 +18166,7 @@
             },
             {
                 id: 'gost-local', group: 'sp42', name: 'Улица', sub: '2×3,50', normWidths: true,
-                title: 'Улица местного значения по СП 42.13330: 2×3,50 м, бордюр ГОСТ 6665 БР 100.30.15, тротуар 1,50 м.',
+                title: 'Улица местного значения по СП 42.13330: 2×3,50 м, бордюр ГОСТ 6665 БР 100.30.15 с постелью, тротуар 1,50 м, корыто.',
                 build: () => buildGostRoadTemplate({
                     lanes: 2, laneW: 3.50, curb: true, walkW: 1.50,
                     paveH: 0.08, baseH: 0.15, sandH: 0.20
@@ -18063,8 +18182,14 @@
             const minO = Math.min(...offs), maxO = Math.max(...offs);
             const minZ = Math.min(...dzs), maxZ = Math.max(...dzs);
             const w = 64, h = 28, pad = 3;
-            const sx = (off) => pad + (off - minO) / Math.max(0.01, maxO - minO) * (w - 2 * pad);
-            const sy = (dz) => h - pad - (dz - minZ) / Math.max(0.01, maxZ - minZ) * (h - 2 * pad);
+            const innerW = w - 2 * pad, innerH = h - 2 * pad;
+            const mPerPx = Math.max(
+                (maxO - minO) / Math.max(0.01, innerW),
+                (maxZ - minZ) / Math.max(0.01, innerH)
+            );
+            const midO = (minO + maxO) / 2, midZ = (minZ + maxZ) / 2;
+            const sx = (off) => w / 2 + (off - midO) / mPerPx;
+            const sy = (dz) => h / 2 - (dz - midZ) / mPerPx;
             const byId = new Map(pts.map((p) => [p.id, p]));
             const shapes = (tpl.shapes || []).map((sh) => {
                 const st = roadShapeStyle(sh.code);
@@ -19453,15 +19578,28 @@
                 zMax = Math.max(zMax, ez, zAxis + (pt.dz || 0));
             });
             const relief = zMax - zMin;
-            let spanZ = Math.max(3, relief * 1.6, 0.12 * (model.widthL + model.widthR));
-            let z0 = (zMin + zMax) / 2;
+            const innerW = Math.max(40, pad.w - pad.l - pad.r);
+            const innerH = Math.max(40, pad.h - pad.t - pad.b);
             let offMin = Math.min(-model.widthL, need.minO, ...(groundSamples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
             let offMax = Math.max(model.widthR, need.maxO, ...(groundSamples.map((s) => s.off)), ...resolved.map((p) => p.off), ...slopeOffs);
-            if (roadXsView.offMin != null && roadXsView.offMax != null && roadXsView.spanZ) {
+            const padOff = Math.max(0.4, (offMax - offMin) * 0.06);
+            offMin -= padOff;
+            offMax += padOff;
+            let z0 = (zMin + zMax) / 2;
+            let spanZ;
+            if (roadXsView.offMin != null && roadXsView.offMax != null) {
                 offMin = roadXsView.offMin;
                 offMax = roadXsView.offMax;
                 z0 = roadXsView.z0;
-                spanZ = roadXsView.spanZ;
+                spanZ = ((offMax - offMin) / innerW) * innerH;
+            } else {
+                const spanOff = Math.max(4, offMax - offMin);
+                const spanZdata = Math.max(0.8, relief * 1.25, 0.6);
+                const mPerPx = Math.max(spanOff / innerW, spanZdata / innerH);
+                const midOff = (offMin + offMax) / 2;
+                offMin = midOff - (mPerPx * innerW) / 2;
+                offMax = midOff + (mPerPx * innerW) / 2;
+                spanZ = mPerPx * innerH;
             }
             const px = (off) => pad.l + ((off - offMin) / Math.max(1e-6, offMax - offMin)) * (pad.w - pad.l - pad.r);
             const py = (z) => pad.h / 2 - ((z - z0) / spanZ) * (pad.h - pad.t - pad.b);
@@ -19590,7 +19728,9 @@
             `;
             roadXsChartFrame = {
                 pad, offMin, offMax, spanZ, z0, zAxis,
-                w: pad.w, h: pad.h
+                w: pad.w, h: pad.h,
+                mPerPxOff: (offMax - offMin) / innerW,
+                mPerPxZ: spanZ / innerH
             };
             const hitN = hits.length;
             const work0 = st.samples.find((s) => Math.abs(s.off) < 1e-9);
@@ -19603,7 +19743,8 @@
                         : ' · под осью земли нет') +
                     (model.corridorTris ? ` · полотно ${model.corridorTris} гран.` : ' · полотна нет — «Построить»') +
                     (st.atVertex ? ' · на угле — биссектриса' : '') +
-                    (flat ? ' · рельеф плоский, масштаб ±' + (spanZ / 2).toFixed(1) + ' м' : '');
+                    (flat ? ' · рельеф плоский' : '') +
+                    ' · 1:1';
             }
             if (table) {
                 const codeOf = (id) => templatePoint(tpl, id)?.code || id;
@@ -20147,11 +20288,18 @@
             if (!kind) return;
             const model = currentRoadXsModel();
             if (!model?.template) return notifyError('Сначала постройте поперечники — появится шаблон.');
-            const added = addTemplateFigure(model.template, kind, roadXsActive.pointId);
+            let added = null;
+            if (kind === 'wedge') {
+                added = addRoadTemplateLayer(model.template, 0.05, { code: 'WEDGE', extra: 0.05, fromLayers: true });
+            } else if (kind === 'trough') {
+                added = addRoadTemplateTrough(model.template);
+            } else {
+                added = addTemplateFigure(model.template, kind, roadXsActive.pointId);
+            }
             if (!added) return notifyError('Не удалось добавить фигуру.');
             roadXsActive.shapeId = added.shape.id;
             applyRoadTemplateChange(model, { relink: false });
-            notify(`Фигура «${added.shape.code}» у точки ${added.anchor.code}.`);
+            notify(`Фигура «${added.shape.code}» добавлена.`);
             trackUsage('road_xs_figure', { kind });
         }
 
@@ -20605,7 +20753,7 @@
             ev.preventDefault();
             const at = roadXsClientToOffZ(ev);
             const k = ev.deltaY > 0 ? 1.18 : 1 / 1.18;
-            zoomRoadXsAt(at, k, ev.shiftKey);
+            zoomRoadXsAt(at, k);
         }, { passive: false });
         bindChartRmbPan($('roadXsChart'), (ev) => {
             const f0 = roadXsChartFrame;
@@ -20698,22 +20846,19 @@
             renderRoadXsView();
         }
 
-        function zoomRoadXsAt(at, k, zOnly) {
+        function zoomRoadXsAt(at, k) {
             const f = roadXsChartFrame;
             if (!f || !at) return false;
-            let offMin = f.offMin, offMax = f.offMax, z0 = f.z0, spanZ = f.spanZ;
-            if (zOnly) {
-                spanZ = Math.min(200, Math.max(0.25, spanZ * k));
-            } else {
-                offMin = at.off - (at.off - offMin) * k;
-                offMax = at.off + (offMax - at.off) * k;
-                if (offMax - offMin < 0.2) return false;
-                const zMin = z0 - spanZ / 2, zMax = z0 + spanZ / 2;
-                const nzMin = at.z - (at.z - zMin) * k;
-                const nzMax = at.z + (zMax - at.z) * k;
-                z0 = (nzMin + nzMax) / 2;
-                spanZ = Math.min(200, Math.max(0.25, nzMax - nzMin));
-            }
+            const innerW = Math.max(1e-6, f.w - f.pad.l - f.pad.r);
+            const innerH = Math.max(1e-6, f.h - f.pad.t - f.pad.b);
+            let offMin = at.off - (at.off - f.offMin) * k;
+            let offMax = at.off + (f.offMax - at.off) * k;
+            if (offMax - offMin < 0.2) return false;
+            const zMin = f.z0 - f.spanZ / 2, zMax = f.z0 + f.spanZ / 2;
+            const nzMin = at.z - (at.z - zMin) * k;
+            const nzMax = at.z + (zMax - at.z) * k;
+            const z0 = (nzMin + nzMax) / 2;
+            const spanZ = ((offMax - offMin) / innerW) * innerH;
             roadXsView = { offMin, offMax, z0, spanZ };
             renderRoadXsView();
             return true;
@@ -38840,9 +38985,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.16',
-            buildId: '8982af8-preview',
-            released: '2026-08-16',
+            version: '2026.08.17',
+            buildId: '5b63a2e-preview',
+            released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -38850,6 +38995,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.17: поперечник всегда в масштабе 1:1 (без растяжения по высоте); в шаблонах СП — расклин, корыто, откос 1:1,5 и постель под бортовым камнем.',
                 '2026.08.16: шаблоны дорог по СП 34.13330 (IA…V) и СП 42.13330 (магистраль / улица): одежда, обочина, кювет, разделительная, бордюр ГОСТ 6665, тротуар.',
                 '2026.08.16: земля на поперечнике доходит до края шаблона (бордюр/кювет) и до выхода откоса на рельеф, а не обрывается на ширине покрытия.',
                 '2026.08.16: фигуры на поперечнике тащатся жёстко: отрыв от якоря целиком, при отпускании примагничивание ближайшей вершиной.',
