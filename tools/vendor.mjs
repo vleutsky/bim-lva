@@ -130,6 +130,18 @@ async function main() {
         await copy(path.join(dwgDist, 'wasm', f), path.join(OUT, 'dwgdxf', 'wasm', f));
     }
 
+    // --- occt-wasm: OpenCascade WASM для экспорта STEP (MIT/Apache-2.0) ---
+    // Иницализация загружает occt-wasm.wasm (~22 МБ) асинхронно.
+    const occtDir = path.join(pkgDir('occt-wasm'), 'dist');
+    for (const f of ['index.js', 'occt-wasm.js', 'occt-wasm.wasm']) {
+        await copy(path.join(occtDir, f), path.join(OUT, 'occt-wasm', f));
+    }
+
+    // --- acad-ts: DWG/DXF native support (MIT) ---
+    // Полная библиотека TypeScript для работы с AutoCAD форматами.
+    const acadDir = path.join(pkgDir('@node-projects/acad-ts'), 'dist');
+    await copy(path.join(acadDir, 'index.js'), path.join(OUT, 'acad-ts', 'index.js'));
+
     // --- geotiff: тянет pako/lerc/zstddec, поэтому бандлим ---
     await build({
         entryPoints: [require.resolve('geotiff')],
@@ -160,7 +172,7 @@ async function main() {
     await vendorFonts();
 
     const versions = {};
-    for (const p of ['three', 'three-mesh-bvh', 'web-ifc', 'geotiff', 'qrcode', '@supabase/supabase-js', 'jszip', 'dwgdxf']) {
+    for (const p of ['three', 'three-mesh-bvh', 'web-ifc', 'geotiff', 'qrcode', '@supabase/supabase-js', 'jszip', 'dwgdxf', 'occt-wasm', '@node-projects/acad-ts']) {
         versions[p] = await pkgVersion(p);
     }
     await fs.writeFile(

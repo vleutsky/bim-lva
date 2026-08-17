@@ -4185,6 +4185,8 @@
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
                             <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
                             <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
@@ -13074,6 +13076,16 @@
             URL.revokeObjectURL(url);
         }
 
+        function downloadBinaryFile(buffer, filename, mime) {
+            const blob = new Blob([buffer], { type: mime || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
         function exportSlopeDxf(model) {
             const list = (model ? [model] : slopeModels).filter((sm) => sm?.tin?.faces?.length);
             if (!list.length) {
@@ -13266,6 +13278,62 @@
             notify(`LandXML: поверхность «${target.name}», ${target.tin.points.length} точек, ${target.tin.faces.length} граней. Civil 3D → Import LandXML.`);
             trackUsage('slope_export_landxml', { faces: target.tin.faces.length });
             return true;
+        }
+
+        async function exportDrawingStep() {
+            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length && !slopeModels.length && !roadXsModels.length) {
+                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел, ни откосов, ни поперечников.');
+                return;
+            }
+            try {
+                const text = await buildStep(drawnPolylines, slopeModels);
+                if (!text) {
+                    notifyError('STEP: ошибка при формировании файла.');
+                    return;
+                }
+                downloadTextFile(text, `bim-lva-${new Date().toISOString().slice(0, 10)}.stp`, 'application/stp');
+                const derived = slopeDerivedPolylineIds();
+                const polyCount = drawnPolylines.filter((p) => !derived.has(p.id)).length;
+                const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
+                notify(
+                    `STEP: полилиний ${polyCount}` +
+                    (padCount ? `, площадок ${padCount}` : '') +
+                    `. Координаты мировые, единицы — метры.`
+                );
+                trackUsage('draw_export_step', { polylines: drawnPolylines.length });
+            } catch (err) {
+                notifyError(`STEP-экспорт: ${err.message}`);
+                console.error('STEP export error:', err);
+            }
+        }
+
+        async function exportDrawingDwg() {
+            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length && !slopeModels.length && !roadXsModels.length) {
+                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел, ни откосов, ни поперечников.');
+                return;
+            }
+            try {
+                const buffer = await buildDwg(drawnPolylines, coordPins, slopeModels);
+                if (!buffer) {
+                    notifyError('DWG: ошибка при формировании файла.');
+                    return;
+                }
+                downloadBinaryFile(buffer, `bim-lva-${new Date().toISOString().slice(0, 10)}.dwg`);
+                const derived = slopeDerivedPolylineIds();
+                const polyCount = drawnPolylines.filter((p) => !derived.has(p.id)).length;
+                const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
+                const xsCount = roadXsModels.reduce((n, m) => n + m.stations.length, 0);
+                notify(
+                    `DWG: полилиний ${polyCount}, точек ${coordPins.length}` +
+                    (padCount ? `, площадок ${padCount} (3D-солид)` : '') +
+                    (xsCount ? `, поперечников ${xsCount}` : '') +
+                    `. Координаты мировые, единицы — метры.`
+                );
+                trackUsage('draw_export_dwg', { polylines: drawnPolylines.length, pins: coordPins.length });
+            } catch (err) {
+                notifyError(`DWG-экспорт: ${err.message}`);
+                console.error('DWG export error:', err);
+            }
         }
 
         /**
@@ -16004,10 +16072,14 @@
         function updateDrawUi() {
             const btn = $('btnDrawExport');
             const xmlBtn = $('btnDrawExportXml');
+            const stepBtn = $('btnDrawExportStep');
+            const dwgBtn = $('btnDrawExportDwg');
             const hasContent = drawnPolylines.length || coordPins.length || sweptSolids.length
                 || slopeModels.length || roadXsModels.length;
             if (btn) btn.disabled = !hasContent;
             if (xmlBtn) xmlBtn.disabled = !drawnPolylines.length;
+            if (stepBtn) stepBtn.disabled = !hasContent;
+            if (dwgBtn) dwgBtn.disabled = !hasContent;
             renderPolylinesList();
             renderPadsList();
         }
@@ -16283,6 +16355,44 @@
             g(0, 'ENDSEC');
             g(0, 'EOF');
             return out.join('\r\n') + '\r\n';
+        }
+
+        async function buildStep(polylines, slopeModels) {
+            try {
+                // Динамическая загрузка occt-wasm при необходимости
+                const InitOCCT = (await import('/assets/vendor/occt-wasm/index.js')).default;
+                const occt = await InitOCCT();
+
+                // Создание STEP документа
+                // TODO: Добавить полилинии как BSpline кривые
+                // TODO: Добавить поверхности как BRep solid
+                // TODO: Экспортировать через occt.exportStep()
+
+                notifyError('STEP-экспорт: в разработке');
+                return null;
+            } catch (err) {
+                console.error('STEP build error:', err);
+                throw err;
+            }
+        }
+
+        async function buildDwg(polylines, pins, slopeModels) {
+            try {
+                // Динамическая загрузка acad-ts при необходимости
+                const { CadDocument } = await import('/assets/vendor/acad-ts/index.js');
+                const doc = new CadDocument();
+
+                // TODO: Добавить полилинии как POLYLINE 2D
+                // TODO: Добавить точки как POINT
+                // TODO: Добавить поверхности как 3DSOLID
+                // TODO: Экспортировать через doc.toDwgBuffer()
+
+                notifyError('DWG-экспорт: в разработке');
+                return null;
+            } catch (err) {
+                console.error('DWG build error:', err);
+                throw err;
+            }
         }
 
         function exportDrawingDxf() {
@@ -16639,6 +16749,8 @@
         });
         $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
         $('btnDrawExportXml')?.addEventListener('click', exportPolylineLandXml);
+        $('btnDrawExportStep')?.addEventListener('click', exportDrawingStep);
+        $('btnDrawExportDwg')?.addEventListener('click', exportDrawingDwg);
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
         });
