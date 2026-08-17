@@ -13164,11 +13164,11 @@
                 lines.push('  <Profiles>');
                 drawnPolylines.forEach((poly, idx) => {
                     if (!poly.pts || poly.pts.length < 2 || poly.kind !== '3d') return;
-                    const name = escXml(poly.name || `Profile ${idx + 1}`);
+                    const alignName = escXml(poly.name || `Alignment ${idx + 1}`);
                     const pts = poly.pts.map((p) => scenePointToAbs(p) || p);
                     let sta = 0;
 
-                    lines.push(`    <Profile name="Terrain along ${name}" alignmentName="${name}">`);
+                    lines.push(`    <Profile name="Terrain along ${alignName}" alignmentName="${alignName}">`);
                     lines.push('      <ProfAlign staStart="0" staEnd="9999" slopePercent="0"/>');
                     lines.push('      <PntList>');
                     for (let i = 0; i < pts.length; i++) {
@@ -13182,6 +13182,27 @@
                     }
                     lines.push('      </PntList>');
                     lines.push('    </Profile>');
+
+                    // Проектный профиль если задан
+                    if (poly.designProfileName && poly.designProfileName.trim()) {
+                        const designName = escXml(poly.designProfileName.trim());
+                        lines.push(`    <Profile name="${designName}" alignmentName="${alignName}">`);
+                        lines.push('      <ProfAlign staStart="0" staEnd="9999" slopePercent="0"/>');
+                        lines.push('      <PntList>');
+                        // Используем те же точки, что для terrain (это можно дорабатывать позже)
+                        sta = 0;
+                        for (let i = 0; i < pts.length; i++) {
+                            const p = pts[i];
+                            if (i > 0) {
+                                const prev = pts[i - 1];
+                                const dist = Math.hypot(p.x-prev.x, p.y-prev.y);
+                                sta += dist;
+                            }
+                            lines.push(`        <P>${n(sta)} ${n(p.z)}</P>`);
+                        }
+                        lines.push('      </PntList>');
+                        lines.push('    </Profile>');
+                    }
                 });
                 lines.push('  </Profiles>');
             }
@@ -13628,7 +13649,7 @@
                 nameInput.value = sm.name;
                 nameInput.title = 'Имя площадки';
                 nameInput.addEventListener('change', () => {
-                    sm.name = (nameInput.value || '').trim() || sm.name;
+                    renameSurfaceModel(sm, nameInput.value);
                     nameInput.value = sm.name;
                 });
 
@@ -14706,6 +14727,16 @@
         function renamePolyline(record, name) {
             record.name = (name || '').trim() || record.name;
             renderPolylinesList();
+        }
+
+        function renameSurfaceModel(model, name) {
+            model.name = (name || '').trim() || `Поверхность ${slopeModels.indexOf(model) + 1}`;
+            updateSlopeStatus();
+        }
+
+        function setDesignProfileName(polyline, profileName) {
+            if (!polyline.designProfileName) polyline.designProfileName = '';
+            polyline.designProfileName = (profileName || '').trim() || '';
         }
 
         /** Замкнуть/разомкнуть контур. Замкнуть можно от трёх вершин. */
@@ -15802,6 +15833,21 @@
                 block.className = 'polyline-block';
                 block.append(row);
                 if (r.role === 'road-axis') {
+                    const profRow = document.createElement('div');
+                    profRow.className = 'polyline-edge-row';
+                    const profLab = document.createElement('span');
+                    profLab.textContent = 'проектный профиль';
+                    profLab.title = 'Имя проектной линии в LandXML';
+                    const profInput = document.createElement('input');
+                    profInput.className = 'editInput';
+                    profInput.style.cssText = 'flex:1';
+                    profInput.value = r.designProfileName || '';
+                    profInput.placeholder = 'Design Profile';
+                    profInput.title = 'Имя проектной линии в LandXML';
+                    profInput.addEventListener('change', () => setDesignProfileName(r, profInput.value));
+                    profRow.append(profLab, profInput);
+                    block.append(profRow);
+
                     const edgeRow = document.createElement('div');
                     edgeRow.className = 'polyline-edge-row';
                     const edgeLab = document.createElement('span');
