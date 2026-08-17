@@ -2274,6 +2274,70 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: на профиле L-оси нет отметок/уклонов (${JSON.stringify(labelUi)})`);
     }
 
+    const vcurve = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 10, y: 30, z: 0 },
+                { x: 50, y: 30, z: 8 },
+                { x: 90, y: 30, z: 0 }
+            ],
+            { name: 'Ось-тест-вкривая' }
+        );
+        const before = D.drawn.find((d) => d.id === id);
+        const pviZ = before.vertsAbs[1].z;
+        const maxBefore = Math.max(...before.abs.map((p) => p.z));
+        D.setPolylineVRadius(id, 1, 80);
+        const after = D.drawn.find((d) => d.id === id);
+        const maxAfter = Math.max(...after.abs.map((p) => p.z));
+        D.openRoadProfile(id);
+        const annot = D.chartAnnot();
+        const axis = document.getElementById('polyProfileAxisLine')?.getAttribute('points') || '';
+        const nAxis = axis.trim().split(/\s+/).filter(Boolean).length;
+        const knot = document.querySelector('#polyProfileChart .pknot[data-idx="1"]');
+        let menu = { knot: !!knot };
+        if (knot) {
+            knot.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true, cancelable: true, button: 2, clientX: 120, clientY: 120
+            }));
+            menu.shown = !!document.getElementById('profileChartCtx')?.classList.contains('show');
+            document.getElementById('ctxProfileVCurve')?.click();
+            menu.modal = !!document.getElementById('filletModal')?.classList.contains('show');
+            menu.title = document.getElementById('filletTitle')?.textContent || '';
+            document.getElementById('filletCancel')?.click();
+        }
+        D.setPolylineVRadius(id, 1, 0);
+        const restored = D.drawn.find((d) => d.id === id);
+        const max0 = Math.max(...restored.abs.map((p) => p.z));
+        D.deletePolyline(id);
+        return {
+            pviZ, maxBefore, maxAfter, max0,
+            vR: after.vRadii?.[1],
+            nAbs: after.abs.length,
+            nAxis,
+            annotVR: annot.profVR,
+            menu
+        };
+    });
+    if (!(vcurve.vR > 70)) {
+        problems.push(`профиль: вертикальный радиус не записался (${JSON.stringify(vcurve)})`);
+    }
+    if (!(vcurve.maxAfter < vcurve.pviZ - 0.05)) {
+        problems.push(`профиль: вертикальная кривая прошла через PVI (${JSON.stringify(vcurve)})`);
+    }
+    if (!(Math.abs(vcurve.max0 - vcurve.pviZ) < 0.02)) {
+        problems.push(`профиль: 0 не убрал вертикальную кривую (${JSON.stringify(vcurve)})`);
+    }
+    if ((vcurve.nAxis || 0) < 6) {
+        problems.push(`профиль: ось после кривой не дуга (${JSON.stringify(vcurve)})`);
+    }
+    if ((vcurve.annotVR || 0) < 1) {
+        problems.push(`профиль: нет подписи Rв (${JSON.stringify(vcurve)})`);
+    }
+    if (!vcurve.menu?.shown || !vcurve.menu?.modal || !/Вертикальная/.test(vcurve.menu.title || '')) {
+        problems.push(`профиль: ПКМ не открыл вертикальную кривую (${JSON.stringify(vcurve.menu)})`);
+    }
+
     // Короткое плечо + R больше ширины: радиус сожмётся, внутренность без
     // правки выворачивается (кромка идёт назад, полотно — «ёжик»).
     const tightFillet = await page.evaluate((g) => {
@@ -2500,6 +2564,20 @@ async function checkRoadCrossSections(page) {
     if (!chart.hasKnots || !chart.hasShape) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
     }
+    const xsCaptions = await page.evaluate(() => {
+        const html = document.getElementById('roadXsChart')?.innerHTML || '';
+        return {
+            axis: />Ось</.test(html) || />Ось /.test(html) || html.includes('>Ось<') || /fill="#6a5420">Ось/.test(html),
+            pave: /Покрытие/.test(html),
+            latinCL: /fill="#6a5420">CL</.test(html)
+        };
+    });
+    if (!xsCaptions.axis || !xsCaptions.pave) {
+        problems.push(`поперечники: на чертеже нет кириллических подписей (${JSON.stringify(xsCaptions)})`);
+    }
+    if (xsCaptions.latinCL) {
+        problems.push('поперечники: на чертеже остался латинский код CL вместо «Ось»');
+    }
     if (!chart.profileBtn) {
         problems.push('поперечники: нет кнопки «Профиль»');
     }
@@ -2674,13 +2752,15 @@ async function checkRoadCrossSections(page) {
         return { before, afterGrow, afterBack, h0 };
     });
     const dPlan = Math.abs((paneLock.afterGrow?.plan?.h || 0) - (paneLock.before?.plan?.h || 0));
-    const dProf = Math.abs((paneLock.afterGrow?.prof?.h || 0) - (paneLock.before?.prof?.h || 0));
-    const dXs = Math.abs((paneLock.afterGrow?.xs?.h || 0) - (paneLock.before?.xs?.h || 0));
+    const dProf = (paneLock.afterGrow?.prof?.h || 0) - (paneLock.before?.prof?.h || 0);
+    const dXs = (paneLock.afterGrow?.xs?.h || 0) - (paneLock.before?.xs?.h || 0);
     if (!paneLock.before?.locked) {
         problems.push(`поперечники: высоты панелей не зафиксировались (${JSON.stringify(paneLock.before)})`);
-    } else if (dPlan > 2 || dProf > 2 || dXs > 2) {
+    } else if (dPlan > 2) {
+        problems.push(`поперечники: высота плана уехала при росте окна (Δ ${dPlan})`);
+    } else if (dProf < 80 || dXs < 80) {
         problems.push(
-            `поперечники: высота плана/профиля/сечения уехала при росте окна ` +
+            `поперечники: профиль/сечение не забрали остаток окна ` +
             `(Δ план ${dPlan}, профиль ${dProf}, сечение ${dXs})`
         );
     }
