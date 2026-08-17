@@ -7274,6 +7274,9 @@
                 const tpl = spec.build(DEFAULT_ROAD_HALF_WIDTH, DEFAULT_ROAD_HALF_WIDTH);
                 return snapshotRoadTemplate(tpl);
             },
+            ditchCapTris(ring) {
+                return triangulateRing3D(ring);
+            },
             roadXsPresetIds() {
                 return ROAD_STUDIO_PRESETS.map((p) => p.id);
             },
@@ -11333,6 +11336,37 @@
                 faces.push([ring[idx[0]], ring[idx[1]], ring[idx[2]]]);
             }
             return faces;
+        }
+
+        /**
+         * Ухо в плоскости кольца (не веер от первой вершины и не XY плана).
+         * Веер заливает вогнутость: кювет-слой превращался в призму по контуру.
+         */
+        function triangulateRing3D(ring) {
+            if (!ring || ring.length < 3) return [];
+            let nx = 0, ny = 0, nz = 0;
+            for (let i = 0; i < ring.length; i++) {
+                const a = ring[i], b = ring[(i + 1) % ring.length];
+                nx += (a.y - b.y) * (a.z + b.z);
+                ny += (a.z - b.z) * (a.x + b.x);
+                nz += (a.x - b.x) * (a.y + b.y);
+            }
+            const nL = Math.hypot(nx, ny, nz) || 1;
+            nx /= nL; ny /= nL; nz /= nL;
+            let ux, uy, uz;
+            if (Math.abs(nz) < 0.9) { ux = ny; uy = -nx; uz = 0; }
+            else { ux = 0; uy = nz; uz = -ny; }
+            const uL = Math.hypot(ux, uy, uz) || 1;
+            ux /= uL; uy /= uL; uz /= uL;
+            const vx = ny * uz - nz * uy;
+            const vy = nz * ux - nx * uz;
+            const vz = nx * uy - ny * ux;
+            const pts2 = ring.map((p) => ({
+                x: p.x * ux + p.y * uy + p.z * uz,
+                y: p.x * vx + p.y * vy + p.z * vz,
+                src: p
+            }));
+            return triangulateRingXY(pts2).map((tri) => tri.map((q) => q.src));
         }
 
         function signedAreaXY(ring) {
@@ -18415,6 +18449,7 @@
                 push(inner);
                 push(tr);
                 push(slopeO);
+                push(outerMost('SHLDUO') || outerMost('SHLDO'));
                 shld.slice().reverse().forEach(push);
                 if (ids.length < 3) return;
                 tpl.shapeSeq = (tpl.shapeSeq || (tpl.shapes?.length || 0)) + 1;
@@ -19422,15 +19457,13 @@
             const ids = capIds || [];
             if (ids.length >= 3 && placed.length) {
                 const cap = (map, reverse) => {
-                    const ring = ids.map((id) => map.get(id)).filter(Boolean);
+                    const ring = ids.map((id) => map.get(id)).filter(Boolean)
+                        .map((p) => new THREE.Vector3(p.x, p.y, p.z));
                     if (ring.length < 3) return;
-                    const origin = new THREE.Vector3(ring[0].x, ring[0].y, ring[0].z);
-                    for (let i = 1; i < ring.length - 1; i++) {
-                        const b = new THREE.Vector3(ring[i].x, ring[i].y, ring[i].z);
-                        const c = new THREE.Vector3(ring[i + 1].x, ring[i + 1].y, ring[i + 1].z);
-                        if (reverse) push(origin, c, b);
-                        else push(origin, b, c);
-                    }
+                    triangulateRing3D(ring).forEach((tri) => {
+                        if (reverse) push(tri[0], tri[2], tri[1]);
+                        else push(tri[0], tri[1], tri[2]);
+                    });
                 };
                 cap(placed[0], false);
                 cap(placed[placed.length - 1], true);
@@ -20017,7 +20050,7 @@
             }
             if (!best) return '';
             const pa = xyOf(best.a), pb = xyOf(best.b);
-            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) < 26) return '';
+            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) < 14) return '';
             return `<text class="xs-grade" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${((pa.y + pb.y) / 2 - 7).toFixed(1)}" text-anchor="middle" fill="#6a4020">${fmtRoadXsRatio(best.dOff, best.dZ)}</text>`;
         }
 
@@ -20044,13 +20077,19 @@
                 prevR = p;
             });
             const slopeO = all('SLOPEO');
-            const shldFace = [...all('SHLDUB'), ...all('SHLDB'), ...all('SHLDO'), ...all('SHLDUO')];
+            const shldFace = [...all('SHLDUO'), ...all('SHLDO')];
             slopeO.forEach((toe) => {
                 const side = Math.sign(toe.off) || 1;
                 const face = shldFace.filter((p) => Math.sign(p.off) === side)
                     .sort((a, b) => Math.abs(b.off) - Math.abs(a.off))[0];
                 if (!face) return;
-                parts.push(roadXsRatioLabelSvg([face, toe], xyOf));
+                const run = Math.abs(toe.off - face.off);
+                const rise = Math.abs((toe.dz || 0) - (face.dz || 0));
+                if (run < 0.04 || rise < 0.04) return;
+                const pa = xyOf(face), pb = xyOf(toe);
+                parts.push(
+                    `<text class="xs-grade" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${((pa.y + pb.y) / 2 - 7).toFixed(1)}" text-anchor="middle" fill="#6a4020">${fmtRoadXsRatio(run, rise)}</text>`
+                );
             });
             const ratioCodes = new Set(['WEDGE', 'TROUGH', 'SLOPE']);
             (tpl?.shapes || []).forEach((sh) => {
@@ -20208,7 +20247,8 @@
                 }).join(' ') + ' Z';
                 const on = sh.id === roadXsActive.shapeId;
                 const sty = roadShapeStyle(sh.code);
-                const fill = String(sh.code || '').toUpperCase() === 'EMBK' ? 'url(#xs-embk)' : sty.fill;
+                const codeU = String(sh.code || '').toUpperCase();
+                const fill = codeU === 'EMBK' ? 'url(#xs-embk)' : sty.fill;
                 const qs = ring.map(xyOf);
                 let cx = 0, cy = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
                 qs.forEach((q) => {
@@ -20217,14 +20257,19 @@
                     if (q.y < minY) minY = q.y; if (q.y > maxY) maxY = q.y;
                 });
                 cx /= qs.length; cy /= qs.length;
+                /* Кювет-слой: подпись на днище укрепления, не в пустом канале. */
+                if (codeU === 'DITCH' && ring.length >= 8) {
+                    const bot = [ring[1], ring[2], ring[5], ring[6]].map(xyOf);
+                    cx = (bot[0].x + bot[1].x + bot[2].x + bot[3].x) / 4;
+                    cy = (bot[0].y + bot[1].y + bot[2].y + bot[3].y) / 4;
+                }
                 const caption = (maxX - minX > 22 && maxY - minY > 14)
                     ? `<text class="xs-shape-lab" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" text-anchor="middle" fill="#3d3320" pointer-events="none">${esc(roadXsShapeCaption(sh.code))}</text>`
                     : '';
-                const codeU = String(sh.code || '').toUpperCase();
                 const opac = codeU === 'EMBK' ? (on ? 1 : 0.92) : codeU === 'DITCH' ? (on ? 0.95 : 0.82) : (on ? 0.88 : 0.62);
                 return `<path class="xs-shape" data-sid="${sh.id}" data-code="${esc(sh.code || '')}" d="${d}"
-                    fill="${esc(fill)}" fill-opacity="${opac}"
-                    stroke="${esc(sty.stroke)}" stroke-width="${String(sh.code || '').toUpperCase() === 'DITCH' ? 1.4 : (on ? 1.6 : 0.7)}"/>${caption}`;
+                    fill="${esc(fill)}" fill-opacity="${opac}" fill-rule="nonzero"
+                    stroke="${esc(sty.stroke)}" stroke-width="${codeU === 'DITCH' ? 1.4 : (on ? 1.6 : 0.7)}"/>${caption}`;
             }).join('');
             const linkDraw = tpl.links.map((ln) => {
                 const a = ptById.get(ln.a), b = ptById.get(ln.b);
@@ -39601,7 +39646,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.17',
-            buildId: 'xs-earth',
+            buildId: 'xs-ditch',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -39610,7 +39655,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.17: поперечник как в AutoCAD: земляное полотно, кювет слоем (не заливка призмы), корыто стыкуется с низом одежды.',
+                '2026.08.17: кювет — слой заданной толщины (канал пустой); торец полотна не заливает V веером от первой вершины.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
                 '2026.08.17: поперечник всегда в масштабе 1:1 (без растяжения по высоте); в шаблонах СП — расклин, корыто, откос 1:1,5 и постель под бортовым камнем.',
@@ -39719,7 +39764,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=137').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=138').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

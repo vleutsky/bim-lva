@@ -3065,7 +3065,23 @@ async function checkRoadCrossSections(page) {
             const dbix = (snap.points || []).find((p) => p.code === 'DBIX'
                 && dbi && Math.sign(p.off) === Math.sign(dbi.off || 1));
             const ditchThk = dbi && dbix ? Math.hypot(dbi.off - dbix.off, dbi.dz - dbix.dz) : null;
-            const ditchPts = ((snap.shapes || []).find((s) => s.code === 'DITCH') || {}).pts || [];
+            const ditchSh = (snap.shapes || []).find((s) => s.code === 'DITCH');
+            const ditchPts = (ditchSh || {}).pts || [];
+            const ditchRing = ditchPts.map((id) => (snap.points || []).find((p) => p.id === id)).filter(Boolean);
+            const dbo = ditchRing.find((p) => p.code === 'DBO');
+            const pip = (ring, off, dz) => {
+                let n = 0;
+                for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                    const a = ring[i], b = ring[j];
+                    if (((a.dz > dz) !== (b.dz > dz))
+                        && (off < (b.off - a.off) * (dz - a.dz) / ((b.dz - a.dz) || 1e-12) + a.off)) n++;
+                }
+                return n % 2 === 1;
+            };
+            /* Точка в канале (над днищем, внутри V) не должна попадать в полигон слоя. */
+            const ditchFillsChannel = dbi && dbo
+                ? pip(ditchRing, (dbi.off + dbo.off) / 2, (dbi.dz + dbo.dz) / 2 + 0.20)
+                : null;
             const subb = (snap.shapes || []).find((s) => s.code === 'SUBB');
             const trough = (snap.shapes || []).find((s) => s.code === 'TROUGH');
             const troughShare = subb && trough
@@ -3081,7 +3097,7 @@ async function checkRoadCrossSections(page) {
                 embk: n('EMBK'),
                 curbH: curbT && by.R ? curbT.dz - by.R.dz : null,
                 curbBuried: curbB && by.R ? by.R.dz - curbB.dz : 0,
-                shldOuter, ditchThk, ditchPts: ditchPts.length, troughShare
+                shldOuter, ditchThk, ditchPts: ditchPts.length, ditchFillsChannel, troughShare
             };
         };
         const applied = D.applyRoadXsPreset('gost-iii');
@@ -3108,7 +3124,22 @@ async function checkRoadCrossSections(page) {
             perm40: /40‰/.test(html),
             ratio15: /1:1,5/.test(html),
             embkLab: /Земляное полотно/.test(html) || /id="xs-embk"/.test(html),
-            shldGrade: shldDrop(iiiSnap, 'L', 'SHLDO')
+            shldGrade: shldDrop(iiiSnap, 'L', 'SHLDO'),
+            ditchCapFills: (() => {
+                if (typeof D.ditchCapTris !== 'function') return null;
+                const U = [
+                    { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: -1 }, { x: 2, y: 0, z: -1 }, { x: 3, y: 0, z: 0 },
+                    { x: 3, y: 0, z: -0.2 }, { x: 2, y: 0, z: -1.2 }, { x: 1, y: 0, z: -1.2 }, { x: 0, y: 0, z: -0.2 }
+                ];
+                const p = { x: 1.5, z: -0.45 };
+                const s = (a, b, q) => (b.x - a.x) * (q.z - a.z) - (b.z - a.z) * (q.x - a.x);
+                const inTri = (a, b, c) => {
+                    const d0 = s(a, b, p), d1 = s(b, c, p), d2 = s(c, a, p);
+                    return (d0 >= -1e-9 && d1 >= -1e-9 && d2 >= -1e-9)
+                        || (d0 <= 1e-9 && d1 <= 1e-9 && d2 <= 1e-9);
+                };
+                return D.ditchCapTris(U).some((tri) => inTri(tri[0], tri[1], tri[2]));
+            })()
         };
     });
     const near = (a, b, eps = 1e-3) => Math.abs((a ?? 0) - b) <= eps;
@@ -3138,13 +3169,17 @@ async function checkRoadCrossSections(page) {
     if (!near(gost.shldGrade, 0.04, 0.005)) {
         problems.push(`поперечники: уклон обочины III не 40‰ (${gost.shldGrade})`);
     }
-    if (!(gost.iii?.ditchPts >= 8) || !near(gost.iii?.ditchThk, 0.15, 0.04)) {
+    if (!(gost.iii?.ditchPts >= 8) || !near(gost.iii?.ditchThk, 0.15, 0.04)
+        || gost.iii?.ditchFillsChannel) {
         problems.push(`поперечники: кювет не слой (${JSON.stringify({
-            pts: gost.iii?.ditchPts, thk: gost.iii?.ditchThk
+            pts: gost.iii?.ditchPts, thk: gost.iii?.ditchThk, fills: gost.iii?.ditchFillsChannel
         })})`);
     }
     if ((gost.iii?.troughShare || 0) < 2) {
         problems.push(`поперечники: корыто не стыкуется с низом одежды (share=${gost.iii?.troughShare})`);
+    }
+    if (gost.ditchCapFills) {
+        problems.push('поперечники: торец кювета заливает канал (веер вместо уха)');
     }
     if (!gost.embkLab) {
         problems.push('поперечники: на чертеже нет земляного полотна');
