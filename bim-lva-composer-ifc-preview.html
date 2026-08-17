@@ -4010,7 +4010,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 5a91efe</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 7d1c545</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -15930,17 +15930,20 @@
             const writeAbsPolyline = (pts, layer, is3d, closed) => {
                 if (!pts || pts.length < 2) return;
                 entityOpen('POLYLINE', layer);
+                ge(100, 'AcDbPolyline');
                 ge(66, 1);
                 ge(10, 0); ge(20, 0); ge(30, is3d ? 0 : n(pts[0].z));
                 ge(70, (is3d ? 8 : 0) | (closed ? 1 : 0));
                 pts.forEach((p) => {
                     const abs = p.abs ? p : (worldPointToAbsoluteXYZ(p) || p);
                     entityOpen('VERTEX', layer);
+                    ge(100, 'AcDbVertex');
                     ge(10, n(abs.x)); ge(20, n(abs.y)); ge(30, n(abs.z));
                     if (is3d) ge(70, 32);
                     else if (p.bulge) ge(42, n(p.bulge));
                 });
                 entityOpen('SEQEND', layer);
+                ge(100, 'AcDbSequenceEnd');
             };
             if (!opts.xsOnly) polylines.forEach((poly) => {
                 if (skipPolyIds.has(poly.id)) return;
@@ -15951,16 +15954,19 @@
                 const { verts } = buildDxfPolylineVertices(poly);
                 if (!verts.length) return;
                 entityOpen('POLYLINE', layer);
+                ge(100, 'AcDbPolyline');
                 ge(66, 1);
                 ge(10, 0); ge(20, 0); ge(30, is3d ? 0 : n(verts[0].z));
                 ge(70, (is3d ? 8 : 0) | (poly.closed ? 1 : 0));
                 verts.forEach((p) => {
                     entityOpen('VERTEX', layer);
+                    ge(100, 'AcDbVertex');
                     ge(10, n(p.x)); ge(20, n(p.y)); ge(30, n(p.z));
                     if (is3d) ge(70, 32);
                     else if (p.bulge) ge(42, n(p.bulge));
                 });
                 entityOpen('SEQEND', layer);
+                ge(100, 'AcDbSequenceEnd');
                 if (poly.role === 'road-axis') {
                     const el = sanitizeDxfLayer(poly.edgeLayer, ROAD_EDGE_LAYER);
                     writeAbsPolyline(poly.edgeLeftPts, el, true, false);
@@ -20877,13 +20883,16 @@
                     const flush = () => {
                         if (run.length < 2) { run = []; return; }
                         entityOpen('POLYLINE', DXF_LAYER_XS);
+                        ge(100, 'AcDbPolyline');
                         ge(66, 1); ge(10, 0); ge(20, 0); ge(30, 0); ge(70, 8);
                         run.forEach((p) => {
                             entityOpen('VERTEX', DXF_LAYER_XS);
+                            ge(100, 'AcDbVertex');
                             ge(10, n(p.x)); ge(20, n(p.y)); ge(30, n(p.z));
                             ge(70, 32);
                         });
                         entityOpen('SEQEND', DXF_LAYER_XS);
+                        ge(100, 'AcDbSequenceEnd');
                         count++;
                         run = [];
                     };
@@ -20899,15 +20908,18 @@
                 const writeEdge = (pts) => {
                     if (!pts || pts.length < 2) return;
                     entityOpen('POLYLINE', layer);
+                    ge(100, 'AcDbPolyline');
                     ge(66, 1); ge(10, 0); ge(20, 0); ge(30, 0); ge(70, 8);
                     pts.forEach((p) => {
                         const src = p?.clone ? p : new THREE.Vector3(p.x, p.y, p.z);
                         const abs = worldPointToAbsoluteXYZ(src) || src;
                         entityOpen('VERTEX', layer);
+                        ge(100, 'AcDbVertex');
                         ge(10, n(abs.x)); ge(20, n(abs.y)); ge(30, n(abs.z));
                         ge(70, 32);
                     });
                     entityOpen('SEQEND', layer);
+                    ge(100, 'AcDbSequenceEnd');
                     count++;
                 };
                 writeEdge(rec?.edgeLeftPts || model.edgeLeftPts);
@@ -40122,7 +40134,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.17',
-            buildId: '5a91efe-preview',
+            buildId: '7d1c545-preview',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
