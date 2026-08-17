@@ -7120,15 +7120,20 @@
             roadXsTemplate() {
                 return snapshotRoadTemplate(currentRoadXsModel()?.template);
             },
-            frameRoadCorridor() {
+            frameRoadCorridor(opts) {
                 if (typeof roadXsGroup === 'undefined' || !roadXsGroup) return null;
                 const box = new THREE.Box3().setFromObject(roadXsGroup);
                 if (box.isEmpty()) return null;
                 const c = box.getCenter(new THREE.Vector3());
                 const s = box.getSize(new THREE.Vector3());
                 const span = Math.max(s.x, s.y, 4);
-                camera.position.set(c.x, c.y - span * 0.85, c.z + span * 1.05);
-                camera.up.set(0, 0, 1);
+                if (opts && opts.top) {
+                    camera.position.set(c.x, c.y, c.z + span * 2.4);
+                    camera.up.set(0, 1, 0);
+                } else {
+                    camera.position.set(c.x, c.y - span * 0.85, c.z + span * 1.05);
+                    camera.up.set(0, 0, 1);
+                }
                 controls.target.copy(c);
                 camera.lookAt(c);
                 if (typeof applyCameraNear === 'function') applyCameraNear(span);
@@ -19452,7 +19457,7 @@
             model.corridorTris = 0;
         }
 
-        function corridorLoftPush(positions, placed, pairs, capIds) {
+        function corridorLoftPush(positions, placed, pairs, capIds, skipInterval) {
             /* Вырожденность — в 3D, не по площади в плане. Бока одежды (R–RB)
              * и торцы сечения стоят вертикально: areaXY у них ноль, и при
              * проверке в XY формы становились открытыми листами без торцов. */
@@ -19467,6 +19472,7 @@
             };
             (pairs || []).forEach((link) => {
                 for (let i = 0; i < placed.length - 1; i++) {
+                    if (skipInterval && skipInterval[i]) continue;
                     const a0 = placed[i].get(link.a);
                     const b0 = placed[i].get(link.b);
                     const a1 = placed[i + 1].get(link.a);
@@ -19576,6 +19582,13 @@
                 });
                 return map;
             });
+            const twistSkip = stations.map((st, i) => {
+                if (i >= stations.length - 1) return false;
+                const n = stations[i + 1];
+                const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
+                return dot < 0.82;
+            });
+            const skipWide = new Set(['EMBK', 'DITCH', 'SHLD', 'SHLDU', 'SLOPE']);
             const meshes = [];
             let tris = 0;
             let sharedEdges = 0;
@@ -19612,8 +19625,9 @@
                     /* Земля объемлет обочину: торец по полному кольцу снова
                      * кладёт те же треугольники, что и SHLD — клинья на торце. */
                     const capIds = codeU === 'EMBK' ? null : ids;
+                    const skip = skipWide.has(codeU) ? twistSkip : null;
                     if (!pairs.length && !capIds) return;
-                    const positions = corridorLoftPush([], placed, pairs, capIds);
+                    const positions = corridorLoftPush([], placed, pairs, capIds, skip);
                     const style = roadShapeStyle(sh.code);
                     const mesh = makeRoadCorridorMesh(positions, style.fill, 'RoadCorridor:' + (sh.code || sh.id), {
                         modelId: model.id,
@@ -39748,7 +39762,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.17: полотно 3D без клиньев при зуме — общее ребро слоёв лофтится один раз, земля не дублирует торец обочины.',
+                '2026.08.17: полотно 3D без клиньев при зуме — общее ребро слоёв лофтится один раз; на остром угле внутреннюю сторону не раздувает биссектриса.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
                 '2026.08.17: поперечник всегда в масштабе 1:1 (без растяжения по высоте); в шаблонах СП — расклин, корыто, откос 1:1,5 и постель под бортовым камнем.',
