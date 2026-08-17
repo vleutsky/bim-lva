@@ -7133,6 +7133,7 @@
                 camera.lookAt(c);
                 if (typeof applyCameraNear === 'function') applyCameraNear(span);
                 markNeedsRender();
+                if (typeof renderer !== 'undefined' && typeof scene !== 'undefined') renderer.render(scene, camera);
                 return { span, x: c.x, y: c.y, z: c.z };
             },
             /**
@@ -18908,8 +18909,12 @@
         }
 
         function placeTemplateAtStation(st, pt) {
-            const scale = Math.max(1, st.miterScale || 1);
-            const off = clampPlanOffset((Number(pt.off) || 0) * scale, st.rho);
+            let scale = Math.max(1, st.miterScale || 1);
+            const off0 = Number(pt.off) || 0;
+            /* Внутренняя сторона острого уголка: bиссектриса × 1/cos(δ/2)
+             * уносит кювет на другую ветку — отсюда клинья вдоль подхода. */
+            if (st.atVertex && st.turn && off0 * st.turn < 0) scale = 1;
+            const off = clampPlanOffset(off0 * scale, st.rho);
             return new THREE.Vector3(
                 st.x + st.rx * off,
                 st.y + st.ry * off,
@@ -19335,7 +19340,11 @@
                     ? planTangentXY(pts[prev].x, pts[prev].y, pts[vi].x, pts[vi].y) : null;
                 if (tIn && tOut) {
                     const m = miterRightFrame(tIn, tOut);
-                    return { p: loc.p, rx: m.rx, ry: m.ry, miterScale: m.miterScale, atVertex: true };
+                    const turn = tIn.x * tOut.y - tIn.y * tOut.x;
+                    return {
+                        p: loc.p, rx: m.rx, ry: m.ry, miterScale: m.miterScale,
+                        atVertex: true, turn: Math.sign(turn) || 0
+                    };
                 }
                 const t = tIn || tOut;
                 if (t) return { p: loc.p, rx: t.y, ry: -t.x, miterScale: 1, atVertex: true };
@@ -19365,7 +19374,7 @@
             let missed = 0, hits = 0;
             const stations = stationsPk.map((sta) => {
                 const frame = roadXsFrameAtStation(record, stn, sta);
-                const { p, rx, ry, miterScale, atVertex } = frame;
+                const { p, rx, ry, miterScale, atVertex, turn } = frame;
                 const scale = Math.max(1, miterScale || 1);
                 const rho = stationSignedRadius(stn, sta);
                 const offs = roadXsOffsets(widthL * scale, widthR * scale, sampleStep);
@@ -19391,6 +19400,7 @@
                     sta,
                     x: p.x, y: p.y, z: p.z,
                     rx, ry, miterScale: scale, atVertex: !!atVertex,
+                    turn: turn || 0,
                     rho,
                     axisAbs: { x: axisAbs.x, y: axisAbs.y, z: axisAbs.z },
                     samples
