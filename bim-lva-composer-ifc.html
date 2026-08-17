@@ -19512,6 +19512,16 @@
                 };
                 cap(placed[0], false);
                 cap(placed[placed.length - 1], true);
+                /* Пропуск лофта на остром угле — торцы на стыке, иначе
+                 * открытый разрез и клинья при зуме. */
+                if (skipInterval) {
+                    for (let i = 0; i < placed.length; i++) {
+                        const prevSkip = i > 0 ? skipInterval[i - 1] : false;
+                        const nextSkip = i < placed.length - 1 ? skipInterval[i] : false;
+                        if (!prevSkip && nextSkip) cap(placed[i], true);
+                        if (prevSkip && !nextSkip) cap(placed[i], false);
+                    }
+                }
             }
             return positions;
         }
@@ -19588,7 +19598,6 @@
                 const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
                 return dot < 0.82;
             });
-            const skipWide = new Set(['EMBK', 'DITCH', 'SHLD', 'SHLDU', 'SLOPE']);
             const meshes = [];
             let tris = 0;
             let sharedEdges = 0;
@@ -19625,7 +19634,7 @@
                     /* Земля объемлет обочину: торец по полному кольцу снова
                      * кладёт те же треугольники, что и SHLD — клинья на торце. */
                     const capIds = codeU === 'EMBK' ? null : ids;
-                    const skip = skipWide.has(codeU) ? twistSkip : null;
+                    const skip = twistSkip;
                     if (!pairs.length && !capIds) return;
                     const positions = corridorLoftPush([], placed, pairs, capIds, skip);
                     const style = roadShapeStyle(sh.code);
@@ -39753,7 +39762,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.17',
-            buildId: 'xs-zfight',
+            buildId: 'xs-twist-cap',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -39871,7 +39880,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=139').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=140').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });
