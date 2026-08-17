@@ -3741,6 +3741,126 @@ async function checkPanelTabs(page) {
 }
 
 /**
+ * Стартовое окно и пустое состояние.
+ *
+ * Автопоказ окна под Playwright сознательно выключен (подложка перекрыла бы
+ * ленту и уронила все тесты), поэтому здесь оно открывается кнопкой «?» —
+ * проверяется ровно то, что увидит пользователь: подложка поверх сцены,
+ * плитки управления мышью, закрытие с запоминанием галочки.
+ *
+ * Вызывать ДО загрузки фикстуры: пустое состояние живёт только на пустой сцене.
+ */
+async function checkWelcomeAndEmptyState(page) {
+    const empty = await page.evaluate(() => {
+        const hint = document.querySelector('.drop-hint');
+        const shown = !!(hint && hint.offsetParent !== null);
+        return {
+            shown,
+            local: !!document.getElementById('dhOpenLocal'),
+            map: !!document.getElementById('dhOpenMap'),
+            formats: document.querySelectorAll('.drop-hint .dh-formats .fmt').length
+        };
+    });
+    if (!empty.shown) problems.push('пустое состояние (.drop-hint) не показано на пустой сцене');
+    if (!empty.local || !empty.map) problems.push('в пустом состоянии нет кнопок «Загрузить модели» / «Площадка с карты»');
+    // Форматов заявлено больше одного IFC — иначе плитка не выполняет свою задачу.
+    if (empty.formats < 5) problems.push(`в пустом состоянии перечислено ${empty.formats} форматов, ожидалось не меньше пяти`);
+
+    // Кнопки пустого состояния должны дёргать тот же выбор файлов, что и лента,
+    // и ровно один раз: плашка сама по себе кликабельна, и без гашения всплытия
+    // диалог открывался бы дважды, а на «Площадку с карты» — вместо карты.
+    const wired = await page.evaluate(() => {
+        const input = document.getElementById('localFileInput');
+        if (!input) return null;
+        let picks = 0;
+        // showPicker в headless может поднять настоящий диалог и подвесить прогон.
+        const realPicker = input.showPicker;
+        input.showPicker = () => { picks++; };
+        const onClick = (e) => { e.preventDefault(); picks++; };
+        input.addEventListener('click', onClick);
+
+        document.getElementById('dhOpenLocal')?.click();
+        const fromLocal = picks;
+
+        // «Площадка с карты» должна дойти до кнопки ленты — и только до неё.
+        // Сам построитель не открываем: он тянет тайлы, которых в песочнице нет,
+        // и оставил бы после себя модальное окно поверх сцены.
+        picks = 0;
+        let mapHits = 0;
+        const guard = (e) => {
+            if (e.target?.id !== 'btnMapBuilder') return;
+            mapHits++;
+            e.stopPropagation();
+        };
+        document.addEventListener('click', guard, true);
+        document.getElementById('dhOpenMap')?.click();
+        document.removeEventListener('click', guard, true);
+        const fromMap = picks;
+
+        picks = 0;
+        document.querySelector('.drop-hint .dh-more summary')?.click();
+        const fromDetails = picks;
+
+        input.removeEventListener('click', onClick);
+        input.showPicker = realPicker;
+        return { fromLocal, fromMap, fromDetails, mapHits };
+    });
+    if (wired && wired.mapHits !== 1) problems.push(`кнопка «Площадка с карты» из пустого состояния дошла до кнопки ленты ${wired.mapHits} раз, ожидался один`);
+    if (!wired || wired.fromLocal === 0) problems.push('кнопка «Загрузить модели» из пустого состояния не открывает выбор файлов');
+    else if (wired.fromLocal > 1) problems.push(`кнопка «Загрузить модели» открывает диалог ${wired.fromLocal} раза — клик всплывает на плашку`);
+    if (wired && wired.fromMap > 0) problems.push('кнопка «Площадка с карты» из пустого состояния открывает выбор файлов');
+    if (wired && wired.fromDetails > 0) problems.push('раскрывашка «Что не откроется напрямую» открывает выбор файлов');
+
+    await page.evaluate(() => document.getElementById('btnWelcome')?.click());
+    const opened = await page.evaluate(() => {
+        const md = document.getElementById('welcomeModal');
+        if (!md || !md.classList.contains('show')) return null;
+        const st = getComputedStyle(md);
+        return {
+            visible: st.display !== 'none' && st.visibility !== 'hidden',
+            mice: md.querySelectorAll('.wc-mouse').length,
+            hideChecked: !!document.getElementById('welcomeHide')?.checked
+        };
+    });
+    if (!opened) {
+        problems.push('стартовое окно не открылось по кнопке «?»');
+        return null;
+    }
+    if (!opened.visible) problems.push('стартовое окно помечено show, но не отрисовано');
+    if (opened.mice !== 4) problems.push(`плиток управления мышью ${opened.mice}, ожидалось 4`);
+    // Открытие руками не должно молча ставить «больше не показывать».
+    if (opened.hideChecked) problems.push('открытие стартового окна кнопкой «?» ставит галочку «больше не показывать»');
+
+    const closed = await page.evaluate(() => {
+        const key = 'bimlva_welcome_v1';
+        localStorage.removeItem(key);
+        document.getElementById('welcomeClose')?.click();
+        const md = document.getElementById('welcomeModal');
+        return { open: !!md?.classList.contains('show'), remembered: !!localStorage.getItem(key) };
+    });
+    if (closed.open) problems.push('стартовое окно не закрывается крестиком');
+    // Крестик без галочки — не «навсегда»: иначе случайный клик прячет объяснение.
+    if (closed.remembered) problems.push('закрытие без галочки запомнилось как «больше не показывать»');
+
+    const remembered = await page.evaluate(() => {
+        const key = 'bimlva_welcome_v1';
+        localStorage.removeItem(key);
+        document.getElementById('btnWelcome')?.click();
+        const hide = document.getElementById('welcomeHide');
+        if (hide) hide.checked = true;
+        document.getElementById('welcomeStart')?.click();
+        return {
+            open: !!document.getElementById('welcomeModal')?.classList.contains('show'),
+            remembered: !!localStorage.getItem(key)
+        };
+    });
+    if (remembered.open) problems.push('стартовое окно не закрывается кнопкой «Начать работу»');
+    if (!remembered.remembered) problems.push('галочка «больше не показывать» не сохраняется');
+
+    return { formats: empty.formats, mice: opened.mice };
+}
+
+/**
  * Прогон проверки коллизий на двух перекрывающихся моделях.
  * Коллизии переведены с полного перебора A×B на пространственную сетку —
  * здесь проверяется, что в реальном UI она находит пары, а не молчит.
@@ -4071,6 +4191,10 @@ async function main() {
     let addKeep = null;
     // Любая сборка Composer, включая тестовую копию, а не только основной файл.
     if (/^bim-lva-composer-ifc.*\.html$/.test(PAGE)) {
+        // До загрузки фикстуры: пустое состояние существует только на пустой сцене.
+        const welcome = await checkWelcomeAndEmptyState(page);
+        if (welcome) console.log(`старт:     форматов ${welcome.formats}, плиток мыши ${welcome.mice}`);
+
         const fixture = path.join(ROOT, 'tools', 'fixtures', 'smoke-grid.ifc');
         await fs.writeFile(fixture, makeGridIfc(2100, 50, 3));
         try {
