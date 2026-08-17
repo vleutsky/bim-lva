@@ -3903,7 +3903,42 @@ async function checkTourTrain(page) {
  * создавались из ИСХОДНЫХ цветов фрагментов (appearanceByID не читался), а
  * камера вписывалась после каждой пачки, а не только после первой.
  */
-async function checkAddFileKeepsStateForModel(page) {
+/**
+ * Режимы отображения модели: тонированный, каркас, с кромками, реалистичный.
+ */
+async function checkModelDisplayModes(page) {
+    const modes = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const snap = (mode) => {
+            D.setModelDisplayMode(mode);
+            return D.modelDisplaySample();
+        };
+        return {
+            shaded: snap('shaded'),
+            wire: snap('wireframe'),
+            edges: snap('shaded-edges'),
+            real: snap('realistic')
+        };
+    });
+    if (!modes.shaded?.mesh) {
+        problems.push('режим отображения: нет меша для проверки');
+        return null;
+    }
+    if (modes.shaded.wireframe) {
+        problems.push(`режим отображения: тонированный с wireframe (${JSON.stringify(modes.shaded)})`);
+    }
+    if (!modes.wire.wireframe) {
+        problems.push(`режим отображения: каркас без wireframe (${JSON.stringify(modes.wire)})`);
+    }
+    if (!modes.edges.edges) {
+        problems.push(`режим отображения: «с кромками» без линий (${JSON.stringify(modes.edges)})`);
+    }
+    if (!modes.real.standard || modes.real.wireframe) {
+        problems.push(`режим отображения: реалистичный (${JSON.stringify(modes.real)})`);
+    }
+    return modes;
+}
+
     const a = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-a.ifc');
     const b = path.join(ROOT, 'tools', 'fixtures', 'smoke-add-b.ifc');
     const base = { worldX: 431_000, worldY: 6_171_000, worldZ: 40, count: 40, cols: 8 };
@@ -4090,6 +4125,14 @@ async function main() {
                 // поэтому уведомления идут первыми, коллизии последними.
                 toast = await checkNotifications(page);
                 pick = await checkPicking(page);
+                const displayModes = await checkModelDisplayModes(page);
+                if (displayModes) {
+                    console.log(
+                        `режимы:   тонир ${displayModes.shaded.lambert ? 'Lambert' : 'Std'}, ` +
+                        `каркас ${displayModes.wire.wireframe}, кромки ${displayModes.edges.edges}, ` +
+                        `PBR ${displayModes.real.standard}`
+                    );
+                }
                 const panelTabs = await checkPanelTabs(page);
                 if (panelTabs) {
                     console.log(
