@@ -4010,7 +4010,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · e5fdb29</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 40f3edf</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4203,6 +4203,7 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
                             <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
@@ -13120,6 +13121,76 @@
             return true;
         }
 
+        function buildPolylineLandXml() {
+            if (!drawnPolylines.length) return null;
+            const escXml = (s) => String(s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const n = (v) => (Math.round(v * 1e6) / 1e6).toFixed(6);
+            const now = new Date();
+            const date = now.toISOString().slice(0, 10);
+            const time = now.toISOString().slice(11, 19);
+            const lines = [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                `<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2" date="${date}" time="${time}">`,
+                '  <Units>',
+                '    <Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter" temperatureUnit="celsius" pressureUnit="HPA"/>',
+                '  </Units>',
+                `  <Application name="BIM.LVA Composer IFC" version="${COMPOSER_ABOUT.version}" manufacturer="LVA"/>`,
+                '  <Project name="Polylines"/>',
+                '  <Alignments>'
+            ];
+            drawnPolylines.forEach((poly, idx) => {
+                if (!poly.pts || poly.pts.length < 2) return;
+                const name = escXml(poly.name || `Polyline ${idx + 1}`);
+                lines.push(`    <Alignment name="${name}" staStart="0" length="${poly.length?.toFixed(2) || '?'}">`);
+                lines.push('      <CoordGeom>');
+                let sta = 0;
+                const pts = poly.pts.map((p) => scenePointToAbs(p) || p);
+                for (let i = 0; i < pts.length; i++) {
+                    const p = pts[i];
+                    if (i > 0) {
+                        const prev = pts[i - 1];
+                        const dx = p.x - prev.x, dy = p.y - prev.y;
+                        const dist = Math.hypot(dx, dy);
+                        if (dist > 1e-6) {
+                            const bearing = Math.atan2(dx, dy) * 180 / Math.PI;
+                            lines.push(`        <Line length="${n(dist)}" dir="${n(bearing)}" staStart="${n(sta)}">`);
+                            lines.push(`          <Start>${n(prev.y)} ${n(prev.x)} ${n(prev.z)}</Start>`);
+                            lines.push(`          <End>${n(p.y)} ${n(p.x)} ${n(p.z)}</End>`);
+                            lines.push('        </Line>');
+                            sta += dist;
+                        }
+                    }
+                }
+                lines.push('      </CoordGeom>');
+                lines.push('      <PntList>');
+                pts.forEach((p) => {
+                    lines.push(`        <P>${n(p.y)} ${n(p.x)} ${n(p.z)}</P>`);
+                });
+                lines.push('      </PntList>');
+                lines.push('    </Alignment>');
+            });
+            lines.push(
+                '  </Alignments>',
+                '</LandXML>',
+                ''
+            );
+            return lines.join('\n');
+        }
+
+        function exportPolylineLandXml() {
+            const xml = buildPolylineLandXml();
+            if (!xml) {
+                notifyError('Нет полилиний для выгрузки.');
+                return false;
+            }
+            downloadTextFile(xml, `bim-lva-polylines-${new Date().toISOString().slice(0, 10)}.xml`, 'application/xml');
+            notify(`LandXML: ${drawnPolylines.length} полилиний. Civil 3D → Import LandXML.`);
+            trackUsage('polyline_export_landxml', { count: drawnPolylines.length });
+            return true;
+        }
+
         function exportSlopeLandXml(model) {
             const target = model || slopeModels[slopeModels.length - 1];
             const xml = buildSlopeLandXml(target);
@@ -15843,8 +15914,11 @@
 
         function updateDrawUi() {
             const btn = $('btnDrawExport');
-            if (btn) btn.disabled = !drawnPolylines.length && !coordPins.length && !sweptSolids.length
-                && !slopeModels.length && !roadXsModels.length;
+            const xmlBtn = $('btnDrawExportXml');
+            const hasContent = drawnPolylines.length || coordPins.length || sweptSolids.length
+                || slopeModels.length || roadXsModels.length;
+            if (btn) btn.disabled = !hasContent;
+            if (xmlBtn) xmlBtn.disabled = !drawnPolylines.length;
             renderPolylinesList();
             renderPadsList();
         }
@@ -16475,6 +16549,7 @@
             });
         });
         $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
+        $('btnDrawExportXml')?.addEventListener('click', exportPolylineLandXml);
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
         });
@@ -40134,7 +40209,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.17',
-            buildId: 'e5fdb29-preview',
+            buildId: '40f3edf-preview',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
