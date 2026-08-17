@@ -677,6 +677,15 @@ async function checkDrawDxf(page) {
     if (!/\r\n0\r\nAPPID\r\n5\r\n[0-9A-F]+\r\n330\r\n[0-9A-F]+\r\n/.test(dxf)) {
         problems.push('запись APPID без owner 330');
     }
+    if (!/\r\n2\r\nByLayer\r\n/.test(dxf) || !/\r\n2\r\nByBlock\r\n/.test(dxf)) {
+        problems.push('в LTYPE нет ByLayer/ByBlock — Civil не откроет DXF');
+    }
+    if (!/\r\n2\r\nContinuous\r\n/.test(dxf)) {
+        problems.push('в LTYPE нет Continuous');
+    }
+    if (!/\r\n2\r\nStandard\r\n/.test(dxf)) {
+        problems.push('в STYLE/DIMSTYLE нет Standard');
+    }
     if (!has('ACAD_PLOTSTYLENAME')) problems.push('в DXF нет ACAD_PLOTSTYLENAME');
     if (!/\r\n370\r\n-3\r\n390\r\n/.test(dxf)) {
         problems.push('у LAYER нет lineweight/plotstyle (370/390)');
@@ -2053,7 +2062,10 @@ async function checkRoadCrossSections(page) {
             dxfXs: /Поперечник/.test(dxf),
             dxfRoad: /Кромка/.test(dxf),
             dxfPolys: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
-            dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length
+            dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length,
+            dxfByLayer: /\r\n2\r\nByLayer\r\n/.test(dxf),
+            dxfByBlock: /\r\n2\r\nByBlock\r\n/.test(dxf),
+            dxfContinuous: /\r\n2\r\nContinuous\r\n/.test(dxf)
         };
     }, groundZ);
 
@@ -2119,6 +2131,13 @@ async function checkRoadCrossSections(page) {
     if (!got.dxfXs || !got.dxfRoad || got.dxfPolys < 3) {
         problems.push(
             `поперечники: DXF Поперечник ${got.dxfXs}, Кромка ${got.dxfRoad}, POLYLINE ${got.dxfPolys} (ждали оба слоя и ≥3)`
+        );
+    }
+    if (!got.dxfByLayer || !got.dxfByBlock || !got.dxfContinuous) {
+        problems.push(
+            `поперечники: в DXF дороги нет LTYPE ByLayer/ByBlock/Continuous (${JSON.stringify({
+                ByLayer: got.dxfByLayer, ByBlock: got.dxfByBlock, Continuous: got.dxfContinuous
+            })})`
         );
     }
 
