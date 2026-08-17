@@ -5242,6 +5242,7 @@
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
                 <button class="btn" id="slopeExportDxf" title="Площадка и откосы одним 3D-солидом (3DSOLID, DXF R2010), координаты абсолютные, единицы — метры. Civil 2018+ и nanoCAD открывают">⬇ DXF</button>
+                <button class="btn" id="slopeExportDwg" title="Площадка и откосы в формате DWG, координаты абсолютные, единицы — метры">⬇ DWG</button>
                 <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
                 <button class="btn" id="slopeOpenTable" title="Таблица всех построенных площадок">▣ Таблица</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
@@ -13112,6 +13113,40 @@
             );
             trackUsage('slope_export_dxf', { faces, pads: list.length });
             return true;
+        }
+
+        async function exportSlopeDwg(model) {
+            const list = (model ? [model] : slopeModels).filter((sm) => sm?.tin?.faces?.length);
+            if (!list.length) {
+                notifyError('Сначала постройте откосы — выгружать нечего.');
+                return false;
+            }
+            try {
+                const target = list[0];
+                const buffer = await buildDwg([], [], model || list);
+                if (!buffer) {
+                    notifyError('DWG: ошибка при формировании файла.');
+                    return false;
+                }
+                const faces = list.reduce((n, sm) => n + sm.tin.faces.length, 0);
+                const slug = String(target.name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
+                downloadBinaryFile(buffer, `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dwg`);
+                const kdoN = list.reduce((n, sm) => n + (sm.kdoMeshes?.length || 0), 0);
+                notify(
+                    list.length === 1
+                        ? `DWG площадки «${target.name}»: 3D-поверхность, ${faces} треугольников` +
+                            (kdoN ? `, КДО ${kdoN} сл.` : '') +
+                            `, координаты мировые, метры.`
+                        : `DWG: ${list.length} площадок, ${faces} треугольников` +
+                            (kdoN ? `, КДО ${kdoN} сл.` : '')
+                );
+                trackUsage('slope_export_dwg', { faces, pads: list.length });
+                return true;
+            } catch (err) {
+                notifyError(`DWG-экспорт откосов: ${err.message}`);
+                console.error('Slope DWG export error:', err);
+                return false;
+            }
         }
 
         function buildPolylineLandXml() {
@@ -22915,6 +22950,7 @@
 
         $('slopeApply')?.addEventListener('click', runSlopeBuild);
         $('slopeExportDxf')?.addEventListener('click', () => exportSlopeDxf());
+        $('slopeExportDwg')?.addEventListener('click', () => exportSlopeDwg());
         $('slopeExportXml')?.addEventListener('click', () => exportSlopeLandXml());
         $('slopeSelect')?.addEventListener('change', () => {
             slopeRecordId = Number($('slopeSelect').value);
