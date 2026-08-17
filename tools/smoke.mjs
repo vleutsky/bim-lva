@@ -2423,6 +2423,90 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: раздельный шаг дал слишком мало сечений (${JSON.stringify(splitStep)})`);
     }
 
+    // Вертикальная кривая профиля — тот же мелкий шаг, что на дуге плана.
+    const vcurveStep = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 20, y: 16, z: g + 0.5 },
+                { x: 60, y: 16, z: g + 2.5 },
+                { x: 100, y: 16, z: g + 0.5 }
+            ],
+            { name: 'Ось-тест-vcurve-шаг', role: 'road-axis' }
+        );
+        D.setPolylineVRadius(id, 1, 120);
+        const plain = D.buildRoadXs(id, {
+            step: 20, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        D.setPolylineVRadius(id, 1, 0);
+        const noV = D.buildRoadXs(id, {
+            step: 20, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+        });
+        const pk = plain?.pk || [];
+        const mid = pk.filter((s) => s > 25 && s < 55);
+        const gaps = [];
+        for (let i = 1; i < mid.length; i++) gaps.push(mid[i] - mid[i - 1]);
+        const med = gaps.length
+            ? [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+            : 99;
+        D.deletePolyline(id);
+        return {
+            withV: plain?.stations || 0,
+            noV: noV?.stations || 0,
+            medGap: med,
+            midN: mid.length
+        };
+    }, groundZ);
+    if ((vcurveStep.withV || 0) <= (vcurveStep.noV || 0)) {
+        problems.push(
+            `поперечники: вертикальная кривая не добавила сечения ` +
+            `(${vcurveStep.withV} vs ${vcurveStep.noV})`
+        );
+    }
+    if ((vcurveStep.medGap || 99) > 8) {
+        problems.push(
+            `поперечники: на вертикальной кривой шаг ${vcurveStep.medGap} м, ждали ≈4 ` +
+            `(${JSON.stringify(vcurveStep)})`
+        );
+    }
+
+    // Укреплённая обочина: слои выше её низа — вертикаль у внутренней кромки.
+    const shoulderKnee = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const snap = D.buildRoadXsPreset('gost-iii');
+        const R = (snap.points || []).find((p) => p.code === 'R');
+        const pt = (id) => (snap.points || []).find((p) => p.id === id);
+        const rightEdge = (code) => {
+            const sh = (snap.shapes || []).find((s) => s.code === code);
+            if (!sh) return null;
+            const pts = (sh.pts || []).map((id) => pt(id)).filter(Boolean);
+            const rb = pts.find((q) => q.code === 'RB' || q.code === 'R2');
+            const rBot = pts.find((q) => /^R\d+$/.test(q.code) && q.dz < (rb?.dz ?? 9));
+            const knee = pts.find((q) => /KR$/.test(q.code));
+            const vert = rb && rBot && Math.abs(rb.off - (R?.off || 0)) < 1e-4
+                && Math.abs(rBot.off - (R?.off || 0)) < 1e-4;
+            return { n: pts.length, vert, knee: !!knee, rbOff: rb?.off, rBotOff: rBot?.off };
+        };
+        return {
+            wedge: rightEdge('WEDGE'),
+            base: rightEdge('BASE'),
+            subb: rightEdge('SUBB'),
+            clipKR: (snap.points || []).filter((p) => /K[RL]$/.test(p.code)).length
+        };
+    });
+    if (!shoulderKnee.wedge?.vert && !shoulderKnee.wedge?.knee) {
+        problems.push(`поперечники: расклин не обрезан у обочины (${JSON.stringify(shoulderKnee.wedge)})`);
+    }
+    if (!shoulderKnee.base?.knee || (shoulderKnee.base?.n || 0) < 6) {
+        problems.push(`поперечники: основание без колена у обочины (${JSON.stringify(shoulderKnee.base)})`);
+    }
+    if ((shoulderKnee.clipKR || 0) < 2) {
+        problems.push(`поперечники: колена обочины не с двух сторон (${shoulderKnee.clipKR})`);
+    }
+    if (shoulderKnee.subb?.knee) {
+        problems.push(`поперечники: песок ниже обочины не должен резаться (${JSON.stringify(shoulderKnee.subb)})`);
+    }
+
     const ui = await page.evaluate(() => {
         document.getElementById('btnPolylineList')?.click();
         const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
