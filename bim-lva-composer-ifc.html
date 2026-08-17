@@ -17822,7 +17822,7 @@
         const ROAD_LAYER_CODES = ['PVMT', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4'];
         const ROAD_XS_LAYER_CODES = new Set(['PVMT', 'WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4']);
         /** Одежда, корыто и земляное полотно не якоря для бордюра/обочины. */
-        const ROAD_XS_STRUCT_CODES = new Set(['PVMT', 'WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4', 'TROUGH', 'BED', 'EMBK']);
+        const ROAD_XS_STRUCT_CODES = new Set(['PVMT', 'WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4', 'TROUGH', 'BED']);
 
         /** Нижние левая и правая точки шаблона — от них наращивается слой одежды. */
         function templateBottomEdges(tpl, onlyCodes) {
@@ -18397,12 +18397,24 @@
                     });
                 });
                 shld.sort((a, b) => (a.off - b.off) * sign);
-                const slopeB = outerMost('SLOPEB');
+                let slopeO = outerMost('SLOPEO');
+                const shldO = outerMost('SHLDUO') || outerMost('SHLDO') || shld[shld.length - 1];
+                if (!slopeO && shldO) {
+                    const h = 1.20, m = 1.5;
+                    tpl.seq = (tpl.seq || (tpl.points || []).length) + 1;
+                    slopeO = {
+                        id: tpl.seq,
+                        code: 'SLOPEO',
+                        off: shldO.off + sign * h * m,
+                        dz: shldO.dz - h
+                    };
+                    tpl.points.push(slopeO);
+                }
                 const ids = [];
                 const push = (p) => { if (p && !ids.includes(p.id)) ids.push(p.id); };
                 push(inner);
                 push(tr);
-                push(slopeB);
+                push(slopeO);
                 shld.slice().reverse().forEach(push);
                 if (ids.length < 3) return;
                 tpl.shapeSeq = (tpl.shapeSeq || (tpl.shapes?.length || 0)) + 1;
@@ -18456,12 +18468,7 @@
                     code: 'SHLDU', w: shldW - strW, h: shldH, slope: shldSlope
                 });
             }
-            if (cfg.slope !== false) {
-                addFigureBothSides(tpl, 'slope', {
-                    h: cfg.slopeH || 1.20,
-                    m: cfg.slopeM || 1.5
-                });
-            }
+            if (cfg.earth !== false) addRoadEarthwork(tpl);
             if (cfg.ditch) {
                 addFigureBothSides(tpl, 'ditch', {
                     h: cfg.ditchH || 0.50,
@@ -18471,7 +18478,12 @@
                     thk: cfg.ditchThk == null ? 0.15 : cfg.ditchThk
                 });
             }
-            if (cfg.earth !== false) addRoadEarthwork(tpl);
+            if (cfg.slope !== false && cfg.earth === false) {
+                addFigureBothSides(tpl, 'slope', {
+                    h: cfg.slopeH || 1.20,
+                    m: cfg.slopeM || 1.5
+                });
+            }
             return tpl;
         }
 
@@ -20031,6 +20043,15 @@
                 parts.push(roadXsGradeLabelSvg(prevR, p, xyOf));
                 prevR = p;
             });
+            const slopeO = all('SLOPEO');
+            const shldFace = [...all('SHLDUB'), ...all('SHLDB'), ...all('SHLDO'), ...all('SHLDUO')];
+            slopeO.forEach((toe) => {
+                const side = Math.sign(toe.off) || 1;
+                const face = shldFace.filter((p) => Math.sign(p.off) === side)
+                    .sort((a, b) => Math.abs(b.off) - Math.abs(a.off))[0];
+                if (!face) return;
+                parts.push(roadXsRatioLabelSvg([face, toe], xyOf));
+            });
             const ratioCodes = new Set(['WEDGE', 'TROUGH', 'SLOPE']);
             (tpl?.shapes || []).forEach((sh) => {
                 if (!ratioCodes.has(String(sh.code || '').toUpperCase())) return;
@@ -20199,10 +20220,11 @@
                 const caption = (maxX - minX > 22 && maxY - minY > 14)
                     ? `<text class="xs-shape-lab" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" text-anchor="middle" fill="#3d3320" pointer-events="none">${esc(roadXsShapeCaption(sh.code))}</text>`
                     : '';
-                const opac = String(sh.code || '').toUpperCase() === 'EMBK' ? (on ? 1 : 0.92) : (on ? 0.88 : 0.62);
+                const codeU = String(sh.code || '').toUpperCase();
+                const opac = codeU === 'EMBK' ? (on ? 1 : 0.92) : codeU === 'DITCH' ? (on ? 0.95 : 0.82) : (on ? 0.88 : 0.62);
                 return `<path class="xs-shape" data-sid="${sh.id}" data-code="${esc(sh.code || '')}" d="${d}"
                     fill="${esc(fill)}" fill-opacity="${opac}"
-                    stroke="${esc(sty.stroke)}" stroke-width="${on ? 1.6 : 0.7}"/>${caption}`;
+                    stroke="${esc(sty.stroke)}" stroke-width="${String(sh.code || '').toUpperCase() === 'DITCH' ? 1.4 : (on ? 1.6 : 0.7)}"/>${caption}`;
             }).join('');
             const linkDraw = tpl.links.map((ln) => {
                 const a = ptById.get(ln.a), b = ptById.get(ln.b);
@@ -20220,7 +20242,7 @@
                 const on = p.id === roadXsActive.pointId;
                 const ghost = p.hide;
                 const codeU = String(p.code || '').toUpperCase();
-                const skipLab = /^(DHX|DBIX|DBOX|DOX)$/.test(codeU);
+                const skipLab = !/^(CL|L|R|SHLDO|SHLDUO|SLOPEO|DH|DO)$/.test(codeU);
                 const lab = skipLab ? '' : `<text x="${(q.x + 8).toFixed(1)}" y="${(q.y - 8).toFixed(1)}" fill="#6a5420">${esc(roadXsPointCaption(p.code))}${ghost ? ' ∅' : ''}</text>`;
                 return `<g class="xs-pt" data-id="${p.id}" style="cursor:grab;opacity:${ghost ? 0.35 : 1}">
                     <circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="${on ? 7 : 5.5}"

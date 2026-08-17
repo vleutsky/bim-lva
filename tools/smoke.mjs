@@ -3121,7 +3121,7 @@ async function checkRoadCrossSections(page) {
     if (!near(gost.iii?.L, -3.5) || !near(gost.iii?.R, 3.5)
         || (gost.iii?.shld || 0) < 4 || (gost.iii?.ditch || 0) < 2
         || !gost.iii?.base || !gost.iii?.subb || !gost.iii?.pvmt
-        || !gost.iii?.wedge || !gost.iii?.trough || (gost.iii?.slope || 0) < 2
+        || !gost.iii?.wedge || !gost.iii?.trough
         || (gost.iii?.embk || 0) < 2
         || gost.appliedDitch < 2 || gost.appliedShld < 4 || !near(gost.widthL, 3.5)) {
         problems.push(`поперечники: шаблон III по СП 34 (${JSON.stringify(gost.iii)} appliedDitch=${gost.appliedDitch} shld=${gost.appliedShld} widthL=${gost.widthL})`);
