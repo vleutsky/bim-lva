@@ -531,6 +531,73 @@ try {
     check(exported.xmlHasNode, 'LandXML содержит поверхность узла');
     check(exported.xmlFaces > 0, `у поверхности узла есть грани (${exported.xmlFaces})`);
 
+    // --- Заданная отметка: площадка ПЛОСКАЯ, и это не зависит от запекания --
+    /*
+     * ⚠️ Проверять это на пути «через ручку» бесполезно: там отметка успевает
+     * запечься в профиль оси, поправка становится нулевой и любая ошибка в её
+     * применении прячется. Дёргаем расчёт напрямую с целевой отметкой —
+     * запекания нет, поправка ненулевая, и ошибка видна.
+     *
+     * Ловится: `outline` и `arcs` держат ОДНИ И ТЕ ЖЕ объекты точек, и два
+     * прохода со сложением сдвигали дуги дважды — покрытие выворачивалось
+     * чашей с задранными краями (при целевой 5 контур уезжал на 5…10).
+     */
+    const flat = await page.evaluate(({ id1, id2, r }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        const ix = D.buildIntersection(id1, id2, { type: 'cross', radius: r, zTarget: 5 });
+        if (!ix) return null;
+        const zs = ix.arcs.flatMap((a) => a.pts.map((p) => p.z))
+            .concat(ix.outline.map((p) => p.z));
+        return { cross: ix.cross.z, min: Math.min(...zs), max: Math.max(...zs) };
+    }, { id1: trim.id1, id2: trim.id2, r: R });
+
+    check(!!flat, 'узел с заданной отметкой построен');
+    if (flat) {
+        console.log(`  заданная отметка 5: узел ${flat.cross.toFixed(3)}, контур и дуги ${flat.min.toFixed(3)}…${flat.max.toFixed(3)}`);
+        check(Math.abs(flat.cross - 5) < 1e-9, 'точка узла на заданной отметке');
+        check(Math.abs(flat.min - 5) < 1e-9 && Math.abs(flat.max - 5) < 1e-9,
+            `площадка плоская на заданной отметке (${flat.min.toFixed(3)}…${flat.max.toFixed(3)})`);
+    }
+
+    // --- Многошаговый подъём: вершина ПОД узлом едет вместе с устьями -------
+    /*
+     * ⚠️ Один шаг этого не ловит: на первом подъёме все три вершины ставятся
+     * заново и совпадают. Ошибка вылезает со ВТОРОГО шага — вершина в самой
+     * точке пересечения заводилась один раз и больше не обновлялась, устья
+     * росли, а она оставалась внизу: профиль проваливался буквой V прямо под
+     * покрытием (замерено 1602.1 против 1604.5 после пяти шагов).
+     */
+    const multi = await page.evaluate(({ id1, id2, r }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        const ix = D.buildIntersection(id1, id2, { type: 'cross', radius: r });
+        const z0 = D.nodeElevation(ix.id).abs;
+        const steps = [];
+        for (let k = 1; k <= 4; k++) {
+            D.setNodeElevationAbs(ix.id, z0 + k * 0.75);
+            const anchors = D.axisProfile(id1).filter((p) => p.anchor);
+            steps.push({
+                want: z0 + k * 0.75,
+                node: D.nodeElevation(ix.id).abs,
+                anchors: anchors.map((a) => a.z)
+            });
+        }
+        return steps;
+    }, { id1: trim.id1, id2: trim.id2, r: R });
+
+    if (multi?.length) {
+        const last = multi[multi.length - 1];
+        const spread = Math.max(...last.anchors) - Math.min(...last.anchors);
+        console.log(`  после ${multi.length} шагов: узел ${last.node.toFixed(3)}, вершины оси ${last.anchors.map((z) => z.toFixed(2)).join(' / ')}`);
+        check(multi.every((s) => Math.abs(s.node - s.want) < 1e-6),
+            'узел встаёт ровно на заданную отметку на каждом шаге');
+        check(spread < 1e-6,
+            `вершины оси под узлом на одной отметке — профиль не проваливается (разброс ${spread.toFixed(3)} м)`);
+        check(Math.abs(Math.max(...last.anchors) - last.node) < 1e-6,
+            'вершины оси подняты вместе с узлом');
+    }
+
     // --- КОСОЕ пересечение: контур доходит до устья по обеим кромкам --------
     /*
      * ⚠️ На ПЕРПЕНДИКУЛЯРНЫХ осях эта проверка проходит вхолостую: у обоих
