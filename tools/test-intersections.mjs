@@ -68,6 +68,31 @@ function distToLine(p, a, b) {
     return Math.abs((p.x - a.x) * vy - (p.y - a.y) * vx) / len;
 }
 
+/** Площадь контура в плане со знаком (для проверки обхода). */
+function signedArea(ring) {
+    return ring.reduce((s, p, i, arr) => {
+        const q = arr[(i + 1) % arr.length];
+        return s + (p.x * q.y - q.x * p.y);
+    }, 0) / 2;
+}
+
+/**
+ * Точка внутри контура (луч вправо). Покрытие узла — веер из точки
+ * пересечения, и он верен только если сама точка ВНУТРИ контура. У
+ * примыкания контур из одних дуг лежал по одну сторону от узла, веер
+ * выворачивался наизнанку — эта проверка ровно про тот случай.
+ */
+function pointInRing(pt, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[i], b = ring[j];
+        const hit = (a.y > pt.y) !== (b.y > pt.y)
+            && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x;
+        if (hit) inside = !inside;
+    }
+    return inside;
+}
+
 /*
  * Геодезическая модель нужна ОБЯЗАТЕЛЬНО, иначе тест проходит вхолостую:
  * без неё ifcWorldOrigin пуст, worldPointToAbsoluteXYZ возвращает точку как
@@ -179,6 +204,11 @@ try {
         check(tj.res.arcs.length === 2, `у примыкания 2 закругления (получено ${tj.res.arcs.length})`);
         const cT = tj.res.cross;
         check(Math.hypot(cT.x, cT.y) < 1e-6, 'точка примыкания в (0, 0)');
+        // Проверять здесь «узел внутри контура» БЕСПОЛЕЗНО: у полилиний
+        // ширина 0, замыкающая хорда проходит ровно через узел, и ответ
+        // вырожден — проверено, проходит и со сломанным контуром. Этот
+        // случай ловится ниже, на примыкании дорог с шириной.
+        console.log(`  контур примыкания: ${tj.res.outline.length} точек, площадь ${Math.abs(signedArea(tj.res.outline)).toFixed(1)} м²`);
     }
 
     // --- Удаление оси уносит её закругления --------------------------------
@@ -190,6 +220,120 @@ try {
     console.log(`  после удаления примыкающей оси: записей ${afterDelete.records}, объектов ${afterDelete.objects}`);
     check(afterDelete.records === 0, 'запись о пересечении снята вместе с осью');
     check(afterDelete.objects === 0, 'объекты закруглений убраны из сцены вместе с осью');
+
+    // --- Закругления по КРОМКАМ проезжей части, а не по осям ---------------
+    // Ось дороги несёт ширину, и угол узла лежит на пересечении кромок:
+    // на осях дуги слипались бы в звёздочку вокруг точки пересечения.
+    const HALF = 5; // полуширина проезжей части, м
+    const road = await page.evaluate(({ a, b, r, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        const id1 = D.createPolylineFromPoints(a, { name: 'Дорога A', role: 'road-axis' });
+        const id2 = D.createPolylineFromPoints(b, { name: 'Дорога B', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        D.setRoadWidths(id2, half, half);
+        const res = D.buildIntersection(id1, id2, { type: 'cross', radius: r });
+        return { id1, id2, res };
+    }, { a: AXIS_A, b: AXIS_B, r: R, half: HALF });
+
+    check(!!road.res, 'узел на осях дорог построен');
+    if (road.res) {
+        const widths = road.res.arms.map((x) => x.wLeft);
+        check(widths.every((w) => Math.abs(w - HALF) < 1e-6),
+            `ветви взяли ширину поперечника (${widths.map((w) => w.toFixed(2)).join(', ')})`);
+
+        // Центр дуги обязан стоять на R от КРОМКИ, то есть на half + R от оси.
+        let maxEdgeErr = 0;
+        for (const arc of road.res.arcs) {
+            const dA = distToLine(arc.center, AXIS_A[0], AXIS_A[1]);
+            const dB = distToLine(arc.center, AXIS_B[0], AXIS_B[1]);
+            maxEdgeErr = Math.max(maxEdgeErr, Math.abs(dA - (HALF + R)), Math.abs(dB - (HALF + R)));
+        }
+        console.log(`  центр дуги от оси: ожидалось ${(HALF + R).toFixed(2)} м, отклонение ${maxEdgeErr.toExponential(1)} м`);
+        check(maxEdgeErr < 1e-6, 'дуги касаются кромок проезжей части, а не осей');
+
+        // Покрытие узла: веер треугольников по контуру.
+        console.log(`  покрытие узла: ${road.res.patchTris} треугольников, контур ${road.res.outline.length} точек`);
+        check(road.res.patchTris > 0, `покрытие узла построено как 3D-меш (${road.res.patchTris} тр.)`);
+        check(pointInRing({ x: road.res.cross.x, y: road.res.cross.y }, road.res.outline),
+            'точка пересечения внутри контура — веер покрытия не вывернут');
+
+        // Площадь считаем ИЗ геометрии узла, а не «на глаз»: плюс шириной
+        // 2·HALF до устьев плюс четыре угловых сегмента R²(1 − π/4).
+        const area = Math.abs(signedArea(road.res.outline));
+        const mouth = HALF + R;                       // устье ветви от узла
+        const plus = 2 * (2 * mouth) * (2 * HALF) - (2 * HALF) * (2 * HALF);
+        const wantArea = plus + 4 * R * R * (1 - Math.PI / 4);
+        console.log(`  площадь покрытия: ${area.toFixed(1)} м², ожидалось ${wantArea.toFixed(1)} м²`);
+        check(Math.abs(area - wantArea) / wantArea < 0.01,
+            `площадь покрытия сошлась с расчётной (${area.toFixed(1)} против ${wantArea.toFixed(1)} м²)`);
+    }
+
+    // --- Правка радиуса пересчитывает узел ---------------------------------
+    const edited = await page.evaluate(({ ixId }) => {
+        const D = window.BimLvaDebug;
+        const ok = D.editIntersection(ixId, { radii: { 0: 8 } });
+        const rec = D.intersections.find((x) => x.id === ixId);
+        return { ok, corners: rec?.corners || null };
+    }, { ixId: road.res?.id });
+    check(edited.ok === true, 'правка радиуса угла принята');
+    if (edited.corners) {
+        const r0 = edited.corners.find((c) => c.index === 0);
+        console.log(`  радиус угла 0 после правки: ${r0 ? r0.radius : '—'} м (остальные ${R})`);
+        check(!!r0 && Math.abs(r0.radius - 8) < 1e-9, 'угол 0 пересчитан на новый радиус');
+        check(edited.corners.filter((c) => Math.abs(c.radius - R) < 1e-9).length === edited.corners.length - 1,
+            'остальные углы сохранили общий радиус');
+    }
+
+    // --- Уширение с отгоном -------------------------------------------------
+    const flared = await page.evaluate(({ id1, id2, r, flare, taper }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        const flares = { 0: { flare, taper }, 1: { flare, taper }, 2: { flare, taper }, 3: { flare, taper } };
+        return D.buildIntersection(id1, id2, { type: 'cross', radius: r, flares });
+    }, { id1: road.id1, id2: road.id2, r: R, flare: 3, taper: 40 });
+
+    check(!!flared, 'узел с уширением построен');
+    if (flared) {
+        check(flared.tapers === 8, `отгоны построены по обеим кромкам каждого угла (${flared.tapers})`);
+        let maxErr = 0;
+        for (const arc of flared.arcs) {
+            const dA = distToLine(arc.center, AXIS_A[0], AXIS_A[1]);
+            const dB = distToLine(arc.center, AXIS_B[0], AXIS_B[1]);
+            maxErr = Math.max(maxErr, Math.abs(dA - (HALF + 3 + R)), Math.abs(dB - (HALF + 3 + R)));
+        }
+        console.log(`  с уширением 3 м центр дуги от оси: ожидалось ${(HALF + 3 + R).toFixed(2)} м, отклонение ${maxErr.toExponential(1)} м`);
+        check(maxErr < 1e-6, 'уширение отодвинуло кромку, и дуги встали по ней');
+    }
+
+    // --- Примыкание НА ДОРОГАХ С ШИРИНОЙ -----------------------------------
+    // На полилиниях нулевой ширины этот случай не проверить: замыкающая
+    // хорда проходит ровно через узел, и «внутри/снаружи» вырождается.
+    // С шириной кромка сквозной дороги отстоит на HALF, и отсутствие прямой
+    // вставки в контуре сразу выносит узел наружу.
+    const tjRoad = await page.evaluate(({ a, t, r, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        const id1 = D.createPolylineFromPoints(a, { name: 'Главная', role: 'road-axis' });
+        const id2 = D.createPolylineFromPoints(t, { name: 'Примыкающая', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        D.setRoadWidths(id2, half, half);
+        return D.buildIntersection(id1, id2, { type: 't-junction', radius: r });
+    }, { a: AXIS_A, t: AXIS_T, r: R, half: HALF });
+
+    check(!!tjRoad, 'примыкание на дорогах с шириной построено');
+    if (tjRoad) {
+        check(tjRoad.corners.length === 2, `у примыкания 2 закругления (получено ${tjRoad.corners.length})`);
+        check(pointInRing({ x: 0, y: 0 }, tjRoad.outline),
+            'узел внутри контура: прямая кромка сквозной дороги замкнула его');
+        const area = Math.abs(signedArea(tjRoad.outline));
+        // Сквозная дорога 2·HALF на всю длину устьев + мешок примыкания
+        // сверху; нижняя половина обязана попасть в контур.
+        const lowest = tjRoad.outline.reduce((m, p) => Math.min(m, p.y), Infinity);
+        console.log(`  примыкание: площадь ${area.toFixed(1)} м², нижняя кромка y=${lowest.toFixed(2)}`);
+        check(Math.abs(lowest + HALF) < 1e-6,
+            `контур доходит до дальней кромки сквозной дороги (y=${lowest.toFixed(2)}, ожидалось ${-HALF})`);
+    }
 
     // --- Параллельные оси не пересекаются ---------------------------------
     const parallel = await page.evaluate(({ r }) => {

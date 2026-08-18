@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-1836</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-edges</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -2029,6 +2029,14 @@
             color: var(--txt-dim, var(--txt-dim));
         }
         #polylinePointsList.compact-table-list { max-height: 200px; margin-top: 0; }
+        #intersectionsList { font-size: 10.5px; }
+        .ix-row { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+        .ix-row:last-child { border-bottom: 0; }
+        .ix-head { display: flex; align-items: center; gap: 8px; }
+        .ix-head .mono { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--txt-dim); }
+        .ix-grid { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 4px; }
+        .ix-cell { display: flex; align-items: center; gap: 4px; color: var(--txt-dim); }
+        .ix-cell .editInput { width: 62px; }
         #polylinesList, #polylinePointsList, #padsList { font-size: 10.5px; }
         .polyline-row, .pad-row {
             display: grid;
@@ -4010,7 +4018,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 54c87d4</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 711d420</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5546,14 +5554,32 @@
             </div>
 
             <div class="prop small">
-                <div class="k">Радиус переходной кривой, м</div>
-                <input id="intersectionRadius" class="editInput" type="number" min="5" max="500" step="5" value="30">
+                <div class="k">Радиус закругления, м</div>
+                <input id="intersectionRadius" class="editInput" type="number" min="1" max="500" step="5" value="15">
             </div>
 
-            <div class="bulk-note" id="intersectionStatus">—</div>
+            <div class="prop small">
+                <div class="k">Уширение у узла, м</div>
+                <input id="intersectionFlare" class="editInput" type="number" min="0" max="20" step="0.25" value="0">
+            </div>
+
+            <div class="prop small">
+                <div class="k">Длина отгона уширения, м</div>
+                <input id="intersectionTaper" class="editInput" type="number" min="0" max="300" step="5" value="30">
+            </div>
+
+            <div class="bulk-note" id="intersectionStatus">
+                Закругления строятся по кромкам проезжей части: у оси дороги
+                ширина берётся из её поперечника, у обычной полилинии ширины
+                нет — там дуги коснутся самих осей. Уширение прикладывается к
+                кромкам у узла и сводится к обычной ширине за длину отгона.
+            </div>
+
+            <div id="intersectionsList" class="compact-table-list"></div>
 
             <div class="modal-actions">
-                <button class="btn" id="intersectionCancel">Отмена</button>
+                <button class="btn" id="intersectionClear">Убрать все</button>
+                <button class="btn" id="intersectionCancel">Закрыть</button>
                 <button class="btn load-btn" id="intersectionCreate">Создать</button>
             </div>
         </div>
@@ -7311,11 +7337,16 @@
                 if (!p1 || !p2) return null;
                 const type = opts.type || 'cross';
                 const radius = opts.radius || 30;
-                const result = calculateIntersection(p1, p2, type, radius);
+                const result = calculateIntersection(p1, p2, type, radius, {
+                    radii: opts.radii || {},
+                    flares: opts.flares || {}
+                });
                 if (!result) return null;
                 const rec = {
                     id: 'ix-' + Math.random().toString(36).slice(2, 10),
+                    name: `${p1.name} × ${p2.name}`,
                     poly1Id: p1.id, poly2Id: p2.id, type, radius,
+                    radii: opts.radii || {}, flares: opts.flares || {},
                     created: new Date(), points: result
                 };
                 roadIntersections.push(rec);
@@ -7323,12 +7354,25 @@
                 return {
                     id: rec.id,
                     cross: { x: result.crossPoint.x, y: result.crossPoint.y, z: result.crossPoint.z },
+                    arms: result.arms,
+                    corners: result.corners,
+                    tapers: result.tapers.length,
+                    patchTris: result.patch ? result.patch.length / 9 : 0,
+                    outline: result.outline.map((p) => ({ x: p.x, y: p.y, z: p.z })),
                     arcs: result.arcs.map((a) => ({
                         tangentDist: a.tangentDist,
                         center: a.center,
                         pts: a.pts.map((p) => ({ x: p.x, y: p.y, z: p.z }))
                     }))
                 };
+            },
+            /** Пересчитать узел под новые радиусы/уширения — как правка в списке. */
+            editIntersection(ixId, patch = {}) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                if (!rec) return false;
+                if (patch.radii) rec.radii = { ...(rec.radii || {}), ...patch.radii };
+                if (patch.flares) rec.flares = { ...(rec.flares || {}), ...patch.flares };
+                return refreshRoadIntersection(rec);
             },
             get intersections() {
                 return roadIntersections.map((x) => ({
@@ -22491,6 +22535,7 @@
             select2.value = '1';
             intersectionDialogState.candidates = candidates;
 
+            renderIntersectionsList();
             $('intersectionModal')?.classList.add('show');
         }
 
@@ -22498,7 +22543,9 @@
             const idx1Str = $('intersectionPoly1')?.value;
             const idx2Str = $('intersectionPoly2')?.value;
             const type = $('intersectionType')?.value || 'cross';
-            const radius = parseFloat($('intersectionRadius')?.value || 30);
+            const radius = Math.max(1, parseFloat($('intersectionRadius')?.value) || 15);
+            const flare = Math.max(0, parseFloat($('intersectionFlare')?.value) || 0);
+            const taper = Math.max(0, parseFloat($('intersectionTaper')?.value) || 0);
 
             if (!idx1Str || !idx2Str) {
                 notifyError('Выберите обе оси.');
@@ -22530,15 +22577,25 @@
                 return;
             }
 
-            const result = calculateIntersection(poly1, poly2, type, radius);
-            if (!result) {
+            // Уширение просят на всех ветвях сразу; дальше его правят по одной
+            // в списке узлов. Число ветвей заранее неизвестно, поэтому
+            // раскладываем по индексам после первого расчёта.
+            const probe = calculateIntersection(poly1, poly2, type, radius);
+            if (!probe) {
                 notifyError('Закругление радиусом ' + radius + ' м здесь не строится: оси почти параллельны.');
                 return;
             }
+            const flares = {};
+            probe.arms.forEach((a) => { flares[a.index] = { flare, taper }; });
+            const result = (flare > 0 && taper > 0)
+                ? (calculateIntersection(poly1, poly2, type, radius, { flares }) || probe)
+                : probe;
 
             // Повторный расчёт по той же паре осей заменяет прошлый, а не
             // копит второе закругление поверх первого.
-            const prev = roadIntersections.find((x) => x.poly1Id === poly1.id && x.poly2Id === poly2.id);
+            const prev = roadIntersections.find((x) =>
+                (x.poly1Id === poly1.id && x.poly2Id === poly2.id) ||
+                (x.poly1Id === poly2.id && x.poly2Id === poly1.id));
             if (prev) {
                 removeIntersectionObjects(prev.id);
                 roadIntersections.splice(roadIntersections.indexOf(prev), 1);
@@ -22546,21 +22603,28 @@
 
             const intersection = {
                 id: 'ix-' + Math.random().toString(36).slice(2, 10),
+                name: `${poly1.name} × ${poly2.name}`,
                 poly1Id: poly1.id,
                 poly2Id: poly2.id,
                 type,
                 radius,
+                radii: {},
+                flares,
                 created: new Date(),
                 points: result
             };
             roadIntersections.push(intersection);
             visualizeIntersection(intersection);
+            renderIntersectionsList();
 
             const a = result.absolute;
             const where = a ? ` в точке ${a.x.toFixed(2)} / ${a.y.toFixed(2)} / ${a.z.toFixed(2)}` : '';
-            notify(`Пересечение: ${result.arcs.length} закруглений R${radius} м${where}.`);
-            $('intersectionModal')?.classList.remove('show');
-            trackUsage('create_road_intersection', { type, radius, arcs: result.arcs.length });
+            const byEdges = result.arms.some((x) => x.wLeft > 0 || x.wRight > 0);
+            notify(
+                `Узел: ${result.corners.length} закруглений R${radius} м по ` +
+                (byEdges ? 'кромкам проезжей части' : 'осям (ширина не задана)') + where + '.'
+            );
+            trackUsage('create_road_intersection', { type, radius, corners: result.corners.length });
         }
 
         /* ------------------------------------------------------------------
@@ -22659,60 +22723,281 @@
                 const a = a1 + sweep * (k / segments);
                 pts.push({ x: C.x + radius * Math.cos(a), y: C.y + radius * Math.sin(a), z });
             }
-            return { pts, center: C, tangentDist: tanDist };
+            return { pts, center: C, tangentDist: tanDist, T1, T2 };
+        }
+
+        /* ---- Ветви (лучи) дороги в узле, с шириной проезжей части --------- */
+
+        const INTERSECTION_ARC_SEGMENTS = 20;
+
+        /** Ширина полуполос оси. У обычной полилинии её нет — тогда 0. */
+        function intersectionWidthsFor(record) {
+            if (record?.role !== 'road-axis') return { widthL: 0, widthR: 0 };
+            const w = roadAxisWidthsFor(record);
+            return { widthL: Math.max(0, w.widthL || 0), widthR: Math.max(0, w.widthR || 0) };
         }
 
         /**
-         * Какие лучи оси реально существуют в точке пересечения. Если точка
-         * села на самый конец оси, продолжения за ним нет — именно так
-         * отличается примыкание от креста, и закруглений тогда вдвое меньше.
+         * Отметка оси на расстоянии s от узла вдоль луча. Идём по звеньям
+         * полилинии от точки пересечения — так мouth ветви садится на ту же
+         * высоту, что и сам коридор, а не на среднюю по узлу.
          */
-        function axisRaysAt(poly, seg, crossPt) {
-            const fwd = unitXY(seg.a, seg.b);
-            if (!fwd) return [];
-            const back = { x: -fwd.x, y: -fwd.y };
-            const atStart = seg.i === 0 && seg.t <= 1e-6;
-            const atEnd = seg.i === poly.pts.length - 2 && seg.t >= 1 - 1e-6;
-            const rays = [];
-            if (!atEnd) rays.push(fwd);   // вперёд по оси
-            if (!atStart) rays.push(back); // назад по оси
-            return rays;
+        function axisElevationAlong(poly, seg, startT, dirSign, s) {
+            const pts = poly.pts;
+            let cur = {
+                x: seg.a.x + startT * (seg.b.x - seg.a.x),
+                y: seg.a.y + startT * (seg.b.y - seg.a.y),
+                z: seg.a.z + startT * (seg.b.z - seg.a.z)
+            };
+            // Следующая вершина по ходу: вперёд — конец звена, назад — начало.
+            let next = dirSign > 0 ? seg.i + 1 : seg.i;
+            let left = Math.max(0, s);
+            while (left > 1e-9) {
+                const to = pts[next];
+                if (!to) return cur.z;
+                const d = Math.hypot(to.x - cur.x, to.y - cur.y);
+                if (d >= left) {
+                    const k = left / Math.max(1e-9, d);
+                    return cur.z + k * (to.z - cur.z);
+                }
+                left -= d;
+                cur = { x: to.x, y: to.y, z: to.z };
+                next += dirSign > 0 ? 1 : -1;
+            }
+            return cur.z;
         }
 
-        function calculateIntersection(poly1, poly2, type, radius) {
+        /**
+         * Ветви узла: по одной на каждый существующий луч каждой оси.
+         * Ширины подписаны ОТНОСИТЕЛЬНО направления луча: у обратного луча
+         * левая и правая полуполосы меняются местами, иначе кромки узла
+         * разъедутся на дороге с несимметричным профилем.
+         */
+        function intersectionArms(poly1, seg1, poly2, seg2) {
+            const arms = [];
+            const add = (poly, seg, sign) => {
+                const fwd = unitXY(seg.a, seg.b);
+                if (!fwd) return;
+                const u = sign > 0 ? fwd : { x: -fwd.x, y: -fwd.y };
+                const atStart = seg.i === 0 && seg.t <= 1e-6;
+                const atEnd = seg.i === poly.pts.length - 2 && seg.t >= 1 - 1e-6;
+                if (sign > 0 && atEnd) return;
+                if (sign < 0 && atStart) return;
+                const w = intersectionWidthsFor(poly);
+                arms.push({
+                    poly, seg, sign, u,
+                    // вдоль луча: слева от него и справа от него
+                    wLeft: sign > 0 ? w.widthL : w.widthR,
+                    wRight: sign > 0 ? w.widthR : w.widthL,
+                    flare: 0, taper: 0,
+                    angle: Math.atan2(u.y, u.x)
+                });
+            };
+            add(poly1, seg1, +1);
+            add(poly1, seg1, -1);
+            add(poly2, seg2, +1);
+            add(poly2, seg2, -1);
+            arms.sort((a, b) => a.angle - b.angle); // против часовой
+            return arms;
+        }
+
+        const leftNormal = (u) => ({ x: -u.y, y: u.x });
+        const rightNormal = (u) => ({ x: u.y, y: -u.x });
+
+        /** Точка пересечения двух прямых, заданных точкой и направлением. */
+        function lineLineXY(p1, d1, p2, d2) {
+            const denom = d1.x * d2.y - d1.y * d2.x;
+            if (Math.abs(denom) < 1e-9) return null;
+            const t = ((p2.x - p1.x) * d2.y - (p2.y - p1.y) * d2.x) / denom;
+            return { x: p1.x + t * d1.x, y: p1.y + t * d1.y };
+        }
+
+        /**
+         * Угол узла между соседними ветвями. Закругление касается КРОМОК
+         * проезжей части, а не осей: иначе на дороге любой ширины дуги
+         * слипаются в звёздочку вокруг точки пересечения. Кромку берём с
+         * учётом уширения — отгон дорисовывается отдельно.
+         */
+        function intersectionCorner(node, armA, armB, radius) {
+            const offA = armA.wLeft + (armA.flare || 0);   // кромка A слева по ходу
+            const offB = armB.wRight + (armB.flare || 0);  // кромка B справа по ходу
+            const nA = leftNormal(armA.u), nB = rightNormal(armB.u);
+            const pA = { x: node.x + nA.x * offA, y: node.y + nA.y * offA };
+            const pB = { x: node.x + nB.x * offB, y: node.y + nB.y * offB };
+            const corner = lineLineXY(pA, armA.u, pB, armB.u);
+            if (!corner) return null;
+            const arc = filletArc(corner, armA.u, armB.u, radius, node.z, INTERSECTION_ARC_SEGMENTS);
+            if (!arc) return null;
+            // Отметки на входе и выходе — с профилей самих ветвей, поэтому
+            // площадка садится на коридор, а не висит на средней высоте.
+            const zA = axisElevationAlong(armA.poly, armA.seg, armA.seg.t, armA.sign, arc.tangentDist);
+            const zB = axisElevationAlong(armB.poly, armB.seg, armB.seg.t, armB.sign, arc.tangentDist);
+            arc.pts.forEach((p, i) => {
+                const k = i / (arc.pts.length - 1);
+                p.z = zA + (zB - zA) * k;
+            });
+            return { arc, corner, armA, armB, radius, zA, zB };
+        }
+
+        /**
+         * Отгон уширения: от кромки узла (с уширением) обратно к обычной
+         * кромке за длину отгона. Это и есть разгонная / переходно-скоростная
+         * полоса в плане — не отдельная сущность, а форма самой кромки.
+         */
+        function flareTaperLine(node, arm, side, fromDist) {
+            const flare = arm.flare || 0;
+            const taper = arm.taper || 0;
+            if (flare <= 1e-6 || taper <= 1e-6) return null;
+            const n = side === 'left' ? leftNormal(arm.u) : rightNormal(arm.u);
+            const base = side === 'left' ? arm.wLeft : arm.wRight;
+            const at = (s, off) => ({
+                x: node.x + arm.u.x * s + n.x * off,
+                y: node.y + arm.u.y * s + n.y * off,
+                z: axisElevationAlong(arm.poly, arm.seg, arm.seg.t, arm.sign, s)
+            });
+            return [at(fromDist, base + flare), at(fromDist + taper, base)];
+        }
+
+        /**
+         * Геометрия узла: ветви, закругления по кромкам и контур покрытия.
+         *
+         * Контур — сами дуги подряд против часовой стрелки; прямые вставки
+         * между ними это устья ветвей, отдельно считать их не нужно.
+         */
+        function calculateIntersection(poly1, poly2, type, radius, opts = {}) {
             const hit = findAxisCrossing(poly1, poly2);
             if (!hit) return null;
 
             const z = (hit.z1 + hit.z2) / 2;
             const crossPoint = { x: hit.x, y: hit.y, z };
 
-            let rays1 = axisRaysAt(poly1, hit.seg1, crossPoint);
-            let rays2 = axisRaysAt(poly2, hit.seg2, crossPoint);
-            if (!rays1.length || !rays2.length) return null;
+            let arms = intersectionArms(poly1, hit.seg1, poly2, hit.seg2);
+            if (arms.length < 3) return null;
 
-            // Тип задаёт, сколько ветвей второстепенной оси участвует:
-            // крест — обе, примыкание и слияние — только та, что реально есть.
+            // Тип отсекает ветви второстепенной оси: примыкание — одна,
+            // слияние — по одной от каждой.
             if (type === 't-junction' || type === 'merge') {
-                rays2 = [rays2[0]];
-                if (type === 'merge') rays1 = [rays1[0]];
+                const keep = new Set();
+                const first = (poly) => arms.find((a) => a.poly === poly);
+                keep.add(first(poly1));
+                if (type !== 'merge') {
+                    const back1 = arms.filter((a) => a.poly === poly1)[1];
+                    if (back1) keep.add(back1);
+                }
+                keep.add(first(poly2));
+                arms = arms.filter((a) => keep.has(a));
             }
+            if (arms.length < 2) return null;
 
-            const arcs = [];
-            for (const u1 of rays1) {
-                for (const u2 of rays2) {
-                    const arc = filletArc(crossPoint, u1, u2, radius, z);
-                    if (arc) arcs.push(arc);
+            // Уширения по ветвям: индекс ветви → { flare, taper }.
+            const flares = opts.flares || {};
+            arms.forEach((arm, i) => {
+                const f = flares[i] || {};
+                arm.flare = Math.max(0, Number(f.flare) || 0);
+                arm.taper = Math.max(0, Number(f.taper) || 0);
+                arm.index = i;
+            });
+
+            // Радиус: общий, но с правом переопределить каждый угол.
+            // Идём по ВСЕМ парам соседних ветвей, включая замыкающую: там, где
+            // ветви коллинеарны (сквозная дорога), закругления нет, но кромка
+            // есть — без неё контур ложится по одну сторону от узла, и веер
+            // покрытия строится из точки СНАРУЖИ контура.
+            const perCorner = opts.radii || {};
+            const n = arms.length;
+            const slots = [];
+            for (let i = 0; i < n; i++) {
+                const a = arms[i], b = arms[(i + 1) % n];
+                const dot = a.u.x * b.u.x + a.u.y * b.u.y;
+                if (dot > 0.999 || dot < -0.999) { slots.push({ i, straight: true, armA: a, armB: b }); continue; }
+                const r = Math.max(1, Number(perCorner[i]) || radius);
+                const corner = intersectionCorner(crossPoint, a, b, r);
+                slots.push(corner ? { i, corner, armA: a, armB: b } : { i, straight: true, armA: a, armB: b });
+            }
+            const corners = slots.filter((s) => s.corner).map((s) => { s.corner.index = s.i; return s.corner; });
+            if (!corners.length) return null;
+
+            // Устье ветви — отступ до касания на её углах. Он же задаёт, где
+            // обрывается прямая кромка на сквозной дороге.
+            const mouth = new Map();
+            for (const s of slots) {
+                if (!s.corner) continue;
+                const d = s.corner.arc.tangentDist;
+                mouth.set(s.armA, Math.max(mouth.get(s.armA) || 0, d));
+                mouth.set(s.armB, Math.max(mouth.get(s.armB) || 0, d));
+            }
+            const edgePoint = (arm, side) => {
+                const nrm = side === 'left' ? leftNormal(arm.u) : rightNormal(arm.u);
+                const off = (side === 'left' ? arm.wLeft : arm.wRight) + (arm.flare || 0);
+                const s = mouth.get(arm) || Math.max(arm.wLeft, arm.wRight, 1) * 2;
+                return {
+                    x: crossPoint.x + arm.u.x * s + nrm.x * off,
+                    y: crossPoint.y + arm.u.y * s + nrm.y * off,
+                    z: axisElevationAlong(arm.poly, arm.seg, arm.seg.t, arm.sign, s)
+                };
+            };
+
+            const arcs = corners.map((c) => c.arc);
+            // Покрытие имеет смысл от трёх ветвей: у двух это угол дороги, а
+            // не узел, и замыкать там нечего.
+            const outline = [];
+            if (n >= 3) {
+                for (const s of slots) {
+                    if (s.corner) outline.push(...s.corner.arc.pts);
+                    else outline.push(edgePoint(s.armA, 'left'), edgePoint(s.armB, 'right'));
                 }
             }
-            if (!arcs.length) return null;
+
+            // Отгоны уширения: по одному на каждую кромку, где уширение задано.
+            const tapers = [];
+            for (const c of corners) {
+                const tA = flareTaperLine(crossPoint, c.armA, 'left', c.arc.tangentDist);
+                const tB = flareTaperLine(crossPoint, c.armB, 'right', c.arc.tangentDist);
+                if (tA) tapers.push(tA);
+                if (tB) tapers.push(tB);
+            }
 
             return {
                 crossPoint,
+                arms: arms.map((a) => ({
+                    index: a.index,
+                    name: a.poly.name,
+                    polyId: a.poly.id,
+                    dir: a.u,
+                    wLeft: a.wLeft,
+                    wRight: a.wRight,
+                    flare: a.flare,
+                    taper: a.taper
+                })),
+                corners: corners.map((c) => ({
+                    index: c.index,
+                    radius: c.radius,
+                    tangentDist: c.arc.tangentDist,
+                    center: c.arc.center
+                })),
                 arcs,
-                rays1,
-                rays2,
+                outline,
+                tapers,
+                patch: buildIntersectionPatch(crossPoint, outline),
                 absolute: worldPointToAbsoluteXYZ(new THREE.Vector3(hit.x, hit.y, z))
             };
+        }
+
+        /**
+         * Покрытие узла — веер треугольников из точки пересечения на контур.
+         * Веер годится потому, что контур звёздно-видим из узла: он собран из
+         * дуг, вынесенных наружу от него. Разбивать на общий полигон (ear
+         * clipping, как у площадок) тут не за чем.
+         */
+        function buildIntersectionPatch(node, outline) {
+            if (!outline || outline.length < 3) return null;
+            const pos = [];
+            for (let i = 0; i < outline.length; i++) {
+                const a = outline[i];
+                const b = outline[(i + 1) % outline.length];
+                pos.push(node.x, node.y, node.z, a.x, a.y, a.z, b.x, b.y, b.z);
+            }
+            return pos;
         }
 
         /**
@@ -22747,14 +23032,38 @@
             if (!data?.crossPoint) return;
             removeIntersectionObjects(intersection.id);
 
-            // Закругления — обычные линии в координатах сцены.
+            const tag = (obj) => {
+                obj.userData.intersectionId = intersection.id;
+                intersectionGroup.add(obj);
+                return obj;
+            };
+
+            // Покрытие узла — тот же материал, что у коридора, чтобы шов с
+            // дорогой не читался как другой объект.
+            if (data.patch && data.patch.length >= 9) {
+                const mesh = makeRoadCorridorMesh(data.patch, ROAD_DECK_COLOR, 'RoadIntersection', {
+                    modelId: intersection.id
+                });
+                if (mesh) {
+                    mesh.material.polygonOffsetFactor = -3;
+                    mesh.material.polygonOffsetUnits = -6;
+                    mesh.renderOrder = 4;
+                    tag(mesh);
+                }
+            }
+
+            // Кромки закруглений поверх покрытия.
             for (const arc of data.arcs) {
                 const pts = arc.pts.map((p) => new THREE.Vector3(p.x, p.y, p.z));
                 const geom = new THREE.BufferGeometry().setFromPoints(pts);
-                const mat = new THREE.LineBasicMaterial({ color: 0xff8a1f });
-                const line = new THREE.Line(geom, mat);
-                line.userData.intersectionId = intersection.id;
-                intersectionGroup.add(line);
+                tag(new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xff8a1f })));
+            }
+
+            // Отгоны уширения — той же линией, что и кромка.
+            for (const seg of (data.tapers || [])) {
+                const pts = seg.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+                const geom = new THREE.BufferGeometry().setFromPoints(pts);
+                tag(new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xff8a1f })));
             }
 
             // Метка самой точки: маленький крест в плане, а не шар — размер
@@ -22765,12 +23074,71 @@
                 new THREE.Vector3(c.x - m, c.y, c.z), new THREE.Vector3(c.x + m, c.y, c.z),
                 new THREE.Vector3(c.x, c.y - m, c.z), new THREE.Vector3(c.x, c.y + m, c.z)
             ]);
-            const crossMat = new THREE.LineBasicMaterial({ color: 0xff5a00 });
-            const crossObj = new THREE.LineSegments(crossGeom, crossMat);
-            crossObj.userData.intersectionId = intersection.id;
-            intersectionGroup.add(crossObj);
+            tag(new THREE.LineSegments(crossGeom, new THREE.LineBasicMaterial({ color: 0xff5a00 })));
 
             sceneNeedsRender = true;
+        }
+
+        /* ---- Правка уже созданного узла ---------------------------------- */
+
+        /** Пересчитать узел под новые радиусы и уширения и перерисовать. */
+        function refreshRoadIntersection(rec) {
+            if (!rec) return false;
+            const p1 = drawnPolylines.find((r) => r.id === rec.poly1Id);
+            const p2 = drawnPolylines.find((r) => r.id === rec.poly2Id);
+            if (!p1 || !p2) return false;
+            const next = calculateIntersection(p1, p2, rec.type, rec.radius, {
+                radii: rec.radii || {},
+                flares: rec.flares || {}
+            });
+            if (!next) return false;
+            rec.points = next;
+            visualizeIntersection(rec);
+            renderIntersectionsList();
+            return true;
+        }
+
+        /**
+         * Список созданных узлов прямо в диалоге: радиус общий и по каждому
+         * углу, уширение и длина отгона по каждой ветви. Правка пересчитывает
+         * узел на месте — заново выбирать оси не нужно.
+         */
+        function renderIntersectionsList() {
+            const box = $('intersectionsList');
+            if (!box) return;
+            if (!roadIntersections.length) {
+                box.innerHTML = '<div class="bulk-note" style="margin:0">Узлов пока нет.</div>';
+                return;
+            }
+            const rows = roadIntersections.map((rec) => {
+                const d = rec.points || {};
+                const corners = (d.corners || []).map((c) => `
+                    <label class="ix-cell">угол ${c.index + 1}
+                        <input class="editInput" type="number" min="1" step="1"
+                               data-ix="${escAttr(rec.id)}" data-corner="${c.index}"
+                               value="${c.radius.toFixed(0)}">
+                    </label>`).join('');
+                const arms = (d.arms || []).map((a) => `
+                    <label class="ix-cell">${esc(a.name || 'ветвь')} — уширение
+                        <input class="editInput" type="number" min="0" step="0.25"
+                               data-ix="${escAttr(rec.id)}" data-flare="${a.index}"
+                               value="${(a.flare || 0).toFixed(2)}">
+                    </label>
+                    <label class="ix-cell">отгон
+                        <input class="editInput" type="number" min="0" step="1"
+                               data-ix="${escAttr(rec.id)}" data-taper="${a.index}"
+                               value="${(a.taper || 0).toFixed(0)}">
+                    </label>`).join('');
+                return `<div class="ix-row">
+                    <div class="ix-head">
+                        <b>${esc(rec.name || 'Узел')}</b>
+                        <span class="mono">${(d.corners || []).length} закр. · ${(d.arms || []).length} ветв.</span>
+                        <button class="btn" data-ix-del="${escAttr(rec.id)}" title="Убрать узел">✕</button>
+                    </div>
+                    <div class="ix-grid">${corners}${arms}</div>
+                </div>`;
+            });
+            box.innerHTML = rows.join('');
         }
 
         function fillRoadXsRuleBar() {
@@ -23545,11 +23913,55 @@
             $('intersectionModal')?.classList.remove('show');
         });
 
+        $('intersectionClear')?.addEventListener('click', () => {
+            if (!roadIntersections.length) return;
+            clearRoadIntersections();
+            renderIntersectionsList();
+        });
+
         // Клик по backdrop закрывает модаль
         $('intersectionModal')?.addEventListener('click', (e) => {
             if (e.target === $('intersectionModal')) {
                 $('intersectionModal').classList.remove('show');
             }
+        });
+
+        // Правка узла: радиус по углу, уширение и отгон по ветви. Считаем на
+        // change, а не на input — пересчёт узла тянет за собой меш покрытия,
+        // а на каждый набранный знак это лишняя работа.
+        $('intersectionsList')?.addEventListener('change', (ev) => {
+            const el = ev.target;
+            if (!el || el.tagName !== 'INPUT') return;
+            const rec = roadIntersections.find((x) => x.id === el.dataset.ix);
+            if (!rec) return;
+            const val = Number(el.value);
+            if (!Number.isFinite(val)) return;
+            if (el.dataset.corner != null) {
+                rec.radii = rec.radii || {};
+                rec.radii[Number(el.dataset.corner)] = Math.max(1, val);
+            } else if (el.dataset.flare != null) {
+                const i = Number(el.dataset.flare);
+                rec.flares = rec.flares || {};
+                rec.flares[i] = { ...(rec.flares[i] || {}), flare: Math.max(0, val) };
+            } else if (el.dataset.taper != null) {
+                const i = Number(el.dataset.taper);
+                rec.flares = rec.flares || {};
+                rec.flares[i] = { ...(rec.flares[i] || {}), taper: Math.max(0, val) };
+            } else return;
+            if (!refreshRoadIntersection(rec)) {
+                notifyError('С этими числами узел не строится — верните прежние.');
+            }
+        });
+
+        $('intersectionsList')?.addEventListener('click', (ev) => {
+            const btn = ev.target.closest?.('[data-ix-del]');
+            if (!btn) return;
+            const rec = roadIntersections.find((x) => x.id === btn.dataset.ixDel);
+            if (!rec) return;
+            removeIntersectionObjects(rec.id);
+            roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+            markNeedsRender();
+            renderIntersectionsList();
         });
 
         function addMeasureMarker(pt) {
@@ -41066,7 +41478,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: '54c87d4-preview',
+            buildId: '711d420-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -41075,7 +41487,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: пересечения дорог — выбор двух осей, тип (крест/Т/слияние), радиус переходной кривой; в сцене точка пересечения и переходные кривые по бокам (расширение в разработке).',
+                '2026.08.18: узлы дорог — закругления по кромкам проезжей части (ширина из поперечника), покрытие узла 3D-мешем, радиус по каждому углу, уширение с отгоном; правка узла в списке без пересоздания.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
