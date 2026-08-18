@@ -22365,7 +22365,27 @@
         });
 
         function openIntersectionsDialog() {
+            console.log('[Intersections] Opening dialog...');
+            console.log('[Intersections] drawnPolylines count:', drawnPolylines.length);
+            console.log('[Intersections] All drawnPolylines:', drawnPolylines.map((p, i) => ({
+                index: i,
+                id: p.id,
+                name: p.name,
+                role: p.role,
+                ptsCount: p.pts?.length || 0,
+                absCount: p.abs?.length || 0
+            })));
+
             const candidates = listedPolylines();
+            console.log('[Intersections] After listedPolylines filter:', candidates.length);
+            console.log('[Intersections] Candidates:', candidates.map((p, i) => ({
+                index: i,
+                id: p.id,
+                name: p.name,
+                ptsCount: p.pts?.length || 0,
+                absCount: p.abs?.length || 0
+            })));
+
             if (candidates.length < 2) {
                 notifyError('Нужно минимум две оси для пересечения.');
                 return;
@@ -22394,9 +22414,11 @@
             if (candidates.length >= 2) {
                 select1.value = candidates[0].id;
                 select2.value = candidates[1].id;
+                console.log('[Intersections] Auto-selected:', candidates[0].id, candidates[1].id);
             }
 
-            $('intersectionModal')?.showModal?.();
+            $('intersectionModal')?.classList.add('show');
+            console.log('[Intersections] Dialog opened');
         }
 
         function createRoadIntersection() {
@@ -22404,6 +22426,10 @@
             const poly2Id = $('intersectionPoly2')?.value;
             const type = $('intersectionType')?.value || 'cross';
             const radius = parseFloat($('intersectionRadius')?.value || 30);
+
+            console.log('[Intersections] Starting createRoadIntersection...');
+            console.log('[Intersections] poly1Id:', poly1Id, 'poly2Id:', poly2Id);
+            console.log('[Intersections] drawnPolylines count:', drawnPolylines.length);
 
             if (!poly1Id || !poly2Id) {
                 notifyError('Выберите обе оси.');
@@ -22418,8 +22444,29 @@
             const poly1 = drawnPolylines.find((p) => String(p.id) === String(poly1Id));
             const poly2 = drawnPolylines.find((p) => String(p.id) === String(poly2Id));
 
-            if (!poly1 || !poly2 || !poly1.pts?.length || !poly2.pts?.length) {
-                notifyError('Не найдены полилинии или они пусты.');
+            console.log('[Intersections] Found poly1:', !!poly1);
+            console.log('[Intersections] Found poly2:', !!poly2);
+            if (poly1) {
+                console.log('[Intersections] poly1.pts:', poly1.pts ? poly1.pts.length : 'undefined', 'pts:', poly1.pts);
+            }
+            if (poly2) {
+                console.log('[Intersections] poly2.pts:', poly2.pts ? poly2.pts.length : 'undefined', 'pts:', poly2.pts);
+            }
+
+            if (!poly1 || !poly2) {
+                console.error('[Intersections] FAILED: Polylines not found');
+                console.log('[Intersections] All polylines:', drawnPolylines.map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    ptsLen: p.pts?.length
+                })));
+                notifyError('Не найдены полилинии. Проверьте консоль.');
+                return;
+            }
+
+            if (!poly1.pts?.length || !poly2.pts?.length) {
+                console.error('[Intersections] FAILED: Polylines are empty');
+                notifyError('Полилинии пусты. Начертите их перед пересечением.');
                 return;
             }
 
@@ -22448,7 +22495,7 @@
             visualizeIntersection(intersection);
 
             notify(`Пересечение дорог создано: ${type}`);
-            $('intersectionModal')?.close?.();
+            $('intersectionModal')?.classList.remove('show');
             trackUsage('create_road_intersection', { type });
         }
 
