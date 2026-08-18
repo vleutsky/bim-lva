@@ -22453,7 +22453,7 @@
         }
 
         function calculateIntersection(poly1, poly2, type, radius) {
-            // Простой расчёт точки пересечения двух прямых (через первую и последнюю точку каждой)
+            // Расчёт точки пересечения двух прямых (через первую и последнюю точку каждой)
             const p1start = poly1.pts[0];
             const p1end = poly1.pts[poly1.pts.length - 1];
             const p2start = poly2.pts[0];
@@ -22477,11 +22477,85 @@
                 return null;
             }
 
+            // Интерполировать Z между двумя осями в точке пересечения
+            const z1 = interpolateZ(a1, a2, intersection);
+            const z2 = interpolateZ(b1, b2, intersection);
+            const crossZ = (z1 + z2) / 2;
+            const crossPoint = { x: intersection.x, y: intersection.y, z: crossZ };
+
+            // Вычислить направления обеих осей
+            const dir1 = { x: a2.x - a1.x, y: a2.y - a1.y };
+            const dir2 = { x: b2.x - b1.x, y: b2.y - b1.y };
+            const len1 = Math.hypot(dir1.x, dir1.y);
+            const len2 = Math.hypot(dir2.x, dir2.y);
+            dir1.x /= len1; dir1.y /= len1;
+            dir2.x /= len2; dir2.y /= len2;
+
+            // Рассчитать переходные кривые (S-кривые между осями)
+            const transitionCurves = generateTransitionCurves(
+                crossPoint, dir1, dir2, radius, type
+            );
+
             return {
-                crossPoint: intersection, // точка пересечения в 2D
-                poly1: { start: a1, end: a2 },
-                poly2: { start: b1, end: b2 }
+                crossPoint,
+                transitionCurves,
+                poly1: { start: a1, end: a2, dir: dir1 },
+                poly2: { start: b1, end: b2, dir: dir2 }
             };
+        }
+
+        function interpolateZ(p1, p2, point) {
+            // Интерполировать Z-координату вдоль линии p1-p2 в позиции point
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-6) return (p1.z + p2.z) / 2;
+
+            const px = point.x - p1.x;
+            const py = point.y - p1.y;
+            let t = (px * dx + py * dy) / (len * len);
+            t = Math.max(0, Math.min(1, t));
+            return p1.z + t * (p2.z - p1.z);
+        }
+
+        function generateTransitionCurves(center, dir1, dir2, radius, type) {
+            // Генерировать переходные S-кривые между двумя направлениями осей
+            const curves = [];
+            const segments = Math.ceil(radius / 2);
+
+            // Перпендикулярные векторы к направлениям
+            const perp1 = { x: -dir1.y, y: dir1.x };
+            const perp2 = { x: -dir2.y, y: dir2.x };
+
+            for (let side = -1; side <= 1; side += 2) {
+                const curve = [];
+                for (let i = 0; i <= segments; i++) {
+                    const t = i / segments;
+                    // S-кривая: кубическая интерполяция
+                    const s = 3 * t * t - 2 * t * t * t;
+
+                    const dir = {
+                        x: dir1.x * (1 - s) + dir2.x * s,
+                        y: dir1.y * (1 - s) + dir2.y * s
+                    };
+                    const norm = Math.hypot(dir.x, dir.y);
+                    if (norm > 0) {
+                        dir.x /= norm;
+                        dir.y /= norm;
+                    }
+
+                    const perp = { x: -dir.y, y: dir.x };
+                    const pt = {
+                        x: center.x + perp.x * radius * side,
+                        y: center.y + perp.y * radius * side,
+                        z: center.z
+                    };
+                    curve.push(pt);
+                }
+                curves.push(curve);
+            }
+
+            return curves;
         }
 
         function lineIntersection2D(a1, a2, b1, b2) {
@@ -22501,16 +22575,34 @@
         }
 
         function visualizeIntersection(intersection) {
-            // Нарисовать пересечение в сцене (пока как простой маркер)
-            const { crossPoint } = intersection.points;
+            const { crossPoint, transitionCurves } = intersection.points;
             if (!crossPoint) return;
 
-            const geometry = new THREE.SphereGeometry(10, 8, 8);
-            const material = new THREE.MeshBasicMaterial({ color: 0xff6600 });
-            const marker = new THREE.Mesh(geometry, material);
-            marker.position.set(crossPoint.x, crossPoint.y, 0);
+            // Визуализировать переходные кривые как линии
+            if (transitionCurves && transitionCurves.length > 0) {
+                for (const curve of transitionCurves) {
+                    const points = curve.map(pt => new THREE.Vector3(pt.x, pt.y, pt.z || 0));
+                    if (points.length > 1) {
+                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                        const material = new THREE.LineBasicMaterial({ color: 0xff9944, linewidth: 3 });
+                        const line = new THREE.Line(geometry, material);
+                        intersectionGroup.add(line);
+                    }
+                }
+            }
+
+            // Маркер точки пересечения
+            const markerGeom = new THREE.SphereGeometry(15, 8, 8);
+            const markerMat = new THREE.MeshBasicMaterial({ color: 0xff6600 });
+            const marker = new THREE.Mesh(markerGeom, markerMat);
+            marker.position.set(crossPoint.x, crossPoint.y, crossPoint.z || 0);
             marker.userData.intersectionId = intersection.id;
             intersectionGroup.add(marker);
+
+            // Добавить в сцену если ещё не добавлена
+            if (!scene.getObjectById(intersectionGroup.id)) {
+                scene.add(intersectionGroup);
+            }
         }
 
         function fillRoadXsRuleBar() {
