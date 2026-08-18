@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · Сводные модели</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-1836</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -4010,7 +4010,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b4dac60</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 54c87d4</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4202,8 +4202,11 @@
                         <button class="btn rbtn-big" id="btnRailwayAxis" disabled title="Ось железной дороги: клики — вершины, Esc — поперечники"><span class="tb-ico">🚂</span><span class="tb-txt">Ось ЖД</span></button>
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
+                            <button class="btn rbtn-sm" id="btnIntersections" disabled title="Пересечения и примыкания дорог">⛔ Пересечения</button>
                             <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
                             <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
@@ -4664,7 +4667,7 @@
                     <li>Собирает сводку из IFC, DWG, DXF, LandXML, FBX, GLB, OBJ, STL и георастров.</li>
                     <li>Держит мировые координаты: файлы садятся на свои места, а не в кучу у нуля.</li>
                     <li>Замеры, разрезы, коллизии, свойства, ведомости в Excel.</li>
-                    <li>Откосы, профиль, поперечники и объёмы — с выгрузкой в DXF и LandXML для Civil 3D.</li>
+                    <li>Откосы, профиль, поперечники и объёмы — с выгрузкой в DXF, DWG, STEP и LandXML для Civil 3D и САПР.</li>
                     <li>Площадка с карты: снимок и рельеф по рамке на глобусе.</li>
                 </ul>
 
@@ -5259,6 +5262,7 @@
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
                 <button class="btn" id="slopeExportDxf" title="Площадка и откосы одним 3D-солидом (3DSOLID, DXF R2010), координаты абсолютные, единицы — метры. Civil 2018+ и nanoCAD открывают">⬇ DXF</button>
+                <button class="btn" id="slopeExportDwg" title="Площадка и откосы в формате DWG, координаты абсолютные, единицы — метры">⬇ DWG</button>
                 <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
                 <button class="btn" id="slopeOpenTable" title="Таблица всех построенных площадок">▣ Таблица</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
@@ -5509,6 +5513,48 @@
                 <button class="btn" id="padsExcel" title="Сводка по площадкам: имя, площадь, объёмы, уклоны, грани TIN">⬇ Все в Excel</button>
                 <button class="btn" id="padsClear">Убрать все</button>
                 <button class="btn load-btn" id="padsClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="intersectionModal">
+        <div class="modal-card" role="dialog" aria-modal="true" style="width:min(500px,100%)">
+            <h3>Создать пересечение дорог</h3>
+            <div class="bulk-note">Выберите две оси для пересечения или примыкания</div>
+
+            <div class="prop small">
+                <div class="k">Первая ось</div>
+                <select id="intersectionPoly1" class="editInput">
+                    <option value="">-- выберите --</option>
+                </select>
+            </div>
+
+            <div class="prop small">
+                <div class="k">Вторая ось</div>
+                <select id="intersectionPoly2" class="editInput">
+                    <option value="">-- выберите --</option>
+                </select>
+            </div>
+
+            <div class="prop small">
+                <div class="k">Тип пересечения</div>
+                <select id="intersectionType" class="editInput">
+                    <option value="cross">Крестообразное (две дороги пересекаются)</option>
+                    <option value="t-junction">Т-образное примыкание</option>
+                    <option value="merge">Слияние (одна вливается в другую)</option>
+                </select>
+            </div>
+
+            <div class="prop small">
+                <div class="k">Радиус переходной кривой, м</div>
+                <input id="intersectionRadius" class="editInput" type="number" min="5" max="500" step="5" value="30">
+            </div>
+
+            <div class="bulk-note" id="intersectionStatus">—</div>
+
+            <div class="modal-actions">
+                <button class="btn" id="intersectionCancel">Отмена</button>
+                <button class="btn load-btn" id="intersectionCreate">Создать</button>
             </div>
         </div>
     </div>
@@ -7255,6 +7301,44 @@
                 return roadXsModels.length ? buildDxf([], [], null, { xsOnly: true }) : '';
             },
             clearRoadXs() { clearRoadXsModels(); },
+            /**
+             * Построить пересечение по id двух осей — тестовый вход в обход
+             * диалога: сам диалог проверяется кликами, а геометрия числами.
+             */
+            buildIntersection(id1, id2, opts = {}) {
+                const p1 = drawnPolylines.find((r) => r.id === id1);
+                const p2 = drawnPolylines.find((r) => r.id === id2);
+                if (!p1 || !p2) return null;
+                const type = opts.type || 'cross';
+                const radius = opts.radius || 30;
+                const result = calculateIntersection(p1, p2, type, radius);
+                if (!result) return null;
+                const rec = {
+                    id: 'ix-' + Math.random().toString(36).slice(2, 10),
+                    poly1Id: p1.id, poly2Id: p2.id, type, radius,
+                    created: new Date(), points: result
+                };
+                roadIntersections.push(rec);
+                visualizeIntersection(rec);
+                return {
+                    id: rec.id,
+                    cross: { x: result.crossPoint.x, y: result.crossPoint.y, z: result.crossPoint.z },
+                    arcs: result.arcs.map((a) => ({
+                        tangentDist: a.tangentDist,
+                        center: a.center,
+                        pts: a.pts.map((p) => ({ x: p.x, y: p.y, z: p.z }))
+                    }))
+                };
+            },
+            get intersections() {
+                return roadIntersections.map((x) => ({
+                    id: x.id, type: x.type, radius: x.radius,
+                    poly1Id: x.poly1Id, poly2Id: x.poly2Id,
+                    arcs: x.points?.arcs?.length || 0
+                }));
+            },
+            intersectionObjectCount() { return intersectionGroup.children.length; },
+            clearIntersections(polylineId) { clearRoadIntersections(polylineId); },
             get defaultRoadHalfWidth() { return DEFAULT_ROAD_HALF_WIDTH; },
             planMoveVertex(id, idx, x, y) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -13093,6 +13177,16 @@
             URL.revokeObjectURL(url);
         }
 
+        function downloadBinaryFile(buffer, filename, mime) {
+            const blob = new Blob([buffer], { type: mime || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
         function exportSlopeDxf(model) {
             const list = (model ? [model] : slopeModels).filter((sm) => sm?.tin?.faces?.length);
             if (!list.length) {
@@ -13119,6 +13213,40 @@
             );
             trackUsage('slope_export_dxf', { faces, pads: list.length });
             return true;
+        }
+
+        async function exportSlopeDwg(model) {
+            const list = (model ? [model] : slopeModels).filter((sm) => sm?.tin?.faces?.length);
+            if (!list.length) {
+                notifyError('Сначала постройте откосы — выгружать нечего.');
+                return false;
+            }
+            try {
+                const target = list[0];
+                const buffer = await buildDwg([], [], model || list);
+                if (!buffer) {
+                    notifyError('DWG: ошибка при формировании файла.');
+                    return false;
+                }
+                const faces = list.reduce((n, sm) => n + sm.tin.faces.length, 0);
+                const slug = String(target.name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
+                downloadBinaryFile(buffer, `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dwg`);
+                const kdoN = list.reduce((n, sm) => n + (sm.kdoMeshes?.length || 0), 0);
+                notify(
+                    list.length === 1
+                        ? `DWG площадки «${target.name}»: 3D-поверхность, ${faces} треугольников` +
+                            (kdoN ? `, КДО ${kdoN} сл.` : '') +
+                            `, координаты мировые, метры.`
+                        : `DWG: ${list.length} площадок, ${faces} треугольников` +
+                            (kdoN ? `, КДО ${kdoN} сл.` : '')
+                );
+                trackUsage('slope_export_dwg', { faces, pads: list.length });
+                return true;
+            } catch (err) {
+                notifyError(`DWG-экспорт откосов: ${err.message}`);
+                console.error('Slope DWG export error:', err);
+                return false;
+            }
         }
 
         function buildPolylineLandXml() {
@@ -13183,11 +13311,11 @@
                 lines.push('  <Profiles>');
                 drawnPolylines.forEach((poly, idx) => {
                     if (!poly.pts || poly.pts.length < 2 || poly.kind !== '3d') return;
-                    const name = escXml(poly.name || `Profile ${idx + 1}`);
+                    const alignName = escXml(poly.name || `Alignment ${idx + 1}`);
                     const pts = poly.pts.map((p) => scenePointToAbs(p) || p);
                     let sta = 0;
 
-                    lines.push(`    <Profile name="Terrain along ${name}" alignmentName="${name}">`);
+                    lines.push(`    <Profile name="Terrain along ${alignName}" alignmentName="${alignName}">`);
                     lines.push('      <ProfAlign staStart="0" staEnd="9999" slopePercent="0"/>');
                     lines.push('      <PntList>');
                     for (let i = 0; i < pts.length; i++) {
@@ -13201,6 +13329,27 @@
                     }
                     lines.push('      </PntList>');
                     lines.push('    </Profile>');
+
+                    // Проектный профиль если задан
+                    if (poly.designProfileName && poly.designProfileName.trim()) {
+                        const designName = escXml(poly.designProfileName.trim());
+                        lines.push(`    <Profile name="${designName}" alignmentName="${alignName}">`);
+                        lines.push('      <ProfAlign staStart="0" staEnd="9999" slopePercent="0"/>');
+                        lines.push('      <PntList>');
+                        // Используем те же точки, что для terrain (это можно дорабатывать позже)
+                        sta = 0;
+                        for (let i = 0; i < pts.length; i++) {
+                            const p = pts[i];
+                            if (i > 0) {
+                                const prev = pts[i - 1];
+                                const dist = Math.hypot(p.x-prev.x, p.y-prev.y);
+                                sta += dist;
+                            }
+                            lines.push(`        <P>${n(sta)} ${n(p.z)}</P>`);
+                        }
+                        lines.push('      </PntList>');
+                        lines.push('    </Profile>');
+                    }
                 });
                 lines.push('  </Profiles>');
             }
@@ -13264,6 +13413,62 @@
             notify(`LandXML: поверхность «${target.name}», ${target.tin.points.length} точек, ${target.tin.faces.length} граней. Civil 3D → Import LandXML.`);
             trackUsage('slope_export_landxml', { faces: target.tin.faces.length });
             return true;
+        }
+
+        async function exportDrawingStep() {
+            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length && !slopeModels.length && !roadXsModels.length) {
+                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел, ни откосов, ни поперечников.');
+                return;
+            }
+            try {
+                const text = await buildStep(drawnPolylines, slopeModels);
+                if (!text) {
+                    notifyError('STEP: ошибка при формировании файла.');
+                    return;
+                }
+                downloadTextFile(text, `bim-lva-${new Date().toISOString().slice(0, 10)}.stp`, 'application/stp');
+                const derived = slopeDerivedPolylineIds();
+                const polyCount = drawnPolylines.filter((p) => !derived.has(p.id)).length;
+                const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
+                notify(
+                    `STEP: полилиний ${polyCount}` +
+                    (padCount ? `, площадок ${padCount}` : '') +
+                    `. Координаты мировые, единицы — метры.`
+                );
+                trackUsage('draw_export_step', { polylines: drawnPolylines.length });
+            } catch (err) {
+                notifyError(`STEP-экспорт: ${err.message}`);
+                console.error('STEP export error:', err);
+            }
+        }
+
+        async function exportDrawingDwg() {
+            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length && !slopeModels.length && !roadXsModels.length) {
+                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел, ни откосов, ни поперечников.');
+                return;
+            }
+            try {
+                const buffer = await buildDwg(drawnPolylines, coordPins, slopeModels);
+                if (!buffer) {
+                    notifyError('DWG: ошибка при формировании файла.');
+                    return;
+                }
+                downloadBinaryFile(buffer, `bim-lva-${new Date().toISOString().slice(0, 10)}.dwg`);
+                const derived = slopeDerivedPolylineIds();
+                const polyCount = drawnPolylines.filter((p) => !derived.has(p.id)).length;
+                const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
+                const xsCount = roadXsModels.reduce((n, m) => n + m.stations.length, 0);
+                notify(
+                    `DWG: полилиний ${polyCount}, точек ${coordPins.length}` +
+                    (padCount ? `, площадок ${padCount} (3D-солид)` : '') +
+                    (xsCount ? `, поперечников ${xsCount}` : '') +
+                    `. Координаты мировые, единицы — метры.`
+                );
+                trackUsage('draw_export_dwg', { polylines: drawnPolylines.length, pins: coordPins.length });
+            } catch (err) {
+                notifyError(`DWG-экспорт: ${err.message}`);
+                console.error('DWG export error:', err);
+            }
         }
 
         /**
@@ -13647,7 +13852,7 @@
                 nameInput.value = sm.name;
                 nameInput.title = 'Имя площадки';
                 nameInput.addEventListener('change', () => {
-                    sm.name = (nameInput.value || '').trim() || sm.name;
+                    renameSurfaceModel(sm, nameInput.value);
                     nameInput.value = sm.name;
                 });
 
@@ -13905,12 +14110,17 @@
         let drawMode = false;
         let drawPoints = [];
         let drawnPolylines = [];
+        let roadIntersections = [];
         const drawGroup = new THREE.Group();
         drawGroup.name = 'DrawnPolylines';
         scene.add(drawGroup);
         const roadXsGroup = new THREE.Group();
         roadXsGroup.name = 'RoadCrossSections';
         scene.add(roadXsGroup);
+        const intersectionGroup = new THREE.Group();
+        intersectionGroup.name = 'RoadIntersections';
+        scene.add(intersectionGroup);
+        let intersectionDialogState = { poly1: null, poly2: null }; // Запомнить выбранные полилинии
         let roadXsModels = [];
         const DRAW_COLOR = '#1f8f5f';
         const DRAW_WIDTH = 2;
@@ -14694,6 +14904,7 @@
             leftover.forEach(disposePolylineObject);
             clearSlopeModels();
             clearRoadXsModels();
+            clearRoadIntersections();
             purgeOrphanDrawObjects();
             drawPoints = [];
             polylineEditingId = null;
@@ -14711,6 +14922,7 @@
             // вычеркнули из списка, не убрав с сцены.
             removeSlopeModelsForPolyline(id);
             clearRoadXsModels(id);
+            clearRoadIntersections(id);
             const i = drawnPolylines.findIndex((r) => r.id === id);
             if (i >= 0) {
                 disposePolylineObject(drawnPolylines[i]);
@@ -14725,6 +14937,16 @@
         function renamePolyline(record, name) {
             record.name = (name || '').trim() || record.name;
             renderPolylinesList();
+        }
+
+        function renameSurfaceModel(model, name) {
+            model.name = (name || '').trim() || `Поверхность ${slopeModels.indexOf(model) + 1}`;
+            updateSlopeStatus();
+        }
+
+        function setDesignProfileName(polyline, profileName) {
+            if (!polyline.designProfileName) polyline.designProfileName = '';
+            polyline.designProfileName = (profileName || '').trim() || '';
         }
 
         /** Замкнуть/разомкнуть контур. Замкнуть можно от трёх вершин. */
@@ -15821,6 +16043,21 @@
                 block.className = 'polyline-block';
                 block.append(row);
                 if (r.role === 'road-axis') {
+                    const profRow = document.createElement('div');
+                    profRow.className = 'polyline-edge-row';
+                    const profLab = document.createElement('span');
+                    profLab.textContent = 'проектный профиль';
+                    profLab.title = 'Имя проектной линии в LandXML';
+                    const profInput = document.createElement('input');
+                    profInput.className = 'editInput';
+                    profInput.style.cssText = 'flex:1';
+                    profInput.value = r.designProfileName || '';
+                    profInput.placeholder = 'Design Profile';
+                    profInput.title = 'Имя проектной линии в LandXML';
+                    profInput.addEventListener('change', () => setDesignProfileName(r, profInput.value));
+                    profRow.append(profLab, profInput);
+                    block.append(profRow);
+
                     const edgeRow = document.createElement('div');
                     edgeRow.className = 'polyline-edge-row';
                     const edgeLab = document.createElement('span');
@@ -15977,10 +16214,16 @@
         function updateDrawUi() {
             const btn = $('btnDrawExport');
             const xmlBtn = $('btnDrawExportXml');
+            const stepBtn = $('btnDrawExportStep');
+            const dwgBtn = $('btnDrawExportDwg');
+            const intersectionsBtn = $('btnIntersections');
             const hasContent = drawnPolylines.length || coordPins.length || sweptSolids.length
                 || slopeModels.length || roadXsModels.length;
             if (btn) btn.disabled = !hasContent;
             if (xmlBtn) xmlBtn.disabled = !drawnPolylines.length;
+            if (stepBtn) stepBtn.disabled = !hasContent;
+            if (dwgBtn) dwgBtn.disabled = !hasContent;
+            if (intersectionsBtn) intersectionsBtn.disabled = drawnPolylines.length < 2;
             renderPolylinesList();
             renderPadsList();
         }
@@ -16256,6 +16499,214 @@
             g(0, 'ENDSEC');
             g(0, 'EOF');
             return out.join('\r\n') + '\r\n';
+        }
+
+        async function buildStep(polylines, slopeModels) {
+            let kernel;
+            try {
+                const { OcctKernel } = await import('/assets/vendor/occt-wasm/index.js');
+                kernel = await OcctKernel.init();
+
+                const shapes = [];
+
+                // Добавить полилинии как линии
+                for (const rec of polylines) {
+                    if (!rec.pts?.length || rec.pts.length < 2) continue;
+
+                    const pts = rec.pts.map((p) => {
+                        const abs = worldPointToAbsoluteXYZ(p);
+                        return [abs.x, abs.y, abs.z];
+                    });
+
+                    // Создать wire из точек как линии
+                    const edges = [];
+                    for (let i = 0; i < pts.length - 1; i++) {
+                        const [x1, y1, z1] = pts[i];
+                        const [x2, y2, z2] = pts[i + 1];
+                        const edge = kernel.makeLine([x1, y1, z1], [x2, y2, z2]);
+                        edges.push(edge);
+                    }
+
+                    if (edges.length > 0) {
+                        try {
+                            const wire = kernel.makeWire(edges);
+                            shapes.push(wire);
+                        } catch (e) {
+                            console.warn('Failed to create wire for polyline:', e);
+                        }
+                    }
+                }
+
+                // Добавить поверхности как треугольные грани
+                for (const sm of slopeModels) {
+                    if (!sm?.tin?.faces?.length) continue;
+
+                    const pts = sm.tin.points;
+                    if (!pts?.length) continue;
+
+                    // Построить грани из треугольников
+                    const faces = [];
+                    for (const face of sm.tin.faces) {
+                        const [i0, i1, i2] = face;
+                        if (i0 < pts.length && i1 < pts.length && i2 < pts.length) {
+                            const p0 = worldPointToAbsoluteXYZ(pts[i0]);
+                            const p1 = worldPointToAbsoluteXYZ(pts[i1]);
+                            const p2 = worldPointToAbsoluteXYZ(pts[i2]);
+
+                            try {
+                                // Создать треугольную грань через wire
+                                const pts3 = [
+                                    [p0.x, p0.y, p0.z],
+                                    [p1.x, p1.y, p1.z],
+                                    [p2.x, p2.y, p2.z],
+                                    [p0.x, p0.y, p0.z]  // закрыть цикл
+                                ];
+
+                                const edges = [];
+                                for (let j = 0; j < pts3.length - 1; j++) {
+                                    edges.push(kernel.makeLine(pts3[j], pts3[j + 1]));
+                                }
+
+                                const wire = kernel.makeWire(edges);
+                                const face = kernel.makeFaceFromWire(wire);
+                                faces.push(face);
+                            } catch (e) {
+                                console.warn('Failed to create triangle face:', e);
+                            }
+                        }
+                    }
+
+                    if (faces.length > 0) {
+                        // Объединить грани в shell или solid
+                        try {
+                            const shell = kernel.makeShell(faces);
+                            shapes.push(shell);
+                        } catch (e) {
+                            // Если не удалось создать shell, добавить грани по отдельности
+                            shapes.push(...faces);
+                        }
+                    }
+                }
+
+                if (shapes.length === 0) {
+                    return null;
+                }
+
+                // Экспортировать compound всех shape'ов
+                const compound = kernel.makeCompound(shapes);
+                const stepText = kernel.exportStep(compound);
+                return stepText;
+            } catch (err) {
+                console.error('STEP build error:', err);
+                throw err;
+            } finally {
+                // Очистить ресурсы OCCT kernel
+                if (kernel && typeof kernel.dispose === 'function') {
+                    try {
+                        kernel.dispose();
+                    } catch (e) {
+                        console.warn('Error disposing OCCT kernel:', e);
+                    }
+                }
+            }
+        }
+
+        async function buildDwg(polylines, pins, slopeModels) {
+            try {
+                // Динамическая загрузка acad-ts при необходимости
+                const acad = await import('/assets/vendor/acad-ts/index.js');
+                const { CadDocument } = acad;
+                const doc = new CadDocument();
+
+                const modelSpace = doc.modelSpace;
+
+                // Добавить полилинии как POLYLINE 2D
+                for (const rec of polylines) {
+                    if (!rec.pts?.length || rec.pts.length < 2) continue;
+
+                    try {
+                        const pts = rec.pts.map((p) => {
+                            const abs = worldPointToAbsoluteXYZ(p);
+                            return { x: abs.x, y: abs.y, z: abs.z };
+                        });
+
+                        // Создать 2D полилинию
+                        const polyline = new acad.Polyline();
+                        for (const pt of pts) {
+                            polyline.addVertex({x: pt.x, y: pt.y}, 0);  // bulge = 0 для прямых линий
+                        }
+
+                        // Установить слой и цвет
+                        polyline.layer = rec.name || 'Полилиния';
+                        polyline.color = 256;  // By layer
+
+                        modelSpace.addEntity(polyline);
+                    } catch (e) {
+                        console.warn('Failed to create DWG polyline:', e);
+                    }
+                }
+
+                // Добавить координатные точки
+                for (const pin of pins) {
+                    if (!pin.abs) continue;
+
+                    try {
+                        const point = new acad.Point();
+                        point.position = {
+                            x: pin.abs.x,
+                            y: pin.abs.y,
+                            z: pin.abs.z
+                        };
+                        point.layer = 'Точки';
+                        modelSpace.addEntity(point);
+                    } catch (e) {
+                        console.warn('Failed to create DWG point:', e);
+                    }
+                }
+
+                // Добавить поверхности как 3DSOLID (если возможно через acad-ts)
+                // Упрощённый подход: экспортировать как LW-полилинии на разных высотах
+                for (const sm of slopeModels) {
+                    if (!sm?.tin?.faces?.length) continue;
+
+                    try {
+                        // Для каждого треугольника создать 3D-полилинию
+                        const pts = sm.tin.points;
+                        if (!pts?.length) continue;
+
+                        for (const face of sm.tin.faces) {
+                            const [i0, i1, i2] = face;
+                            if (i0 >= pts.length || i1 >= pts.length || i2 >= pts.length) continue;
+
+                            const p0 = worldPointToAbsoluteXYZ(pts[i0]);
+                            const p1 = worldPointToAbsoluteXYZ(pts[i1]);
+                            const p2 = worldPointToAbsoluteXYZ(pts[i2]);
+
+                            // Создать 3D-полилинию для треугольника
+                            // Это упрощение - в DWG есть 3DFACE, но acad-ts может не поддерживать
+                            const face3d = new acad.Polyline3D();
+                            face3d.addVertex({x: p0.x, y: p0.y, z: p0.z});
+                            face3d.addVertex({x: p1.x, y: p1.y, z: p1.z});
+                            face3d.addVertex({x: p2.x, y: p2.y, z: p2.z});
+                            face3d.addVertex({x: p0.x, y: p0.y, z: p0.z});  // закрыть
+
+                            face3d.layer = sm.name || 'Поверхность';
+                            face3d.closed = true;
+
+                            modelSpace.addEntity(face3d);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to create DWG surface:', e);
+                    }
+                }
+
+                // Экспортировать в DWG буфер
+                const buffer = doc.toDwgBuffer();
+                return buffer;
+            } catch (err) {
+                console.error('DWG build error:', err);
+                throw err;
+            }
         }
 
         function exportDrawingDxf() {
@@ -16612,6 +17063,8 @@
         });
         $('btnDrawExport')?.addEventListener('click', exportDrawingDxf);
         $('btnDrawExportXml')?.addEventListener('click', exportPolylineLandXml);
+        $('btnDrawExportStep')?.addEventListener('click', exportDrawingStep);
+        $('btnDrawExportDwg')?.addEventListener('click', exportDrawingDwg);
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
         });
@@ -20004,7 +20457,7 @@
                         while (i < placed.length - 1 && skipInterval[i]) i++;
                         const endSta = i;
                         if (startSta > 0) cap(placed[startSta], true);
-                        if (endSta < placed.length - 1) cap(placed[endSta], false);
+                        if (endSta < placed.length) cap(placed[endSta], false);
                     }
                 }
             }
@@ -21385,7 +21838,6 @@
                 || offsetPlanPolyline(src, widths.widthR, !!rec.closed);
             const pts = [];
             src.forEach((p) => pts.push(p));
-            rec.pts.forEach((p) => pts.push(p));
             (leftPts || []).forEach((p) => pts.push(p));
             (rightPts || []).forEach((p) => pts.push(p));
             (model?.stations || []).forEach((st) => {
@@ -22006,6 +22458,321 @@
             };
         });
 
+        /**
+         * Диалог пересечения. <option> несёт НОМЕР оси в списке, а не её id:
+         * значение <select> — всегда строка, и сравнение с числовым
+         * record.id не совпадало никогда — диалог открывался, но «Создать»
+         * ругался «не найдены полилинии». Список запоминается целиком, и
+         * искать по id больше не нужно.
+         */
+        function openIntersectionsDialog() {
+            const candidates = listedPolylines();
+            if (candidates.length < 2) {
+                notifyError('Нужно минимум две оси для пересечения.');
+                return;
+            }
+
+            const select1 = $('intersectionPoly1');
+            const select2 = $('intersectionPoly2');
+            if (!select1 || !select2) return;
+
+            select1.innerHTML = '<option value="">-- выберите --</option>';
+            select2.innerHTML = '<option value="">-- выберите --</option>';
+
+            for (let i = 0; i < candidates.length; i++) {
+                const opt1 = document.createElement('option');
+                opt1.value = String(i);
+                opt1.textContent = candidates[i].name || `Ось ${i + 1}`;
+                select1.appendChild(opt1);
+                select2.appendChild(opt1.cloneNode(true));
+            }
+
+            select1.value = '0';
+            select2.value = '1';
+            intersectionDialogState.candidates = candidates;
+
+            $('intersectionModal')?.classList.add('show');
+        }
+
+        function createRoadIntersection() {
+            const idx1Str = $('intersectionPoly1')?.value;
+            const idx2Str = $('intersectionPoly2')?.value;
+            const type = $('intersectionType')?.value || 'cross';
+            const radius = parseFloat($('intersectionRadius')?.value || 30);
+
+            if (!idx1Str || !idx2Str) {
+                notifyError('Выберите обе оси.');
+                return;
+            }
+            if (idx1Str === idx2Str) {
+                notifyError('Оси не должны быть одинаковыми.');
+                return;
+            }
+
+            // Оси берём из списка, запомненного при открытии диалога, а не
+            // ищем по id: <option> несёт номер в этом списке.
+            const candidates = intersectionDialogState.candidates || [];
+            const poly1 = candidates[parseInt(idx1Str, 10)];
+            const poly2 = candidates[parseInt(idx2Str, 10)];
+
+            if (!poly1 || !poly2) {
+                notifyError('Полилинии не найдены. Откройте диалог заново.');
+                return;
+            }
+            if (!poly1.pts?.length || !poly2.pts?.length) {
+                notifyError('Полилинии пусты. Начертите их перед пересечением.');
+                return;
+            }
+
+            // Оси должны именно пересекаться в плане — иначе закруглять нечего.
+            if (!findAxisCrossing(poly1, poly2)) {
+                notifyError('Оси не пересекаются в плане. Продлите их до точки пересечения.');
+                return;
+            }
+
+            const result = calculateIntersection(poly1, poly2, type, radius);
+            if (!result) {
+                notifyError('Закругление радиусом ' + radius + ' м здесь не строится: оси почти параллельны.');
+                return;
+            }
+
+            // Повторный расчёт по той же паре осей заменяет прошлый, а не
+            // копит второе закругление поверх первого.
+            const prev = roadIntersections.find((x) => x.poly1Id === poly1.id && x.poly2Id === poly2.id);
+            if (prev) {
+                removeIntersectionObjects(prev.id);
+                roadIntersections.splice(roadIntersections.indexOf(prev), 1);
+            }
+
+            const intersection = {
+                id: 'ix-' + Math.random().toString(36).slice(2, 10),
+                poly1Id: poly1.id,
+                poly2Id: poly2.id,
+                type,
+                radius,
+                created: new Date(),
+                points: result
+            };
+            roadIntersections.push(intersection);
+            visualizeIntersection(intersection);
+
+            const a = result.absolute;
+            const where = a ? ` в точке ${a.x.toFixed(2)} / ${a.y.toFixed(2)} / ${a.z.toFixed(2)}` : '';
+            notify(`Пересечение: ${result.arcs.length} закруглений R${radius} м${where}.`);
+            $('intersectionModal')?.classList.remove('show');
+            trackUsage('create_road_intersection', { type, radius, arcs: result.arcs.length });
+        }
+
+        /* ------------------------------------------------------------------
+         * Пересечения и примыкания осей.
+         *
+         * Всё считается в координатах СЦЕНЫ (record.pts), а не в абсолютных:
+         * intersectionGroup висит прямо в scene, и абсолютные координаты
+         * увели бы закругления на величину ifcWorldOrigin (у владельца это
+         * ~64 886 м — рисунок уезжал за горизонт, поэтому «ничего не
+         * появлялось»). Абсолютные нужны только для подписи в уведомлении.
+         *
+         * Закругление — не сглаживание «на глаз», а дуга радиуса R,
+         * касательная к обеим осям: от угла вдоль каждого луча отступ
+         * t = R/tg(φ/2), центр дуги на биссектрисе на d = R/sin(φ/2).
+         * ------------------------------------------------------------------ */
+
+        /** Пересечение двух отрезков в плане. Возвращает параметры t и u. */
+        function segmentIntersectionXY(a1, a2, b1, b2) {
+            const r = { x: a2.x - a1.x, y: a2.y - a1.y };
+            const s = { x: b2.x - b1.x, y: b2.y - b1.y };
+            const denom = r.x * s.y - r.y * s.x;
+            if (Math.abs(denom) < 1e-9) return null; // параллельны или вырождены
+            const qp = { x: b1.x - a1.x, y: b1.y - a1.y };
+            const t = (qp.x * s.y - qp.y * s.x) / denom;
+            const u = (qp.x * r.y - qp.y * r.x) / denom;
+            return { t, u, x: a1.x + t * r.x, y: a1.y + t * r.y };
+        }
+
+        /**
+         * Найти, где две оси пересекаются в плане. Перебираем пары звеньев:
+         * ось из двух точек — частный случай, у реальной трассы вершин больше.
+         * Допуск EPS по параметру позволяет поймать примыкание точно в конец
+         * звена (T-образное), где иначе t выходил бы за [0,1] на 1e-16.
+         */
+        function findAxisCrossing(poly1, poly2) {
+            const EPS = 1e-6;
+            const A = poly1.pts, B = poly2.pts;
+            for (let i = 0; i < A.length - 1; i++) {
+                for (let j = 0; j < B.length - 1; j++) {
+                    const hit = segmentIntersectionXY(A[i], A[i + 1], B[j], B[j + 1]);
+                    if (!hit) continue;
+                    if (hit.t < -EPS || hit.t > 1 + EPS) continue;
+                    if (hit.u < -EPS || hit.u > 1 + EPS) continue;
+                    const t = Math.min(1, Math.max(0, hit.t));
+                    const u = Math.min(1, Math.max(0, hit.u));
+                    return {
+                        x: hit.x,
+                        y: hit.y,
+                        z1: A[i].z + t * (A[i + 1].z - A[i].z),
+                        z2: B[j].z + u * (B[j + 1].z - B[j].z),
+                        seg1: { i, t, a: A[i], b: A[i + 1] },
+                        seg2: { i: j, t: u, a: B[j], b: B[j + 1] }
+                    };
+                }
+            }
+            return null;
+        }
+
+        function unitXY(from, to) {
+            const dx = to.x - from.x, dy = to.y - from.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-9) return null;
+            return { x: dx / len, y: dy / len };
+        }
+
+        /**
+         * Дуга радиуса R, касательная к лучам u1 и u2, выходящим из точки P.
+         * Возвращает null, если лучи почти совпадают или почти развёрнуты
+         * (закругление там вырождается), либо если отступ длиннее самих осей
+         * не проверяем — это забота вызывающего.
+         */
+        function filletArc(P, u1, u2, radius, z, segments = 16) {
+            const dot = Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y));
+            const phi = Math.acos(dot);
+            if (!Number.isFinite(phi) || phi < 0.05 || phi > Math.PI - 0.05) return null;
+            const half = phi / 2;
+            const tanDist = radius / Math.tan(half);   // отступ по лучу до точки касания
+            const centDist = radius / Math.sin(half);  // до центра дуги по биссектрисе
+            const b = { x: u1.x + u2.x, y: u1.y + u2.y };
+            const bLen = Math.hypot(b.x, b.y);
+            if (bLen < 1e-9) return null;
+            b.x /= bLen; b.y /= bLen;
+
+            const C = { x: P.x + b.x * centDist, y: P.y + b.y * centDist };
+            const T1 = { x: P.x + u1.x * tanDist, y: P.y + u1.y * tanDist };
+            const T2 = { x: P.x + u2.x * tanDist, y: P.y + u2.y * tanDist };
+
+            let a1 = Math.atan2(T1.y - C.y, T1.x - C.x);
+            let a2 = Math.atan2(T2.y - C.y, T2.x - C.x);
+            let sweep = a2 - a1;
+            while (sweep > Math.PI) sweep -= 2 * Math.PI;
+            while (sweep < -Math.PI) sweep += 2 * Math.PI;
+
+            const pts = [];
+            for (let k = 0; k <= segments; k++) {
+                const a = a1 + sweep * (k / segments);
+                pts.push({ x: C.x + radius * Math.cos(a), y: C.y + radius * Math.sin(a), z });
+            }
+            return { pts, center: C, tangentDist: tanDist };
+        }
+
+        /**
+         * Какие лучи оси реально существуют в точке пересечения. Если точка
+         * села на самый конец оси, продолжения за ним нет — именно так
+         * отличается примыкание от креста, и закруглений тогда вдвое меньше.
+         */
+        function axisRaysAt(poly, seg, crossPt) {
+            const fwd = unitXY(seg.a, seg.b);
+            if (!fwd) return [];
+            const back = { x: -fwd.x, y: -fwd.y };
+            const atStart = seg.i === 0 && seg.t <= 1e-6;
+            const atEnd = seg.i === poly.pts.length - 2 && seg.t >= 1 - 1e-6;
+            const rays = [];
+            if (!atEnd) rays.push(fwd);   // вперёд по оси
+            if (!atStart) rays.push(back); // назад по оси
+            return rays;
+        }
+
+        function calculateIntersection(poly1, poly2, type, radius) {
+            const hit = findAxisCrossing(poly1, poly2);
+            if (!hit) return null;
+
+            const z = (hit.z1 + hit.z2) / 2;
+            const crossPoint = { x: hit.x, y: hit.y, z };
+
+            let rays1 = axisRaysAt(poly1, hit.seg1, crossPoint);
+            let rays2 = axisRaysAt(poly2, hit.seg2, crossPoint);
+            if (!rays1.length || !rays2.length) return null;
+
+            // Тип задаёт, сколько ветвей второстепенной оси участвует:
+            // крест — обе, примыкание и слияние — только та, что реально есть.
+            if (type === 't-junction' || type === 'merge') {
+                rays2 = [rays2[0]];
+                if (type === 'merge') rays1 = [rays1[0]];
+            }
+
+            const arcs = [];
+            for (const u1 of rays1) {
+                for (const u2 of rays2) {
+                    const arc = filletArc(crossPoint, u1, u2, radius, z);
+                    if (arc) arcs.push(arc);
+                }
+            }
+            if (!arcs.length) return null;
+
+            return {
+                crossPoint,
+                arcs,
+                rays1,
+                rays2,
+                absolute: worldPointToAbsoluteXYZ(new THREE.Vector3(hit.x, hit.y, z))
+            };
+        }
+
+        /**
+         * Снять пересечения: все либо только те, где участвует эта ось.
+         * Зовётся из удаления полилинии — иначе закругление остаётся висеть
+         * в сцене без оси, к которой было касательным.
+         */
+        function clearRoadIntersections(polylineId) {
+            const doomed = polylineId == null
+                ? roadIntersections.slice()
+                : roadIntersections.filter((x) => x.poly1Id === polylineId || x.poly2Id === polylineId);
+            for (const x of doomed) {
+                removeIntersectionObjects(x.id);
+                const i = roadIntersections.indexOf(x);
+                if (i >= 0) roadIntersections.splice(i, 1);
+            }
+            if (doomed.length) markNeedsRender();
+        }
+
+        /** Убрать из сцены то, что было нарисовано для этого пересечения. */
+        function removeIntersectionObjects(id) {
+            const doomed = intersectionGroup.children.filter((o) => o.userData?.intersectionId === id);
+            for (const obj of doomed) {
+                intersectionGroup.remove(obj);
+                obj.geometry?.dispose?.();
+                obj.material?.dispose?.();
+            }
+        }
+
+        function visualizeIntersection(intersection) {
+            const data = intersection.points;
+            if (!data?.crossPoint) return;
+            removeIntersectionObjects(intersection.id);
+
+            // Закругления — обычные линии в координатах сцены.
+            for (const arc of data.arcs) {
+                const pts = arc.pts.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+                const geom = new THREE.BufferGeometry().setFromPoints(pts);
+                const mat = new THREE.LineBasicMaterial({ color: 0xff8a1f });
+                const line = new THREE.Line(geom, mat);
+                line.userData.intersectionId = intersection.id;
+                intersectionGroup.add(line);
+            }
+
+            // Метка самой точки: маленький крест в плане, а не шар — размер
+            // шара пришлось бы подбирать под масштаб площадки.
+            const m = Math.max(2, intersection.radius * 0.25);
+            const c = data.crossPoint;
+            const crossGeom = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(c.x - m, c.y, c.z), new THREE.Vector3(c.x + m, c.y, c.z),
+                new THREE.Vector3(c.x, c.y - m, c.z), new THREE.Vector3(c.x, c.y + m, c.z)
+            ]);
+            const crossMat = new THREE.LineBasicMaterial({ color: 0xff5a00 });
+            const crossObj = new THREE.LineSegments(crossGeom, crossMat);
+            crossObj.userData.intersectionId = intersection.id;
+            intersectionGroup.add(crossObj);
+
+            sceneNeedsRender = true;
+        }
+
         function fillRoadXsRuleBar() {
             const bar = $('roadXsRuleBar');
             const model = currentRoadXsModel();
@@ -22607,6 +23374,7 @@
 
         $('slopeApply')?.addEventListener('click', runSlopeBuild);
         $('slopeExportDxf')?.addEventListener('click', () => exportSlopeDxf());
+        $('slopeExportDwg')?.addEventListener('click', () => exportSlopeDwg());
         $('slopeExportXml')?.addEventListener('click', () => exportSlopeLandXml());
         $('slopeSelect')?.addEventListener('change', () => {
             slopeRecordId = Number($('slopeSelect').value);
@@ -22762,6 +23530,26 @@
         $('polylinesClear')?.addEventListener('click', () => {
             if (!drawnPolylines.length) return;
             clearDrawnPolylines();
+        });
+
+        const btnIntersections = $('btnIntersections');
+        btnIntersections?.addEventListener('click', () => {
+            openIntersectionsDialog();
+        });
+
+        $('intersectionCreate')?.addEventListener('click', () => {
+            createRoadIntersection();
+        });
+
+        $('intersectionCancel')?.addEventListener('click', () => {
+            $('intersectionModal')?.classList.remove('show');
+        });
+
+        // Клик по backdrop закрывает модаль
+        $('intersectionModal')?.addEventListener('click', (e) => {
+            if (e.target === $('intersectionModal')) {
+                $('intersectionModal').classList.remove('show');
+            }
         });
 
         function addMeasureMarker(pt) {
@@ -38360,6 +39148,7 @@ ${componentXml || '    '}
 
         const RIGHT_DRAG_THRESHOLD = 6;
         let stageRightPointer = null;
+        let stageCtxAllowed = false;
 
         stage.addEventListener('pointerdown', e => {
             if (e.button !== 2) return;
@@ -38367,14 +39156,17 @@ ${componentXml || '    '}
                 pointerId: e.pointerId,
                 x: e.clientX,
                 y: e.clientY,
-                dragged: false
+                dragged: false,
+                time: Date.now()
             };
+            stageCtxAllowed = true;
         }, true);
 
         stage.addEventListener('pointermove', e => {
             if (!stageRightPointer || stageRightPointer.pointerId !== e.pointerId) return;
             if (Math.hypot(e.clientX - stageRightPointer.x, e.clientY - stageRightPointer.y) >= RIGHT_DRAG_THRESHOLD) {
                 stageRightPointer.dragged = true;
+                stageCtxAllowed = false;
             }
         }, true);
 
@@ -38389,16 +39181,19 @@ ${componentXml || '    '}
 
         stage.addEventListener('pointercancel', () => {
             stageRightPointer = null;
+            stageCtxAllowed = false;
         }, true);
 
         stage.addEventListener('contextmenu', e => {
             e.preventDefault();
-            const wasCameraDrag = !!(stageRightPointer && stageRightPointer.dragged);
-            stageRightPointer = null;
-            if (wasCameraDrag) {
+            if (!stageCtxAllowed || (stageRightPointer && stageRightPointer.dragged)) {
                 stageCtx.classList.remove('show');
+                stageRightPointer = null;
+                stageCtxAllowed = false;
                 return;
             }
+            stageRightPointer = null;
+            stageCtxAllowed = false;
             stageContextElementRef = resolveHitElementRef(pickStageHit(e.clientX, e.clientY));
             $('ctxSelectSimilar').classList.toggle('disabled', !stageContextElementRef);
             // Блок команд полилинии показываем, только если ПКМ пришёлся по ней.
@@ -40270,9 +41065,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.17',
-            buildId: 'b4dac60-preview',
-            released: '2026-08-17',
+            version: '2026.08.18',
+            buildId: '54c87d4-preview',
+            released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -40280,6 +41075,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.18: пересечения дорог — выбор двух осей, тип (крест/Т/слияние), радиус переходной кривой; в сцене точка пересечения и переходные кривые по бокам (расширение в разработке).',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',

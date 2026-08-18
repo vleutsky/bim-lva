@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.17 · ix-1836</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-1836</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -7282,6 +7282,44 @@
                 return roadXsModels.length ? buildDxf([], [], null, { xsOnly: true }) : '';
             },
             clearRoadXs() { clearRoadXsModels(); },
+            /**
+             * Построить пересечение по id двух осей — тестовый вход в обход
+             * диалога: сам диалог проверяется кликами, а геометрия числами.
+             */
+            buildIntersection(id1, id2, opts = {}) {
+                const p1 = drawnPolylines.find((r) => r.id === id1);
+                const p2 = drawnPolylines.find((r) => r.id === id2);
+                if (!p1 || !p2) return null;
+                const type = opts.type || 'cross';
+                const radius = opts.radius || 30;
+                const result = calculateIntersection(p1, p2, type, radius);
+                if (!result) return null;
+                const rec = {
+                    id: 'ix-' + Math.random().toString(36).slice(2, 10),
+                    poly1Id: p1.id, poly2Id: p2.id, type, radius,
+                    created: new Date(), points: result
+                };
+                roadIntersections.push(rec);
+                visualizeIntersection(rec);
+                return {
+                    id: rec.id,
+                    cross: { x: result.crossPoint.x, y: result.crossPoint.y, z: result.crossPoint.z },
+                    arcs: result.arcs.map((a) => ({
+                        tangentDist: a.tangentDist,
+                        center: a.center,
+                        pts: a.pts.map((p) => ({ x: p.x, y: p.y, z: p.z }))
+                    }))
+                };
+            },
+            get intersections() {
+                return roadIntersections.map((x) => ({
+                    id: x.id, type: x.type, radius: x.radius,
+                    poly1Id: x.poly1Id, poly2Id: x.poly2Id,
+                    arcs: x.points?.arcs?.length || 0
+                }));
+            },
+            intersectionObjectCount() { return intersectionGroup.children.length; },
+            clearIntersections(polylineId) { clearRoadIntersections(polylineId); },
             get defaultRoadHalfWidth() { return DEFAULT_ROAD_HALF_WIDTH; },
             planMoveVertex(id, idx, x, y) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -14847,6 +14885,7 @@
             leftover.forEach(disposePolylineObject);
             clearSlopeModels();
             clearRoadXsModels();
+            clearRoadIntersections();
             purgeOrphanDrawObjects();
             drawPoints = [];
             polylineEditingId = null;
@@ -14864,6 +14903,7 @@
             // вычеркнули из списка, не убрав с сцены.
             removeSlopeModelsForPolyline(id);
             clearRoadXsModels(id);
+            clearRoadIntersections(id);
             const i = drawnPolylines.findIndex((r) => r.id === id);
             if (i >= 0) {
                 disposePolylineObject(drawnPolylines[i]);
@@ -22399,18 +22439,20 @@
             };
         });
 
+        /**
+         * Диалог пересечения. <option> несёт НОМЕР оси в списке, а не её id:
+         * значение <select> — всегда строка, и сравнение с числовым
+         * record.id не совпадало никогда — диалог открывался, но «Создать»
+         * ругался «не найдены полилинии». Список запоминается целиком, и
+         * искать по id больше не нужно.
+         */
         function openIntersectionsDialog() {
-            console.log('[Intersections] Opening dialog...');
             const candidates = listedPolylines();
-            console.log('[Intersections] Found polylines:', candidates.length);
-
             if (candidates.length < 2) {
                 notifyError('Нужно минимум две оси для пересечения.');
                 return;
             }
-            console.log('[Intersections] Proceeding with dialog...');
 
-            // Заполнить селекты списком осей (используем индекс как value)
             const select1 = $('intersectionPoly1');
             const select2 = $('intersectionPoly2');
             if (!select1 || !select2) return;
@@ -22418,31 +22460,19 @@
             select1.innerHTML = '<option value="">-- выберите --</option>';
             select2.innerHTML = '<option value="">-- выберите --</option>';
 
-            // Создать опции с индексами (0, 1, 2, ...) вместо ID
             for (let i = 0; i < candidates.length; i++) {
-                const poly = candidates[i];
                 const opt1 = document.createElement('option');
-                opt1.value = String(i); // Используем индекс
-                opt1.textContent = poly.name || `Ось ${i + 1}`;
+                opt1.value = String(i);
+                opt1.textContent = candidates[i].name || `Ось ${i + 1}`;
                 select1.appendChild(opt1);
-
-                const opt2 = opt1.cloneNode(true);
-                select2.appendChild(opt2);
+                select2.appendChild(opt1.cloneNode(true));
             }
 
-            // Предвыбрать первые две оси
-            if (candidates.length >= 2) {
-                select1.value = '0';
-                select2.value = '1';
-                // ЗАПОМНИТЬ ПОЛИЛИНИИ В ПЕРЕМЕННОЙ (не по ID!)
-                intersectionDialogState.candidates = candidates;
-                intersectionDialogState.poly1 = candidates[0];
-                intersectionDialogState.poly2 = candidates[1];
-                console.log('[Intersections] Auto-selected polylines (not by ID)');
-            }
+            select1.value = '0';
+            select2.value = '1';
+            intersectionDialogState.candidates = candidates;
 
             $('intersectionModal')?.classList.add('show');
-            console.log('[Intersections] Dialog opened');
         }
 
         function createRoadIntersection() {
@@ -22450,9 +22480,6 @@
             const idx2Str = $('intersectionPoly2')?.value;
             const type = $('intersectionType')?.value || 'cross';
             const radius = parseFloat($('intersectionRadius')?.value || 30);
-
-            console.log('[Intersections] Creating intersection...');
-            console.log('[Intersections] Selected indices: idx1=', idx1Str, 'idx2=', idx2Str);
 
             if (!idx1Str || !idx2Str) {
                 notifyError('Выберите обе оси.');
@@ -22463,31 +22490,41 @@
                 return;
             }
 
-            // Использовать ЗАПОМНЕННЫЕ полилинии из состояния (не искать по ID!)
+            // Оси берём из списка, запомненного при открытии диалога, а не
+            // ищем по id: <option> несёт номер в этом списке.
             const candidates = intersectionDialogState.candidates || [];
-            const idx1 = parseInt(idx1Str);
-            const idx2 = parseInt(idx2Str);
-
-            const poly1 = candidates[idx1];
-            const poly2 = candidates[idx2];
-
-            console.log('[Intersections] Got polylines from state: poly1=', !!poly1, 'poly2=', !!poly2);
-            console.log('[Intersections] poly1.pts.length=', poly1?.pts?.length || 0);
-            console.log('[Intersections] poly2.pts.length=', poly2?.pts?.length || 0);
+            const poly1 = candidates[parseInt(idx1Str, 10)];
+            const poly2 = candidates[parseInt(idx2Str, 10)];
 
             if (!poly1 || !poly2) {
-                console.error('[Intersections] FAILED: Polylines not in state');
                 notifyError('Полилинии не найдены. Откройте диалог заново.');
                 return;
             }
-
             if (!poly1.pts?.length || !poly2.pts?.length) {
-                console.error('[Intersections] FAILED: Polylines are empty');
                 notifyError('Полилинии пусты. Начертите их перед пересечением.');
                 return;
             }
 
-            // Создать пересечение
+            // Оси должны именно пересекаться в плане — иначе закруглять нечего.
+            if (!findAxisCrossing(poly1, poly2)) {
+                notifyError('Оси не пересекаются в плане. Продлите их до точки пересечения.');
+                return;
+            }
+
+            const result = calculateIntersection(poly1, poly2, type, radius);
+            if (!result) {
+                notifyError('Закругление радиусом ' + radius + ' м здесь не строится: оси почти параллельны.');
+                return;
+            }
+
+            // Повторный расчёт по той же паре осей заменяет прошлый, а не
+            // копит второе закругление поверх первого.
+            const prev = roadIntersections.find((x) => x.poly1Id === poly1.id && x.poly2Id === poly2.id);
+            if (prev) {
+                removeIntersectionObjects(prev.id);
+                roadIntersections.splice(roadIntersections.indexOf(prev), 1);
+            }
+
             const intersection = {
                 id: 'ix-' + Math.random().toString(36).slice(2, 10),
                 poly1Id: poly1.id,
@@ -22495,178 +22532,226 @@
                 type,
                 radius,
                 created: new Date(),
-                points: null // будет заполнено при расчёте
+                points: result
             };
-
-            // Расчёт геометрии пересечения
-            const result = calculateIntersection(poly1, poly2, type, radius);
-            if (!result) {
-                notifyError('Не удалось расчитать пересечение на этих осях.');
-                return;
-            }
-
-            intersection.points = result;
             roadIntersections.push(intersection);
-
-            // Визуализировать пересечение
             visualizeIntersection(intersection);
 
-            notify(`Пересечение дорог создано: ${type}`);
+            const a = result.absolute;
+            const where = a ? ` в точке ${a.x.toFixed(2)} / ${a.y.toFixed(2)} / ${a.z.toFixed(2)}` : '';
+            notify(`Пересечение: ${result.arcs.length} закруглений R${radius} м${where}.`);
             $('intersectionModal')?.classList.remove('show');
-            trackUsage('create_road_intersection', { type });
+            trackUsage('create_road_intersection', { type, radius, arcs: result.arcs.length });
+        }
+
+        /* ------------------------------------------------------------------
+         * Пересечения и примыкания осей.
+         *
+         * Всё считается в координатах СЦЕНЫ (record.pts), а не в абсолютных:
+         * intersectionGroup висит прямо в scene, и абсолютные координаты
+         * увели бы закругления на величину ifcWorldOrigin (у владельца это
+         * ~64 886 м — рисунок уезжал за горизонт, поэтому «ничего не
+         * появлялось»). Абсолютные нужны только для подписи в уведомлении.
+         *
+         * Закругление — не сглаживание «на глаз», а дуга радиуса R,
+         * касательная к обеим осям: от угла вдоль каждого луча отступ
+         * t = R/tg(φ/2), центр дуги на биссектрисе на d = R/sin(φ/2).
+         * ------------------------------------------------------------------ */
+
+        /** Пересечение двух отрезков в плане. Возвращает параметры t и u. */
+        function segmentIntersectionXY(a1, a2, b1, b2) {
+            const r = { x: a2.x - a1.x, y: a2.y - a1.y };
+            const s = { x: b2.x - b1.x, y: b2.y - b1.y };
+            const denom = r.x * s.y - r.y * s.x;
+            if (Math.abs(denom) < 1e-9) return null; // параллельны или вырождены
+            const qp = { x: b1.x - a1.x, y: b1.y - a1.y };
+            const t = (qp.x * s.y - qp.y * s.x) / denom;
+            const u = (qp.x * r.y - qp.y * r.x) / denom;
+            return { t, u, x: a1.x + t * r.x, y: a1.y + t * r.y };
+        }
+
+        /**
+         * Найти, где две оси пересекаются в плане. Перебираем пары звеньев:
+         * ось из двух точек — частный случай, у реальной трассы вершин больше.
+         * Допуск EPS по параметру позволяет поймать примыкание точно в конец
+         * звена (T-образное), где иначе t выходил бы за [0,1] на 1e-16.
+         */
+        function findAxisCrossing(poly1, poly2) {
+            const EPS = 1e-6;
+            const A = poly1.pts, B = poly2.pts;
+            for (let i = 0; i < A.length - 1; i++) {
+                for (let j = 0; j < B.length - 1; j++) {
+                    const hit = segmentIntersectionXY(A[i], A[i + 1], B[j], B[j + 1]);
+                    if (!hit) continue;
+                    if (hit.t < -EPS || hit.t > 1 + EPS) continue;
+                    if (hit.u < -EPS || hit.u > 1 + EPS) continue;
+                    const t = Math.min(1, Math.max(0, hit.t));
+                    const u = Math.min(1, Math.max(0, hit.u));
+                    return {
+                        x: hit.x,
+                        y: hit.y,
+                        z1: A[i].z + t * (A[i + 1].z - A[i].z),
+                        z2: B[j].z + u * (B[j + 1].z - B[j].z),
+                        seg1: { i, t, a: A[i], b: A[i + 1] },
+                        seg2: { i: j, t: u, a: B[j], b: B[j + 1] }
+                    };
+                }
+            }
+            return null;
+        }
+
+        function unitXY(from, to) {
+            const dx = to.x - from.x, dy = to.y - from.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-9) return null;
+            return { x: dx / len, y: dy / len };
+        }
+
+        /**
+         * Дуга радиуса R, касательная к лучам u1 и u2, выходящим из точки P.
+         * Возвращает null, если лучи почти совпадают или почти развёрнуты
+         * (закругление там вырождается), либо если отступ длиннее самих осей
+         * не проверяем — это забота вызывающего.
+         */
+        function filletArc(P, u1, u2, radius, z, segments = 16) {
+            const dot = Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y));
+            const phi = Math.acos(dot);
+            if (!Number.isFinite(phi) || phi < 0.05 || phi > Math.PI - 0.05) return null;
+            const half = phi / 2;
+            const tanDist = radius / Math.tan(half);   // отступ по лучу до точки касания
+            const centDist = radius / Math.sin(half);  // до центра дуги по биссектрисе
+            const b = { x: u1.x + u2.x, y: u1.y + u2.y };
+            const bLen = Math.hypot(b.x, b.y);
+            if (bLen < 1e-9) return null;
+            b.x /= bLen; b.y /= bLen;
+
+            const C = { x: P.x + b.x * centDist, y: P.y + b.y * centDist };
+            const T1 = { x: P.x + u1.x * tanDist, y: P.y + u1.y * tanDist };
+            const T2 = { x: P.x + u2.x * tanDist, y: P.y + u2.y * tanDist };
+
+            let a1 = Math.atan2(T1.y - C.y, T1.x - C.x);
+            let a2 = Math.atan2(T2.y - C.y, T2.x - C.x);
+            let sweep = a2 - a1;
+            while (sweep > Math.PI) sweep -= 2 * Math.PI;
+            while (sweep < -Math.PI) sweep += 2 * Math.PI;
+
+            const pts = [];
+            for (let k = 0; k <= segments; k++) {
+                const a = a1 + sweep * (k / segments);
+                pts.push({ x: C.x + radius * Math.cos(a), y: C.y + radius * Math.sin(a), z });
+            }
+            return { pts, center: C, tangentDist: tanDist };
+        }
+
+        /**
+         * Какие лучи оси реально существуют в точке пересечения. Если точка
+         * села на самый конец оси, продолжения за ним нет — именно так
+         * отличается примыкание от креста, и закруглений тогда вдвое меньше.
+         */
+        function axisRaysAt(poly, seg, crossPt) {
+            const fwd = unitXY(seg.a, seg.b);
+            if (!fwd) return [];
+            const back = { x: -fwd.x, y: -fwd.y };
+            const atStart = seg.i === 0 && seg.t <= 1e-6;
+            const atEnd = seg.i === poly.pts.length - 2 && seg.t >= 1 - 1e-6;
+            const rays = [];
+            if (!atEnd) rays.push(fwd);   // вперёд по оси
+            if (!atStart) rays.push(back); // назад по оси
+            return rays;
         }
 
         function calculateIntersection(poly1, poly2, type, radius) {
-            // Расчёт точки пересечения двух прямых (через первую и последнюю точку каждой)
-            const p1start = poly1.pts[0];
-            const p1end = poly1.pts[poly1.pts.length - 1];
-            const p2start = poly2.pts[0];
-            const p2end = poly2.pts[poly2.pts.length - 1];
+            const hit = findAxisCrossing(poly1, poly2);
+            if (!hit) return null;
 
-            // Преобразовать в мировые координаты
-            const a1 = worldPointToAbsoluteXYZ(p1start);
-            const a2 = worldPointToAbsoluteXYZ(p1end);
-            const b1 = worldPointToAbsoluteXYZ(p2start);
-            const b2 = worldPointToAbsoluteXYZ(p2end);
+            const z = (hit.z1 + hit.z2) / 2;
+            const crossPoint = { x: hit.x, y: hit.y, z };
 
-            // Найти пересечение 2D линий (проекция на XY)
-            const intersection = lineIntersection2D(
-                { x: a1.x, y: a1.y },
-                { x: a2.x, y: a2.y },
-                { x: b1.x, y: b1.y },
-                { x: b2.x, y: b2.y }
-            );
+            let rays1 = axisRaysAt(poly1, hit.seg1, crossPoint);
+            let rays2 = axisRaysAt(poly2, hit.seg2, crossPoint);
+            if (!rays1.length || !rays2.length) return null;
 
-            if (!intersection) {
-                return null;
+            // Тип задаёт, сколько ветвей второстепенной оси участвует:
+            // крест — обе, примыкание и слияние — только та, что реально есть.
+            if (type === 't-junction' || type === 'merge') {
+                rays2 = [rays2[0]];
+                if (type === 'merge') rays1 = [rays1[0]];
             }
 
-            // Интерполировать Z между двумя осями в точке пересечения
-            const z1 = interpolateZ(a1, a2, intersection);
-            const z2 = interpolateZ(b1, b2, intersection);
-            const crossZ = (z1 + z2) / 2;
-            const crossPoint = { x: intersection.x, y: intersection.y, z: crossZ };
-
-            // Вычислить направления обеих осей
-            const dir1 = { x: a2.x - a1.x, y: a2.y - a1.y };
-            const dir2 = { x: b2.x - b1.x, y: b2.y - b1.y };
-            const len1 = Math.hypot(dir1.x, dir1.y);
-            const len2 = Math.hypot(dir2.x, dir2.y);
-            dir1.x /= len1; dir1.y /= len1;
-            dir2.x /= len2; dir2.y /= len2;
-
-            // Рассчитать переходные кривые (S-кривые между осями)
-            const transitionCurves = generateTransitionCurves(
-                crossPoint, dir1, dir2, radius, type
-            );
+            const arcs = [];
+            for (const u1 of rays1) {
+                for (const u2 of rays2) {
+                    const arc = filletArc(crossPoint, u1, u2, radius, z);
+                    if (arc) arcs.push(arc);
+                }
+            }
+            if (!arcs.length) return null;
 
             return {
                 crossPoint,
-                transitionCurves,
-                poly1: { start: a1, end: a2, dir: dir1 },
-                poly2: { start: b1, end: b2, dir: dir2 }
+                arcs,
+                rays1,
+                rays2,
+                absolute: worldPointToAbsoluteXYZ(new THREE.Vector3(hit.x, hit.y, z))
             };
         }
 
-        function interpolateZ(p1, p2, point) {
-            // Интерполировать Z-координату вдоль линии p1-p2 в позиции point
-            const dx = p2.x - p1.x;
-            const dy = p2.y - p1.y;
-            const len = Math.hypot(dx, dy);
-            if (len < 1e-6) return (p1.z + p2.z) / 2;
-
-            const px = point.x - p1.x;
-            const py = point.y - p1.y;
-            let t = (px * dx + py * dy) / (len * len);
-            t = Math.max(0, Math.min(1, t));
-            return p1.z + t * (p2.z - p1.z);
-        }
-
-        function generateTransitionCurves(center, dir1, dir2, radius, type) {
-            // Генерировать переходные S-кривые между двумя направлениями осей
-            const curves = [];
-            const segments = Math.ceil(radius / 2);
-
-            // Перпендикулярные векторы к направлениям
-            const perp1 = { x: -dir1.y, y: dir1.x };
-            const perp2 = { x: -dir2.y, y: dir2.x };
-
-            for (let side = -1; side <= 1; side += 2) {
-                const curve = [];
-                for (let i = 0; i <= segments; i++) {
-                    const t = i / segments;
-                    // S-кривая: кубическая интерполяция
-                    const s = 3 * t * t - 2 * t * t * t;
-
-                    const dir = {
-                        x: dir1.x * (1 - s) + dir2.x * s,
-                        y: dir1.y * (1 - s) + dir2.y * s
-                    };
-                    const norm = Math.hypot(dir.x, dir.y);
-                    if (norm > 0) {
-                        dir.x /= norm;
-                        dir.y /= norm;
-                    }
-
-                    const perp = { x: -dir.y, y: dir.x };
-                    const pt = {
-                        x: center.x + perp.x * radius * side,
-                        y: center.y + perp.y * radius * side,
-                        z: center.z
-                    };
-                    curve.push(pt);
-                }
-                curves.push(curve);
+        /**
+         * Снять пересечения: все либо только те, где участвует эта ось.
+         * Зовётся из удаления полилинии — иначе закругление остаётся висеть
+         * в сцене без оси, к которой было касательным.
+         */
+        function clearRoadIntersections(polylineId) {
+            const doomed = polylineId == null
+                ? roadIntersections.slice()
+                : roadIntersections.filter((x) => x.poly1Id === polylineId || x.poly2Id === polylineId);
+            for (const x of doomed) {
+                removeIntersectionObjects(x.id);
+                const i = roadIntersections.indexOf(x);
+                if (i >= 0) roadIntersections.splice(i, 1);
             }
-
-            return curves;
+            if (doomed.length) markNeedsRender();
         }
 
-        function lineIntersection2D(a1, a2, b1, b2) {
-            // Найти пересечение двух линий в 2D (использует параметрические уравнения)
-            const x1 = a1.x, y1 = a1.y, x2 = a2.x, y2 = a2.y;
-            const x3 = b1.x, y3 = b1.y, x4 = b2.x, y4 = b2.y;
-
-            const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-            if (Math.abs(denom) < 1e-6) return null; // линии параллельны
-
-            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
-
-            return {
-                x: x1 + t * (x2 - x1),
-                y: y1 + t * (y2 - y1)
-            };
+        /** Убрать из сцены то, что было нарисовано для этого пересечения. */
+        function removeIntersectionObjects(id) {
+            const doomed = intersectionGroup.children.filter((o) => o.userData?.intersectionId === id);
+            for (const obj of doomed) {
+                intersectionGroup.remove(obj);
+                obj.geometry?.dispose?.();
+                obj.material?.dispose?.();
+            }
         }
 
         function visualizeIntersection(intersection) {
-            const { crossPoint, transitionCurves } = intersection.points;
-            if (!crossPoint) return;
+            const data = intersection.points;
+            if (!data?.crossPoint) return;
+            removeIntersectionObjects(intersection.id);
 
-            // Визуализировать переходные кривые как линии
-            if (transitionCurves && transitionCurves.length > 0) {
-                for (const curve of transitionCurves) {
-                    const points = curve.map(pt => new THREE.Vector3(pt.x, pt.y, pt.z || 0));
-                    if (points.length > 1) {
-                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
-                        const material = new THREE.LineBasicMaterial({ color: 0xff9944, linewidth: 3 });
-                        const line = new THREE.Line(geometry, material);
-                        intersectionGroup.add(line);
-                    }
-                }
+            // Закругления — обычные линии в координатах сцены.
+            for (const arc of data.arcs) {
+                const pts = arc.pts.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+                const geom = new THREE.BufferGeometry().setFromPoints(pts);
+                const mat = new THREE.LineBasicMaterial({ color: 0xff8a1f });
+                const line = new THREE.Line(geom, mat);
+                line.userData.intersectionId = intersection.id;
+                intersectionGroup.add(line);
             }
 
-            // Маркер точки пересечения
-            const markerGeom = new THREE.SphereGeometry(15, 8, 8);
-            const markerMat = new THREE.MeshBasicMaterial({ color: 0xff6600 });
-            const marker = new THREE.Mesh(markerGeom, markerMat);
-            marker.position.set(crossPoint.x, crossPoint.y, crossPoint.z || 0);
-            marker.userData.intersectionId = intersection.id;
-            intersectionGroup.add(marker);
+            // Метка самой точки: маленький крест в плане, а не шар — размер
+            // шара пришлось бы подбирать под масштаб площадки.
+            const m = Math.max(2, intersection.radius * 0.25);
+            const c = data.crossPoint;
+            const crossGeom = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(c.x - m, c.y, c.z), new THREE.Vector3(c.x + m, c.y, c.z),
+                new THREE.Vector3(c.x, c.y - m, c.z), new THREE.Vector3(c.x, c.y + m, c.z)
+            ]);
+            const crossMat = new THREE.LineBasicMaterial({ color: 0xff5a00 });
+            const crossObj = new THREE.LineSegments(crossGeom, crossMat);
+            crossObj.userData.intersectionId = intersection.id;
+            intersectionGroup.add(crossObj);
 
-            // Добавить в сцену если ещё не добавлена
-            if (!scene.getObjectById(intersectionGroup.id)) {
-                scene.add(intersectionGroup);
-            }
+            sceneNeedsRender = true;
         }
 
         function fillRoadXsRuleBar() {
@@ -23429,14 +23514,11 @@
         });
 
         const btnIntersections = $('btnIntersections');
-        console.log('[Intersections] Button element found:', !!btnIntersections);
         btnIntersections?.addEventListener('click', () => {
-            console.log('[Intersections] Button clicked');
             openIntersectionsDialog();
         });
 
         $('intersectionCreate')?.addEventListener('click', () => {
-            console.log('[Intersections] Create button clicked');
             createRoadIntersection();
         });
 
@@ -40964,9 +41046,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.08.17',
+            version: '2026.08.18',
             buildId: 'ix-1836',
-            released: '2026-08-17',
+            released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -40974,7 +41056,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.17: диалог пересечений дорог — выбор двух осей, тип (крест/Т/слияние), радиус переходной кривой; визуализация маркером в сцене (расширение в разработке).',
+                '2026.08.18: пересечения дорог — выбор двух осей, тип (крест/Т/слияние), радиус переходной кривой; в сцене точка пересечения и переходные кривые по бокам (расширение в разработке).',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
