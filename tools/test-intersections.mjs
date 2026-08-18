@@ -788,6 +788,58 @@ try {
     check(noDragAnchors.handles === noDragAnchors.vertices - noDragAnchors.anchors,
         `ручки только у своих вершин (${noDragAnchors.handles} при ${noDragAnchors.vertices} вершинах и ${noDragAnchors.anchors} служебных)`);
 
+    // --- Примыкание «впритык»: ось не дотянулась до чужой оси ---------------
+    /*
+     * Так рисуют на практике: конец примыкающей дороги привязан к КРОМКЕ
+     * главной, а не к её оси. Строгого пересечения нет, и узел не строился
+     * вовсе. Допуск — половины проезжих частей обеих дорог (полотна
+     * соприкасаются), не меньше метра.
+     */
+    const touch = await page.evaluate(({ a, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearPolylines();
+        D.setAutoNodes(true);
+        const id1 = D.createPolylineFromPoints(a, { name: 'Главная', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        // Конец ветви не доходит до оси главной на 4 м (в пределах полотна).
+        const id2 = D.createPolylineFromPoints(
+            [{ x: 0, y: 60, z: 10 }, { x: 0, y: 4, z: 10 }], { name: 'Впритык', role: 'road-axis' });
+        D.setRoadWidths(id2, half, half);
+        const near = D.intersections.length;
+        // А в 40 м — это уже не узел.
+        const id3 = D.createPolylineFromPoints(
+            [{ x: 40, y: 60, z: 10 }, { x: 40, y: 40, z: 10 }], { name: 'Далеко', role: 'road-axis' });
+        D.setRoadWidths(id3, half, half);
+        return { near, far: D.intersections.length, types: D.intersections.map((x) => x.type) };
+    }, { a: AXIS_A, half: HALF });
+
+    console.log(`  впритык (4 м до оси): узлов ${touch.near}; после дальней ветви (40 м): ${touch.far} [${touch.types.join(', ')}]`);
+    check(touch.near === 1, `ветвь, не дошедшая до оси, дала узел (${touch.near})`);
+    check(touch.far === 1, `далёкая ветвь узла НЕ дала (стало ${touch.far})`);
+
+    // --- Подписи углов в сцене ----------------------------------------------
+    const labels = await page.evaluate(({ a, b, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearPolylines();
+        D.setAutoNodes(true);
+        const id1 = D.createPolylineFromPoints(a, { name: 'Подписи A', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        D.createPolylineFromPoints(b, { name: 'Подписи B', role: 'road-axis' });
+        const ix = D.intersections[0];
+        const before = D.nodeCornerLabelState();
+        // Правка радиуса одного угла — подпись обязана поехать за ним.
+        D.editIntersection(ix.id, { radii: { 0: 9 } });
+        return { before, after: D.nodeCornerLabelState() };
+    }, { a: AXIS_A, b: AXIS_B, half: HALF });
+
+    console.log(`  подписи углов: ${labels.before.map((l) => l.text).join(' | ')}`);
+    check(labels.before.length === 4, `подпись у каждого угла (${labels.before.length})`);
+    check(labels.before.every((l) => /^R \d+ · \d+°$/.test(l.text)),
+        `подпись несёт радиус и угол (${labels.before[0]?.text})`);
+    const nine = labels.after.find((l) => l.index === 0);
+    console.log(`  после правки радиуса угла 0: ${nine?.text}`);
+    check(nine?.text.startsWith('R 9 '), `подпись угла обновилась под новый радиус (${nine?.text})`);
+
     // --- Параллельные оси не пересекаются ---------------------------------
     const parallel = await page.evaluate(({ r }) => {
         const D = window.BimLvaDebug;

@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-sync</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-labels</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -1921,6 +1921,17 @@
             border: 1px solid var(--line); border-radius: 3px;
             pointer-events: none;
         }
+        .node-corner {
+            position: absolute; top: 0; left: 0;
+            transform-origin: 0 0;
+            padding: 1px 5px; margin: -9px 0 0 -18px; white-space: nowrap;
+            font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-variant-numeric: tabular-nums;
+            color: var(--txt); background: var(--glass);
+            border: 1px solid var(--line); border-radius: 3px;
+            pointer-events: auto; cursor: pointer; z-index: 3;
+        }
+        .node-corner:hover { border-color: var(--accent); color: var(--accent); }
         .node-handle:hover::before { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); }
         .node-handle.is-drag::before { background: var(--accent); }
         .poly-handle:hover { background: #d8f3e6; }
@@ -4049,7 +4060,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 3db5013</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · e4203a5</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5559,7 +5570,7 @@
     <div class="modal-backdrop" id="intersectionModal">
         <div class="modal-card" role="dialog" aria-modal="true" style="width:min(500px,100%)">
             <h3>Создать пересечение дорог</h3>
-            <div class="bulk-note">Выберите две оси для пересечения или примыкания</div>
+            <div class="bulk-note">Выберите две оси. Узел можно править в сцене: ромб — отметка, подпись угла — радиус.</div>
 
             <div class="prop small">
                 <div class="k">Первая ось</div>
@@ -5605,21 +5616,9 @@
                        title="Начертил ось поперёк существующей — узел появится сам. Только для осей дорог: обычные полилинии пересекаются часто, и узел там не нужен.">
             </div>
 
-            <div class="bulk-note" id="intersectionStatus">
-                Закругления строятся по кромкам проезжей части: у оси дороги
-                ширина берётся из её поперечника, у обычной полилинии ширины
-                нет — там дуги коснутся самих осей. Уширение прикладывается к
-                кромкам у узла и сводится к обычной ширине за длину отгона.
-                Узлы строятся сами, как только ось ложится поперёк другой оси
-                дороги — галочка выше это отключает. Обычных полилиний это не
-                касается. Коридоры обеих дорог обрываются у устья узла, а покрытие и
-                слои одежды под ним строятся отдельными телами — объём не
-                считается дважды. Отметка узла тянется ручкой прямо в сцене
-                (ромб с подписью, двойной щелчок — ввести число): профили
-                подходящих дорог идут за узлом, а концы трасс остаются на
-                месте, пока их не поднять вручную. Одежда берётся от той оси, у которой
-                конструкция мощнее. Узел уходит в «⬇ DXF» слоем «Узел»
-                (тела 3DSOLID и контур) и в «⬇ LandXML» поверхностью.
+            <div class="bulk-note" id="intersectionStatus" style="display:flex;align-items:center;gap:6px">
+                <span>Закругления — по кромкам проезжей части.</span>
+                <button type="button" class="pop" id="intersectionHelp" data-tip="Ширина берётся из поперечника оси; у обычной полилинии её нет — дуги коснутся самих осей.&#10;&#10;Уширение прикладывается к кромкам у узла и сводится к обычной ширине за длину отгона.&#10;&#10;Коридоры обеих дорог обрываются у устья, покрытие и слои одежды под узлом — отдельные тела: объём не считается дважды.&#10;&#10;Одежда берётся от той оси, где конструкция мощнее.&#10;&#10;Выгрузка: «⬇ DXF» — слой «Узел» (тела 3DSOLID и контур), «⬇ LandXML» — поверхность верха." style="cursor:help">?</button>
             </div>
 
             <div id="intersectionsList" class="compact-table-list"></div>
@@ -7485,6 +7484,12 @@
                 if (!c) return false;
                 const abs = scenePointToAbs(c);
                 return setNodeElevation(rec, c.z + (absZ - (abs ? abs.z : c.z)));
+            },
+            /** Подписи углов в сцене: текст и к какому углу относятся. */
+            nodeCornerLabelState() {
+                return nodeCornerLabels.map(({ el, id, index }) => ({
+                    id, index, hidden: !!el.hidden, text: el.textContent
+                }));
             },
             /** Ручки узлов: сколько их и где на экране. */
             nodeHandleState() {
@@ -23145,7 +23150,62 @@
                     };
                 }
             }
-            return null;
+            return findAxisTouch(poly1, poly2);
+        }
+
+        /**
+         * Примыкание «впритык»: ось не доходит до чужой оси или чуть заходит
+         * за неё. Строгого пересечения нет, а узел нужен — так рисуют, когда
+         * конец примыкающей дороги привязан к КРОМКЕ главной, а не к её оси.
+         *
+         * Допуск не с потолка: половина ширины чужой проезжей части плюс своя
+         * (если полотна соприкасаются — это узел), но не меньше метра.
+         */
+        function findAxisTouch(poly1, poly2) {
+            const w = (p) => {
+                const x = intersectionWidthsFor(p);
+                return Math.max(x.widthL, x.widthR, 0);
+            };
+            const tol = Math.max(1, w(poly1) + w(poly2));
+            const near = (poly, pt) => {
+                let best = null;
+                for (let i = 0; i < poly.pts.length - 1; i++) {
+                    const a = poly.pts[i], b = poly.pts[i + 1];
+                    const dx = b.x - a.x, dy = b.y - a.y;
+                    const len2 = dx * dx + dy * dy;
+                    if (len2 < 1e-12) continue;
+                    let t = ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2;
+                    t = Math.max(0, Math.min(1, t));
+                    const px = a.x + t * dx, py = a.y + t * dy;
+                    const d = Math.hypot(pt.x - px, pt.y - py);
+                    if (!best || d < best.d) best = { d, i, t, x: px, y: py, a, b };
+                }
+                return best;
+            };
+            const ends = (poly) => [{ i: 0, t: 0, p: poly.pts[0] },
+                { i: poly.pts.length - 2, t: 1, p: poly.pts[poly.pts.length - 1] }];
+
+            let win = null;
+            for (const e of ends(poly1)) {
+                const h = near(poly2, e.p);
+                if (h && h.d <= tol && (!win || h.d < win.d)) win = { d: h.d, swap: false, e, h };
+            }
+            for (const e of ends(poly2)) {
+                const h = near(poly1, e.p);
+                if (h && h.d <= tol && (!win || h.d < win.d)) win = { d: h.d, swap: true, e, h };
+            }
+            if (!win) return null;
+
+            const { e, h, swap } = win;
+            const segEnd = { i: e.i, t: e.t, a: (swap ? poly2 : poly1).pts[e.i], b: (swap ? poly2 : poly1).pts[e.i + 1] };
+            const segNear = { i: h.i, t: h.t, a: h.a, b: h.b };
+            const zEnd = e.p.z;
+            const zNear = h.a.z + h.t * (h.b.z - h.a.z);
+            // Точку берём на ЧУЖОЙ оси: конец примыкающей до неё не дотянулся,
+            // а узел должен сесть на сквозную дорогу.
+            return swap
+                ? { x: h.x, y: h.y, z1: zNear, z2: zEnd, seg1: segNear, seg2: segEnd, touch: win.d }
+                : { x: h.x, y: h.y, z1: zEnd, z2: zNear, seg1: segEnd, seg2: segNear, touch: win.d };
         }
 
         function unitXY(from, to) {
@@ -23321,7 +23381,12 @@
                 const k = i / (arc.pts.length - 1);
                 p.z = zA + (zB - zA) * k;
             });
-            return { arc, corner, armA, armB, radius, zA, zB, alongA, alongB };
+            const dot = Math.max(-1, Math.min(1, armA.u.x * armB.u.x + armA.u.y * armB.u.y));
+            return {
+                arc, corner, armA, armB, radius, zA, zB, alongA, alongB,
+                angleDeg: Math.acos(dot) * 180 / Math.PI,
+                mid: arc.pts[Math.floor(arc.pts.length / 2)]
+            };
         }
 
         /**
@@ -23515,6 +23580,8 @@
                 corners: corners.map((c) => ({
                     index: c.index,
                     radius: c.radius,
+                    angleDeg: c.angleDeg,
+                    mid: { x: c.mid.x, y: c.mid.y, z: c.mid.z },
                     tangentDist: c.arc.tangentDist,
                     center: c.arc.center
                 })),
@@ -23955,7 +24022,11 @@
                  * пересечения, и сдвиг конца трассы «не замечается» — ось
                  * просто получает излом на старом узле. Именно так профиль и
                  * превращался в пилу. */
-                const authored = (poly) => ({ pts: poly.pts.filter((p) => !p.nodeAnchor) });
+                /* ⚠️ Копию делаем ПОВЕРХ оси, а не голым { pts }: от `role` и
+                 * `id` зависит ширина проезжей части, а от неё — допуск
+                 * примыкания. С голым объектом ширина падала в ноль, допуск
+                 * схлопывался до метра, и живой узел сносило. */
+                const authored = (poly) => ({ ...poly, pts: poly.pts.filter((p) => !p.nodeAnchor) });
                 for (const rec of touching.slice()) {
                     const p1 = drawnPolylines.find((r) => r.id === rec.poly1Id);
                     const p2 = drawnPolylines.find((r) => r.id === rec.poly2Id);
@@ -24011,11 +24082,14 @@
          * ------------------------------------------------------------------ */
         const nodeHandlesLayer = document.getElementById('node-handles');
         let nodeHandles = [];           // {el, id}
+        let nodeCornerLabels = [];      // {el, id, index}
         let nodeHandleDrag = null;
 
         function clearNodeHandles() {
             nodeHandles.forEach((h) => h.el.remove());
+            nodeCornerLabels.forEach((h) => h.el.remove());
             nodeHandles = [];
+            nodeCornerLabels = [];
         }
 
         function rebuildNodeHandles() {
@@ -24030,6 +24104,29 @@
                 nodeHandlesLayer.appendChild(el);
                 attachNodeHandleDrag(rec.id, el);
                 nodeHandles.push({ el, id: rec.id });
+
+                // Подпись каждого угла: радиус и сам угол. Клик правит радиус
+                // прямо в сцене — тот же путь, что поле в списке узлов.
+                for (const c of (rec.points?.corners || [])) {
+                    const lab = document.createElement('div');
+                    lab.className = 'node-corner';
+                    lab.dataset.tip = 'Радиус закругления и угол между ветвями. Клик — задать радиус.';
+                    lab.addEventListener('click', (ev) => {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        const cur = (rec.radii || {})[c.index] || rec.radius;
+                        const raw = prompt(`Радиус закругления, м (угол ${c.angleDeg.toFixed(1)}°):`, String(cur));
+                        if (raw == null) return;
+                        const v = Number(String(raw).replace(',', '.'));
+                        if (!Number.isFinite(v) || v <= 0) { notifyError('Радиус — положительное число.'); return; }
+                        rec.radii = rec.radii || {};
+                        rec.radii[c.index] = v;
+                        if (!refreshRoadIntersection(rec)) notifyError('С таким радиусом узел не строится.');
+                        else trackUsage('road_node_radius', { by: 'scene' });
+                    });
+                    nodeHandlesLayer.appendChild(lab);
+                    nodeCornerLabels.push({ el: lab, id: rec.id, index: c.index });
+                }
             }
             updateNodeHandles();
         }
@@ -24046,6 +24143,16 @@
                 el.style.transform = `translate(${s.x}px, ${s.y}px)`;
                 const abs = scenePointToAbs(c);
                 el.dataset.z = abs ? abs.z.toFixed(3) : '';
+            }
+            for (const { el, id, index } of nodeCornerLabels) {
+                const rec = roadIntersections.find((x) => x.id === id);
+                const c = (rec?.points?.corners || []).find((k) => k.index === index);
+                if (!c?.mid) { el.hidden = true; continue; }
+                const s = projectToPixels(new THREE.Vector3(c.mid.x, c.mid.y, c.mid.z));
+                if (s.behind) { el.hidden = true; continue; }
+                el.hidden = false;
+                el.style.transform = `translate(${s.x}px, ${s.y}px)`;
+                el.textContent = `R ${c.radius.toFixed(0)} · ${c.angleDeg.toFixed(0)}°`;
             }
         }
 
@@ -24212,6 +24319,9 @@
             }
             visualizeIntersection(rec);
             syncCorridorsForIntersection(rec);
+            // Углов могло стать больше или меньше — подписи пересобираем,
+            // а не ждём кадра: иначе на экране остаётся прежний радиус.
+            rebuildNodeHandles();
             renderIntersectionsList();
             renderPolylinesList();
             return true;
@@ -42696,7 +42806,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: '3db5013-preview',
+            buildId: 'e4203a5-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -42705,7 +42815,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: правка оси пересчитывает узлы на ней — устье едет за осью, а разведённые оси снимают узел; служебные вершины узла больше не таскаются ручками и не держат форму оси (профиль превращался в пилу). Узлы строятся сами при пересечении осей дорог.',
+                '2026.08.18: подписи углов узла прямо в сцене (радиус и угол, клик — задать радиус); примыкание строится, даже если ось не дотянулась до чужой оси в пределах полотна; длинные пояснения в диалоге убраны во всплывающую подсказку.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
