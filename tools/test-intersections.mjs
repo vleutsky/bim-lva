@@ -692,6 +692,102 @@ try {
         `конец оси на чужой оси распознан как примыкание (${autoT[0]?.type || '—'})`);
     check(autoT[0]?.arcs === 2, `у автопримыкания 2 закругления (${autoT[0]?.arcs})`);
 
+    // --- Ось подвинули: узел идёт за ней, профиль не превращается в пилу ----
+    /*
+     * Владелец потянул вершины оси и получил на профиле пилу из случайных
+     * переломов: узел оставался от прежней геометрии, а посаженные им вершины
+     * висели там, где были. Проверяем связку целиком — узел следует за осью,
+     * якорей по-прежнему два и стоят они у устьев, а когда оси разошлись,
+     * узел снимается вместе со своими вершинами.
+     */
+    const moved = await page.evaluate(({ a, b, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearPolylines();
+        D.setAutoNodes(true);
+        const id1 = D.createPolylineFromPoints(a, { name: 'Двигаем A', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        const id2 = D.createPolylineFromPoints(b, { name: 'Двигаем B', role: 'road-axis' });
+        const ix = D.intersections[0];
+        D.setNodeElevationAbs(ix.id, D.nodeElevation(ix.id).abs + 3);
+
+        const snap = () => {
+            const prof = D.axisProfile(id1);
+            const anchors = prof.filter((p) => p.anchor);
+            const gaps = D.nodeGaps(id1);
+            return {
+                nodes: D.intersections.length,
+                anchors: anchors.length,
+                anchorSta: anchors.map((p) => p.sta),
+                anchorZ: anchors.map((p) => p.z),
+                nodeZ: D.intersections.length ? D.nodeElevation(D.intersections[0].id).abs : null,
+                gap: gaps[0] || null
+            };
+        };
+        const before = snap();
+        /* Двигаем поперечную ось за её КОНЦЫ. Индекс 1 брать нельзя: у оси с
+         * узлом там уже сидит служебная вершина устья, и «сдвиг вершины 1»
+         * согнул бы ось вместо переноса — тест мерил бы не то. Концы ищем по
+         * профилю: они всегда первый и последний. */
+        const endsOf = (id) => {
+            const prof = D.axisProfile(id);
+            return { first: prof[0].i, last: prof[prof.length - 1].i };
+        };
+        let e = endsOf(id2);
+        D.planMoveVertex(id2, e.first, 30, -80);
+        e = endsOf(id2);
+        D.planMoveVertex(id2, e.last, 30, 80);
+        const after = snap();
+        // Разводим оси совсем.
+        e = endsOf(id2);
+        D.planMoveVertex(id2, e.first, 400, -80);
+        e = endsOf(id2);
+        D.planMoveVertex(id2, e.last, 400, 80);
+        const apart = snap();
+        return { before, after, apart };
+    }, { a: AXIS_A, b: AXIS_B, half: HALF });
+
+    console.log(`  до сдвига: узел ${moved.before.nodeZ.toFixed(3)}, устье ${moved.before.gap.from.toFixed(2)}…${moved.before.gap.to.toFixed(2)}, якоря ПК ${moved.before.anchorSta.map((v) => v.toFixed(2)).join(' / ')}`);
+    console.log(`  после сдвига оси: устье ${moved.after.gap ? moved.after.gap.from.toFixed(2) + '…' + moved.after.gap.to.toFixed(2) : '—'}, якоря ПК ${moved.after.anchorSta.map((v) => v.toFixed(2)).join(' / ')}`);
+
+    check(moved.after.nodes === 1, 'узел уцелел при сдвиге оси');
+    check(moved.after.anchors === 2, `якорей по-прежнему два (${moved.after.anchors})`);
+    check(moved.after.gap && Math.abs(moved.after.gap.from - moved.before.gap.from) > 1,
+        'устье уехало вместе с осью — узел пересчитался, а не остался прежним');
+    if (moved.after.gap) {
+        // Якорь может встать чуть раньше устья (вставка проецируется на
+        // звено), но не за километр: это и отличает «следует за осью» от
+        // «остался от прошлой геометрии».
+        const near = moved.after.anchorSta.map((sta) =>
+            Math.min(Math.abs(sta - moved.after.gap.from), Math.abs(sta - moved.after.gap.to)));
+        console.log(`  промах якорей от устьев: ${near.map((v) => v.toFixed(2)).join(' / ')} м`);
+        check(near.every((d) => d < 1), `якоря стоят у устьев (промах до ${Math.max(...near).toFixed(2)} м)`);
+    }
+    check(moved.after.anchorZ.every((z) => Math.abs(z - moved.after.nodeZ) < 1e-6),
+        'якоря остались на отметке узла после сдвига оси');
+
+    console.log(`  после развода осей: узлов ${moved.apart.nodes}, якорей ${moved.apart.anchors}`);
+    check(moved.apart.nodes === 0, 'оси разошлись — узел снят');
+    check(moved.apart.anchors === 0, 'вершины, посаженные узлом, сняты вместе с ним');
+
+    // --- Служебные вершины узла не таскаются ручками ------------------------
+    const noDragAnchors = await page.evaluate(({ a, b, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearPolylines();
+        D.setAutoNodes(true);
+        const id1 = D.createPolylineFromPoints(a, { name: 'Ручки A', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        D.createPolylineFromPoints(b, { name: 'Ручки B', role: 'road-axis' });
+        D.setNodeElevationAbs(D.intersections[0].id, D.nodeElevation(D.intersections[0].id).abs + 2);
+        D.openPolylineEditor(id1);
+        const prof = D.axisProfile(id1);
+        return { vertices: prof.length, anchors: prof.filter((p) => p.anchor).length, handles: D.polylineHandleCount };
+    }, { a: AXIS_A, b: AXIS_B, half: HALF });
+
+    console.log(`  ось: вершин ${noDragAnchors.vertices}, из них служебных ${noDragAnchors.anchors}, ручек ${noDragAnchors.handles}`);
+    check(noDragAnchors.anchors > 0, 'служебные вершины на оси есть — проверка не вхолостую');
+    check(noDragAnchors.handles === noDragAnchors.vertices - noDragAnchors.anchors,
+        `ручки только у своих вершин (${noDragAnchors.handles} при ${noDragAnchors.vertices} вершинах и ${noDragAnchors.anchors} служебных)`);
+
     // --- Параллельные оси не пересекаются ---------------------------------
     const parallel = await page.evaluate(({ r }) => {
         const D = window.BimLvaDebug;

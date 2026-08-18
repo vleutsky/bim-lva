@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-pvi</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-sync</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -4049,7 +4049,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 18cc717</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 3db5013</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -6995,6 +6995,13 @@
                 if (!A || !B) return false;
                 return applyVerticalTransition(rec, A, B, opts);
             },
+            /** Раскрыть полилинию на правку точек — как клик по строке списка. */
+            openPolylineEditor(id) {
+                const rec = drawnPolylines.find((r) => r.id === id);
+                if (!rec) return false;
+                selectDrawnPolyline(rec);
+                return true;
+            },
             /** Сколько ручек вершин сейчас на экране (у раскрытой полилинии). */
             get polylineHandleCount() {
                 return typeof polylineHandles === 'undefined' ? 0 : polylineHandles.length;
@@ -7493,6 +7500,7 @@
                     const abs = scenePointToAbs(p);
                     return {
                         i, z: abs ? abs.z : p.z,
+                        sta: stationOfPointOnPolyline(rec, p),
                         anchor: p.nodeAnchor || null, key: p.nodeAnchorKey || null
                     };
                 });
@@ -7607,6 +7615,9 @@
                 rec.pts[idx].x = x;
                 rec.pts[idx].y = y;
                 rebuildPolylineGeometry(rec);
+                // Правка плана «насовсем» — тот же путь, что после отпускания
+                // ручки в сцене: отсюда пересчитываются узлы на этой оси.
+                renderPolylinesList();
                 renderRoadPlanView();
                 return true;
             },
@@ -15926,7 +15937,14 @@
             clearPolylineHandles();
             const rec = drawnPolylines.find((r) => r.id === polylineEditingId);
             if (!rec || !polylineHandlesLayer) { markNeedsRender(); return; }
-            rec.pts.forEach((_, idx) => {
+            rec.pts.forEach((pt, idx) => {
+                /* Вершины, посаженные узлом, ручек НЕ получают: их положение и
+                 * отметку задаёт сам узел, а стоят они ровно на устье. Дав их
+                 * тянуть, мы позволяли увести устье в сторону и задрать
+                 * отметку — профиль превращался в пилу из случайных переломов,
+                 * и вылечить это правкой оси было уже нельзя. Отметка узла
+                 * правится его ручкой (ромб), план — самими осями. */
+                if (pt.nodeAnchor) return;
                 const el = document.createElement('div');
                 el.className = 'poly-handle';
                 if (idx === 0 || idx === rec.pts.length - 1) el.classList.add('is-end');
@@ -16279,6 +16297,14 @@
         }
 
         function renderPolylinesList() {
+            // Общее место «полилиния изменилась насовсем» — отсюда же
+            // пересчитываются узлы, которые на этой оси держатся. Внутри
+            // перетаскивания сюда не заходят (там только
+            // rebuildPolylineGeometry), поэтому пересборка коридоров не
+            // случается на каждый кадр.
+            for (const r of drawnPolylines.slice()) {
+                if (r.role === 'road-axis') resyncNodesForPolyline(r.id);
+            }
             const body = $('polylinesList');
             const count = $('polylinesCount');
             const list = listedPolylines();
@@ -23838,15 +23864,31 @@
         /**
          * Посадить (или подвинуть) вершину оси на пикете `sta` с отметкой `z`.
          * Повторный вызов двигает свою прежнюю вершину, а не плодит новые.
+         *
+         * Двигать надо и В ПЛАНЕ: устье уезжает вместе с осью (пользователь
+         * потянул вершину вбок, поменял радиус, изменил ширину), и якорь,
+         * оставшийся на прежнем месте, превращается в случайный перелом
+         * профиля посреди дороги — ровно ту «странность», что видна на
+         * профиле ломаной пилой.
          */
         function setNodeAnchorVertex(poly, ixId, key, sta, z) {
-            let idx = findNodeAnchor(poly, ixId, key);
-            if (idx < 0) {
-                idx = insertPolylineVertexAtStation(poly, sta);
-                if (idx < 0) return false;
-                poly.pts[idx].nodeAnchor = ixId;
-                poly.pts[idx].nodeAnchorKey = key;
+            /* Прежнюю вершину СНИМАЕМ и ставим заново, а не двигаем на месте.
+             * Якорь — сам вершина оси, и сдвигая его мы деформируем линию:
+             * стационирование считается по ней же, и вершина промахивается
+             * мимо нового устья (замерено ПК 65.8 при устье 82.5). Снятая
+             * вершина лежала НА линии, поэтому её удаление форму не меняет,
+             * и вставка по пикету попадает точно. */
+            const old = findNodeAnchor(poly, ixId, key);
+            if (old >= 0 && poly.pts.length > 2) {
+                poly.pts.splice(old, 1);
+                poly.radii.splice(old, 1);
+                if (Array.isArray(poly.vRadii)) poly.vRadii.splice(old, 1);
+                rebuildPolylineGeometry(poly);
             }
+            const idx = insertPolylineVertexAtStation(poly, sta);
+            if (idx < 0) return false;
+            poly.pts[idx].nodeAnchor = ixId;
+            poly.pts[idx].nodeAnchorKey = key;
             poly.pts[idx].z = z;
             return true;
         }
@@ -23884,6 +23926,63 @@
                 rebuildPolylineGeometry(poly);
             });
             return touched;
+        }
+
+        /**
+         * Ось изменилась — пересчитать узлы, которые на ней держатся.
+         *
+         * Без этого узел остаётся от прежней геометрии: точка пересечения,
+         * устья и посаженные вершины — все от старого положения оси. На
+         * профиле это выглядит как пила из случайных переломов, а покрытие
+         * висит в стороне от дороги. Если оси разошлись и больше не
+         * пересекаются, узел снимается вместе со своими вершинами.
+         *
+         * Пересчитываем ТОЛЬКО когда точка пересечения реально уехала:
+         * функция зовётся из общего места «полилиния изменилась насовсем»,
+         * и гонять пересборку коридоров на каждый чих незачем.
+         */
+        let resyncingNodes = false;
+        function resyncNodesForPolyline(polyId) {
+            if (resyncingNodes) return 0;      // refreshRoadIntersection зовёт нас обратно
+            const touching = roadIntersections.filter((x) => x.poly1Id === polyId || x.poly2Id === polyId);
+            if (!touching.length) return 0;
+            resyncingNodes = true;
+            let changed = 0;
+            try {
+                /* Пересечение ищем по АВТОРСКОЙ геометрии — без вершин,
+                 * посаженных узлом. Они производные, но это настоящие вершины
+                 * оси: пока они на месте, ось идёт через прежнюю точку
+                 * пересечения, и сдвиг конца трассы «не замечается» — ось
+                 * просто получает излом на старом узле. Именно так профиль и
+                 * превращался в пилу. */
+                const authored = (poly) => ({ pts: poly.pts.filter((p) => !p.nodeAnchor) });
+                for (const rec of touching.slice()) {
+                    const p1 = drawnPolylines.find((r) => r.id === rec.poly1Id);
+                    const p2 = drawnPolylines.find((r) => r.id === rec.poly2Id);
+                    if (!p1 || !p2) continue;
+                    const a1 = authored(p1), a2 = authored(p2);
+                    const hit = (a1.pts.length >= 2 && a2.pts.length >= 2)
+                        ? findAxisCrossing(a1, a2) : null;
+                    if (!hit) {
+                        removeIntersectionObjects(rec.id);
+                        dropNodeAnchors(rec.id);
+                        roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+                        syncCorridorsForIntersection(rec);
+                        changed++;
+                        continue;
+                    }
+                    const c = rec.points?.crossPoint;
+                    if (c && Math.hypot(hit.x - c.x, hit.y - c.y) < 1e-6) continue;
+                    // Снимаем свои вершины и считаем узел заново уже по чистой
+                    // оси; refreshRoadIntersection посадит их на новые устья.
+                    dropNodeAnchors(rec.id);
+                    if (refreshRoadIntersection(rec)) changed++;
+                }
+            } finally {
+                resyncingNodes = false;
+            }
+            if (changed) { rebuildNodeHandles(); markNeedsRender(); }
+            return changed;
         }
 
         /** Снять вершины, посаженные этим узлом (узел удалён или сброшен). */
@@ -24092,10 +24191,24 @@
             const next = calc();
             if (!next) return false;
             rec.points = next;
-            // Профили осей идут за узлом; после правки оси геометрию узла
-            // считаем ЗАНОВО — устья могли сдвинуться вместе с профилем.
-            if (rec.zTarget != null && syncAxisElevationsForNode(rec)) {
-                rec.points = calc() || rec.points;
+            /* Профили осей идут за узлом, а узел — за профилями: посадка
+             * вершин меняет пикетаж, от которого считались устья. Крутим до
+             * СХОЖДЕНИЯ, иначе якоря остаются от предыдущего расчёта и
+             * промахиваются мимо устья (замерено ПК 65.8 при устье 82.5, а
+             * второй якорь и вовсе садился на конец трассы).
+             * Двух-трёх проходов хватает: вершины ставятся НА линию, форма от
+             * этого не меняется, и пикетаж сходится сразу. */
+            const armSig = (pts) => (pts?.arms || [])
+                .map((a) => `${a.polyId}:${(a.sta ?? 0).toFixed(4)}:${a.mouth.toFixed(4)}`).join('|');
+            if (rec.zTarget != null) {
+                for (let pass = 0; pass < 3; pass++) {
+                    const before = armSig(rec.points);
+                    if (!syncAxisElevationsForNode(rec)) break;
+                    const again = calc();
+                    if (!again) break;
+                    rec.points = again;
+                    if (armSig(rec.points) === before) break;
+                }
             }
             visualizeIntersection(rec);
             syncCorridorsForIntersection(rec);
@@ -42583,7 +42696,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: '18cc717-preview',
+            buildId: '3db5013-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -42592,7 +42705,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: при подъёме узла в ось садятся только две вершины — по одной на устье; третья, в самой точке пересечения, давала лишний перелом на прямом участке. Узлы строятся сами при пересечении осей дорог, ширина узла — по проезжей части, площадка при подъёме остаётся плоской.',
+                '2026.08.18: правка оси пересчитывает узлы на ней — устье едет за осью, а разведённые оси снимают узел; служебные вершины узла больше не таскаются ручками и не держат форму оси (профиль превращался в пилу). Узлы строятся сами при пересечении осей дорог.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
