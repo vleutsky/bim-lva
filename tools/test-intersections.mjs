@@ -531,6 +531,37 @@ try {
     check(exported.xmlHasNode, 'LandXML содержит поверхность узла');
     check(exported.xmlFaces > 0, `у поверхности узла есть грани (${exported.xmlFaces})`);
 
+    // --- КОСОЕ пересечение: контур доходит до устья по обеим кромкам --------
+    /*
+     * ⚠️ На ПЕРПЕНДИКУЛЯРНЫХ осях эта проверка проходит вхолостую: у обоих
+     * соседних углов ветви одинаковый отступ до касания, и контур сам собой
+     * доходит до устья. Разрыв вылезает только на косом пересечении: острый
+     * угол даёт длинный отступ (t = R/tg(φ/2)), тупой — короткий, устье берётся
+     * по большему, и между точкой касания тупого угла и устьем вырезается
+     * треугольник. На 45° замерено 50.3 м — это и были «чёрные клинья».
+     */
+    const SKEW_B = [{ x: -60, y: -60, z: 10 }, { x: 60, y: 60, z: 10 }];
+    const skew = await page.evaluate(({ a, b, r, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        const id1 = D.createPolylineFromPoints(a, { name: 'Косая A', role: 'road-axis' });
+        const id2 = D.createPolylineFromPoints(b, { name: 'Косая B', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        D.setRoadWidths(id2, half, half);
+        D.buildRoadXs(id1, { step: 10, widthL: half, widthR: half, live: true });
+        D.buildRoadXs(id2, { step: 10, widthL: half, widthR: half, live: true });
+        const ix = D.buildIntersection(id1, id2, { type: 'cross', radius: r });
+        return ix ? { ixId: ix.id, mouth: D.nodeMouthGap(ix.id) } : null;
+    }, { a: AXIS_A, b: SKEW_B, r: R, half: HALF });
+
+    check(!!skew, 'узел на косом пересечении построен');
+    if (skew) {
+        const worst = skew.mouth.reduce((m, x) => (Math.abs(x.gap) > Math.abs(m.gap) ? x : m), skew.mouth[0]);
+        console.log(`  косое пересечение: устье ${worst.mouth.toFixed(2)} м, худший разрыв ${worst.gap.toFixed(2)} м (ветвь ${worst.arm}, ${worst.side})`);
+        check(skew.mouth.every((x) => Math.abs(x.gap) < 1e-3),
+            `контур доходит до устья по обеим кромкам всех ветвей (худший разрыв ${worst.gap.toFixed(3)} м)`);
+    }
+
     // --- Параллельные оси не пересекаются ---------------------------------
     const parallel = await page.evaluate(({ r }) => {
         const D = window.BimLvaDebug;
