@@ -335,6 +335,91 @@ try {
             `контур доходит до дальней кромки сквозной дороги (y=${lowest.toFixed(2)}, ожидалось ${-HALF})`);
     }
 
+    // --- Коридор обрывается у узла, а не лезет под покрытие ----------------
+    // Без разрыва оба коридора перекрывают друг друга в центре узла и ещё
+    // ложатся под покрытие — объём считался бы дважды.
+    const trim = await page.evaluate(({ a, b, r, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        const id1 = D.createPolylineFromPoints(a, { name: 'Дорога A', role: 'road-axis' });
+        const id2 = D.createPolylineFromPoints(b, { name: 'Дорога B', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        D.setRoadWidths(id2, half, half);
+        // Коридоры строим ДО узла — как у пользователя: сначала дорога.
+        D.buildRoadXs(id1, { step: 10, widthL: half, widthR: half, live: true });
+        D.buildRoadXs(id2, { step: 10, widthL: half, widthR: half, live: true });
+        const before = D.corridorStations(id1)?.length || 0;
+        const ix = D.buildIntersection(id1, id2, { type: 'cross', radius: r });
+        return {
+            id1, id2, ix,
+            before,
+            gaps: D.nodeGaps(id1),
+            after: D.corridorStations(id1)
+        };
+    }, { a: AXIS_A, b: AXIS_B, r: R, half: HALF });
+
+    check(!!trim.ix, 'узел на построенных коридорах создан');
+    if (trim.ix && trim.after) {
+        console.log(`  разрывов на оси A: ${trim.gaps.length}, пикетов было ${trim.before}, стало ${trim.after.length}`);
+        check(trim.gaps.length === 1, `узел дал один разрыв пикетажа (получено ${trim.gaps.length})`);
+        if (trim.gaps.length === 1) {
+            const g = trim.gaps[0];
+            const want = HALF + R; // вылет устья = отступ до касания
+            const half1 = (g.to - g.from) / 2;
+            console.log(`  разрыв: ${g.from.toFixed(2)}…${g.to.toFixed(2)} м (полудлина ${half1.toFixed(2)}, ожидалось ${want})`);
+            check(Math.abs(half1 - want) < 1e-6,
+                `разрыв равен вылету устья с обеих сторон (${half1.toFixed(2)} против ${want})`);
+            const inside = trim.after.filter((s) => s > g.from + 1e-6 && s < g.to - 1e-6);
+            check(inside.length === 0, `внутри узла пикетов не осталось (найдено ${inside.length})`);
+            const onEdge = (v) => trim.after.some((s) => Math.abs(s - v) < 1e-3);
+            check(onEdge(g.from) && onEdge(g.to),
+                'пикеты стоят ровно на границах устья — торец коридора заподлицо');
+        }
+    }
+
+    // --- Слои одежды под узлом ---------------------------------------------
+    const BASE_H = 0.35;
+    const layered = await page.evaluate(({ id1, id2, r, baseH }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        // Второй слой одежды — чтобы проверить именно многослойность, а не
+        // «нашёлся хоть один слой»: у шаблона по умолчанию только покрытие.
+        const added = D.addRoadXsLayer(baseH);
+        const ix = D.buildIntersection(id1, id2, { type: 'cross', radius: r });
+        return { added: !!added, ix, layers: ix ? D.nodeLayers(ix.id) : null };
+    }, { id1: trim.id1, id2: trim.id2, r: R, baseH: BASE_H });
+
+    if (layered.layers) {
+        console.log(`  слои одежды под узлом: ${layered.layers.length ? layered.layers.map((L) => `${L.code} ${L.thickness.toFixed(3)} м`).join(', ') : '—'}`);
+        check(layered.layers.length > 0, `слои одежды подхвачены из шаблона (${layered.layers.length})`);
+        check(layered.layers.every((L) => L.thickness > 0), 'у всех слоёв положительная толщина');
+        if (layered.added) {
+            check(layered.layers.length >= 2,
+                `добавленный слой основания попал под узел (слоёв ${layered.layers.length})`);
+            const base = layered.layers.find((L) => Math.abs(L.thickness - BASE_H) < 1e-6);
+            check(!!base, `толщина основания сошлась с заданной (${BASE_H} м)`);
+        }
+    }
+
+    // --- Выгрузка узла ------------------------------------------------------
+    const exported = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const dxf = D.dxfPreview();
+        const xml = D.landXmlPreview();
+        return {
+            dxfHasLayer: dxf.includes('Узел'),
+            dxfSolids: (dxf.match(/3DSOLID/g) || []).length,
+            xmlHasNode: /<Surface name="[^"]*×/.test(xml) || xml.includes('Узел'),
+            xmlFaces: (xml.match(/<F>/g) || []).length
+        };
+    });
+    console.log(`  DXF: слой «Узел» ${exported.dxfHasLayer ? 'есть' : 'НЕТ'}, тел 3DSOLID ${exported.dxfSolids}`);
+    console.log(`  LandXML: поверхность узла ${exported.xmlHasNode ? 'есть' : 'НЕТ'}, граней ${exported.xmlFaces}`);
+    check(exported.dxfHasLayer, 'DXF содержит слой «Узел»');
+    check(exported.dxfSolids > 0, `узел выгружен телами 3DSOLID (${exported.dxfSolids})`);
+    check(exported.xmlHasNode, 'LandXML содержит поверхность узла');
+    check(exported.xmlFaces > 0, `у поверхности узла есть грани (${exported.xmlFaces})`);
+
     // --- Параллельные оси не пересекаются ---------------------------------
     const parallel = await page.evaluate(({ r }) => {
         const D = window.BimLvaDebug;

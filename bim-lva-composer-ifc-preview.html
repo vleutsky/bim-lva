@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-edges</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-solid</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -4018,7 +4018,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 711d420</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 78394fc</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5573,6 +5573,11 @@
                 ширина берётся из её поперечника, у обычной полилинии ширины
                 нет — там дуги коснутся самих осей. Уширение прикладывается к
                 кромкам у узла и сводится к обычной ширине за длину отгона.
+                Коридоры обеих дорог обрываются у устья узла, а покрытие и
+                слои одежды под ним строятся отдельными телами — объём не
+                считается дважды. Одежда берётся от той оси, у которой
+                конструкция мощнее. Узел уходит в «⬇ DXF» слоем «Узел»
+                (тела 3DSOLID и контур) и в «⬇ LandXML» поверхностью.
             </div>
 
             <div id="intersectionsList" class="compact-table-list"></div>
@@ -7351,6 +7356,7 @@
                 };
                 roadIntersections.push(rec);
                 visualizeIntersection(rec);
+                syncCorridorsForIntersection(rec);
                 return {
                     id: rec.id,
                     cross: { x: result.crossPoint.x, y: result.crossPoint.y, z: result.crossPoint.z },
@@ -7383,6 +7389,18 @@
             },
             intersectionObjectCount() { return intersectionGroup.children.length; },
             clearIntersections(polylineId) { clearRoadIntersections(polylineId); },
+            /** Разрывы коридора, занятые узлами, по пикетажу этой оси. */
+            nodeGaps(polylineId) { return roadNodeGapsFor(polylineId); },
+            /** Пикеты коридора после обрезки узлами — чтобы видеть, где обрыв. */
+            corridorStations(polylineId) {
+                const m = roadXsModels.find((x) => x.polylineId === polylineId);
+                return m ? m.stations.map((s) => s.sta) : null;
+            },
+            /** Слои одежды, попавшие под узел. */
+            nodeLayers(ixId) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                return (rec?.points?.layers || []).map((L) => ({ code: L.code, thickness: L.thickness }));
+            },
             get defaultRoadHalfWidth() { return DEFAULT_ROAD_HALF_WIDTH; },
             planMoveVertex(id, idx, x, y) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -7873,6 +7891,9 @@
             /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
             dxfPreview() {
                 return buildDxf(drawnPolylines, coordPins);
+            },
+            landXmlPreview() {
+                return buildPolylineLandXml();
             },
             /** Байты скачиваемого DXF (UTF-8) — ловит регресс Windows-1251. */
             dxfDownloadBytes() {
@@ -13174,6 +13195,73 @@
             return faces;
         }
 
+        /**
+         * Узлы в DXF: покрытие и каждый слой одежды — своим 3DSOLID на слое
+         * «Узел». Треугольники берём из тех же массивов, что и меши сцены, —
+         * второй источник геометрии разошёлся бы с картинкой.
+         */
+        function nodeSolidsToDxf(g, allocHandle, ownerHandle) {
+            let faces = 0;
+            const triples = (pos) => {
+                const out = [];
+                for (let i = 0; i + 8 < pos.length; i += 9) {
+                    out.push([
+                        new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]),
+                        new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]),
+                        new THREE.Vector3(pos[i + 6], pos[i + 7], pos[i + 8])
+                    ]);
+                }
+                return out;
+            };
+            for (const ix of roadIntersections) {
+                const d = ix.points;
+                if (!d?.outline?.length) continue;
+                const layers = d.layers || [];
+                if (layers.length) {
+                    let depth = 0;
+                    for (const L of layers) {
+                        const solid = buildNodeLayerSolid(d.crossPoint, d.outline, depth, L.thickness);
+                        depth += L.thickness;
+                        if (solid) faces += tinToSolidDxf(g, weldTin(triples(solid)), DXF_LAYER_NODE, allocHandle, ownerHandle);
+                    }
+                } else if (d.patch) {
+                    faces += tinToSolidDxf(g, weldTin(triples(d.patch)), DXF_LAYER_NODE, allocHandle, ownerHandle);
+                }
+            }
+            return faces;
+        }
+
+        /**
+         * TIN верха узла для LandXML: только покрытие, без боков и низа —
+         * Surface в LandXML это поверхность, а не тело. Слои одежды уходят
+         * в DXF телами; складывать их в одну поверхность значило бы отдать
+         * Civil самопересекающийся TIN.
+         */
+        function nodeSurfaceTin(ix) {
+            const d = ix?.points;
+            if (!d?.patch?.length) return null;
+            const tris = [];
+            for (let i = 0; i + 8 < d.patch.length; i += 9) {
+                tris.push([
+                    new THREE.Vector3(d.patch[i], d.patch[i + 1], d.patch[i + 2]),
+                    new THREE.Vector3(d.patch[i + 3], d.patch[i + 4], d.patch[i + 5]),
+                    new THREE.Vector3(d.patch[i + 6], d.patch[i + 7], d.patch[i + 8])
+                ]);
+            }
+            return tris.length ? weldTin(tris) : null;
+        }
+
+        /** Контур узла — замкнутая полилиния на том же слое, для посадки в плане. */
+        function nodeOutlinesForDxf() {
+            return roadIntersections
+                .filter((ix) => (ix.points?.outline || []).length >= 3)
+                .map((ix) => ({
+                    name: ix.name || 'Узел',
+                    layer: DXF_LAYER_NODE,
+                    pts: ix.points.outline.map((p) => scenePointToAbs(p))
+                }));
+        }
+
         /** Линии выхода и наружный контур — следствие TIN, в DXF не дублируем. */
         function slopeDerivedPolylineIds() {
             const ids = new Set();
@@ -13398,9 +13486,32 @@
                 lines.push('  </Profiles>');
             }
 
-            // Поверхности (откосы если есть)
-            if (slopeModels.length) {
+            // Поверхности: откосы и покрытия узлов.
+            const nodeSurfaces = roadIntersections
+                .map((ix) => ({ ix, tin: nodeSurfaceTin(ix) }))
+                .filter((r) => r.tin?.faces?.length);
+            if (slopeModels.length || nodeSurfaces.length) {
                 lines.push('  <Surfaces>');
+                nodeSurfaces.forEach(({ ix, tin }) => {
+                    const name = escXml(ix.name || 'Узел');
+                    const absPts = tin.points.map((p) => scenePointToAbs(p) || p);
+                    let zMin = Infinity, zMax = -Infinity;
+                    absPts.forEach((p) => { zMin = Math.min(zMin, p.z); zMax = Math.max(zMax, p.z); });
+                    lines.push(`    <Surface name="${name}">`);
+                    lines.push(`      <Definition surfType="TIN" elevMin="${n(zMin)}" elevMax="${n(zMax)}">`);
+                    lines.push('        <Pnts>');
+                    absPts.forEach((p, i) => {
+                        lines.push(`          <P id="${i + 1}">${n(p.y)} ${n(p.x)} ${n(p.z)}</P>`);
+                    });
+                    lines.push('        </Pnts>');
+                    lines.push('        <Faces>');
+                    tin.faces.forEach((f) => {
+                        lines.push(`          <F>${f[0] + 1} ${f[1] + 1} ${f[2] + 1}</F>`);
+                    });
+                    lines.push('        </Faces>');
+                    lines.push('      </Definition>');
+                    lines.push('    </Surface>');
+                });
                 slopeModels.forEach((sm, idx) => {
                     if (!sm.tin?.faces?.length) return;
                     const name = escXml(sm.name || `Surface ${idx + 1}`);
@@ -14195,6 +14306,7 @@
         const DXF_LAYER_SLOPE = 'Откос';
         const DXF_LAYER_KDO = 'КДО';
         const DXF_LAYER_XS = 'Поперечник';
+        const DXF_LAYER_NODE = 'Узел';
 
         function sanitizeDxfLayer(name, fallback = '0') {
             const s = String(name || '').trim().replace(/[<>/\\":;?*|,=`'\n\r]/g, '_').slice(0, 255);
@@ -16287,7 +16399,7 @@
             const bylayerH = allocHandle();
             const ltypeH = allocHandle();
             const dashedH = allocHandle();
-            const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_KDO, DXF_LAYER_XS, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
+            const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_KDO, DXF_LAYER_XS, DXF_LAYER_NODE, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
             const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3];
             const dashedLayers = new Set([ROAD_AXIS_LAYER]);
             const addLayer = (name, color) => {
@@ -16408,6 +16520,24 @@
                 });
             }
             if (!opts.xsOnly) slopeTinFacesToDxfPairs(ge, onlySlope, allocHandle, blockRecModel);
+            if (onlySlope == null && !opts.xsOnly) {
+                nodeSolidsToDxf(ge, allocHandle, blockRecModel);
+                nodeOutlinesForDxf().forEach((ring) => {
+                    // 70 = 8 (3D-полилиния) + 1 (замкнутая) — как у поперечников,
+                    // плюс флаг замыкания: контур узла всегда кольцо.
+                    entityOpen('POLYLINE', ring.layer);
+                    ge(100, 'AcDbPolyline');
+                    ge(66, 1); ge(10, 0); ge(20, 0); ge(30, 0); ge(70, 9);
+                    ring.pts.forEach((p) => {
+                        entityOpen('VERTEX', ring.layer);
+                        ge(100, 'AcDbVertex');
+                        ge(10, n(p.x)); ge(20, n(p.y)); ge(30, n(p.z));
+                        ge(70, 32);
+                    });
+                    entityOpen('SEQEND', ring.layer);
+                    ge(100, 'AcDbSequenceEnd');
+                });
+            }
             if (onlySlope == null) writeRoadXsToDxf(ge, entityOpen, n, { edges: !!opts.xsOnly });
             if (!opts.xsOnly) pins.forEach((pin) => {
                 entityOpen('POINT', DXF_LAYER_POINTS);
@@ -20285,6 +20415,78 @@
             return turns;
         }
 
+        /**
+         * Пикет точки на оси: проекция на звенья renderPts. Нужен, чтобы
+         * привязать узел к пикетажу — по нему коридор и обрывается у устья.
+         */
+        function stationOfPointOnPolyline(record, pt) {
+            const pts = record?.renderPts?.length >= 2 ? record.renderPts : record?.pts;
+            if (!pts || pts.length < 2) return null;
+            let cum = 0, best = null;
+            for (let i = 0; i < pts.length - 1; i++) {
+                const a = pts[i], b = pts[i + 1];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const len = Math.hypot(dx, dy);
+                if (len > 1e-9) {
+                    let t = ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / (len * len);
+                    t = Math.max(0, Math.min(1, t));
+                    const px = a.x + t * dx, py = a.y + t * dy;
+                    const d = Math.hypot(pt.x - px, pt.y - py);
+                    if (!best || d < best.d) best = { d, sta: cum + t * len };
+                }
+                cum += len;
+            }
+            return best ? best.sta : null;
+        }
+
+        /**
+         * Куски оси, занятые узлами: там коридор не строится — его место
+         * занимает покрытие узла. Без этого объём считался бы дважды, а
+         * два коридора ещё и накладывались бы друг на друга в центре.
+         * Интервалы сливаются: два близких узла дают один разрыв.
+         */
+        function roadNodeGapsFor(polylineId) {
+            const raw = [];
+            for (const ix of roadIntersections) {
+                for (const arm of (ix.points?.arms || [])) {
+                    if (arm.polyId !== polylineId) continue;
+                    if (arm.sta == null || !(arm.mouth > 0)) continue;
+                    raw.push(arm.sign > 0
+                        ? { from: arm.sta, to: arm.sta + arm.mouth }
+                        : { from: arm.sta - arm.mouth, to: arm.sta });
+                }
+            }
+            if (!raw.length) return [];
+            raw.sort((a, b) => a.from - b.from);
+            const merged = [raw[0]];
+            for (let i = 1; i < raw.length; i++) {
+                const last = merged[merged.length - 1];
+                if (raw[i].from <= last.to + 1e-6) last.to = Math.max(last.to, raw[i].to);
+                else merged.push(raw[i]);
+            }
+            return merged;
+        }
+
+        const stationInsideGaps = (sta, gaps) =>
+            gaps.some((g) => sta > g.from + 1e-6 && sta < g.to - 1e-6);
+
+        /**
+         * Убрать пикеты внутри узла и поставить их ровно на границы устья —
+         * тогда торец коридора встаёт заподлицо с покрытием узла, а не с
+         * ближайшим случайным пикетом.
+         */
+        function applyNodeGapsToStations(stationsPk, gaps, total) {
+            if (!gaps.length) return stationsPk;
+            const kept = stationsPk.filter((s) => !stationInsideGaps(s, gaps));
+            for (const g of gaps) {
+                if (g.from > 1e-6 && g.from < total - 1e-6) kept.push(g.from);
+                if (g.to > 1e-6 && g.to < total - 1e-6) kept.push(g.to);
+            }
+            const uniq = [...new Set(kept.map((s) => Math.round(s * 1000) / 1000))];
+            uniq.sort((a, b) => a - b);
+            return uniq;
+        }
+
         function pruneStationsNearCorners(stations, turns, width) {
             if (!turns.length) return stations;
             return stations.filter((s) => {
@@ -20354,6 +20556,8 @@
             extra = [...new Set(extra.map((s) => Math.round(s * 1000) / 1000))];
             let stationsPk = roadXsStationList(stn, step, stepCurve, extra, record);
             stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
+            const nodeGaps = roadNodeGapsFor(record.id);
+            stationsPk = applyNodeGapsToStations(stationsPk, nodeGaps, stn.total);
             const MISS = Number.NEGATIVE_INFINITY;
             let missed = 0, hits = 0;
             const stations = stationsPk.map((sta) => {
@@ -20391,7 +20595,7 @@
                 };
             });
             return {
-                stations, total: stn.total, missed, hits,
+                stations, total: stn.total, missed, hits, nodeGaps,
                 step, stepCurve, widthL, widthR, sampleStep
             };
         }
@@ -20574,11 +20778,16 @@
                 });
                 return map;
             });
+            // Разрыв лофта: на вывернутом сечении (острый угол) и внутри узла.
+            // corridorLoftPush по этому же массиву сам ставит торцы на границах
+            // пропуска, поэтому коридор у устья получается закрытым.
+            const gaps = model.nodeGaps || [];
             const twistSkip = stations.map((st, i) => {
                 if (i >= stations.length - 1) return false;
                 const n = stations[i + 1];
                 const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
-                return dot < 0.82;
+                if (dot < 0.82) return true;
+                return stationInsideGaps((st.sta + n.sta) / 2, gaps);
             });
             const meshes = [];
             let tris = 0;
@@ -22615,6 +22824,7 @@
             };
             roadIntersections.push(intersection);
             visualizeIntersection(intersection);
+            syncCorridorsForIntersection(intersection);
             renderIntersectionsList();
 
             const a = result.absolute;
@@ -22828,15 +23038,23 @@
             if (!corner) return null;
             const arc = filletArc(corner, armA.u, armB.u, radius, node.z, INTERSECTION_ARC_SEGMENTS);
             if (!arc) return null;
+            /* Вылет устья считается ОТ УЗЛА вдоль оси, а не от угла кромок:
+             * угол отодвинут от узла на полуширину поперечной дороги, и
+             * tangentDist сам по себе короче настоящего вылета ровно на неё.
+             * По этому числу обрывается коридор — ошибка здесь оставила бы
+             * кусок коридора под покрытием. */
+            const along = (T, arm) => (T.x - node.x) * arm.u.x + (T.y - node.y) * arm.u.y;
+            const alongA = along(arc.T1, armA);
+            const alongB = along(arc.T2, armB);
             // Отметки на входе и выходе — с профилей самих ветвей, поэтому
             // площадка садится на коридор, а не висит на средней высоте.
-            const zA = axisElevationAlong(armA.poly, armA.seg, armA.seg.t, armA.sign, arc.tangentDist);
-            const zB = axisElevationAlong(armB.poly, armB.seg, armB.seg.t, armB.sign, arc.tangentDist);
+            const zA = axisElevationAlong(armA.poly, armA.seg, armA.seg.t, armA.sign, alongA);
+            const zB = axisElevationAlong(armB.poly, armB.seg, armB.seg.t, armB.sign, alongB);
             arc.pts.forEach((p, i) => {
                 const k = i / (arc.pts.length - 1);
                 p.z = zA + (zB - zA) * k;
             });
-            return { arc, corner, armA, armB, radius, zA, zB };
+            return { arc, corner, armA, armB, radius, zA, zB, alongA, alongB };
         }
 
         /**
@@ -22922,9 +23140,8 @@
             const mouth = new Map();
             for (const s of slots) {
                 if (!s.corner) continue;
-                const d = s.corner.arc.tangentDist;
-                mouth.set(s.armA, Math.max(mouth.get(s.armA) || 0, d));
-                mouth.set(s.armB, Math.max(mouth.get(s.armB) || 0, d));
+                mouth.set(s.armA, Math.max(mouth.get(s.armA) || 0, s.corner.alongA));
+                mouth.set(s.armB, Math.max(mouth.get(s.armB) || 0, s.corner.alongB));
             }
             const edgePoint = (arm, side) => {
                 const nrm = side === 'left' ? leftNormal(arm.u) : rightNormal(arm.u);
@@ -22951,8 +23168,8 @@
             // Отгоны уширения: по одному на каждую кромку, где уширение задано.
             const tapers = [];
             for (const c of corners) {
-                const tA = flareTaperLine(crossPoint, c.armA, 'left', c.arc.tangentDist);
-                const tB = flareTaperLine(crossPoint, c.armB, 'right', c.arc.tangentDist);
+                const tA = flareTaperLine(crossPoint, c.armA, 'left', c.alongA);
+                const tB = flareTaperLine(crossPoint, c.armB, 'right', c.alongB);
                 if (tA) tapers.push(tA);
                 if (tB) tapers.push(tB);
             }
@@ -22964,6 +23181,11 @@
                     name: a.poly.name,
                     polyId: a.poly.id,
                     dir: a.u,
+                    sign: a.sign,
+                    // Пикет узла и вылет устья по этой ветви: по ним коридор
+                    // обрывается, чтобы не лечь вторым слоем под покрытие.
+                    sta: stationOfPointOnPolyline(a.poly, crossPoint),
+                    mouth: mouth.get(a) || 0,
                     wLeft: a.wLeft,
                     wRight: a.wRight,
                     flare: a.flare,
@@ -22979,8 +23201,75 @@
                 outline,
                 tapers,
                 patch: buildIntersectionPatch(crossPoint, outline),
+                layers: nodePavementLayers([poly1.id, poly2.id]),
                 absolute: worldPointToAbsoluteXYZ(new THREE.Vector3(hit.x, hit.y, z))
             };
+        }
+
+        /**
+         * Слои одежды под узлом — по шаблону поперечника одной из осей.
+         * Берём толщину каждого конструктивного слоя НА ОСИ (offset ≈ 0):
+         * у кромки слои обрываются иначе, а под узлом полотно одно на все
+         * направления, и разнотолщинность там не воспроизвести.
+         */
+        function nodePavementLayers(polyIds) {
+            const variants = [];
+            for (const id of polyIds) {
+                const model = roadXsModels.find((m) => m.polylineId === id);
+                const tpl = model?.template;
+                if (!tpl?.shapes?.length) continue;
+                const layers = [];
+                for (const sh of tpl.shapes) {
+                    const code = String(sh.code || '').toUpperCase();
+                    if (!ROAD_LAYER_CODES.includes(code)) continue;
+                    const pts = (sh.pts || []).map((pid) => templatePoint(tpl, pid)).filter(Boolean);
+                    if (pts.length < 3) continue;
+                    // Толщина на оси: берём точки в узкой полосе вокруг off=0,
+                    // иначе у наклонного слоя в толщину попадёт поперечный уклон.
+                    const near = pts.filter((p) => Math.abs(p.off) < 1e-6);
+                    const use = near.length >= 2 ? near : pts;
+                    const top = Math.max(...use.map((p) => p.dz));
+                    const bot = Math.min(...use.map((p) => p.dz));
+                    const h = top - bot;
+                    if (h > 1e-4) layers.push({ code, thickness: h, top });
+                }
+                if (layers.length) {
+                    layers.sort((a, b) => b.top - a.top); // сверху вниз
+                    variants.push({ id, layers, total: layers.reduce((s, L) => s + L.thickness, 0) });
+                }
+            }
+            if (!variants.length) return [];
+            /* У двух осей одежда может быть разной, а полотно под узлом одно.
+             * Берём более мощную конструкцию: занизить её значило бы положить
+             * под перекрёсток одежду слабее, чем на подходящей к нему дороге.
+             * «Первая, у которой слои есть» — правило произвольное: результат
+             * зависел бы от порядка выбора осей в диалоге. */
+            variants.sort((a, b) => b.total - a.total);
+            return variants[0].layers;
+        }
+
+        /**
+         * Тело слоя под узлом: верх — контур покрытия, низ — он же ниже на
+         * толщину, плюс боковые грани. Замкнутая оболочка, а не лист: иначе
+         * в объёмах и в экспорте это не тело.
+         */
+        function buildNodeLayerSolid(node, outline, top, thickness) {
+            if (!outline || outline.length < 3 || !(thickness > 0)) return null;
+            const pos = [];
+            const push = (a, b, c) => pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+            const up = (p) => ({ x: p.x, y: p.y, z: p.z - top });
+            const dn = (p) => ({ x: p.x, y: p.y, z: p.z - top - thickness });
+            const cTop = { x: node.x, y: node.y, z: node.z - top };
+            const cBot = { x: node.x, y: node.y, z: node.z - top - thickness };
+            const n = outline.length;
+            for (let i = 0; i < n; i++) {
+                const a = outline[i], b = outline[(i + 1) % n];
+                push(cTop, up(a), up(b));          // верх
+                push(cBot, dn(b), dn(a));          // низ, обход обратный
+                push(up(a), dn(a), dn(b));         // бок
+                push(up(a), dn(b), up(b));
+            }
+            return pos;
         }
 
         /**
@@ -23014,6 +23303,10 @@
                 const i = roadIntersections.indexOf(x);
                 if (i >= 0) roadIntersections.splice(i, 1);
             }
+            // Разрыв в коридоре держался этим узлом — без него дорога снова
+            // сплошная. Полилиния может быть уже удалена, тогда пересобирать
+            // нечего, и rebuildRoadXsForPolyline сам это увидит.
+            for (const x of doomed) syncCorridorsForIntersection(x);
             if (doomed.length) markNeedsRender();
         }
 
@@ -23038,9 +23331,26 @@
                 return obj;
             };
 
+            // Слои одежды под узлом — снизу вверх, чтобы верхний рисовался
+            // последним и не спорил с покрытием за глубину.
+            let depth = 0;
+            const layers = data.layers || [];
+            const solids = layers.map((L) => {
+                const solid = buildNodeLayerSolid(data.crossPoint, data.outline, depth, L.thickness);
+                depth += L.thickness;
+                return { L, solid };
+            }).reverse();
+            for (const { L, solid } of solids) {
+                if (!solid) continue;
+                const mesh = makeRoadCorridorMesh(solid, roadShapeStyle(L.code).fill,
+                    'RoadIntersection:' + L.code, { modelId: intersection.id });
+                if (mesh) tag(mesh);
+            }
+
             // Покрытие узла — тот же материал, что у коридора, чтобы шов с
-            // дорогой не читался как другой объект.
-            if (data.patch && data.patch.length >= 9) {
+            // дорогой не читался как другой объект. Если слои есть, верх
+            // покрытия уже нарисован верхним слоем — тогда лист не нужен.
+            if (!layers.length && data.patch && data.patch.length >= 9) {
                 const mesh = makeRoadCorridorMesh(data.patch, ROAD_DECK_COLOR, 'RoadIntersection', {
                     modelId: intersection.id
                 });
@@ -23094,8 +23404,19 @@
             if (!next) return false;
             rec.points = next;
             visualizeIntersection(rec);
+            syncCorridorsForIntersection(rec);
             renderIntersectionsList();
             return true;
+        }
+
+        /**
+         * Пересобрать коридоры обеих осей: устье узла сдвинулось, значит
+         * сдвинулась и граница, на которой коридор обрывается. Без этого
+         * коридор остаётся от прошлого радиуса и лезет под покрытие.
+         */
+        function syncCorridorsForIntersection(rec) {
+            if (!rec) return;
+            [rec.poly1Id, rec.poly2Id].forEach((id) => rebuildRoadXsForPolyline(id));
         }
 
         /**
@@ -23960,6 +24281,7 @@
             if (!rec) return;
             removeIntersectionObjects(rec.id);
             roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+            syncCorridorsForIntersection(rec);
             markNeedsRender();
             renderIntersectionsList();
         });
@@ -41478,7 +41800,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: '711d420-preview',
+            buildId: '78394fc-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -41487,7 +41809,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: узлы дорог — закругления по кромкам проезжей части (ширина из поперечника), покрытие узла 3D-мешем, радиус по каждому углу, уширение с отгоном; правка узла в списке без пересоздания.',
+                '2026.08.18: узлы дорог целиком — закругления по кромкам, коридор обрывается у устья (без двойного объёма), слои одежды под узлом телами, выгрузка в DXF (слой «Узел») и LandXML; радиус по углу, уширение с отгоном, правка в списке.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
