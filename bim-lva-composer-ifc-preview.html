@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-flat</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-auto</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -4049,7 +4049,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · bd906df</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b091ae7</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5599,12 +5599,20 @@
                 <input id="intersectionTaper" class="editInput" type="number" min="0" max="300" step="5" value="30">
             </div>
 
+            <div class="prop small">
+                <div class="k">Строить узлы сразу</div>
+                <input type="checkbox" id="intersectionAuto" checked
+                       title="Начертил ось поперёк существующей — узел появится сам. Только для осей дорог: обычные полилинии пересекаются часто, и узел там не нужен.">
+            </div>
+
             <div class="bulk-note" id="intersectionStatus">
                 Закругления строятся по кромкам проезжей части: у оси дороги
                 ширина берётся из её поперечника, у обычной полилинии ширины
                 нет — там дуги коснутся самих осей. Уширение прикладывается к
                 кромкам у узла и сводится к обычной ширине за длину отгона.
-                Коридоры обеих дорог обрываются у устья узла, а покрытие и
+                Узлы строятся сами, как только ось ложится поперёк другой оси
+                дороги — галочка выше это отключает. Обычных полилиний это не
+                касается. Коридоры обеих дорог обрываются у устья узла, а покрытие и
                 слои одежды под ним строятся отдельными телами — объём не
                 считается дважды. Отметка узла тянется ручкой прямо в сцене
                 (ромб с подписью, двойной щелчок — ввести число): профили
@@ -7159,8 +7167,14 @@
              */
             createPolylineFromPoints(points, opts) {
                 const rec = addPolylineFromPoints(points, opts || {});
+                if (rec) autoBuildNodesFor(rec);
                 return rec ? rec.id : null;
             },
+            /** Убрать все полилинии — чистый лист для проверок. */
+            clearPolylines() { clearDrawnPolylines(); },
+            /** Автопостроение узлов: включить/выключить (как галочка в диалоге). */
+            setAutoNodes(on) { setAutoRoadNodes(on); return autoRoadNodes; },
+            get autoNodes() { return autoRoadNodes; },
             /** Удалить полилинию тем же путём, что кнопка ✕ в списке. */
             deletePolyline(id) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -7518,6 +7532,24 @@
                     }
                 }
                 return out;
+            },
+            /** Ширины: чем меряет узел, чем — сама дорога, и что в шаблоне. */
+            nodeWidthDump(ixId) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                const d = rec?.points;
+                if (!d) return null;
+                const polyId = d.arms[0]?.polyId;
+                const model = roadXsModels.find((m) => m.polylineId === polyId);
+                const tpl = model?.template;
+                const offs = (tpl?.points || []).map((p) => ({ code: p.code, off: p.off }));
+                return {
+                    nodeArmWidth: { L: d.arms[0]?.wLeft, R: d.arms[0]?.wRight },
+                    modelWidth: model ? { L: model.widthL, R: model.widthR } : null,
+                    pavementWidth: tpl ? templatePavementWidths(tpl) : null,
+                    templateWidth: tpl ? templateWidths(tpl) : null,
+                    outerEdgeOff: d.outer?.edgeOff ?? null,
+                    points: offs
+                };
             },
             /** Разбор геометрии узла: где что по высоте (для отладки стыков). */
             nodeGeometryDump(ixId) {
@@ -15231,6 +15263,8 @@
                 `L3D ${record.length3d.toFixed(2)} м · L2D ${record.length2d.toFixed(2)} м`
             );
             trackUsage(asRoad ? 'road_axis_draw' : 'draw_polyline', { kind, points: pts.length });
+            // Ось легла поперёк существующей — узел строится сразу.
+            autoBuildNodesFor(record);
             return record;
         }
 
@@ -23135,10 +23169,22 @@
 
         const INTERSECTION_ARC_SEGMENTS = 20;
 
-        /** Ширина полуполос оси. У обычной полилинии её нет — тогда 0. */
+        /**
+         * Ширина полуполос оси для узла. У обычной полилинии её нет — тогда 0.
+         *
+         * Берётся ширина ПРОЕЗЖЕЙ ЧАСТИ (точки L/R шаблона), а не габарит
+         * всего поперечника: `model.widthL/R` считаются по крайним точкам и
+         * включают бордюр, обочину, кювет. С ними кромка узла уходила за
+         * кромку дороги (5.15 против 5.00 у шаблона «С бордюром»), и на устье
+         * получалась ступенька: бордюр узла вставал на 15 см наружу от
+         * бордюра дороги. Внешний профиль отсчитывается от той же кромки
+         * (`nodeOuterProfile` → `templatePavementWidths`), поэтому теперь они
+         * продолжают друг друга без стыка.
+         */
         function intersectionWidthsFor(record) {
             if (record?.role !== 'road-axis') return { widthL: 0, widthR: 0 };
-            const w = roadAxisWidthsFor(record);
+            const model = roadXsModels.find((m) => m.polylineId === record.id);
+            const w = model?.template ? templatePavementWidths(model.template) : roadAxisWidthsFor(record);
             return { widthL: Math.max(0, w.widthL || 0), widthR: Math.max(0, w.widthR || 0) };
         }
 
@@ -23970,6 +24016,78 @@
                 setNodeElevation(rec, c.z + (v - (abs ? abs.z : c.z)));
                 trackUsage('road_node_lift', { by: 'dblclick' });
             });
+        }
+
+        /* --- Узлы сами собой ------------------------------------------------
+         * Начертил ось поперёк существующей — узел строится сразу, без
+         * захода в диалог. Правится он там же, где и созданный вручную.
+         *
+         * Только для ОСЕЙ ДОРОГ (`role === 'road-axis'`): обычные полилинии
+         * пересекаются сплошь и рядом (бровки, контуры, линии выхода откосов),
+         * и плодить на каждом пересечении перекрёсток было бы вредительством.
+         * ------------------------------------------------------------------ */
+        const AUTO_NODE_KEY = 'bimlva.autoRoadNodes';
+        let autoRoadNodes = (() => {
+            try { return localStorage.getItem(AUTO_NODE_KEY) !== '0'; } catch (_) { return true; }
+        })();
+
+        function setAutoRoadNodes(on) {
+            autoRoadNodes = !!on;
+            try { localStorage.setItem(AUTO_NODE_KEY, autoRoadNodes ? '1' : '0'); } catch (_) {}
+        }
+
+        function hasNodeForPair(idA, idB) {
+            return roadIntersections.some((x) =>
+                (x.poly1Id === idA && x.poly2Id === idB) || (x.poly1Id === idB && x.poly2Id === idA));
+        }
+
+        /** Радиус по умолчанию — из поля диалога, чтобы был один источник. */
+        function defaultNodeRadius() {
+            const v = parseFloat($('intersectionRadius')?.value);
+            return Number.isFinite(v) && v > 0 ? v : 15;
+        }
+
+        /**
+         * Построить узлы на всех пересечениях этой оси с другими осями дорог.
+         * Возвращает, сколько создано. Тип определяется сам: если ось упёрлась
+         * концом в чужую — это примыкание, иначе крест.
+         */
+        function autoBuildNodesFor(record) {
+            if (!autoRoadNodes || record?.role !== 'road-axis') return 0;
+            let made = 0;
+            for (const other of drawnPolylines) {
+                if (other === record || other.role !== 'road-axis') continue;
+                if (hasNodeForPair(record.id, other.id)) continue;
+                const hit = findAxisCrossing(record, other);
+                if (!hit) continue;
+                // Конец оси на чужой оси — примыкание, а не крест.
+                const atEnd = (poly, seg) =>
+                    (seg.i === 0 && seg.t <= 1e-6) ||
+                    (seg.i === poly.pts.length - 2 && seg.t >= 1 - 1e-6);
+                const type = (atEnd(record, hit.seg1) || atEnd(other, hit.seg2)) ? 't-junction' : 'cross';
+                const radius = defaultNodeRadius();
+                const points = calculateIntersection(record, other, type, radius);
+                if (!points) continue;
+                const rec = {
+                    id: 'ix-' + Math.random().toString(36).slice(2, 10),
+                    name: `${record.name} × ${other.name}`,
+                    poly1Id: record.id, poly2Id: other.id,
+                    type, radius, radii: {}, flares: {}, zTarget: null,
+                    created: new Date(), points, auto: true
+                };
+                roadIntersections.push(rec);
+                visualizeIntersection(rec);
+                syncCorridorsForIntersection(rec);
+                made++;
+            }
+            if (made) {
+                rebuildNodeHandles();
+                renderIntersectionsList();
+                markNeedsRender();
+                notify(`Узлов построено: ${made}. Радиус ${defaultNodeRadius()} м — правится в «Пересечениях».`);
+                trackUsage('road_node_auto', { count: made });
+            }
+            return made;
         }
 
         /** Пересчитать узел под новые радиусы и уширения и перерисовать. */
@@ -24833,6 +24951,16 @@
         $('intersectionCancel')?.addEventListener('click', () => {
             $('intersectionModal')?.classList.remove('show');
         });
+
+        if ($('intersectionAuto')) {
+            $('intersectionAuto').checked = autoRoadNodes;
+            $('intersectionAuto').addEventListener('change', (e) => {
+                setAutoRoadNodes(e.target.checked);
+                notify(autoRoadNodes
+                    ? 'Узлы будут строиться сразу при пересечении осей.'
+                    : 'Автопостроение узлов выключено — создавайте кнопкой «Создать».');
+            });
+        }
 
         $('intersectionClear')?.addEventListener('click', () => {
             if (!roadIntersections.length) return;
@@ -42467,7 +42595,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: 'bd906df-preview',
+            buildId: 'b091ae7-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -42476,7 +42604,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: подъём узла — площадка остаётся плоской (дуги сдвигались дважды и выворачивались чашей), вершина оси под узлом едет вместе с устьями (профиль проваливался буквой V); контур доходит до устья по обеим кромкам, бордюр по скруглениям, коридор обрывается у устья, слои одежды телами; выгрузка в DXF и LandXML.',
+                '2026.08.18: узлы строятся сами при пересечении осей дорог (примыкание распознаётся по концу оси; галочка в диалоге отключает); ширина узла берётся по проезжей части, а не по габариту шаблона — на устье была ступенька в бордюре; площадка при подъёме остаётся плоской, вершина оси под узлом едет вместе с устьями.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',

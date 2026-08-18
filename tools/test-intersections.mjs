@@ -629,6 +629,57 @@ try {
             `контур доходит до устья по обеим кромкам всех ветвей (худший разрыв ${worst.gap.toFixed(3)} м)`);
     }
 
+    // --- Узел строится сам при пересечении осей ----------------------------
+    const auto = await page.evaluate(({ a, b, half }) => {
+        const D = window.BimLvaDebug;
+        // Чистый лист: от прошлых проверок в сцене осталось много осей, и
+        // новая ось построила бы узлы со всеми — счёт поехал бы.
+        D.clearPolylines();
+        D.setAutoNodes(true);
+        // Первая ось — пересекать нечего.
+        const id1 = D.createPolylineFromPoints(a, { name: 'Авто A', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        const afterFirst = D.intersections.length;
+        // Вторая ложится поперёк — узел обязан появиться сам.
+        const id2 = D.createPolylineFromPoints(b, { name: 'Авто B', role: 'road-axis' });
+        const afterSecond = D.intersections.map((x) => ({ type: x.type, arcs: x.arcs }));
+        // Обычная полилиния поперёк тех же осей узлов давать НЕ должна:
+        // бровки и контуры пересекаются сплошь и рядом.
+        D.createPolylineFromPoints([{ x: -40, y: 40, z: 10 }, { x: 40, y: -40, z: 10 }], { name: 'Просто линия' });
+        const afterPlain = D.intersections.length;
+        // Выключенное автопостроение больше ничего не создаёт.
+        D.setAutoNodes(false);
+        D.createPolylineFromPoints([{ x: -30, y: -50, z: 10 }, { x: 30, y: 50, z: 10 }], { name: 'Авто C', role: 'road-axis' });
+        const afterOff = D.intersections.length;
+        D.setAutoNodes(true);
+        return { afterFirst, afterSecond, afterPlain, afterOff };
+    }, { a: AXIS_A, b: AXIS_B, half: HALF });
+
+    console.log(`  узлов: после первой оси ${auto.afterFirst}, после второй ${auto.afterSecond.length}, после обычной линии ${auto.afterPlain}, при выключенном авто ${auto.afterOff}`);
+    check(auto.afterFirst === 0, 'одна ось узлов не даёт');
+    check(auto.afterSecond.length === 1, `вторая ось построила узел сама (${auto.afterSecond.length})`);
+    if (auto.afterSecond[0]) {
+        check(auto.afterSecond[0].arcs === 4, `у автоузла на кресте 4 закругления (${auto.afterSecond[0].arcs})`);
+    }
+    check(auto.afterPlain === 1, 'обычная полилиния поперёк осей узла не создаёт');
+    check(auto.afterOff === 1, 'при выключенной галочке узлы сами не строятся');
+
+    // Примыкание распознаётся само: ось упирается концом в чужую.
+    const autoT = await page.evaluate(({ a, t, half }) => {
+        const D = window.BimLvaDebug;
+        D.clearPolylines();
+        D.setAutoNodes(true);
+        const id1 = D.createPolylineFromPoints(a, { name: 'Сквозная', role: 'road-axis' });
+        D.setRoadWidths(id1, half, half);
+        D.createPolylineFromPoints(t, { name: 'Подходящая', role: 'road-axis' });
+        return D.intersections.map((x) => ({ type: x.type, arcs: x.arcs }));
+    }, { a: AXIS_A, t: AXIS_T, half: HALF });
+
+    console.log(`  автоузел у примыкания: ${autoT.map((x) => x.type + '/' + x.arcs).join(', ') || '—'}`);
+    check(autoT.length === 1 && autoT[0].type === 't-junction',
+        `конец оси на чужой оси распознан как примыкание (${autoT[0]?.type || '—'})`);
+    check(autoT[0]?.arcs === 2, `у автопримыкания 2 закругления (${autoT[0]?.arcs})`);
+
     // --- Параллельные оси не пересекаются ---------------------------------
     const parallel = await page.evaluate(({ r }) => {
         const D = window.BimLvaDebug;
