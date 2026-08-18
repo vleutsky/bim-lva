@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.17 · intersections-beta</title>
+    <title>BIM.LVA Composer IFC · 2026.08.17 · ix-1836</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -14063,6 +14063,7 @@
         const intersectionGroup = new THREE.Group();
         intersectionGroup.name = 'RoadIntersections';
         scene.add(intersectionGroup);
+        let intersectionDialogState = { poly1: null, poly2: null }; // Запомнить выбранные полилинии
         let roadXsModels = [];
         const DRAW_COLOR = '#1f8f5f';
         const DRAW_WIDTH = 2;
@@ -22401,83 +22402,96 @@
         function openIntersectionsDialog() {
             console.log('[Intersections] Opening dialog...');
             const candidates = listedPolylines();
-            console.log('[Intersections] Found polylines:', candidates.length, candidates);
+            console.log('[Intersections] Found polylines:', candidates.length);
+
             if (candidates.length < 2) {
                 notifyError('Нужно минимум две оси для пересечения.');
                 return;
             }
             console.log('[Intersections] Proceeding with dialog...');
 
-            // Заполнить селекты списком осей
+            // Заполнить селекты списком осей (используем индекс как value)
             const select1 = $('intersectionPoly1');
             const select2 = $('intersectionPoly2');
             if (!select1 || !select2) return;
 
-            // Очистить и заполнить
             select1.innerHTML = '<option value="">-- выберите --</option>';
             select2.innerHTML = '<option value="">-- выберите --</option>';
 
-            for (const poly of candidates) {
+            // Создать опции с индексами (0, 1, 2, ...) вместо ID
+            for (let i = 0; i < candidates.length; i++) {
+                const poly = candidates[i];
                 const opt1 = document.createElement('option');
-                opt1.value = poly.id;
-                opt1.textContent = poly.name || `Ось ${poly.id.slice(0, 8)}`;
+                opt1.value = String(i); // Используем индекс
+                opt1.textContent = poly.name || `Ось ${i + 1}`;
                 select1.appendChild(opt1);
 
                 const opt2 = opt1.cloneNode(true);
                 select2.appendChild(opt2);
             }
 
-            // Предвыбрать разные оси
+            // Предвыбрать первые две оси
             if (candidates.length >= 2) {
-                select1.value = candidates[0].id;
-                select2.value = candidates[1].id;
-                console.log('[Intersections] Set select1.value =', select1.value);
-                console.log('[Intersections] Set select2.value =', select2.value);
-                console.log('[Intersections] select1 options:', Array.from(select1.options).map(o => ({ value: o.value, text: o.text })));
+                select1.value = '0';
+                select2.value = '1';
+                // ЗАПОМНИТЬ ПОЛИЛИНИИ В ПЕРЕМЕННОЙ (не по ID!)
+                intersectionDialogState.candidates = candidates;
+                intersectionDialogState.poly1 = candidates[0];
+                intersectionDialogState.poly2 = candidates[1];
+                console.log('[Intersections] Auto-selected polylines (not by ID)');
             }
 
-            console.log('[Intersections] Opening modal, show class added');
             $('intersectionModal')?.classList.add('show');
+            console.log('[Intersections] Dialog opened');
         }
 
         function createRoadIntersection() {
-            const poly1Id = $('intersectionPoly1')?.value;
-            const poly2Id = $('intersectionPoly2')?.value;
+            const idx1Str = $('intersectionPoly1')?.value;
+            const idx2Str = $('intersectionPoly2')?.value;
             const type = $('intersectionType')?.value || 'cross';
             const radius = parseFloat($('intersectionRadius')?.value || 30);
 
-            console.log('[Intersections] Creating: poly1Id=', poly1Id, 'poly2Id=', poly2Id, 'typeof:', typeof poly1Id, typeof poly2Id);
-            console.log('[Intersections] drawnPolylines full:', drawnPolylines.map((p, i) => ({
-                index: i,
-                id: p.id,
-                id_typeof: typeof p.id,
-                name: p.name
-            })));
+            console.log('[Intersections] Creating intersection...');
+            console.log('[Intersections] Selected indices: idx1=', idx1Str, 'idx2=', idx2Str);
 
-            if (!poly1Id || !poly2Id) {
+            if (!idx1Str || !idx2Str) {
                 notifyError('Выберите обе оси.');
                 return;
             }
-            if (poly1Id === poly2Id) {
+            if (idx1Str === idx2Str) {
                 notifyError('Оси не должны быть одинаковыми.');
                 return;
             }
 
-            const poly1 = drawnPolylines.find((p) => p.id === poly1Id);
-            const poly2 = drawnPolylines.find((p) => p.id === poly2Id);
+            // Использовать ЗАПОМНЕННЫЕ полилинии из состояния (не искать по ID!)
+            const candidates = intersectionDialogState.candidates || [];
+            const idx1 = parseInt(idx1Str);
+            const idx2 = parseInt(idx2Str);
 
-            console.log('[Intersections] Found poly1:', !!poly1, 'poly2:', !!poly2);
+            const poly1 = candidates[idx1];
+            const poly2 = candidates[idx2];
 
-            if (!poly1 || !poly2 || !poly1.pts?.length || !poly2.pts?.length) {
-                notifyError('Не найдены полилинии или они пусты.');
+            console.log('[Intersections] Got polylines from state: poly1=', !!poly1, 'poly2=', !!poly2);
+            console.log('[Intersections] poly1.pts.length=', poly1?.pts?.length || 0);
+            console.log('[Intersections] poly2.pts.length=', poly2?.pts?.length || 0);
+
+            if (!poly1 || !poly2) {
+                console.error('[Intersections] FAILED: Polylines not in state');
+                notifyError('Полилинии не найдены. Откройте диалог заново.');
+                return;
+            }
+
+            if (!poly1.pts?.length || !poly2.pts?.length) {
+                console.error('[Intersections] FAILED: Polylines are empty');
+                notifyError('Полилинии пусты. Начертите их перед пересечением.');
                 return;
             }
 
             // Создать пересечение
             const intersection = {
                 id: 'ix-' + Math.random().toString(36).slice(2, 10),
-                poly1Id,
-                poly2Id,
+                poly1Id: poly1.id,
+                poly2Id: poly2.id,
                 type,
                 radius,
                 created: new Date(),
@@ -22503,7 +22517,7 @@
         }
 
         function calculateIntersection(poly1, poly2, type, radius) {
-            // Простой расчёт точки пересечения двух прямых (через первую и последнюю точку каждой)
+            // Расчёт точки пересечения двух прямых (через первую и последнюю точку каждой)
             const p1start = poly1.pts[0];
             const p1end = poly1.pts[poly1.pts.length - 1];
             const p2start = poly2.pts[0];
@@ -22527,11 +22541,85 @@
                 return null;
             }
 
+            // Интерполировать Z между двумя осями в точке пересечения
+            const z1 = interpolateZ(a1, a2, intersection);
+            const z2 = interpolateZ(b1, b2, intersection);
+            const crossZ = (z1 + z2) / 2;
+            const crossPoint = { x: intersection.x, y: intersection.y, z: crossZ };
+
+            // Вычислить направления обеих осей
+            const dir1 = { x: a2.x - a1.x, y: a2.y - a1.y };
+            const dir2 = { x: b2.x - b1.x, y: b2.y - b1.y };
+            const len1 = Math.hypot(dir1.x, dir1.y);
+            const len2 = Math.hypot(dir2.x, dir2.y);
+            dir1.x /= len1; dir1.y /= len1;
+            dir2.x /= len2; dir2.y /= len2;
+
+            // Рассчитать переходные кривые (S-кривые между осями)
+            const transitionCurves = generateTransitionCurves(
+                crossPoint, dir1, dir2, radius, type
+            );
+
             return {
-                crossPoint: intersection, // точка пересечения в 2D
-                poly1: { start: a1, end: a2 },
-                poly2: { start: b1, end: b2 }
+                crossPoint,
+                transitionCurves,
+                poly1: { start: a1, end: a2, dir: dir1 },
+                poly2: { start: b1, end: b2, dir: dir2 }
             };
+        }
+
+        function interpolateZ(p1, p2, point) {
+            // Интерполировать Z-координату вдоль линии p1-p2 в позиции point
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-6) return (p1.z + p2.z) / 2;
+
+            const px = point.x - p1.x;
+            const py = point.y - p1.y;
+            let t = (px * dx + py * dy) / (len * len);
+            t = Math.max(0, Math.min(1, t));
+            return p1.z + t * (p2.z - p1.z);
+        }
+
+        function generateTransitionCurves(center, dir1, dir2, radius, type) {
+            // Генерировать переходные S-кривые между двумя направлениями осей
+            const curves = [];
+            const segments = Math.ceil(radius / 2);
+
+            // Перпендикулярные векторы к направлениям
+            const perp1 = { x: -dir1.y, y: dir1.x };
+            const perp2 = { x: -dir2.y, y: dir2.x };
+
+            for (let side = -1; side <= 1; side += 2) {
+                const curve = [];
+                for (let i = 0; i <= segments; i++) {
+                    const t = i / segments;
+                    // S-кривая: кубическая интерполяция
+                    const s = 3 * t * t - 2 * t * t * t;
+
+                    const dir = {
+                        x: dir1.x * (1 - s) + dir2.x * s,
+                        y: dir1.y * (1 - s) + dir2.y * s
+                    };
+                    const norm = Math.hypot(dir.x, dir.y);
+                    if (norm > 0) {
+                        dir.x /= norm;
+                        dir.y /= norm;
+                    }
+
+                    const perp = { x: -dir.y, y: dir.x };
+                    const pt = {
+                        x: center.x + perp.x * radius * side,
+                        y: center.y + perp.y * radius * side,
+                        z: center.z
+                    };
+                    curve.push(pt);
+                }
+                curves.push(curve);
+            }
+
+            return curves;
         }
 
         function lineIntersection2D(a1, a2, b1, b2) {
@@ -22551,16 +22639,34 @@
         }
 
         function visualizeIntersection(intersection) {
-            // Нарисовать пересечение в сцене (пока как простой маркер)
-            const { crossPoint } = intersection.points;
+            const { crossPoint, transitionCurves } = intersection.points;
             if (!crossPoint) return;
 
-            const geometry = new THREE.SphereGeometry(10, 8, 8);
-            const material = new THREE.MeshBasicMaterial({ color: 0xff6600 });
-            const marker = new THREE.Mesh(geometry, material);
-            marker.position.set(crossPoint.x, crossPoint.y, 0);
+            // Визуализировать переходные кривые как линии
+            if (transitionCurves && transitionCurves.length > 0) {
+                for (const curve of transitionCurves) {
+                    const points = curve.map(pt => new THREE.Vector3(pt.x, pt.y, pt.z || 0));
+                    if (points.length > 1) {
+                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                        const material = new THREE.LineBasicMaterial({ color: 0xff9944, linewidth: 3 });
+                        const line = new THREE.Line(geometry, material);
+                        intersectionGroup.add(line);
+                    }
+                }
+            }
+
+            // Маркер точки пересечения
+            const markerGeom = new THREE.SphereGeometry(15, 8, 8);
+            const markerMat = new THREE.MeshBasicMaterial({ color: 0xff6600 });
+            const marker = new THREE.Mesh(markerGeom, markerMat);
+            marker.position.set(crossPoint.x, crossPoint.y, crossPoint.z || 0);
             marker.userData.intersectionId = intersection.id;
             intersectionGroup.add(marker);
+
+            // Добавить в сцену если ещё не добавлена
+            if (!scene.getObjectById(intersectionGroup.id)) {
+                scene.add(intersectionGroup);
+            }
         }
 
         function fillRoadXsRuleBar() {
@@ -40859,7 +40965,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.17',
-            buildId: 'intersections-beta',
+            buildId: 'ix-1836',
             released: '2026-08-17',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
