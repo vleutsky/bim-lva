@@ -1,0 +1,395 @@
+import { DwgFileHeaderAC18 } from '../FileHeaders/DwgFileHeaderAC18.js';
+import { DwgSectionDescriptor } from '../FileHeaders/DwgSectionDescriptor.js';
+import { DwgLocalSectionMap } from '../FileHeaders/DwgLocalSectionMap.js';
+import { DwgSectionDefinition } from '../FileHeaders/DwgSectionDefinition.js';
+import { DwgCheckSumCalculator } from '../DwgCheckSumCalculator.js';
+import { CRC } from '../CRC.js';
+import { DwgLZ77AC18Compressor } from './DwgLZ77AC18Compressor.js';
+import { DwgFileHeaderWriterBase } from './DwgFileHeaderWriterBase.js';
+export class DwgFileHeaderWriterAC18 extends DwgFileHeaderWriterBase {
+    get fileHeaderSize() { return 0x100; }
+    get handleSectionOffset() { return 0; }
+    get compressor() { return new DwgLZ77AC18Compressor(); }
+    get _descriptors() { return this.fileHeader.descriptors; }
+    _localSectionsMaps = [];
+    constructor(stream, encoding, document) {
+        super(stream, encoding, document, new DwgFileHeaderAC18());
+        // Fill file header area with zeros
+        for (let i = 0; i < this.fileHeaderSize; i++) {
+            this._stream[this._streamPosition++] = 0;
+        }
+    }
+    addSection(name, stream, isCompressed, decompsize = 0x7400) {
+        const descriptor = new DwgSectionDescriptor(name);
+        this.fileHeader.addSectionDescriptor(descriptor);
+        descriptor.decompressedSize = decompsize;
+        descriptor.compressedSize = stream.length;
+        descriptor.compressedCode = !isCompressed ? 1 : 2;
+        const nlocalSections = Math.floor(stream.length / descriptor.decompressedSize);
+        let offset = 0;
+        for (let i = 0; i < nlocalSections; i++) {
+            this.createLocalSection(descriptor, stream, descriptor.decompressedSize, offset, descriptor.decompressedSize, isCompressed);
+            offset += descriptor.decompressedSize;
+        }
+        const spearBytes = stream.length % descriptor.decompressedSize;
+        if (spearBytes > 0 && !this.checkEmptyBytes(stream, offset, spearBytes)) {
+            this.createLocalSection(descriptor, stream, descriptor.decompressedSize, offset, spearBytes, isCompressed);
+        }
+    }
+    writeFile() {
+        this.fileHeader.sectionArrayPageSize = this._localSectionsMaps.length + 2;
+        this.fileHeader.sectionPageMapId = this.fileHeader.sectionArrayPageSize;
+        this.fileHeader.sectionMapId = this.fileHeader.sectionArrayPageSize - 1;
+        this._writeDescriptors();
+        this._writeRecords();
+        this.writeFileMetaData();
+    }
+    applyCompression(buffer, decompressedSize, offset, totalSize, isCompressed) {
+        if (isCompressed) {
+            const holder = new Uint8Array(decompressedSize);
+            for (let i = 0; i < totalSize; i++) {
+                holder[i] = buffer[offset + i];
+            }
+            // remaining bytes are already 0
+            const result = [];
+            this.compressor.compress(holder, 0, decompressedSize, result);
+            return new Uint8Array(result);
+        }
+        else {
+            const result = new Uint8Array(decompressedSize);
+            for (let i = 0; i < totalSize; i++) {
+                result[i] = buffer[offset + i];
+            }
+            // remaining are 0
+            return result;
+        }
+    }
+    createLocalSection(descriptor, buffer, decompressedSize, offset, totalSize, isCompressed) {
+        const descriptorStream = this.applyCompression(buffer, decompressedSize, offset, totalSize, isCompressed);
+        this.writeMagicNumber();
+        // Save position for the local section
+        const position = this._streamPosition;
+        const localMap = new DwgLocalSectionMap();
+        localMap.offset = offset;
+        localMap.seeker = position;
+        localMap.pageNumber = this._localSectionsMaps.length + 1;
+        localMap.oda = DwgCheckSumCalculator.calculate(0, descriptorStream, 0, descriptorStream.length);
+        const compressDiff = DwgCheckSumCalculator.compressionCalculator(descriptorStream.length);
+        localMap.compressedSize = descriptorStream.length;
+        localMap.decompressedSize = totalSize;
+        localMap.pageSize = localMap.compressedSize + 32 + compressDiff;
+        localMap.checksum = 0;
+        let checkSumData = this._buildDataSection(descriptor, localMap, descriptor.pageType);
+        localMap.checksum = DwgCheckSumCalculator.calculate(localMap.oda, checkSumData, 0, checkSumData.length);
+        checkSumData = this._buildDataSection(descriptor, localMap, descriptor.pageType);
+        this.applyMask(checkSumData, 0, checkSumData.length);
+        this.writeToStream(checkSumData);
+        this.writeToStream(descriptorStream);
+        if (isCompressed) {
+            this.writeToStream(DwgCheckSumCalculator.magicSequence, 0, compressDiff);
+        }
+        else if (compressDiff !== 0) {
+            throw new Error('Compression diff should be 0 for uncompressed data');
+        }
+        if (localMap.pageNumber > 0) {
+            descriptor.pageCount++;
+        }
+        localMap.size = this._streamPosition - position;
+        descriptor.localSections.push(localMap);
+        this._localSectionsMaps.push(localMap);
+    }
+    writeFileMetaData() {
+        this.fileHeader.secondHeaderAddr = this._streamPosition;
+        const fileHeaderData = this._buildFileHeader();
+        this.writeToStream(fileHeaderData);
+        // Write at position 0
+        const savedPos = this._streamPosition;
+        this._streamPosition = 0;
+        // 0x00  6  "ACXXXX" version string
+        const versionBytes = new TextEncoder().encode(this._document.header.versionString);
+        this.writeToStream(versionBytes, 0, 6);
+        // 5 bytes of 0x00
+        this.writeToStream(new Uint8Array(5));
+        // 0x0B  Maintenance release version
+        this.writeByteToStream(this._document.header.maintenanceVersion);
+        // 0x0C  Byte 0x00, 0x01, or 0x03
+        this.writeByteToStream(3);
+        // 0x0D  Preview address
+        const previewDesc = this._descriptors.get(DwgSectionDefinition.preview);
+        this.writeUint32ToStream(previewDesc?.localSections?.[0] ? previewDesc.localSections[0].seeker + 0x20 : 0);
+        // 0x11  Dwg version
+        this.writeByteToStream(33);
+        // 0x12  App maintenance version
+        this.writeByteToStream(this._document.header.maintenanceVersion);
+        // 0x13  Codepage
+        this.writeUint16ToStream(this.getFileCodePage());
+        // 0x15  3 zero bytes
+        this.writeToStream(new Uint8Array(3));
+        // 0x18  SecurityType
+        this.writeInt32ToStream(0);
+        // 0x1C  Unknown
+        this.writeInt32ToStream(0);
+        // 0x20  Summary info address
+        const summaryDesc = this._descriptors.get(DwgSectionDefinition.summaryInfo);
+        this.writeUint32ToStream(summaryDesc?.localSections?.[0] ? summaryDesc.localSections[0].seeker + 0x20 : 0);
+        // 0x24  VBA Project Addr
+        this.writeUint32ToStream(0);
+        // 0x28  0x00000080
+        this.writeUint32ToStream(0x00000080);
+        // 0x2C  App info address
+        const appInfoDesc = this._descriptors.get(DwgSectionDefinition.appInfo);
+        this.writeUint32ToStream(appInfoDesc?.localSections?.[0] ? appInfoDesc.localSections[0].seeker + 0x20 : 0);
+        // 0x30  0x80 zero bytes
+        this.writeToStream(new Uint8Array(80));
+        // Write file header again
+        this.writeToStream(fileHeaderData);
+        // Write magic sequence tail
+        this.writeToStream(DwgCheckSumCalculator.magicSequence, 236, 20);
+        this._streamPosition = savedPos;
+    }
+    _addSectionMap(section) {
+        section.pageNumber = this._localSectionsMaps.length + 1;
+        this._localSectionsMaps.push(section);
+    }
+    _compressChecksum(section, stream) {
+        section.decompressedSize = stream.length;
+        const compressed = [];
+        this.compressor.compress(stream, 0, stream.length, compressed);
+        const compressedArr = new Uint8Array(compressed);
+        section.compressedSize = compressedArr.length;
+        let checkSumData = this._buildPageHeaderData(section);
+        section.checksum = DwgCheckSumCalculator.calculate(0, checkSumData, 0, checkSumData.length);
+        section.checksum = DwgCheckSumCalculator.calculate(section.checksum, compressedArr, 0, compressedArr.length);
+        const headerData = this._buildPageHeaderData(section);
+        this.writeToStream(headerData);
+        this.writeToStream(compressedArr);
+    }
+    _setSeeker(mapValue, stream) {
+        const holder = new DwgLocalSectionMap();
+        holder.sectionMap = mapValue;
+        this.writeMagicNumber();
+        holder.seeker = this._streamPosition;
+        this._compressChecksum(holder, stream);
+        return holder;
+    }
+    _buildDataSection(descriptor, map, size) {
+        const data = new Uint8Array(32);
+        const view = new DataView(data.buffer);
+        // 0x00  Section page type
+        view.setInt32(0, size, true);
+        // 0x04  Section number
+        view.setInt32(4, descriptor.sectionId, true);
+        // 0x08  Data size (compressed)
+        view.setInt32(8, map.compressedSize, true);
+        // 0x0C  Page Size (decompressed)
+        view.setInt32(12, map.pageSize, true);
+        // 0x10  Start Offset (as 64-bit, low 32 bits)
+        view.setInt32(16, map.offset & 0xFFFFFFFF, true);
+        view.setInt32(20, 0, true); // high 32 bits
+        // 0x18  Data Checksum
+        view.setUint32(24, map.checksum >>> 0, true);
+        // 0x1C  ODA
+        view.setUint32(28, map.oda >>> 0, true);
+        return data;
+    }
+    _writeDescriptors() {
+        const streamArr = [];
+        const writeInt = (value) => {
+            streamArr.push(value & 0xFF);
+            streamArr.push((value >>> 8) & 0xFF);
+            streamArr.push((value >>> 16) & 0xFF);
+            streamArr.push((value >>> 24) & 0xFF);
+        };
+        const writeInt64 = (value) => {
+            writeInt(value);
+            writeInt(0); // high 32 bits
+        };
+        const writeBytes = (arr, offset = 0, length) => {
+            const len = length ?? arr.length;
+            for (let i = 0; i < len; i++)
+                streamArr.push(arr[offset + i]);
+        };
+        // 0x00  Number of section descriptions
+        writeInt(this._descriptors.size);
+        // 0x04  0x02
+        writeInt(2);
+        // 0x08  0x00007400
+        writeInt(0x7400);
+        // 0x0C  0x00
+        writeInt(0);
+        // 0x10  NumDescriptions
+        writeInt(this._descriptors.size);
+        for (const descriptor of this._descriptors.values()) {
+            // 0x00  Size of section (64-bit)
+            writeInt64(descriptor.compressedSize);
+            // 0x08  Page count
+            writeInt(descriptor.pageCount);
+            // 0x0C  Max Decompressed Size
+            writeInt(descriptor.decompressedSize);
+            // 0x10  Unknown
+            writeInt(1);
+            // 0x14  Compressed (1=no, 2=yes)
+            writeInt(descriptor.compressedCode);
+            // 0x18  Section Id
+            writeInt(descriptor.sectionId);
+            // 0x1C  Encrypted
+            writeInt(descriptor.encrypted);
+            // 0x20  Section Name (64 bytes)
+            const nameArr = new Uint8Array(64);
+            if (descriptor.name) {
+                const nameBytes = new TextEncoder().encode(descriptor.name);
+                const length = Math.min(nameBytes.length, nameArr.length);
+                for (let i = 0; i < length; i++) {
+                    nameArr[i] = nameBytes[i];
+                }
+            }
+            writeBytes(nameArr);
+            for (const localMap of descriptor.localSections) {
+                if (localMap.pageNumber > 0) {
+                    // Page number
+                    writeInt(localMap.pageNumber);
+                    // Compressed size
+                    writeInt(localMap.compressedSize);
+                    // Start offset (64-bit)
+                    writeInt64(localMap.offset);
+                }
+            }
+        }
+        const streamData = new Uint8Array(streamArr);
+        // Section map: 0x4163003b
+        const sectionHolder = this._setSeeker(0x4163003B, streamData);
+        const count = DwgCheckSumCalculator.compressionCalculator(this._streamPosition - sectionHolder.seeker);
+        this.writeToStream(DwgCheckSumCalculator.magicSequence, 0, count);
+        sectionHolder.size = this._streamPosition - sectionHolder.seeker;
+        this._addSectionMap(sectionHolder);
+    }
+    _buildFileHeader() {
+        const buffer = new Uint8Array(0x6C);
+        let pos = 0;
+        // We need CRC32 calculation over the buffer
+        // Write data first, then compute CRC
+        const writeInt = (value) => {
+            buffer[pos++] = value & 0xFF;
+            buffer[pos++] = (value >>> 8) & 0xFF;
+            buffer[pos++] = (value >>> 16) & 0xFF;
+            buffer[pos++] = (value >>> 24) & 0xFF;
+        };
+        const writeInt64 = (value) => {
+            writeInt(value);
+            writeInt(0); // high 32
+        };
+        // 0x00  12  "AcFssFcAJMB\0"
+        const magic = new TextEncoder().encode('AcFssFcAJMB');
+        for (let i = 0; i < 11; i++)
+            buffer[pos++] = magic[i];
+        buffer[pos++] = 0;
+        // 0x0C  0x00
+        writeInt(0);
+        // 0x10  0x6c
+        writeInt(0x6C);
+        // 0x14  0x04
+        writeInt(0x04);
+        // 0x18  Root tree node gap
+        writeInt(this.fileHeader.rootTreeNodeGap);
+        // 0x1C  Left gap
+        writeInt(this.fileHeader.leftGap);
+        // 0x20  Right gap
+        writeInt(this.fileHeader.rigthGap);
+        // 0x24  Unknown (1)
+        writeInt(1);
+        // 0x28  Last section page Id
+        writeInt(this.fileHeader.lastPageId);
+        // 0x2C  Last section page end address (64-bit)
+        writeInt64(this.fileHeader.lastSectionAddr);
+        // 0x34  Second header data address (64-bit)
+        writeInt64(this.fileHeader.secondHeaderAddr);
+        // 0x3C  Gap amount
+        writeInt(this.fileHeader.gapAmount);
+        // 0x40  Section page amount
+        writeInt(this.fileHeader.sectionAmount);
+        // 0x44  0x20
+        writeInt(0x20);
+        // 0x48  0x80
+        writeInt(0x80);
+        // 0x4C  0x40
+        writeInt(0x40);
+        // 0x50  Section Page Map Id
+        writeInt(this.fileHeader.sectionPageMapId);
+        // 0x54  Section Page Map address (64-bit) - subtract 256
+        writeInt64(this.fileHeader.pageMapAddress - 256);
+        // 0x5C  Section Map Id
+        writeInt(this.fileHeader.sectionMapId);
+        // 0x60  Section page array size
+        writeInt(this.fileHeader.sectionArrayPageSize);
+        // 0x64  Gap array size
+        writeInt(this.fileHeader.gapArraySize);
+        // 0x68  CRC32 - initially zero, then compute and fill
+        // pos should be at 0x68 now
+        writeInt(0);
+        // Compute CRC32 over the entire 0x6C bytes
+        let crc = 0xFFFFFFFF;
+        for (let i = 0; i < 0x6C; i++) {
+            crc = ((crc >>> 8) ^ CRC.crc32Table[(crc ^ buffer[i]) & 0xFF]) >>> 0;
+        }
+        crc = (~crc) >>> 0;
+        // Write CRC at offset 0x68
+        buffer[0x68] = crc & 0xFF;
+        buffer[0x69] = (crc >>> 8) & 0xFF;
+        buffer[0x6A] = (crc >>> 16) & 0xFF;
+        buffer[0x6B] = (crc >>> 24) & 0xFF;
+        // Apply magic sequence
+        this.applyMagicSequence(buffer, buffer.length);
+        return buffer;
+    }
+    _buildPageHeaderData(section) {
+        const data = new Uint8Array(20);
+        const view = new DataView(data.buffer);
+        // 0x00  Section page type
+        view.setInt32(0, section.sectionMap, true);
+        // 0x04  Decompressed size
+        view.setInt32(4, section.decompressedSize, true);
+        // 0x08  Compressed size
+        view.setInt32(8, section.compressedSize, true);
+        // 0x0C  Compression type (0x02)
+        view.setInt32(12, section.compression, true);
+        // 0x10  Checksum
+        view.setUint32(16, section.checksum >>> 0, true);
+        return data;
+    }
+    _writeRecords() {
+        this.writeMagicNumber();
+        // Section page map: 0x41630e3b
+        const section = new DwgLocalSectionMap();
+        section.sectionMap = 0x41630E3B;
+        this._addSectionMap(section);
+        const counter = this._localSectionsMaps.length * 8;
+        section.seeker = this._streamPosition;
+        const size = counter + DwgCheckSumCalculator.compressionCalculator(counter);
+        section.size = size;
+        const streamArr = [];
+        for (const item of this._localSectionsMaps) {
+            if (item != null) {
+                // Page number
+                streamArr.push(item.pageNumber & 0xFF);
+                streamArr.push((item.pageNumber >>> 8) & 0xFF);
+                streamArr.push((item.pageNumber >>> 16) & 0xFF);
+                streamArr.push((item.pageNumber >>> 24) & 0xFF);
+                // Size
+                const sz = item.size;
+                streamArr.push(sz & 0xFF);
+                streamArr.push((sz >>> 8) & 0xFF);
+                streamArr.push((sz >>> 16) & 0xFF);
+                streamArr.push((sz >>> 24) & 0xFF);
+            }
+        }
+        const streamData = new Uint8Array(streamArr);
+        this._compressChecksum(section, streamData);
+        const last = this._localSectionsMaps[this._localSectionsMaps.length - 1];
+        this.fileHeader.gapAmount = 0;
+        this.fileHeader.lastPageId = last.pageNumber;
+        this.fileHeader.lastSectionAddr = last.seeker + size - 256;
+        this.fileHeader.sectionAmount = this._localSectionsMaps.length - 1;
+        this.fileHeader.pageMapAddress = section.seeker;
+    }
+}
+//# sourceMappingURL=DwgFileHeaderWriterAC18.js.map

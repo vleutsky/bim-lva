@@ -1,0 +1,80 @@
+import { Entity } from './Entity.js';
+import { DxfSubclassMarker } from '../DxfSubclassMarker.js';
+import { BoundingBox } from '../Math/BoundingBox.js';
+import { Color } from '../Color.js';
+import { XYZ } from '../Math/XYZ.js';
+export class ModelerGeometryWire {
+    acisIndex = 0;
+    applyTransformPresent = false;
+    color = Color.byLayer;
+    hasRotation = false;
+    hasShear = false;
+    points = [];
+    scale = 0;
+    selectionMarker = 0;
+    translation = new XYZ(0, 0, 0);
+    type = 0;
+    xAxis = new XYZ(0, 0, 0);
+    yAxis = new XYZ(0, 0, 0);
+    zAxis = new XYZ(0, 0, 0);
+    /** @internal */
+    hasReflection = false;
+}
+export class ModelerGeometrySilhouette {
+    viewportDirectionFromTarget = new XYZ(0, 0, 0);
+    viewportId = 0;
+    viewportPerspective = false;
+    viewportTarget = new XYZ(0, 0, 0);
+    viewportUpDirection = new XYZ(0, 0, 0);
+    wires = [];
+}
+export class ModelerGeometry extends Entity {
+    point = new XYZ(0, 0, 0);
+    silhouettes = [];
+    get subclassMarker() {
+        return DxfSubclassMarker.modelerGeometry;
+    }
+    wires = [];
+    /** @internal */
+    guid = '';
+    modelerFormatVersion = 0;
+    /** Raw SAT/SAB modeler payload when it is stored inline in the entity. */
+    binaryData = new Uint8Array(0);
+    proprietaryData = '';
+    applyTransform(transform) {
+        this.point = this.applyTransformToPoint(transform, this.point);
+        for (const wire of this.wires) {
+            wire.points = wire.points.map((point) => this.applyTransformToPoint(transform, point));
+            wire.translation = this.applyTransformToPoint(transform, wire.translation);
+            wire.xAxis = this.applyTransformToVector(transform, wire.xAxis);
+            wire.yAxis = this.applyTransformToVector(transform, wire.yAxis);
+            wire.zAxis = this.applyTransformToVector(transform, wire.zAxis);
+        }
+        for (const silhouette of this.silhouettes) {
+            silhouette.viewportDirectionFromTarget = this.applyTransformToVector(transform, silhouette.viewportDirectionFromTarget);
+            silhouette.viewportTarget = this.applyTransformToPoint(transform, silhouette.viewportTarget);
+            silhouette.viewportUpDirection = this.applyTransformToVector(transform, silhouette.viewportUpDirection);
+            for (const wire of silhouette.wires) {
+                wire.points = wire.points.map((point) => this.applyTransformToPoint(transform, point));
+                wire.translation = this.applyTransformToPoint(transform, wire.translation);
+                wire.xAxis = this.applyTransformToVector(transform, wire.xAxis);
+                wire.yAxis = this.applyTransformToVector(transform, wire.yAxis);
+                wire.zAxis = this.applyTransformToVector(transform, wire.zAxis);
+            }
+        }
+    }
+    getBoundingBox() {
+        const points = [this.point];
+        for (const wire of this.wires) {
+            points.push(...wire.points);
+        }
+        for (const silhouette of this.silhouettes) {
+            points.push(silhouette.viewportTarget);
+            for (const wire of silhouette.wires) {
+                points.push(...wire.points);
+            }
+        }
+        return BoundingBox.fromPoints(points);
+    }
+}
+//# sourceMappingURL=ModelerGeometry.js.map

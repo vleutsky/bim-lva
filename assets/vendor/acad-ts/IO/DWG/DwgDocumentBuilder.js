@@ -1,0 +1,71 @@
+import { CadDocumentBuilder } from '../CadDocumentBuilder.js';
+import { DwgHeaderHandlesCollection } from './DwgHeaderHandlesCollection.js';
+export class DwgDocumentBuilder extends CadDocumentBuilder {
+    configuration;
+    headerHandles = new DwgHeaderHandlesCollection();
+    blockRecordTemplates = [];
+    paperSpaceEntities = [];
+    modelSpaceEntities = [];
+    get keepUnknownEntities() { return this.configuration.keepUnknownEntities; }
+    get keepUnknownNonGraphicalObjects() { return this.configuration.keepUnknownNonGraphicalObjects; }
+    constructor(version, document, configuration) {
+        super(version, document);
+        this.configuration = configuration;
+    }
+    buildDocument() {
+        this.createMissingHandles();
+        for (const item of this.blockRecordTemplates) {
+            item.setBlockToRecord(this, this.headerHandles);
+        }
+        this._attachSpaceEntities(this.headerHandles.model_space, this.modelSpaceEntities);
+        this._attachSpaceEntities(this.headerHandles.paper_space, this.paperSpaceEntities);
+        this.registerTables();
+        this.buildTables();
+        if (this.documentToBuild.vEntityControl) {
+            this.documentToBuild.registerCollection(this.documentToBuild.vEntityControl);
+            this.buildTable(this.documentToBuild.vEntityControl);
+        }
+        this.buildDictionaries();
+        super.buildDocument();
+        this._ensureDefaultTableEntries();
+        this.headerHandles.updateHeader(this.documentToBuild.header, this);
+    }
+    _attachSpaceEntities(spaceHandle, entities) {
+        if (spaceHandle == null || spaceHandle === 0 || entities.length === 0) {
+            return;
+        }
+        const space = this.blockRecordTemplates.find(template => template.cadObject.handle === spaceHandle);
+        if (!space) {
+            this.notify(`Block record ${spaceHandle} for ${entities.length} explicit space entit${entities.length === 1 ? 'y' : 'ies'} was not found.`);
+            return;
+        }
+        for (const entity of entities) {
+            space.ownedObjectsHandlers.add(entity.handle);
+        }
+    }
+    _ensureDefaultTableEntries() {
+        const doc = this.documentToBuild;
+        if (doc.lineTypes && typeof doc.lineTypes.createDefaultEntries === 'function') {
+            doc.lineTypes.createDefaultEntries();
+        }
+        if (doc.layers && typeof doc.layers.createDefaultEntries === 'function') {
+            doc.layers.createDefaultEntries();
+        }
+        if (doc.blockRecords && typeof doc.blockRecords.createDefaultEntries === 'function') {
+            doc.blockRecords.createDefaultEntries();
+        }
+        if (doc.textStyles && typeof doc.textStyles.createDefaultEntries === 'function') {
+            doc.textStyles.createDefaultEntries();
+        }
+        if (doc.dimensionStyles && typeof doc.dimensionStyles.createDefaultEntries === 'function') {
+            doc.dimensionStyles.createDefaultEntries();
+        }
+        if (doc.appIds && typeof doc.appIds.createDefaultEntries === 'function') {
+            doc.appIds.createDefaultEntries();
+        }
+        if (doc.vPorts && typeof doc.vPorts.createDefaultEntries === 'function') {
+            doc.vPorts.createDefaultEntries();
+        }
+    }
+}
+//# sourceMappingURL=DwgDocumentBuilder.js.map

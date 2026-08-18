@@ -137,10 +137,27 @@ async function main() {
         await copy(path.join(occtDir, f), path.join(OUT, 'occt-wasm', f));
     }
 
-    // --- acad-ts: DWG/DXF native support (MIT) ---
-    // Полная библиотека TypeScript для работы с AutoCAD форматами.
+    /* --- acad-ts: чтение И ЗАПИСЬ DWG/DXF (MIT) ---
+     * Копируем ВСЁ дерево .js, а не один index.js: index — это barrel из
+     * ~600 реэкспортов, и без самих модулей каждый из них даёт 404, то есть
+     * библиотека в браузере не поднимается вовсе. Карты и типы не берём:
+     * с ними каталог 14 МБ, без них 3.5 МБ, а грузится он динамически —
+     * только когда пользователь жмёт выгрузку. */
     const acadDir = path.join(pkgDir('@node-projects/acad-ts'), 'dist');
-    await copy(path.join(acadDir, 'index.js'), path.join(OUT, 'acad-ts', 'index.js'));
+    let acadFiles = 0;
+    const copyAcad = async (rel) => {
+        const abs = path.join(acadDir, rel);
+        for (const e of await fs.readdir(abs, { withFileTypes: true })) {
+            const r = path.join(rel, e.name);
+            if (e.isDirectory()) await copyAcad(r);
+            else if (e.name.endsWith('.js')) {
+                await copy(path.join(acadDir, r), path.join(OUT, 'acad-ts', r));
+                acadFiles++;
+            }
+        }
+    };
+    await copyAcad('.');
+    console.log(`  acad-ts: ${acadFiles} файлов`);
 
     // --- geotiff: тянет pako/lerc/zstddec, поэтому бандлим ---
     await build({

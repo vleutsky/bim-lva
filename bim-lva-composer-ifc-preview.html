@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-labels</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · dwg-out</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -4060,7 +4060,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · e4203a5</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1617665</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -8124,6 +8124,11 @@
             /** Текст DXF без скачивания — чтобы проверять содержимое в тестах. */
             dxfPreview() {
                 return buildDxf(drawnPolylines, coordPins);
+            },
+            /** Байты DWG — тот же путь, что и кнопка выгрузки. */
+            async dwgBytes() {
+                const r = await buildDwg(drawnPolylines, coordPins.filter((p) => p.abs));
+                return { bytes: Array.from(r.bytes), lines: r.lines, points: r.points };
             },
             landXmlPreview() {
                 return buildPolylineLandXml();
@@ -13581,37 +13586,16 @@
         }
 
         async function exportSlopeDwg(model) {
+            /* Тела площадок в DWG пока не пишем: acad-ts умеет Solid3D, но наш
+             * конвейер строит ACIS строками под DXF, и переложить это на
+             * объектную модель — отдельная работа. Кнопкой не врём. */
             const list = (model ? [model] : slopeModels).filter((sm) => sm?.tin?.faces?.length);
             if (!list.length) {
                 notifyError('Сначала постройте откосы — выгружать нечего.');
                 return false;
             }
-            try {
-                const target = list[0];
-                const buffer = await buildDwg([], [], model || list);
-                if (!buffer) {
-                    notifyError('DWG: ошибка при формировании файла.');
-                    return false;
-                }
-                const faces = list.reduce((n, sm) => n + sm.tin.faces.length, 0);
-                const slug = String(target.name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
-                downloadBinaryFile(buffer, `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dwg`);
-                const kdoN = list.reduce((n, sm) => n + (sm.kdoMeshes?.length || 0), 0);
-                notify(
-                    list.length === 1
-                        ? `DWG площадки «${target.name}»: 3D-поверхность, ${faces} треугольников` +
-                            (kdoN ? `, КДО ${kdoN} сл.` : '') +
-                            `, координаты мировые, метры.`
-                        : `DWG: ${list.length} площадок, ${faces} треугольников` +
-                            (kdoN ? `, КДО ${kdoN} сл.` : '')
-                );
-                trackUsage('slope_export_dwg', { faces, pads: list.length });
-                return true;
-            } catch (err) {
-                notifyError(`DWG-экспорт откосов: ${err.message}`);
-                console.error('Slope DWG export error:', err);
-                return false;
-            }
+            notifyError('Тела площадок выгружаются пока только в DXF («⬇ DXF»); в DWG идут полилинии и точки.');
+            return false;
         }
 
         function buildPolylineLandXml() {
@@ -13831,30 +13815,22 @@
         }
 
         async function exportDrawingDwg() {
-            if (!drawnPolylines.length && !coordPins.length && !sweptSolids.length && !slopeModels.length && !roadXsModels.length) {
-                notifyError('Выгружать нечего: нет ни полилиний, ни меток, ни тел, ни откосов, ни поперечников.');
+            const pins = coordPins.filter((p) => p.abs);
+            if (!drawnPolylines.length && !pins.length) {
+                notifyError('Выгружать нечего: нет ни полилиний, ни меток координат.');
                 return;
             }
             try {
-                const buffer = await buildDwg(drawnPolylines, coordPins, slopeModels);
-                if (!buffer) {
-                    notifyError('DWG: ошибка при формировании файла.');
-                    return;
-                }
-                downloadBinaryFile(buffer, `bim-lva-${new Date().toISOString().slice(0, 10)}.dwg`);
-                const derived = slopeDerivedPolylineIds();
-                const polyCount = drawnPolylines.filter((p) => !derived.has(p.id)).length;
-                const padCount = slopeModels.filter((sm) => sm.tin?.faces?.length).length;
-                const xsCount = roadXsModels.reduce((n, m) => n + m.stations.length, 0);
+                const { bytes, lines, points } = await buildDwg(drawnPolylines, pins);
+                downloadBinaryFile(bytes, `bim-lva-${new Date().toISOString().slice(0, 10)}.dwg`);
                 notify(
-                    `DWG: полилиний ${polyCount}, точек ${coordPins.length}` +
-                    (padCount ? `, площадок ${padCount} (3D-солид)` : '') +
-                    (xsCount ? `, поперечников ${xsCount}` : '') +
-                    `. Координаты мировые, единицы — метры.`
+                    `DWG (${DWG_VERSION}, R2004): полилиний ${lines}, точек ${points}, ` +
+                    `${(bytes.length / 1024).toFixed(0)} КБ. Координаты мировые, метры. ` +
+                    'Тела — площадки, узлы, откосы — пока только в DXF.'
                 );
-                trackUsage('draw_export_dwg', { polylines: drawnPolylines.length, pins: coordPins.length });
+                trackUsage('draw_export_dwg', { lines, points });
             } catch (err) {
-                notifyError(`DWG-экспорт: ${err.message}`);
+                notifyError('DWG не собрался: ' + (err?.message || err));
                 console.error('DWG export error:', err);
             }
         }
@@ -17035,102 +17011,87 @@
             }
         }
 
-        async function buildDwg(polylines, pins, slopeModels) {
-            try {
-                // Динамическая загрузка acad-ts при необходимости
-                const acad = await import('/assets/vendor/acad-ts/index.js');
-                const { CadDocument } = acad;
-                const doc = new CadDocument();
+        /* ------------------------------------------------------------------
+         * Выгрузка в DWG (acad-ts, MIT). Проверено сквозняком: файл читается
+         * независимым движком dwgdxf, координаты совпадают.
+         *
+         * Грабли:
+         *  · писатель ждёт ArrayBuffer НУЖНОГО РАЗМЕРА, а не поток;
+         *  · метода `doc.toDwgBuffer()` в библиотеке НЕТ — он тут был выдуман;
+         *  · AC1021+ пишутся раскладкой секций AC1018, поэтому пишем AC1018.
+         * ------------------------------------------------------------------ */
+        const DWG_VERSION = 'AC1018';
 
-                const modelSpace = doc.modelSpace;
-
-                // Добавить полилинии как POLYLINE 2D
-                for (const rec of polylines) {
-                    if (!rec.pts?.length || rec.pts.length < 2) continue;
-
-                    try {
-                        const pts = rec.pts.map((p) => {
-                            const abs = worldPointToAbsoluteXYZ(p);
-                            return { x: abs.x, y: abs.y, z: abs.z };
-                        });
-
-                        // Создать 2D полилинию
-                        const polyline = new acad.Polyline();
-                        for (const pt of pts) {
-                            polyline.addVertex({x: pt.x, y: pt.y}, 0);  // bulge = 0 для прямых линий
-                        }
-
-                        // Установить слой и цвет
-                        polyline.layer = rec.name || 'Полилиния';
-                        polyline.color = 256;  // By layer
-
-                        modelSpace.addEntity(polyline);
-                    } catch (e) {
-                        console.warn('Failed to create DWG polyline:', e);
-                    }
+        async function buildDwg(polylines, pins) {
+            const acad = await import('/assets/vendor/acad-ts/index.js');
+            const { CadDocument, DwgWriter, ACadVersion, Line, Point, XYZ } = acad;
+            const doc = new CadDocument();
+            doc.header.version = ACadVersion[DWG_VERSION];
+            const abs = (p) => { const a = worldPointToAbsoluteXYZ(p) || p; return new XYZ(a.x, a.y, a.z); };
+            /* `entity.layer` ждёт ОБЪЕКТ Layer, а не строку: строка падает на
+             * toUpperCase внутри таблицы слоёв. Заводим слой один раз и
+             * держим в кэше. */
+            const layers = new Map();
+            const layerFor = (name) => {
+                if (!name) return null;
+                if (!layers.has(name)) {
+                    let L = null;
+                    try { L = new acad.Layer(name); doc.layers.add(L); } catch (_) { L = null; }
+                    layers.set(name, L);
                 }
-
-                // Добавить координатные точки
-                for (const pin of pins) {
-                    if (!pin.abs) continue;
-
-                    try {
-                        const point = new acad.Point();
-                        point.position = {
-                            x: pin.abs.x,
-                            y: pin.abs.y,
-                            z: pin.abs.z
-                        };
-                        point.layer = 'Точки';
-                        modelSpace.addEntity(point);
-                    } catch (e) {
-                        console.warn('Failed to create DWG point:', e);
-                    }
+                return layers.get(name);
+            };
+            const add = (ent, name) => {
+                const L = layerFor(name);
+                if (L) { try { ent.layer = L; } catch (_) {} }
+                doc.modelSpace.entities.add(ent);
+            };
+            let lines = 0, points = 0;
+            for (const rec of polylines) {
+                if ((rec.pts?.length || 0) < 2) continue;
+                /* Пишем ОТРЕЗКАМИ, а не POLYLINE. Polyline3D в acad-ts
+                 * вершины наружу не выпускает: писатель ждёт их отдельными
+                 * объектами с ручками, а коллекция создаётся без Seqend и
+                 * без владельца — проверено, в файле выходит POLYLINE с нулём
+                 * VERTEX и координатами (0,0,0). Отрезок же проходит
+                 * сквозняком с точными координатами.
+                 * Цена честная: в DWG это набор отрезков на своём слое, а не
+                 * одна полилиния. Одной сущностью — когда дойдут руки до
+                 * плумбинга вершин в библиотеке. */
+                const layer = rec.layer || defaultPolylineLayer(rec.kind, rec.role);
+                const src = rec.pts;
+                const last = rec.closed ? src.length : src.length - 1;
+                for (let i = 0; i < last; i++) {
+                    const seg = new Line();
+                    seg.startPoint = abs(src[i]);
+                    seg.endPoint = abs(src[(i + 1) % src.length]);
+                    add(seg, layer);
+                    lines++;
                 }
-
-                // Добавить поверхности как 3DSOLID (если возможно через acad-ts)
-                // Упрощённый подход: экспортировать как LW-полилинии на разных высотах
-                for (const sm of slopeModels) {
-                    if (!sm?.tin?.faces?.length) continue;
-
-                    try {
-                        // Для каждого треугольника создать 3D-полилинию
-                        const pts = sm.tin.points;
-                        if (!pts?.length) continue;
-
-                        for (const face of sm.tin.faces) {
-                            const [i0, i1, i2] = face;
-                            if (i0 >= pts.length || i1 >= pts.length || i2 >= pts.length) continue;
-
-                            const p0 = worldPointToAbsoluteXYZ(pts[i0]);
-                            const p1 = worldPointToAbsoluteXYZ(pts[i1]);
-                            const p2 = worldPointToAbsoluteXYZ(pts[i2]);
-
-                            // Создать 3D-полилинию для треугольника
-                            // Это упрощение - в DWG есть 3DFACE, но acad-ts может не поддерживать
-                            const face3d = new acad.Polyline3D();
-                            face3d.addVertex({x: p0.x, y: p0.y, z: p0.z});
-                            face3d.addVertex({x: p1.x, y: p1.y, z: p1.z});
-                            face3d.addVertex({x: p2.x, y: p2.y, z: p2.z});
-                            face3d.addVertex({x: p0.x, y: p0.y, z: p0.z});  // закрыть
-
-                            face3d.layer = sm.name || 'Поверхность';
-                            face3d.closed = true;
-
-                            modelSpace.addEntity(face3d);
-                        }
-                    } catch (e) {
-                        console.warn('Failed to create DWG surface:', e);
-                    }
-                }
-
-                // Экспортировать в DWG буфер
-                const buffer = doc.toDwgBuffer();
-                return buffer;
-            } catch (err) {
-                console.error('DWG build error:', err);
-                throw err;
             }
+            for (const pin of (pins || [])) {
+                if (!pin?.abs) continue;
+                const pt = new Point();
+                pt.location = new XYZ(pin.abs.x, pin.abs.y, pin.abs.z);
+                add(pt, DXF_LAYER_POINTS);
+                points++;
+            }
+            /* Размер буфера заранее неизвестен, при нехватке писатель падает
+             * RangeError на DataView — пробуем и удваиваем. */
+            let size = Math.max(1 << 20, (lines + points) * 4096);
+            for (let attempt = 0; attempt < 6; attempt++, size *= 2) {
+                try {
+                    const back = new ArrayBuffer(size);
+                    new DwgWriter(back, doc).write();
+                    const all = new Uint8Array(back);
+                    let end = all.length;
+                    while (end > 0 && all[end - 1] === 0) end--;
+                    if (end > 0) return { bytes: all.slice(0, end), lines, points };
+                } catch (e) {
+                    if (!(e instanceof RangeError)) throw e;
+                }
+            }
+            throw new Error('не хватило буфера под DWG');
         }
 
         function exportDrawingDxf() {
@@ -42806,7 +42767,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: 'e4203a5-preview',
+            buildId: '1617665-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -42815,7 +42776,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: подписи углов узла прямо в сцене (радиус и угол, клик — задать радиус); примыкание строится, даже если ось не дотянулась до чужой оси в пределах полотна; длинные пояснения в диалоге убраны во всплывающую подсказку.',
+                '2026.08.18: выгрузка в DWG заработала (полилинии отрезками и точки, AC1018/R2004) — вендор был неполный, а метод записи выдуман; проверяется чтением обратно независимым движком. Тела пока только в DXF.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',

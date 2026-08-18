@@ -1,0 +1,19 @@
+export var NotificationType;
+(function (NotificationType) {
+    NotificationType[NotificationType["NotImplemented"] = -1] = "NotImplemented";
+    NotificationType[NotificationType["None"] = 0] = "None";
+    NotificationType[NotificationType["NotSupported"] = 1] = "NotSupported";
+    NotificationType[NotificationType["Warning"] = 2] = "Warning";
+    NotificationType[NotificationType["Error"] = 3] = "Error";
+})(NotificationType || (NotificationType = {}));
+export class NotificationEventArgs {
+    message;
+    notificationType;
+    exception;
+    constructor(message, notificationType = NotificationType.None, exception = null) {
+        this.message = message;
+        this.notificationType = notificationType;
+        this.exception = exception;
+    }
+}
+//# sourceMappingURL=NotificationEventHandler.js.map
