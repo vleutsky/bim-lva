@@ -4648,7 +4648,7 @@
                     <li>Собирает сводку из IFC, DWG, DXF, LandXML, FBX, GLB, OBJ, STL и георастров.</li>
                     <li>Держит мировые координаты: файлы садятся на свои места, а не в кучу у нуля.</li>
                     <li>Замеры, разрезы, коллизии, свойства, ведомости в Excel.</li>
-                    <li>Откосы, профиль, поперечники и объёмы — с выгрузкой в DXF и LandXML для Civil 3D.</li>
+                    <li>Откосы, профиль, поперечники и объёмы — с выгрузкой в DXF, DWG, STEP и LandXML для Civil 3D и САПР.</li>
                     <li>Площадка с карты: снимок и рельеф по рамке на глобусе.</li>
                 </ul>
 
@@ -5243,6 +5243,7 @@
             <div class="bulk-note" id="slopeStatus">—</div>
             <div class="modal-actions">
                 <button class="btn" id="slopeExportDxf" title="Площадка и откосы одним 3D-солидом (3DSOLID, DXF R2010), координаты абсолютные, единицы — метры. Civil 2018+ и nanoCAD открывают">⬇ DXF</button>
+                <button class="btn" id="slopeExportDwg" title="Площадка и откосы в формате DWG, координаты абсолютные, единицы — метры">⬇ DWG</button>
                 <button class="btn" id="slopeExportXml" title="Площадка как LandXML Surface (TIN): Civil 3D → Import LandXML">⬇ LandXML</button>
                 <button class="btn" id="slopeOpenTable" title="Таблица всех построенных площадок">▣ Таблица</button>
                 <button class="btn" id="slopeClear">Убрать откосы</button>
@@ -13157,6 +13158,40 @@
             return true;
         }
 
+        async function exportSlopeDwg(model) {
+            const list = (model ? [model] : slopeModels).filter((sm) => sm?.tin?.faces?.length);
+            if (!list.length) {
+                notifyError('Сначала постройте откосы — выгружать нечего.');
+                return false;
+            }
+            try {
+                const target = list[0];
+                const buffer = await buildDwg([], [], model || list);
+                if (!buffer) {
+                    notifyError('DWG: ошибка при формировании файла.');
+                    return false;
+                }
+                const faces = list.reduce((n, sm) => n + sm.tin.faces.length, 0);
+                const slug = String(target.name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
+                downloadBinaryFile(buffer, `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dwg`);
+                const kdoN = list.reduce((n, sm) => n + (sm.kdoMeshes?.length || 0), 0);
+                notify(
+                    list.length === 1
+                        ? `DWG площадки «${target.name}»: 3D-поверхность, ${faces} треугольников` +
+                            (kdoN ? `, КДО ${kdoN} сл.` : '') +
+                            `, координаты мировые, метры.`
+                        : `DWG: ${list.length} площадок, ${faces} треугольников` +
+                            (kdoN ? `, КДО ${kdoN} сл.` : '')
+                );
+                trackUsage('slope_export_dwg', { faces, pads: list.length });
+                return true;
+            } catch (err) {
+                notifyError(`DWG-экспорт откосов: ${err.message}`);
+                console.error('Slope DWG export error:', err);
+                return false;
+            }
+        }
+
         function buildPolylineLandXml() {
             if (!drawnPolylines.length) return null;
             const escXml = (s) => String(s)
@@ -20363,7 +20398,7 @@
                         while (i < placed.length - 1 && skipInterval[i]) i++;
                         const endSta = i;
                         if (startSta > 0) cap(placed[startSta], true);
-                        if (endSta < placed.length - 1) cap(placed[endSta], false);
+                        if (endSta < placed.length) cap(placed[endSta], false);
                     }
                 }
             }
@@ -21744,7 +21779,6 @@
                 || offsetPlanPolyline(src, widths.widthR, !!rec.closed);
             const pts = [];
             src.forEach((p) => pts.push(p));
-            rec.pts.forEach((p) => pts.push(p));
             (leftPts || []).forEach((p) => pts.push(p));
             (rightPts || []).forEach((p) => pts.push(p));
             (model?.stations || []).forEach((st) => {
@@ -22374,6 +22408,7 @@
                 notifyError('Нужно минимум две оси для пересечения.');
                 return;
             }
+            console.log('[Intersections] Proceeding with dialog...');
 
             // Заполнить селекты списком осей (используем индекс как value)
             const select1 = $('intersectionPoly1');
@@ -22455,8 +22490,8 @@
             // Создать пересечение
             const intersection = {
                 id: 'ix-' + Math.random().toString(36).slice(2, 10),
-                poly1Id,
-                poly2Id,
+                poly1Id: poly1.id,
+                poly2Id: poly2.id,
                 type,
                 radius,
                 created: new Date(),
@@ -23235,6 +23270,7 @@
 
         $('slopeApply')?.addEventListener('click', runSlopeBuild);
         $('slopeExportDxf')?.addEventListener('click', () => exportSlopeDxf());
+        $('slopeExportDwg')?.addEventListener('click', () => exportSlopeDwg());
         $('slopeExportXml')?.addEventListener('click', () => exportSlopeLandXml());
         $('slopeSelect')?.addEventListener('change', () => {
             slopeRecordId = Number($('slopeSelect').value);
@@ -23392,16 +23428,27 @@
             clearDrawnPolylines();
         });
 
-        $('btnIntersections')?.addEventListener('click', () => {
+        const btnIntersections = $('btnIntersections');
+        console.log('[Intersections] Button element found:', !!btnIntersections);
+        btnIntersections?.addEventListener('click', () => {
+            console.log('[Intersections] Button clicked');
             openIntersectionsDialog();
         });
 
         $('intersectionCreate')?.addEventListener('click', () => {
+            console.log('[Intersections] Create button clicked');
             createRoadIntersection();
         });
 
         $('intersectionCancel')?.addEventListener('click', () => {
-            $('intersectionModal')?.close?.();
+            $('intersectionModal')?.classList.remove('show');
+        });
+
+        // Клик по backdrop закрывает модаль
+        $('intersectionModal')?.addEventListener('click', (e) => {
+            if (e.target === $('intersectionModal')) {
+                $('intersectionModal').classList.remove('show');
+            }
         });
 
         function addMeasureMarker(pt) {
@@ -39000,6 +39047,7 @@ ${componentXml || '    '}
 
         const RIGHT_DRAG_THRESHOLD = 6;
         let stageRightPointer = null;
+        let stageCtxAllowed = false;
 
         stage.addEventListener('pointerdown', e => {
             if (e.button !== 2) return;
@@ -39007,14 +39055,17 @@ ${componentXml || '    '}
                 pointerId: e.pointerId,
                 x: e.clientX,
                 y: e.clientY,
-                dragged: false
+                dragged: false,
+                time: Date.now()
             };
+            stageCtxAllowed = true;
         }, true);
 
         stage.addEventListener('pointermove', e => {
             if (!stageRightPointer || stageRightPointer.pointerId !== e.pointerId) return;
             if (Math.hypot(e.clientX - stageRightPointer.x, e.clientY - stageRightPointer.y) >= RIGHT_DRAG_THRESHOLD) {
                 stageRightPointer.dragged = true;
+                stageCtxAllowed = false;
             }
         }, true);
 
@@ -39029,16 +39080,19 @@ ${componentXml || '    '}
 
         stage.addEventListener('pointercancel', () => {
             stageRightPointer = null;
+            stageCtxAllowed = false;
         }, true);
 
         stage.addEventListener('contextmenu', e => {
             e.preventDefault();
-            const wasCameraDrag = !!(stageRightPointer && stageRightPointer.dragged);
-            stageRightPointer = null;
-            if (wasCameraDrag) {
+            if (!stageCtxAllowed || (stageRightPointer && stageRightPointer.dragged)) {
                 stageCtx.classList.remove('show');
+                stageRightPointer = null;
+                stageCtxAllowed = false;
                 return;
             }
+            stageRightPointer = null;
+            stageCtxAllowed = false;
             stageContextElementRef = resolveHitElementRef(pickStageHit(e.clientX, e.clientY));
             $('ctxSelectSimilar').classList.toggle('disabled', !stageContextElementRef);
             // Блок команд полилинии показываем, только если ПКМ пришёлся по ней.
@@ -40920,6 +40974,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.17: диалог пересечений дорог — выбор двух осей, тип (крест/Т/слияние), радиус переходной кривой; визуализация маркером в сцене (расширение в разработке).',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
