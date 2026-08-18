@@ -14028,6 +14028,7 @@
         const intersectionGroup = new THREE.Group();
         intersectionGroup.name = 'RoadIntersections';
         scene.add(intersectionGroup);
+        let intersectionDialogState = { poly1: null, poly2: null }; // Запомнить выбранные полилинии
         let roadXsModels = [];
         const DRAW_COLOR = '#1f8f5f';
         const DRAW_WIDTH = 2;
@@ -22366,55 +22367,43 @@
 
         function openIntersectionsDialog() {
             console.log('[Intersections] Opening dialog...');
-            console.log('[Intersections] drawnPolylines count:', drawnPolylines.length);
-            console.log('[Intersections] All drawnPolylines:', drawnPolylines.map((p, i) => ({
-                index: i,
-                id: p.id,
-                name: p.name,
-                role: p.role,
-                ptsCount: p.pts?.length || 0,
-                absCount: p.abs?.length || 0
-            })));
-
             const candidates = listedPolylines();
-            console.log('[Intersections] After listedPolylines filter:', candidates.length);
-            console.log('[Intersections] Candidates:', candidates.map((p, i) => ({
-                index: i,
-                id: p.id,
-                name: p.name,
-                ptsCount: p.pts?.length || 0,
-                absCount: p.abs?.length || 0
-            })));
+            console.log('[Intersections] Found polylines:', candidates.length);
 
             if (candidates.length < 2) {
                 notifyError('Нужно минимум две оси для пересечения.');
                 return;
             }
 
-            // Заполнить селекты списком осей
+            // Заполнить селекты списком осей (используем индекс как value)
             const select1 = $('intersectionPoly1');
             const select2 = $('intersectionPoly2');
             if (!select1 || !select2) return;
 
-            // Очистить и заполнить
             select1.innerHTML = '<option value="">-- выберите --</option>';
             select2.innerHTML = '<option value="">-- выберите --</option>';
 
-            for (const poly of candidates) {
+            // Создать опции с индексами (0, 1, 2, ...) вместо ID
+            for (let i = 0; i < candidates.length; i++) {
+                const poly = candidates[i];
                 const opt1 = document.createElement('option');
-                opt1.value = poly.id;
-                opt1.textContent = poly.name || `Ось ${poly.id.slice(0, 8)}`;
+                opt1.value = String(i); // Используем индекс
+                opt1.textContent = poly.name || `Ось ${i + 1}`;
                 select1.appendChild(opt1);
 
                 const opt2 = opt1.cloneNode(true);
                 select2.appendChild(opt2);
             }
 
-            // Предвыбрать разные оси
+            // Предвыбрать первые две оси
             if (candidates.length >= 2) {
-                select1.value = candidates[0].id;
-                select2.value = candidates[1].id;
-                console.log('[Intersections] Auto-selected:', candidates[0].id, candidates[1].id);
+                select1.value = '0';
+                select2.value = '1';
+                // ЗАПОМНИТЬ ПОЛИЛИНИИ В ПЕРЕМЕННОЙ (не по ID!)
+                intersectionDialogState.candidates = candidates;
+                intersectionDialogState.poly1 = candidates[0];
+                intersectionDialogState.poly2 = candidates[1];
+                console.log('[Intersections] Auto-selected polylines (not by ID)');
             }
 
             $('intersectionModal')?.classList.add('show');
@@ -22422,56 +22411,38 @@
         }
 
         function createRoadIntersection() {
-            const poly1Id = $('intersectionPoly1')?.value;
-            const poly2Id = $('intersectionPoly2')?.value;
+            const idx1Str = $('intersectionPoly1')?.value;
+            const idx2Str = $('intersectionPoly2')?.value;
             const type = $('intersectionType')?.value || 'cross';
             const radius = parseFloat($('intersectionRadius')?.value || 30);
 
-            console.log('[Intersections] Starting createRoadIntersection...');
-            console.log('[Intersections] poly1Id:', poly1Id, 'poly2Id:', poly2Id);
-            console.log('[Intersections] drawnPolylines count:', drawnPolylines.length);
+            console.log('[Intersections] Creating intersection...');
+            console.log('[Intersections] Selected indices: idx1=', idx1Str, 'idx2=', idx2Str);
 
-            if (!poly1Id || !poly2Id) {
+            if (!idx1Str || !idx2Str) {
                 notifyError('Выберите обе оси.');
                 return;
             }
-            if (poly1Id === poly2Id) {
+            if (idx1Str === idx2Str) {
                 notifyError('Оси не должны быть одинаковыми.');
                 return;
             }
 
-            // Логирование ДО поиска - показать все IDs в drawnPolylines
-            console.log('[Intersections] Searching for IDs in drawnPolylines:');
-            console.log('[Intersections] Looking for poly1Id:', poly1Id, 'type:', typeof poly1Id);
-            console.log('[Intersections] Looking for poly2Id:', poly2Id, 'type:', typeof poly2Id);
-            console.log('[Intersections] Available IDs in drawnPolylines:');
-            drawnPolylines.forEach((p, i) => {
-                const match1 = String(p.id) === String(poly1Id);
-                const match2 = String(p.id) === String(poly2Id);
-                console.log(`  [${i}] id: "${p.id}" (type: ${typeof p.id}), match1: ${match1}, match2: ${match2}, ptsCount: ${p.pts?.length || 0}`);
-            });
+            // Использовать ЗАПОМНЕННЫЕ полилинии из состояния (не искать по ID!)
+            const candidates = intersectionDialogState.candidates || [];
+            const idx1 = parseInt(idx1Str);
+            const idx2 = parseInt(idx2Str);
 
-            // Сравнивать как строки (select всегда возвращает строку)
-            const poly1 = drawnPolylines.find((p) => String(p.id) === String(poly1Id));
-            const poly2 = drawnPolylines.find((p) => String(p.id) === String(poly2Id));
+            const poly1 = candidates[idx1];
+            const poly2 = candidates[idx2];
 
-            console.log('[Intersections] Found poly1:', !!poly1);
-            console.log('[Intersections] Found poly2:', !!poly2);
-            if (poly1) {
-                console.log('[Intersections] poly1.pts:', poly1.pts ? poly1.pts.length : 'undefined', 'pts:', poly1.pts);
-            }
-            if (poly2) {
-                console.log('[Intersections] poly2.pts:', poly2.pts ? poly2.pts.length : 'undefined', 'pts:', poly2.pts);
-            }
+            console.log('[Intersections] Got polylines from state: poly1=', !!poly1, 'poly2=', !!poly2);
+            console.log('[Intersections] poly1.pts.length=', poly1?.pts?.length || 0);
+            console.log('[Intersections] poly2.pts.length=', poly2?.pts?.length || 0);
 
             if (!poly1 || !poly2) {
-                console.error('[Intersections] FAILED: Polylines not found');
-                console.log('[Intersections] All polylines:', drawnPolylines.map(p => ({
-                    id: p.id,
-                    name: p.name,
-                    ptsLen: p.pts?.length
-                })));
-                notifyError('Не найдены полилинии. Проверьте консоль.');
+                console.error('[Intersections] FAILED: Polylines not in state');
+                notifyError('Полилинии не найдены. Откройте диалог заново.');
                 return;
             }
 
