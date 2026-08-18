@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-curb</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · ix-lift</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -1893,6 +1893,27 @@
             cursor: grab;
             touch-action: none;
         }
+        /* Ручка узла: тот же язык, что у вершин, но своя роль — тянется
+           только по высоте, поэтому и форма другая (ромб), и цвет фирменный. */
+        .node-handle {
+            position: absolute; top: 0; left: 0;
+            width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px;
+            background: var(--panel); border: 2px solid var(--accent);
+            transform-origin: center;
+            pointer-events: auto; cursor: ns-resize; touch-action: none;
+            z-index: 3;
+        }
+        .node-handle::after {
+            content: attr(data-z);
+            position: absolute; left: 14px; top: -4px;
+            padding: 1px 5px; white-space: nowrap;
+            font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-variant-numeric: tabular-nums;
+            color: var(--txt); background: var(--glass);
+            border: 1px solid var(--line); border-radius: 3px;
+        }
+        .node-handle:hover { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); }
+        .node-handle.is-drag { background: var(--accent); }
         .poly-handle:hover { background: #d8f3e6; }
         .poly-handle:active { cursor: grabbing; }
         .poly-handle.is-end { border-radius: 50%; }
@@ -4019,7 +4040,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 19a0aa2</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 4726495</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4402,7 +4423,7 @@
         </div>
         <svg id="coord-pin-leaders"></svg>
         <div id="labels-container"></div>
-        <div id="coord-pins-container"></div> <div id="polyline-annot"></div> <div id="polyline-handles"></div> <div id="boxSelectRect"></div>
+        <div id="coord-pins-container"></div> <div id="polyline-annot"></div> <div id="polyline-handles"></div> <div id="node-handles"></div> <div id="boxSelectRect"></div>
         <div id="tourHud" class="tour-hud" hidden>
             <span id="tourHudText">Проезд…</span>
             <select id="tourHudCamView" class="editInput" title="Вид камеры" style="max-width:160px;padding:4px 8px;font-size:12px">
@@ -5576,7 +5597,10 @@
                 кромкам у узла и сводится к обычной ширине за длину отгона.
                 Коридоры обеих дорог обрываются у устья узла, а покрытие и
                 слои одежды под ним строятся отдельными телами — объём не
-                считается дважды. Одежда берётся от той оси, у которой
+                считается дважды. Отметка узла тянется ручкой прямо в сцене
+                (ромб с подписью, двойной щелчок — ввести число): профили
+                подходящих дорог идут за узлом, а концы трасс остаются на
+                месте, пока их не поднять вручную. Одежда берётся от той оси, у которой
                 конструкция мощнее. Узел уходит в «⬇ DXF» слоем «Узел»
                 (тела 3DSOLID и контур) и в «⬇ LandXML» поверхностью.
             </div>
@@ -7346,19 +7370,21 @@
                 const result = calculateIntersection(p1, p2, type, radius, {
                     radii: opts.radii || {},
                     flares: opts.flares || {},
-                    dz: opts.dz || 0
+                    zTarget: Number.isFinite(opts.zTarget) ? opts.zTarget : null
                 });
                 if (!result) return null;
                 const rec = {
                     id: 'ix-' + Math.random().toString(36).slice(2, 10),
                     name: `${p1.name} × ${p2.name}`,
                     poly1Id: p1.id, poly2Id: p2.id, type, radius,
-                    radii: opts.radii || {}, flares: opts.flares || {}, dz: opts.dz || 0,
+                    radii: opts.radii || {}, flares: opts.flares || {},
+                    zTarget: Number.isFinite(opts.zTarget) ? opts.zTarget : null,
                     created: new Date(), points: result
                 };
                 roadIntersections.push(rec);
                 visualizeIntersection(rec);
                 syncCorridorsForIntersection(rec);
+                rebuildNodeHandles();
                 return {
                     id: rec.id,
                     cross: { x: result.crossPoint.x, y: result.crossPoint.y, z: result.crossPoint.z },
@@ -7380,7 +7406,7 @@
                 if (!rec) return false;
                 if (patch.radii) rec.radii = { ...(rec.radii || {}), ...patch.radii };
                 if (patch.flares) rec.flares = { ...(rec.flares || {}), ...patch.flares };
-                if (patch.dz != null) rec.dz = Number(patch.dz) || 0;
+                if (patch.zTarget != null) rec.zTarget = Number(patch.zTarget);
                 return refreshRoadIntersection(rec);
             },
             get intersections() {
@@ -7422,13 +7448,39 @@
                     maxOff: Math.max(0, ...d.outer.pts.map((p) => p.off))
                 };
             },
-            /** Отметка узла: абсолютная и накопленный сдвиг. */
+            /** Задать отметку узла в абсолютных — как ручкой в сцене. */
+            setNodeElevationAbs(ixId, absZ) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                const c = rec?.points?.crossPoint;
+                if (!c) return false;
+                const abs = scenePointToAbs(c);
+                return setNodeElevation(rec, c.z + (absZ - (abs ? abs.z : c.z)));
+            },
+            /** Ручки узлов: сколько их и где на экране. */
+            nodeHandleState() {
+                return nodeHandles.map(({ el, id }) => ({
+                    id, hidden: !!el.hidden, label: el.dataset.z || null
+                }));
+            },
+            /** Профиль оси: отметки вершин и какие из них посажены узлом. */
+            axisProfile(polylineId) {
+                const rec = drawnPolylines.find((r) => r.id === polylineId);
+                if (!rec) return null;
+                return rec.pts.map((p, i) => {
+                    const abs = scenePointToAbs(p);
+                    return {
+                        i, z: abs ? abs.z : p.z,
+                        anchor: p.nodeAnchor || null, key: p.nodeAnchorKey || null
+                    };
+                });
+            },
+            /** Отметка узла: абсолютная и целевая. */
             nodeElevation(ixId) {
                 const rec = roadIntersections.find((x) => x.id === ixId);
                 const c = rec?.points?.crossPoint;
                 if (!c) return null;
                 const abs = scenePointToAbs(c);
-                return { abs: abs ? abs.z : null, scene: c.z, dz: rec.dz || 0 };
+                return { abs: abs ? abs.z : null, scene: c.z, zTarget: rec.zTarget ?? null };
             },
             /**
              * Точки узла в пикселях холста — целиться надо в саму геометрию,
@@ -22898,13 +22950,14 @@
                 radius,
                 radii: {},
                 flares,
-                dz: 0,
+                zTarget: null,
                 created: new Date(),
                 points: result
             };
             roadIntersections.push(intersection);
             visualizeIntersection(intersection);
             syncCorridorsForIntersection(intersection);
+            rebuildNodeHandles();
             renderIntersectionsList();
 
             const a = result.absolute;
@@ -23253,9 +23306,12 @@
                 }
             }
 
-            // Отметка узла: сдвиг всей площадки по высоте. Двигаем и контур, и
-            // саму точку — иначе покрытие уедет, а метка останется на месте.
-            const dz = Number(opts.dz) || 0;
+            /* Отметка узла. Хранится ЦЕЛЕВЫМ значением, а не сдвигом: после
+             * запекания в профиль оси расчётная отметка уже равна целевой, и
+             * сдвиг прибавлялся бы к ней на каждом пересчёте — узел уезжал бы
+             * вверх сам. С целевым значением поправка сходится к нулю. */
+            const zTarget = Number.isFinite(opts.zTarget) ? Number(opts.zTarget) : null;
+            const dz = zTarget == null ? 0 : zTarget - crossPoint.z;
             if (dz) {
                 crossPoint.z += dz;
                 outline.forEach((p) => { p.z += dz; });
@@ -23298,6 +23354,7 @@
                 outline,
                 runs,
                 dz,
+                zTarget,
                 tapers,
                 patch: buildIntersectionPatch(crossPoint, outline),
                 layers: nodePavementLayers([poly1.id, poly2.id]),
@@ -23511,6 +23568,7 @@
                 : roadIntersections.filter((x) => x.poly1Id === polylineId || x.poly2Id === polylineId);
             for (const x of doomed) {
                 removeIntersectionObjects(x.id);
+                dropNodeAnchors(x.id);
                 const i = roadIntersections.indexOf(x);
                 if (i >= 0) roadIntersections.splice(i, 1);
             }
@@ -23518,7 +23576,7 @@
             // сплошная. Полилиния может быть уже удалена, тогда пересобирать
             // нечего, и rebuildRoadXsForPolyline сам это увидит.
             for (const x of doomed) syncCorridorsForIntersection(x);
-            if (doomed.length) markNeedsRender();
+            if (doomed.length) { rebuildNodeHandles(); markNeedsRender(); }
         }
 
         /** Убрать из сцены то, что было нарисовано для этого пересечения. */
@@ -23615,22 +23673,220 @@
 
         /* ---- Правка уже созданного узла ---------------------------------- */
 
+        /* ------------------------------------------------------------------
+         * Отметка узла и профили подходящих дорог.
+         *
+         * Поднимая перекрёсток, надо поднять и дороги за ним, а концы трасс
+         * оставить на месте — иначе площадка висит в воздухе, а дорога уходит
+         * под неё. Делается это правкой САМОГО ПРОФИЛЯ оси: в неё сажается
+         * вершина на устье узла с отметкой узла, и участок от предыдущей
+         * вершины до устья становится уклоном. Так это видно и в окне профиля,
+         * а не только в 3D.
+         *
+         * Отметка узла хранится ЦЕЛЕВЫМ значением (`zTarget`), а не сдвигом:
+         * сдвиг после запекания в ось прибавлялся бы к уже поднятой отметке на
+         * каждом пересчёте, и узел уезжал бы вверх сам по себе.
+         * ------------------------------------------------------------------ */
+
+        /** Вершина оси, посаженная узлом: своя на каждое устье. */
+        function findNodeAnchor(poly, ixId, key) {
+            const i = poly.pts.findIndex((p) => p.nodeAnchor === ixId && p.nodeAnchorKey === key);
+            return i >= 0 ? i : -1;
+        }
+
+        /**
+         * Посадить (или подвинуть) вершину оси на пикете `sta` с отметкой `z`.
+         * Повторный вызов двигает свою прежнюю вершину, а не плодит новые.
+         */
+        function setNodeAnchorVertex(poly, ixId, key, sta, z) {
+            let idx = findNodeAnchor(poly, ixId, key);
+            if (idx < 0) {
+                idx = insertPolylineVertexAtStation(poly, sta);
+                if (idx < 0) return false;
+                poly.pts[idx].nodeAnchor = ixId;
+                poly.pts[idx].nodeAnchorKey = key;
+            }
+            poly.pts[idx].z = z;
+            return true;
+        }
+
+        /**
+         * Привязать профили обеих осей к отметке узла. Вершины ставятся на
+         * устья — там, где кончается коридор и начинается покрытие узла.
+         */
+        function syncAxisElevationsForNode(rec) {
+            const d = rec?.points;
+            if (!d?.crossPoint || rec.zTarget == null) return false;
+            const z = d.crossPoint.z;
+            let touched = false;
+            const polys = new Set();
+            for (const arm of (d.arms || [])) {
+                const poly = drawnPolylines.find((r) => r.id === arm.polyId);
+                if (!poly || arm.sta == null || !(arm.mouth > 0)) continue;
+                const sta = arm.sta + arm.sign * arm.mouth;
+                if (setNodeAnchorVertex(poly, rec.id, 'mouth' + arm.index, sta, z)) {
+                    polys.add(poly);
+                    touched = true;
+                }
+            }
+            // И сама точка пересечения: между устьями профиль должен быть
+            // ровным, иначе ось «проваливается» под площадку узла.
+            for (const arm of (d.arms || [])) {
+                const poly = drawnPolylines.find((r) => r.id === arm.polyId);
+                if (!poly || polys.has(poly) === false) continue;
+                if (findNodeAnchor(poly, rec.id, 'node') >= 0) continue;
+                if (setNodeAnchorVertex(poly, rec.id, 'node', arm.sta, z)) touched = true;
+            }
+            polys.forEach((poly) => {
+                refreshRoadAxisEdges(poly);
+                rebuildPolylineGeometry(poly);
+            });
+            return touched;
+        }
+
+        /** Снять вершины, посаженные этим узлом (узел удалён или сброшен). */
+        function dropNodeAnchors(ixId) {
+            let touched = false;
+            for (const poly of drawnPolylines) {
+                for (let i = poly.pts.length - 1; i >= 0; i--) {
+                    if (poly.pts[i].nodeAnchor !== ixId) continue;
+                    if (poly.pts.length <= 2) break; // линия не может стать точкой
+                    poly.pts.splice(i, 1);
+                    poly.radii.splice(i, 1);
+                    if (Array.isArray(poly.vRadii)) poly.vRadii.splice(i, 1);
+                    touched = true;
+                }
+                if (touched) { rebuildPolylineGeometry(poly); refreshRoadAxisEdges(poly); }
+            }
+            return touched;
+        }
+
+        /* --- Ручка узла в сцене --------------------------------------------
+         * Живёт в HTML-слое поверх канваса, как ручки вершин и метки
+         * координат: так её видно сквозь геометрию и можно схватить мышью.
+         * План у узла не свой — его задают оси, поэтому ручка тянется ТОЛЬКО
+         * по высоте. Подпись рядом — абсолютная отметка, как в статусной
+         * строке; двойной щелчок даёт ввести число.
+         * ------------------------------------------------------------------ */
+        const nodeHandlesLayer = document.getElementById('node-handles');
+        let nodeHandles = [];           // {el, id}
+        let nodeHandleDrag = null;
+
+        function clearNodeHandles() {
+            nodeHandles.forEach((h) => h.el.remove());
+            nodeHandles = [];
+        }
+
+        function rebuildNodeHandles() {
+            clearNodeHandles();
+            if (!nodeHandlesLayer) return;
+            for (const rec of roadIntersections) {
+                if (!rec.points?.crossPoint) continue;
+                const el = document.createElement('div');
+                el.className = 'node-handle';
+                el.title = `${rec.name || 'Узел'}: тяните — поднять или опустить узел, `
+                    + 'двойной щелчок — ввести отметку. Дороги идут за узлом, концы трасс остаются.';
+                nodeHandlesLayer.appendChild(el);
+                attachNodeHandleDrag(rec.id, el);
+                nodeHandles.push({ el, id: rec.id });
+            }
+            updateNodeHandles();
+        }
+
+        function updateNodeHandles() {
+            if (!nodeHandles.length) return;
+            for (const { el, id } of nodeHandles) {
+                const rec = roadIntersections.find((x) => x.id === id);
+                const c = rec?.points?.crossPoint;
+                if (!c) { el.hidden = true; continue; }
+                const s = projectToPixels(new THREE.Vector3(c.x, c.y, c.z));
+                if (s.behind) { el.hidden = true; continue; }
+                el.hidden = false;
+                el.style.transform = `translate(${s.x}px, ${s.y}px) rotate(45deg)`;
+                const abs = scenePointToAbs(c);
+                el.dataset.z = abs ? abs.z.toFixed(3) : '';
+            }
+        }
+
+        function setNodeElevation(rec, sceneZ) {
+            rec.zTarget = sceneZ;
+            return refreshRoadIntersection(rec);
+        }
+
+        function attachNodeHandleDrag(ixId, el) {
+            el.addEventListener('pointerdown', (down) => {
+                if (down.button !== 0) return;
+                down.preventDefault();
+                down.stopPropagation();
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                if (!rec?.points?.crossPoint) return;
+                const wasControls = controls.enabled;
+                controls.enabled = false;
+                nodeHandleDrag = ixId;
+                el.classList.add('is-drag');
+                try { el.setPointerCapture(down.pointerId); } catch (_) {}
+
+                const startY = down.clientY;
+                const startZ = rec.points.crossPoint.z;
+                // Метров на пиксель по вертикали в текущем кадре — иначе на
+                // общем виде узел летал бы, а вблизи почти не двигался.
+                const mPerPx = currentFrameHeight() / Math.max(stage.clientHeight, 1);
+
+                const move = (e) => {
+                    setNodeElevation(rec, startZ + (startY - e.clientY) * mPerPx);
+                    updateNodeHandles();
+                };
+                const up = () => {
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                    controls.enabled = wasControls;
+                    nodeHandleDrag = null;
+                    el.classList.remove('is-drag');
+                    trackUsage('road_node_lift', { by: 'handle' });
+                };
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+            });
+
+            el.addEventListener('dblclick', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                const c = rec?.points?.crossPoint;
+                if (!c) return;
+                const abs = scenePointToAbs(c);
+                const raw = prompt('Отметка узла, м (абсолютная):', abs ? abs.z.toFixed(3) : '');
+                if (raw == null) return;
+                const v = Number(String(raw).replace(',', '.'));
+                if (!Number.isFinite(v)) { notifyError('Не похоже на число.'); return; }
+                setNodeElevation(rec, c.z + (v - (abs ? abs.z : c.z)));
+                trackUsage('road_node_lift', { by: 'dblclick' });
+            });
+        }
+
         /** Пересчитать узел под новые радиусы и уширения и перерисовать. */
         function refreshRoadIntersection(rec) {
             if (!rec) return false;
             const p1 = drawnPolylines.find((r) => r.id === rec.poly1Id);
             const p2 = drawnPolylines.find((r) => r.id === rec.poly2Id);
             if (!p1 || !p2) return false;
-            const next = calculateIntersection(p1, p2, rec.type, rec.radius, {
+            const calc = () => calculateIntersection(p1, p2, rec.type, rec.radius, {
                 radii: rec.radii || {},
                 flares: rec.flares || {},
-                dz: rec.dz || 0
+                zTarget: rec.zTarget
             });
+            const next = calc();
             if (!next) return false;
             rec.points = next;
+            // Профили осей идут за узлом; после правки оси геометрию узла
+            // считаем ЗАНОВО — устья могли сдвинуться вместе с профилем.
+            if (rec.zTarget != null && syncAxisElevationsForNode(rec)) {
+                rec.points = calc() || rec.points;
+            }
             visualizeIntersection(rec);
             syncCorridorsForIntersection(rec);
             renderIntersectionsList();
+            renderPolylinesList();
             return true;
         }
 
@@ -23690,7 +23946,7 @@
                                    data-ix="${escAttr(rec.id)}" data-nodez="1"
                                    value="${abs ? abs.z.toFixed(3) : ''}">
                         </label>
-                        <span class="ix-cell mono">сдвиг ${(rec.dz || 0) >= 0 ? '+' : ''}${(rec.dz || 0).toFixed(3)} м</span>
+                        <span class="ix-cell mono">${rec.zTarget == null ? 'по осям' : 'задана вручную'}</span>
                     </div>
                     <div class="ix-grid">${corners}${arms}</div>
                 </div>`;
@@ -24494,11 +24750,12 @@
             const val = Number(el.value);
             if (!Number.isFinite(val)) return;
             if (el.dataset.nodez != null) {
-                // В поле — абсолютная отметка; храним сдвиг от расчётной,
-                // иначе при правке радиуса узел прыгнул бы обратно.
-                const cur = rec.points?.crossPoint ? scenePointToAbs(rec.points.crossPoint) : null;
+                // В поле абсолютная отметка, внутри — координаты сцены.
+                const cur = rec.points?.crossPoint;
                 if (!cur) return;
-                rec.dz = (rec.dz || 0) + (val - cur.z);
+                const abs = scenePointToAbs(cur);
+                if (!abs) return;
+                rec.zTarget = cur.z + (val - abs.z);
             } else if (el.dataset.corner != null) {
                 rec.radii = rec.radii || {};
                 rec.radii[Number(el.dataset.corner)] = Math.max(1, val);
@@ -24522,8 +24779,10 @@
             const rec = roadIntersections.find((x) => x.id === btn.dataset.ixDel);
             if (!rec) return;
             removeIntersectionObjects(rec.id);
+            dropNodeAnchors(rec.id);
             roadIntersections.splice(roadIntersections.indexOf(rec), 1);
             syncCorridorsForIntersection(rec);
+            rebuildNodeHandles();
             markNeedsRender();
             renderIntersectionsList();
         });
@@ -24843,6 +25102,7 @@
             // модели при вращении камеры.
             updatePolylineHandles();
             updatePolylineAnnotations();
+            updateNodeHandles();
 
             frames++; 
             acc += now - last; 
@@ -42099,7 +42359,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: '19a0aa2-preview',
+            buildId: '4726495-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -42108,7 +42368,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: узлы дорог целиком — закругления по кромкам, бордюр и обочина продлеваются по скруглениям, коридор обрывается у устья (без двойного объёма), слои одежды телами, отметка узла правится отдельно; узел и слои коридора кликабельны; выгрузка в DXF (слой «Узел») и LandXML.',
+                '2026.08.18: узлы дорог целиком — закругления по кромкам, бордюр по скруглениям, коридор обрывается у устья, слои одежды телами; отметка узла тянется ручкой в сцене, профили подходящих дорог идут за узлом (концы трасс на месте); узел и слои коридора кликабельны; выгрузка в DXF и LandXML.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',

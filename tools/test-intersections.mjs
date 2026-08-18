@@ -433,24 +433,58 @@ try {
     }
 
     // --- Отметка узла: поднять и опустить ----------------------------------
-    const lifted = await page.evaluate(({ ixId }) => {
+    const lifted = await page.evaluate(({ ixId, id1 }) => {
         const D = window.BimLvaDebug;
         const before = D.nodeElevation(ixId);
-        D.editIntersection(ixId, { dz: 1.5 });
+        const profBefore = D.axisProfile(id1);
+        D.setNodeElevationAbs(ixId, before.abs + 1.5);
         const after = D.nodeElevation(ixId);
-        // Правка радиуса не должна сбрасывать поднятие: сдвиг хранится
-        // отдельно от расчётной отметки.
+        const profAfter = D.axisProfile(id1);
+        // Правка радиуса не должна сбрасывать поднятие. Отметка хранится
+        // ЦЕЛЕВЫМ значением: сдвиг после запекания в профиль оси прибавлялся
+        // бы к уже поднятой отметке на каждом пересчёте.
         D.editIntersection(ixId, { radii: { 0: 12 } });
         const kept = D.nodeElevation(ixId);
-        return { before, after, kept };
-    }, { ixId: outer?.ixId });
+        // Ещё два холостых пересчёта: если отметка «ползёт», это видно здесь.
+        D.editIntersection(ixId, { radii: { 0: 12 } });
+        D.editIntersection(ixId, { radii: { 0: 12 } });
+        const settled = D.nodeElevation(ixId);
+        return { before, after, kept, settled, profBefore, profAfter };
+    }, { ixId: outer?.ixId, id1: trim.id1 });
 
     if (lifted.before && lifted.after) {
-        console.log(`  отметка узла: ${lifted.before.abs.toFixed(3)} → ${lifted.after.abs.toFixed(3)} м (сдвиг ${lifted.after.dz})`);
+        console.log(`  отметка узла: ${lifted.before.abs.toFixed(3)} → ${lifted.after.abs.toFixed(3)} м`);
         check(Math.abs((lifted.after.abs - lifted.before.abs) - 1.5) < 1e-6,
             `подъём узла на 1.5 м применился (Δ ${(lifted.after.abs - lifted.before.abs).toFixed(3)})`);
         check(Math.abs(lifted.kept.abs - lifted.after.abs) < 1e-6,
             'правка радиуса не сбросила отметку узла');
+        console.log(`  после трёх холостых пересчётов: ${lifted.settled.abs.toFixed(3)} м`);
+        check(Math.abs(lifted.settled.abs - lifted.after.abs) < 1e-6,
+            'отметка не ползёт от повторных пересчётов');
+
+        // Профиль оси идёт за узлом: у устьев появились вершины с его
+        // отметкой, а КОНЦЫ трассы остались на месте.
+        const anchors = lifted.profAfter.filter((p) => p.anchor);
+        console.log(`  вершин оси: ${lifted.profBefore.length} → ${lifted.profAfter.length}, из них посажено узлом ${anchors.length}`);
+        check(anchors.length > 0, `в профиль оси посажены вершины узла (${anchors.length})`);
+        check(anchors.every((a) => Math.abs(a.z - lifted.after.abs) < 1e-6),
+            'вершины узла на отметке узла');
+        const endBefore = lifted.profBefore[lifted.profBefore.length - 1].z;
+        const endAfter = lifted.profAfter[lifted.profAfter.length - 1].z;
+        console.log(`  конец трассы: ${endBefore.toFixed(3)} → ${endAfter.toFixed(3)} м`);
+        check(Math.abs(endAfter - endBefore) < 1e-6,
+            'конец трассы остался на месте — поднимать его пользователю вручную');
+        check(Math.abs(lifted.profAfter[0].z - lifted.profBefore[0].z) < 1e-6,
+            'начало трассы осталось на месте');
+    }
+
+    // --- Ручка узла в сцене -------------------------------------------------
+    const handles = await page.evaluate(() => window.BimLvaDebug.nodeHandleState());
+    console.log(`  ручек узлов: ${handles.length}${handles[0] ? ', подпись «' + handles[0].label + '»' : ''}`);
+    check(handles.length === 1, `у узла появилась ручка (${handles.length})`);
+    if (handles[0]) {
+        check(handles[0].label && Math.abs(Number(handles[0].label) - lifted.after.abs) < 0.001,
+            'на ручке — абсолютная отметка узла');
     }
 
     // --- Элементы дороги кликабельны ---------------------------------------
