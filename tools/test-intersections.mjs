@@ -401,6 +401,83 @@ try {
         }
     }
 
+    // --- Бордюр продлевается по скруглениям --------------------------------
+    // Покрытие узла кончается на кромке проезжей части, коридор обрезан у
+    // устья — без протяжки внешнего профиля у устьев зияли разрывы.
+    // Шаблон «С бордюром» — тот же, что владелец выбирает в окне трассы.
+    // На шаблоне по умолчанию проверять нечего: за кромкой там пусто, и
+    // «протяжка есть» была бы правдой при нулевом вылете.
+    const outer = await page.evaluate(({ id1, id2, r }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        D.applyRoadXsPresetTo(id1, 'curb');
+        D.applyRoadXsPresetTo(id2, 'curb');
+        const ix = D.buildIntersection(id1, id2, { type: 'cross', radius: r });
+        if (!ix) return null;
+        const o = D.nodeOuter(ix.id);
+        // Разворачивать null спредом нельзя: получится объект с одним ixId,
+        // проверка «профиль найден» пройдёт, а следующая строка упадёт на
+        // undefined — падение теста вместо честного FAIL.
+        return o ? { ixId: ix.id, ...o } : { ixId: ix.id, missing: true };
+    }, { id1: trim.id1, id2: trim.id2, r: R });
+    check(!!outer && !outer.missing, 'внешний профиль шаблона найден');
+    if (outer && !outer.missing) {
+        console.log(`  внешний профиль: кромка ${outer.edgeOff} м, точек ${outer.profilePts}, вылет ${outer.maxOff.toFixed(2)} м, формы [${outer.shapes.join(', ')}]`);
+        console.log(`  участков контура: ${outer.runs.map((r) => r.kind).join(', ')}; протянуто кусков ${outer.sweptPieces}, треугольников ${outer.sweptTris}`);
+        check(outer.maxOff > 0, `профиль вынесен за кромку проезжей части (${outer.maxOff.toFixed(2)} м)`);
+        check(outer.sweptTris > 0, `бордюр протянут по краю узла (${outer.sweptTris} треугольников)`);
+        // Устья ветвей в протяжку попадать не должны: там дорога продолжается
+        // и бордюр даёт сам коридор. Участков ровно столько, сколько дуг.
+        check(outer.runs.length === 4 && outer.runs.every((r) => r.kind === 'arc'),
+            `протяжка идёт по дугам, а не через устья (участков ${outer.runs.length})`);
+    }
+
+    // --- Отметка узла: поднять и опустить ----------------------------------
+    const lifted = await page.evaluate(({ ixId }) => {
+        const D = window.BimLvaDebug;
+        const before = D.nodeElevation(ixId);
+        D.editIntersection(ixId, { dz: 1.5 });
+        const after = D.nodeElevation(ixId);
+        // Правка радиуса не должна сбрасывать поднятие: сдвиг хранится
+        // отдельно от расчётной отметки.
+        D.editIntersection(ixId, { radii: { 0: 12 } });
+        const kept = D.nodeElevation(ixId);
+        return { before, after, kept };
+    }, { ixId: outer?.ixId });
+
+    if (lifted.before && lifted.after) {
+        console.log(`  отметка узла: ${lifted.before.abs.toFixed(3)} → ${lifted.after.abs.toFixed(3)} м (сдвиг ${lifted.after.dz})`);
+        check(Math.abs((lifted.after.abs - lifted.before.abs) - 1.5) < 1e-6,
+            `подъём узла на 1.5 м применился (Δ ${(lifted.after.abs - lifted.before.abs).toFixed(3)})`);
+        check(Math.abs(lifted.kept.abs - lifted.after.abs) < 1e-6,
+            'правка радиуса не сбросила отметку узла');
+    }
+
+    // --- Элементы дороги кликабельны ---------------------------------------
+    // ⚠️ Целиться в ЦЕНТР ХОЛСТА бесполезно: «Вписать» кадрирует всю сцену
+    // вместе с моделью, и в центре оказывается она, а не узел. Берём
+    // спроецированные точки самого узла — как и при отладке пикинга по линии.
+    await page.evaluate(() => document.getElementById('fit')?.click());
+    await page.waitForTimeout(500);
+    const picked = await page.evaluate(({ ixId }) => {
+        const D = window.BimLvaDebug;
+        const pts = D.nodeScreenPts(ixId);
+        if (!pts) return null;
+        const tries = [pts.cross, ...pts.outline].filter((p) => p && !p.behind);
+        for (const p of tries) {
+            const hit = D.pickRoadPartAt(p.clientX, p.clientY);
+            if (hit) return { hit, tried: tries.length };
+        }
+        return { hit: null, tried: tries.length };
+    }, { ixId: outer?.ixId });
+
+    console.log(`  пикинг по точкам узла (${picked?.tried ?? 0} проб): ${picked?.hit ? picked.hit.kind + ' / ' + (picked.hit.code || '—') : 'мимо'}`);
+    check(!!picked?.hit, 'элемент дороги под курсором опознан');
+    if (picked?.hit) {
+        check(['node', 'corridor'].includes(picked.hit.kind),
+            `опознан как часть дороги (${picked.hit.kind})`);
+    }
+
     // --- Выгрузка узла ------------------------------------------------------
     const exported = await page.evaluate(() => {
         const D = window.BimLvaDebug;
