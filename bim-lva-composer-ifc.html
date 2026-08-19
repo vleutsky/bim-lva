@@ -7515,6 +7515,19 @@
                 const built = buildNodeSlopes(rec, { ...readRoadXsSlopeOpts(), ...(opts || {}) });
                 return built ? built.length : 0;
             },
+            /** Дерево начерченного: строки как в панели «Структура». */
+            drawnTree() {
+                renderDrawnTree();
+                const root = document.getElementById('drawn-root');
+                if (!root) return null;
+                return [...root.querySelectorAll('.trow')].map((r) => ({
+                    name: r.querySelector('.tlabel')?.textContent || '',
+                    type: r.querySelector('.ttype')?.textContent || '',
+                    depth: (() => { let d = 0, n = r.parentElement;
+                        while (n && n !== root) { if (n.classList.contains('children')) d++; n = n.parentElement; }
+                        return d; })()
+                }));
+            },
             /** Задать отметку узла в абсолютных — как ручкой в сцене. */
             setNodeElevationAbs(ixId, absZ) {
                 const rec = roadIntersections.find((x) => x.id === ixId);
@@ -14154,6 +14167,148 @@
             return groups;
         }
 
+        /* --- Дерево проекта: начерченное ---------------------------------
+         * Просьба владельца: «всё, что создаётся — полилинии, трассы,
+         * перекрёстки — надо формировать в дереве проекта, структуру этих
+         * элементов так, как они находятся в IFC».
+         *
+         * Ветка строится из `describeDrawnStructure` — того же источника, из
+         * которого собирается выгрузка. Заводить для дерева вторую раскладку
+         * нельзя: разойдутся, и в дереве будет одно, а в файле другое.
+         * ------------------------------------------------------------------ */
+
+        /** Габарит элемента дерева — по нему наводится камера при клике. */
+        function drawnNodeBox(g) {
+            const box = new THREE.Box3();
+            const add = (p) => box.expandByPoint(new THREE.Vector3(p.x, p.y, p.z));
+            if (g.kind === 'alignment') {
+                const rec = drawnPolylines.find((r) => r.id === g.polylineId);
+                (rec?.renderPts || []).forEach(add);
+            } else if (g.kind === 'node') {
+                const d = roadIntersections.find((x) => x.id === g.ixId)?.points;
+                (d?.outline || []).forEach(add);
+                if (d?.crossPoint) add(d.crossPoint);
+            } else if (g.kind === 'slope') {
+                const sm = slopeModels.find((m) => m.id === g.slopeId);
+                (sm?.tin?.points || []).forEach(add);
+            }
+            return box.isEmpty() ? null : box;
+        }
+
+        /** Строка дерева в том же виде, что у загруженных моделей. */
+        function drawnTreeRow(name, type, onPick) {
+            const node = document.createElement('div');
+            node.className = 'tnode';
+            const row = document.createElement('div');
+            row.className = 'trow';
+            row.innerHTML = `<span class="caret">▾</span>`
+                + `<span class="tlabel">${esc(name)}</span>`
+                + `<span class="ttype">${esc(type || '')}</span>`;
+            node.appendChild(row);
+            row.addEventListener('click', (e) => {
+                if (e.target.classList.contains('caret')) { node.classList.toggle('collapsed'); return; }
+                if (onPick) onPick(); else node.classList.toggle('collapsed');
+            });
+            return { node, row };
+        }
+
+        function drawnTreeChildren(node) {
+            const box = document.createElement('div');
+            box.className = 'children';
+            node.appendChild(box);
+            return box;
+        }
+
+        /**
+         * Ветка «Начерчено» рядом с файлами моделей. Иерархия — ровно как в
+         * выгрузке: IfcSite → IfcRoad → оси (IfcAlignment с вложенными
+         * горизонталью и профилем), покрытие узлов (IfcPavement) со слоями
+         * одежды (IfcCourse), откосы (IfcEarthworksFill).
+         */
+        function renderDrawnTree() {
+            if (!treeBox) return;
+            treeBox.querySelector('#drawn-root')?.remove();
+            const groups = describeDrawnStructure();
+            if (!groups.length) return;
+            treeBox.querySelector('.empty')?.remove();
+
+            const root = drawnTreeRow('Начерчено', 'PROJECT', null);
+            root.node.id = 'drawn-root';
+            root.node.classList.add('file-root');
+            root.row.querySelector('.tlabel').style.cssText = 'font-weight:600;color:var(--blue)';
+            const rootCh = drawnTreeChildren(root.node);
+
+            const site = drawnTreeRow('Площадка', 'SITE', null);
+            rootCh.appendChild(site.node);
+            const siteCh = drawnTreeChildren(site.node);
+            const road = drawnTreeRow('Дорога', 'ROAD', null);
+            siteCh.appendChild(road.node);
+            const roadCh = drawnTreeChildren(road.node);
+
+            const short = (cls) => String(cls || '').replace(/^IFC/, '');
+            /* Порядок для ЧЕЛОВЕКА, а не порядок записи в файл: сначала оси —
+             * они первичны, от них всё остальное, потом узлы, потом откосы.
+             * В выгрузке порядок свой и трогать его незачем. */
+            const rank = (g) => (g.kind === 'alignment' ? 0 : g.kind === 'node' ? 1 : 2);
+            const ordered = groups.slice().sort((a, b) => rank(a) - rank(b));
+            // Откосов много (на каждый участок бровки свой) — прячем их в одну
+            // группу, иначе они забивают дерево длиннее самих дорог.
+            const slopeBox = ordered.some((g) => g.kind === 'slope')
+                ? (() => {
+                    const n = ordered.filter((g) => g.kind === 'slope').length;
+                    const t = drawnTreeRow(`Откосы · ${n}`, 'EARTHWORKSFILL', null);
+                    t.node.classList.add('collapsed');
+                    roadCh.appendChild(t.node);
+                    return drawnTreeChildren(t.node);
+                })()
+                : null;
+            for (const g of ordered) {
+                const pick = () => {
+                    const box = drawnNodeBox(g);
+                    if (box) frameBox(box);
+                };
+                if (g.kind === 'alignment') {
+                    const al = drawnTreeRow(g.name, 'ALIGNMENT', pick);
+                    roadCh.appendChild(al.node);
+                    const ch = drawnTreeChildren(al.node);
+                    al.node.classList.add('collapsed');
+                    const hor = g.layout?.hor?.length || 0;
+                    const ver = g.layout?.ver?.length || 0;
+                    const arcs = (g.layout?.hor || []).filter((x) => x.type === 'CIRCULARARC').length;
+                    ch.appendChild(drawnTreeRow(
+                        `Горизонталь · ${hor} сегм. (дуг ${arcs})`, 'ALIGNMENTHORIZONTAL', pick).node);
+                    if (ver) {
+                        const varcs = (g.layout.ver || []).filter((x) => x.type === 'CIRCULARARC').length;
+                        ch.appendChild(drawnTreeRow(
+                            `Профиль · ${ver} сегм. (кривых ${varcs})`, 'ALIGNMENTVERTICAL', pick).node);
+                    }
+                    continue;
+                }
+                // Узел и откос: класс берём у первого тела — из того же
+                // ifcClassForCode, по которому пишется файл.
+                const kids = g.children || [];
+                const cls = short(ifcClassForCode(kids[0]?.code).cls);
+                /* «Ось A — бровка Л» это имя служебной линии, по которой
+                 * считался откос. В дереве человеку нужен сам откос. */
+                const label = g.kind === 'slope'
+                    ? g.name.replace(/—\s*бровка\s*/i, '— откос ')
+                        .replace(/откос\s*Л\b/i, 'откос слева')
+                        .replace(/откос\s*П\b/i, 'откос справа')
+                    : g.name;
+                const top = drawnTreeRow(label, cls, pick);
+                (g.kind === 'slope' && slopeBox ? slopeBox : roadCh).appendChild(top.node);
+                if (kids.length > 1) {
+                    const ch = drawnTreeChildren(top.node);
+                    top.node.classList.add('collapsed');
+                    kids.forEach((el) => {
+                        ch.appendChild(drawnTreeRow(
+                            el.name, short(ifcClassForCode(el.code).cls), pick).node);
+                    });
+                }
+            }
+            treeBox.appendChild(root.node);
+        }
+
         /**
          * Собрать IFC из начерченного. Возвращает текст и счётчики — по ним
          * и проверяем, что в файл реально что-то попало.
@@ -16782,6 +16937,7 @@
         }
 
         function renderPolylinesList() {
+            renderDrawnTree();
             // Общее место «полилиния изменилась насовсем» — отсюда же
             // пересчитываются узлы, которые на этой оси держатся. Внутри
             // перетаскивания сюда не заходят (там только
@@ -25189,6 +25345,7 @@
          * узел на месте — заново выбирать оси не нужно.
          */
         function renderIntersectionsList() {
+            renderDrawnTree();
             const box = $('intersectionsList');
             if (!box) return;
             if (!roadIntersections.length) {
