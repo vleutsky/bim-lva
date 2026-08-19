@@ -21767,9 +21767,21 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
-            /* Откосы идут за полотном ВСЕГДА — кнопки, включавшей их, нет.
-             * `quiet`: окно поперечника рисует сам buildRoadCrossSections. */
-            buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
+            /* ⚠️ Здесь откосы с нуля НЕ строим — держим свежими только уже
+             * построенные. Безусловная сборка ломает окно поперечника: smoke
+             * даёт «ПКМ не сдвинул вид» и объём 0.713 вместо 1.125. Три
+             * версии причины проверены и ОТБРОШЕНЫ: (1) перерисовка окна
+             * изнутри — провалы те же и с `quiet`; (2) отложенная пересборка
+             * scheduleRoadXsRebuild — опровергнута кодом, для бровки она
+             * выходит сразу, у неё нет модели поперечников; (3) поверхность
+             * соседней стороны от прошлой сборки в выборке земли — снятие
+             * всех прежних откосов ДО построения ничего не изменило.
+             * Числа во всех трёх прогонах ПОБАЙТНО одинаковы, то есть
+             * результат не зависит ни от одной из этих правок. Следующий шаг —
+             * не гадать, а померить объём ПО СТОРОНАМ отдельно. */
+            if ((model.slopeModelIds || []).length) {
+                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
+            }
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
