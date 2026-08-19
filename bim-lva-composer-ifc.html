@@ -11529,6 +11529,24 @@
             return r?.role === 'road-slope-brow';
         }
 
+        /**
+         * Производная линия: её начертил не пользователь, а расчёт (линия
+         * выхода откоса на рельеф, контур откоса). В списке полилиний она
+         * нужна — это результат, который смотрят и выгружают. А вот ОСЬЮ она
+         * быть не может: у линии выхода вершины идут через полметра, и
+         * «профиль по ней» — сплошные переломы. Владелец на это и наткнулся:
+         * в окне поперечников выбралась «… — бровка 4 — насыпь (вправо)».
+         */
+        function markDerivedPolyline(rec) {
+            if (rec) rec.derived = true;
+            return rec;
+        }
+
+        /** Что можно взять осью в окне «План, профиль, поперечник». */
+        function roadStudioAxisCandidates() {
+            return listedPolylines().filter((r) => !r.derived && (r.pts?.length || 0) >= 2);
+        }
+
         function listedPolylines() {
             return drawnPolylines.filter((r) => !isInternalPolyline(r));
         }
@@ -13071,13 +13089,13 @@
             const groups = slopeExitGroups(tokens, closed, sections.length);
             const exitLines = groups.map((g, gi) => {
                 const modeName = g.mode === 'cut' ? 'выемка' : g.mode === 'fill' ? 'насыпь' : 'откос';
-                return addPolylineFromPoints(g.pts, {
+                return markDerivedPolyline(addPolylineFromPoints(g.pts, {
                     name: `${record.name} — ${modeName} (${side === 'left' ? 'влево' : 'вправо'})` +
                         (groups.length > 1 ? ` #${gi + 1}` : ''),
                     color: g.mode === 'cut' ? '#3a83c9' : (opts.exitColor || '#2c8f4a'),
                     width: 1.5,
                     closed: g.closed
-                });
+                }));
             });
 
             return {
@@ -13110,12 +13128,12 @@
             rightG.slice().reverse().forEach((p) => ring.push(p));
             if (capExits?.[0]) ring.push(capExits[0]);
             if (ring.length < 3) return null;
-            return addPolylineFromPoints(ring, {
+            return markDerivedPolyline(addPolylineFromPoints(ring, {
                 name: `${record.name} — контур откоса`,
                 color: opts.exitColor || '#2c8f4a',
                 width: 1.5,
                 closed: true
-            });
+            }));
         }
 
         function collectSlopeTin(model) {
@@ -21749,12 +21767,11 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
-            // Откосы идут за полотном: держим их свежими, если они уже есть.
-            // Первое построение делает applyRoadTemplateChange / «Построить» —
-            // безусловный вызов ЗДЕСЬ ломал окно поперечника (см. ниже).
-            if ((model.slopeModelIds || []).length) {
-                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-            }
+            // Откосы идут за полотном ВСЕГДА: и при первой сборке, и при
+            // пересборке после сдвига оси или правки узла. Кнопки, которая их
+            // включала, больше нет. `quiet` — чтобы не перерисовывать окно
+            // поперечника отсюда: ниже это делает сам buildRoadCrossSections.
+            buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
@@ -21919,7 +21936,15 @@
         }
 
         let buildingRoadSlopes = false;
-        function buildRoadTemplateSlopes(model, opts) {
+        /**
+         * @param {object} [flags.quiet] не перерисовывать окно поперечника.
+         *   Безусловный вызов из `buildRoadCrossSections` тянул за собой
+         *   renderRoadXsView на КАЖДОЙ пересборке полотна и сбрасывал вид
+         *   окна: smoke ловил это как «ПКМ не сдвинул вид» (до и после
+         *   совпадали побайтно) и как заниженный объём откосов (0.505 вместо
+         *   1.125). Вызывающий и так рисует окно сам — пусть рисует один раз.
+         */
+        function buildRoadTemplateSlopes(model, opts, flags = {}) {
             if (!model?.stations || model.stations.length < 2) return null;
             /* Откосы теперь строятся всегда и из нескольких мест сразу
              * (сборка полотна, правка шаблона, пересчёт узла). Сами они
@@ -21968,8 +21993,10 @@
             // Узел — часть той же дороги: откосы у него появляются и исчезают
             // вместе с дорожными, отдельной кнопки для узла нет.
             syncNodeSlopesForPolyline(model.polylineId);
-            renderRoadXsView();
-            updateRoadXsStatus();
+            if (!flags.quiet) {
+                renderRoadXsView();
+                updateRoadXsStatus();
+            }
             markNeedsRender();
             return built;
         }
@@ -22623,13 +22650,13 @@
         }
 
         function syncRoadStudioProfile(rec) {
-            const axis = rec || listedPolylines().find((r) => r.id === Number($('roadXsSelect')?.value));
+            const axis = rec || roadStudioAxisCandidates().find((r) => r.id === Number($('roadXsSelect')?.value));
             if (!axis) return;
             const switched = polyProfileRecordId !== axis.id;
             polyProfileRecordId = axis.id;
             const sel = $('polyProfileSelect');
             if (sel) {
-                sel.innerHTML = listedPolylines()
+                sel.innerHTML = roadStudioAxisCandidates()
                     .map((r) => `<option value="${r.id}"${r.id === axis.id ? ' selected' : ''}>${esc(r.name)}</option>`)
                     .join('');
             }
@@ -23300,14 +23327,14 @@
         function fillRoadXsSelect(targetId) {
             const sel = $('roadXsSelect');
             if (!sel) return;
-            const list = listedPolylines().filter((r) => r.pts.length >= 2);
+            const list = roadStudioAxisCandidates();
             sel.innerHTML = list
                 .map((r) => `<option value="${r.id}"${r.id === targetId ? ' selected' : ''}>${esc(r.name)}</option>`)
                 .join('');
         }
 
         function openRoadXsModal(record) {
-            const candidates = listedPolylines().filter((r) => r.pts.length >= 2);
+            const candidates = roadStudioAxisCandidates();
             if (!candidates.length) {
                 notifyError('Нет линий: сначала начертите ось.');
                 return;
