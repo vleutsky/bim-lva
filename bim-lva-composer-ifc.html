@@ -21767,17 +21767,9 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
-            /* ⚠️ Здесь откосы НЕ строим с нуля. Проверено дважды: и с
-             * перерисовкой окна, и с `quiet` — smoke одинаково даёт
-             * «ПКМ не сдвинул вид» и объём 0.713 вместо 1.125. Значит дело не
-             * в перерисовке, а в самой сборке откосов внутри пересборки
-             * полотна: бровки заводят полилинии → renderPolylinesList →
-             * отложенный scheduleRoadXsRebuild (160 мс) → полотно
-             * пересобирается ЗАДНИМ ЧИСЛОМ и сбрасывает вид окна.
-             * Пока это не расшито, держим их свежими только если уже есть. */
-            if ((model.slopeModelIds || []).length) {
-                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
-            }
+            /* Откосы идут за полотном ВСЕГДА — кнопки, включавшей их, нет.
+             * `quiet`: окно поперечника рисует сам buildRoadCrossSections. */
+            buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
@@ -21965,6 +21957,13 @@
                 ...(opts || {})
             };
             const prevBrows = (model.slopeBrowIds || []).slice();
+            /* Снять ВСЕ прежние откосы этой оси ДО построения. Иначе первая
+             * сторона строится по чистому рельефу, а вторая уже видит
+             * поверхность первой: `makeSlopeGroundSampler` считает готовые
+             * откосы проектной землёй. От этого повторная сборка давала
+             * другой объём, чем первая, и результат зависел от того, сколько
+             * раз пересобиралось полотно. */
+            prevBrows.forEach((id) => removeSlopeModelsForPolyline(id));
             const built = [];
             /* Бровка рвётся ТАМ ЖЕ, где полотно: под узлом и на вывернутом
              * сечении. Одной линией через весь узел она шла напрямую через
