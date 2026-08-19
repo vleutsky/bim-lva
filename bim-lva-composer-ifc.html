@@ -5357,9 +5357,6 @@
                 <label data-tip="Заложение откоса выемки: 1 : m.">1:m выем.
                     <input class="editInput" id="roadXsMCut" type="number" min="0.1" step="0.1" value="1">
                 </label>
-                <label class="chk" data-tip="Строить откосы от кромок до рельефа вместе с «Построить». Снимите галочку — откосы пропадут с чертежа и из сцены.">
-                    <input type="checkbox" id="roadXsSlopeOn"> откосы
-                </label>
                 <button type="button" class="btn load-btn" id="roadXsApply" data-tip="Протянуть шаблон вдоль оси: полотно в сцене и чертёж сечения.">Построить</button>
                 <details class="rs-more" style="margin:0">
                     <summary data-tip="Шаг по сечению, цвет, связь с осью, вылет откоса, слои DXF.">ещё</summary>
@@ -5443,7 +5440,6 @@
                         <span class="fill"></span>
                         <button class="btn" id="roadXsFit" data-tip="Вписать сечение. Масштаб всегда 1:1. Колесо — зум к курсору, ПКМ — сдвиг.">⤢</button>
                         <button class="btn" id="roadXsProfile" data-tip="Продольный профиль этой оси">〰 профиль</button>
-                        <button class="btn load-btn" id="roadXsSlope" data-tip="Откосы от кромок шаблона до рельефа">△ Откосы до рельефа</button>
                         <button class="btn" id="roadXsCsv" data-tip="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
                         <button class="btn" id="roadXsDxf" data-tip="Поперечники 3D-полилиниями на слое «Поперечник»">⬇ DXF</button>
                         <button class="btn" id="roadXsClear">Убрать</button>
@@ -7731,9 +7727,8 @@
                 const resolved = model.template
                     ? resolveTemplatePoints(model.template, st).filter((p) => !p.hide)
                     : [];
-                const slopeOn = !!$('roadXsSlopeOn')?.checked;
                 const slopeSecs = [];
-                if (slopeOn) {
+                {
                     const opts = readRoadXsSlopeOpts();
                     const edgePts = templateEdgePoints({ points: resolved });
                     [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
@@ -7945,7 +7940,6 @@
                     : currentRoadXsModel();
                 if (!model) return false;
                 clearRoadXsSlopes(model);
-                if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = false;
                 renderRoadXsView();
                 updateRoadXsStatus();
                 markNeedsRender();
@@ -8007,7 +8001,6 @@
                     ? roadXsModels.find((m) => m.polylineId === opts.polylineId)
                     : currentRoadXsModel();
                 if (!model) return null;
-                if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = true;
                 const built = buildRoadTemplateSlopes(model, {
                     mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30,
                     ...(opts || {})
@@ -16841,12 +16834,15 @@
                 lift.title = 'Поднять или опустить всю линию: на отметку либо на Δ';
                 lift.addEventListener('click', () => liftPolylinePrompt(r));
 
-                // Подписанная кнопка, а не значок: откосы — не самая очевидная
-                // операция, значок среди прочих затерялся бы.
+                /* У оси дороги откосы строятся сами вместе с полотном, кнопка
+                 * там лишняя. Остаётся она только на обычном контуре —
+                 * площадке: строить откос от каждой начерченной линии по
+                 * умолчанию нельзя, это и осевые, и контуры, и линии выхода. */
                 const slope = document.createElement('button');
                 slope.className = 'btn';
                 slope.textContent = '△ Откосы';
                 slope.title = 'Поверхность откоса от этой линии до рельефа, с линией выхода и объёмами';
+                slope.hidden = r.role === 'road-axis';
                 slope.addEventListener('click', () => openSlopeModal(r));
 
                 const xs = document.createElement('button');
@@ -21171,6 +21167,39 @@
             gaps.some((g) => sta > g.from + 1e-6 && sta < g.to - 1e-6);
 
         /**
+         * Где полотно дороги рвётся: на вывернутом сечении (острый угол) и
+         * внутри узла. `true` в позиции i значит «между i и i+1 связи нет».
+         *
+         * Один предикат на коридор И на бровку откоса. Раньше бровка строилась
+         * ОДНОЙ полилинией по всем пикетам сразу, включая разрыв под узлом:
+         * линия шла напрямую через перекрёсток, и откос по ней резал покрытие
+         * (у владельца это чёрные клинья у устьев и зелёная линия поперёк
+         * узла). Считать разрывы во второй раз своей формулой нельзя — разой-
+         * дутся, и полотно будет рваться в одном месте, а откос в другом.
+         */
+        function corridorBreakFlags(stations, gaps) {
+            return stations.map((st, i) => {
+                if (i >= stations.length - 1) return false;
+                const n = stations[i + 1];
+                const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
+                if (dot < 0.82) return true;
+                return stationInsideGaps((st.sta + n.sta) / 2, gaps || []);
+            });
+        }
+
+        /** Разбить пикеты на непрерывные участки по тем же разрывам. */
+        function splitStationsAtBreaks(stations, breaks) {
+            const runs = [];
+            let cur = [];
+            for (let i = 0; i < stations.length; i++) {
+                cur.push(stations[i]);
+                if (breaks[i]) { runs.push(cur); cur = []; }
+            }
+            if (cur.length) runs.push(cur);
+            return runs.filter((r) => r.length >= 2);
+        }
+
+        /**
          * Убрать пикеты внутри узла и поставить их ровно на границы устья —
          * тогда торец коридора встаёт заподлицо с покрытием узла, а не с
          * ближайшим случайным пикетом.
@@ -21482,13 +21511,7 @@
             // corridorLoftPush по этому же массиву сам ставит торцы на границах
             // пропуска, поэтому коридор у устья получается закрытым.
             const gaps = model.nodeGaps || [];
-            const twistSkip = stations.map((st, i) => {
-                if (i >= stations.length - 1) return false;
-                const n = stations[i + 1];
-                const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
-                if (dot < 0.82) return true;
-                return stationInsideGaps((st.sta + n.sta) / 2, gaps);
-            });
+            const twistSkip = corridorBreakFlags(stations, gaps);
             const meshes = [];
             let tris = 0;
             let sharedEdges = 0;
@@ -21579,9 +21602,7 @@
                  * прежнего шаблона — сменили пресет на «с бордюром», а у узла
                  * бордюра нет и откос начинается прямо от проезжей части. */
                 refreshNodesOnPolyline(model.polylineId);
-                if ($('roadXsSlopeOn')?.checked && (model.slopeModelIds || []).length) {
-                    buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-                }
+                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
                 renderRoadXsView();
                 updateRoadXsStatus();
             }
@@ -21704,9 +21725,11 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
-            if ((model.slopeModelIds || []).length) {
-                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-            }
+            // Откосы идут за полотном ВСЕГДА — и при первой сборке, и при
+            // пересборке после сдвига оси или правки узла. Отдельной кнопки,
+            // включавшей их, больше нет; от рекурсии закрыт сам
+            // buildRoadTemplateSlopes.
+            buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
@@ -21817,12 +21840,14 @@
             return (sec.exit.x - st.x) * (st.rx || 0) + (sec.exit.y - st.y) * (st.ry || 0);
         }
 
-        function ensureRoadSlopeBrow(model, side, pts) {
-            let rec = drawnPolylines.find((r) => r.roadXsModelId === model.id && r.roadSlopeSide === side);
+        function ensureRoadSlopeBrow(model, side, pts, run = 0) {
+            let rec = drawnPolylines.find((r) => r.roadXsModelId === model.id
+                && r.roadSlopeSide === side && (r.roadSlopeRun || 0) === run);
             const vecs = pts.map((p) => (p instanceof THREE.Vector3 ? p.clone() : new THREE.Vector3(p.x, p.y, p.z)));
             if (!rec) {
                 rec = addPolylineFromPoints(vecs, {
-                    name: `${model.name || 'Ось'} — бровка ${side === 'left' ? 'Л' : 'П'}`,
+                    name: `${model.name || 'Ось'} — бровка ${side === 'left' ? 'Л' : 'П'}`
+                        + (run ? ` (${run + 1})` : ''),
                     role: 'road-slope-brow',
                     color: '#c9793a',
                     width: 1
@@ -21830,6 +21855,7 @@
                 if (!rec) return null;
                 rec.roadXsModelId = model.id;
                 rec.roadSlopeSide = side;
+                rec.roadSlopeRun = run;
             } else {
                 rec.pts = vecs;
                 rec.radii = vecs.map(() => 0);
@@ -21867,8 +21893,14 @@
             syncNodeSlopesForPolyline(model.polylineId);
         }
 
+        let buildingRoadSlopes = false;
         function buildRoadTemplateSlopes(model, opts) {
             if (!model?.stations || model.stations.length < 2) return null;
+            /* Откосы теперь строятся всегда и из нескольких мест сразу
+             * (сборка полотна, правка шаблона, пересчёт узла). Сами они
+             * заводят полилинии-бровки, а это дёргает список полилиний и
+             * узлы — без флага можно уехать в рекурсию. */
+            if (buildingRoadSlopes) return null;
             const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
             const edges = templateEdgePoints(tpl);
             if (!edges.left && !edges.right) return null;
@@ -21878,19 +21910,27 @@
             };
             const prevBrows = (model.slopeBrowIds || []).slice();
             const built = [];
+            /* Бровка рвётся ТАМ ЖЕ, где полотно: под узлом и на вывернутом
+             * сечении. Одной линией через весь узел она шла напрямую через
+             * перекрёсток, и откос по ней резал покрытие. */
+            const runs = splitStationsAtBreaks(
+                model.stations, corridorBreakFlags(model.stations, model.nodeGaps || [])
+            );
             const addSide = (side) => {
-                const pts = model.stations.map((st) => {
-                    const vis = resolveTemplatePoints(tpl, st).filter((p) => !p.hide);
-                    const edges = templateEdgePoints({ points: vis });
-                    const pt = side === 'left' ? edges.left : edges.right;
-                    if (!pt) return null;
-                    return placeTemplateAtStation(st, pt);
-                }).filter(Boolean);
-                if (pts.length < 2) return;
-                const rec = ensureRoadSlopeBrow(model, side, pts);
-                if (!rec) return;
-                const sm = buildSlopeToTerrain(rec, { ...full, side });
-                if (sm) built.push({ side, rec, sm });
+                runs.forEach((run, ri) => {
+                    const pts = run.map((st) => {
+                        const vis = resolveTemplatePoints(tpl, st).filter((p) => !p.hide);
+                        const edges = templateEdgePoints({ points: vis });
+                        const pt = side === 'left' ? edges.left : edges.right;
+                        if (!pt) return null;
+                        return placeTemplateAtStation(st, pt);
+                    }).filter(Boolean);
+                    if (pts.length < 2) return;
+                    const rec = ensureRoadSlopeBrow(model, side, pts, ri);
+                    if (!rec) return;
+                    const sm = buildSlopeToTerrain(rec, { ...full, side });
+                    if (sm) built.push({ side, run: ri, rec, sm });
+                });
             };
             addSide('left');
             addSide('right');
@@ -22156,7 +22196,7 @@
             const slopeOpts = readRoadXsSlopeOpts();
             const edgePts = templateEdgePoints({ points: resolved.filter((p) => !p.hide) });
             const slopeSecs = [];
-            if ($('roadXsSlopeOn')?.checked) {
+            {
                 [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
                     if (!pt) return;
                     const sec = roadXsSlopeSection(st, pt, side, slopeOpts);
@@ -23283,19 +23323,15 @@
             if (!model) notifyError('Не удалось построить поперечники.');
             else {
                 showRoadStudioTab('xs');
+                // Откосы строятся ВСЕГДА: отдельной кнопки и галочки нет.
                 let extra = '';
-                if ($('roadXsSlopeOn')?.checked) {
-                    const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-                    if (built?.length) {
-                        let fill = 0, cut = 0;
-                        built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
-                        extra = ` Откосы до рельефа: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
-                    } else {
-                        extra = ' Откосы до рельефа не построились — нет земли у кромок.';
-                    }
+                const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                if (built?.length) {
+                    let fill = 0, cut = 0;
+                    built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+                    extra = ` Откосы до рельефа: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
                 } else {
-                    clearRoadXsSlopes(model);
-                    renderRoadXsView();
+                    extra = ' Откосы до рельефа не построились — нет земли у кромок.';
                 }
                 notify(
                     `Полотно по «${rec.name}»: ${model.stations.length} сечений, ` +
@@ -23325,42 +23361,6 @@
                 listedPolylines().find((r) => r.id === currentRoadXsModel()?.polylineId);
             if (!rec) return notifyError('Выберите ось.');
             openPolylineProfile(rec);
-        });
-        $('roadXsSlope')?.addEventListener('click', () => {
-            const model = currentRoadXsModel();
-            if (!model) return notifyError('Сначала постройте поперечники.');
-            if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = true;
-            const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-            if (!built?.length) {
-                return notifyError('Не удалось построить откосы: нет рельефа у кромок шаблона.');
-            }
-            let fill = 0, cut = 0;
-            built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
-            notifyOk(
-                `Откосы от кромок «${model.name}»: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`
-            );
-        });
-        $('roadXsSlopeOn')?.addEventListener('change', () => {
-            const model = currentRoadXsModel();
-            if (!model) return;
-            if ($('roadXsSlopeOn').checked) {
-                const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-                if (!built?.length) {
-                    notifyError('Не удалось построить откосы: нет рельефа у кромок шаблона.');
-                    return;
-                }
-                let fill = 0, cut = 0;
-                built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
-                notifyOk(
-                    `Откосы от кромок «${model.name}»: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`
-                );
-            } else {
-                clearRoadXsSlopes(model);
-                renderRoadXsView();
-                updateRoadXsStatus();
-                markNeedsRender();
-                notify('Откосы убраны.');
-            }
         });
         $('roadXsAddLayer')?.addEventListener('click', () => {
             const model = currentRoadXsModel();
@@ -23523,10 +23523,7 @@
             const prev = roadIntersections.find((x) =>
                 (x.poly1Id === poly1.id && x.poly2Id === poly2.id) ||
                 (x.poly1Id === poly2.id && x.poly2Id === poly1.id));
-            if (prev) {
-                removeIntersectionObjects(prev.id);
-                roadIntersections.splice(roadIntersections.indexOf(prev), 1);
-            }
+            if (prev) forgetIntersection(prev);
 
             const intersection = {
                 id: 'ix-' + Math.random().toString(36).slice(2, 10),
@@ -24283,15 +24280,15 @@
         }
 
         /**
-         * Есть ли откосы у подходящих дорог. Узел достраивает их за собой сам,
-         * как и коридор: отдельной галочки для узла нет — «как у основных
-         * дорог» и значит «по тем же настройкам, что у них».
+         * Узлу нужны откосы, как только у подходящих дорог есть полотно: они
+         * строятся ВСЕГДА, отдельной кнопки и галочки нет ни у дороги, ни у
+         * узла. Без полотна строить не от чего — у узла нет ни ширины кромки,
+         * ни внешнего профиля.
          */
         function nodeSlopesWanted(rec) {
-            return [rec.poly1Id, rec.poly2Id].some((id) => {
-                const m = roadXsModels.find((x) => x.polylineId === id);
-                return (m?.slopeModelIds || []).length > 0;
-            });
+            return [rec.poly1Id, rec.poly2Id].some(
+                (id) => roadXsModels.some((x) => x.polylineId === id)
+            );
         }
 
         let syncingNodeSlopes = false;
@@ -24475,17 +24472,28 @@
          * Зовётся из удаления полилинии — иначе закругление остаётся висеть
          * в сцене без оси, к которой было касательным.
          */
+        /**
+         * Снять узел НАСОВСЕМ: объекты сцены, вершины-якоря на осях, откосы и
+         * запись в списке. Одно место на все четыре пути снятия (замена узла
+         * на той же паре осей, развод осей, кнопка в списке, полная очистка):
+         * порознь про откосы уже забыли — за прогон теста накопилось 60
+         * бровок вместо 4, и они же попадали в расчёт как «земля», отчего
+         * насыпь падала с 618 до 38 м³.
+         */
+        function forgetIntersection(rec) {
+            if (!rec) return;
+            removeIntersectionObjects(rec.id);
+            dropNodeAnchors(rec.id);
+            dropNodeSlopes(rec.id);
+            const i = roadIntersections.indexOf(rec);
+            if (i >= 0) roadIntersections.splice(i, 1);
+        }
+
         function clearRoadIntersections(polylineId) {
             const doomed = polylineId == null
                 ? roadIntersections.slice()
                 : roadIntersections.filter((x) => x.poly1Id === polylineId || x.poly2Id === polylineId);
-            for (const x of doomed) {
-                removeIntersectionObjects(x.id);
-                dropNodeAnchors(x.id);
-                dropNodeSlopes(x.id);
-                const i = roadIntersections.indexOf(x);
-                if (i >= 0) roadIntersections.splice(i, 1);
-            }
+            for (const x of doomed) forgetIntersection(x);
             // Разрыв в коридоре держался этим узлом — без него дорога снова
             // сплошная. Полилиния может быть уже удалена, тогда пересобирать
             // нечего, и rebuildRoadXsForPolyline сам это увидит.
@@ -24715,9 +24723,7 @@
                     const hit = (a1.pts.length >= 2 && a2.pts.length >= 2)
                         ? findAxisCrossing(a1, a2) : null;
                     if (!hit) {
-                        removeIntersectionObjects(rec.id);
-                        dropNodeAnchors(rec.id);
-                        roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+                        forgetIntersection(rec);
                         syncCorridorsForIntersection(rec);
                         changed++;
                         continue;
@@ -25017,9 +25023,15 @@
         function syncCorridorsForIntersection(rec) {
             if (!rec) return;
             [rec.poly1Id, rec.poly2Id].forEach((id) => rebuildRoadXsForPolyline(id));
-            // Откосы узла — ПОСЛЕ коридоров: бровка узла стоит на его контуре,
-            // а он только что мог сдвинуться вместе с устьями.
-            syncNodeSlopes(rec);
+            /* Откосы узла — ПОСЛЕ коридоров: бровка узла стоит на его контуре,
+             * а он только что мог сдвинуться вместе с устьями.
+             *
+             * ⚠️ Но `clearRoadIntersections` зовёт нас УЖЕ ПОСЛЕ того, как
+             * вычеркнул узел, — чтобы дорога снова стала сплошной. Без этой
+             * проверки откосы воскресали для снятого узла и оставались в сцене
+             * навсегда: за прогон теста накопилось 60 бровок вместо 4. */
+            if (roadIntersections.includes(rec)) syncNodeSlopes(rec);
+            else dropNodeSlopes(rec.id);
         }
 
         /**
@@ -25910,9 +25922,7 @@
             if (!btn) return;
             const rec = roadIntersections.find((x) => x.id === btn.dataset.ixDel);
             if (!rec) return;
-            removeIntersectionObjects(rec.id);
-            dropNodeAnchors(rec.id);
-            roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+            forgetIntersection(rec);
             syncCorridorsForIntersection(rec);
             rebuildNodeHandles();
             markNeedsRender();
@@ -41630,6 +41640,8 @@ ${componentXml || '    '}
             $('ctxPolylineGroup').hidden = !stageContextPolyline;
             $('ctxStageGeneric').hidden = !!stageContextPolyline;
             $('ctxPolylineFillet').classList.toggle('disabled', stageContextVertex < 0);
+            // У оси дороги откосы строятся сами вместе с полотном — пункт лишний.
+            $('ctxPolylineSlope').hidden = stageContextPolyline?.role === 'road-axis';
             const noPolys = !drawnPolylines.length;
             $('ctxPolylineTable')?.classList.toggle('disabled', noPolys);
             $('ctxPolylineTableEmpty')?.classList.toggle('disabled', noPolys);

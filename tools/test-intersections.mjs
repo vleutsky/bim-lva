@@ -865,8 +865,16 @@ try {
 
     const slope = await page.evaluate(() => {
         const D = window.BimLvaDebug;
+        const trace = [];
+        const mark = (tag) => {
+            const br = D.drawn.filter((r) => /бровка/.test(r.name || '') && !/насыпь|выемк/.test(r.name || ''));
+            const nb = br.filter((r) => /×/.test(r.name));
+            trace.push(`${tag}: узла ${nb.length} (узлов живых ${D.intersections.length}),`
+                + ` дороги ${br.filter((r) => !/×/.test(r.name)).length}, автоузлы ${D.autoNodes}`);
+        };
         D.clearIntersections();
         D.clearPolylines();
+        mark('после очистки');
         const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
         const zRoad = g.centerZ + g.sizeZ / 2 + 3;   // дорога на 3 м выше земли — чистая насыпь
         /* Оси кладём в ЦЕНТР рельефа, а не в ноль сцены: второй файл в сводке
@@ -880,54 +888,103 @@ try {
         const b = D.createPolylineFromPoints(
             [{ x: cx, y: cy - 60, z: zRoad }, { x: cx, y: cy + 60, z: zRoad }], { name: 'Ось B', role: 'road-axis' });
         D.setRoadWidths(b, 5, 5);
+        mark('оси созданы');
         D.buildRoadXs(a, { step: 10, widthL: 5, widthR: 5, live: true });
         D.buildRoadXs(b, { step: 10, widthL: 5, widthR: 5, live: true });
+        mark('поперечники');
         /* Пресет с бордюром обязателен: на шаблоне по умолчанию за кромкой
          * пусто, вылет внешнего профиля 0 — и проверка «бровка вынесена за
          * обстройку» прошла бы вхолостую при нулевом выносе. */
         D.applyRoadXsPresetTo(a, 'curb');
         D.applyRoadXsPresetTo(b, 'curb');
+        mark('пресеты');
         const node = D.buildIntersection(a, b, { type: 'cross', radius: 15 });
+        mark('узел построен');
         if (!node) return { error: 'узел не построился' };
-        const off = D.nodeSlopes(node.id);          // до откосов на дорогах
-        // Сначала ТОЛЬКО узел: рядом нет чужих площадок, значит каждое
-        // сечение обязано выйти на чистый рельеф ровно с заложением 1:m.
-        const solo = (D.buildNodeSlopesOn(node.id), D.nodeSlopes(node.id));
-        D.buildRoadXsSlopes({ polylineId: a });
-        D.buildRoadXsSlopes({ polylineId: b });
-        const withRoad = D.nodeSlopes(node.id);
-        // Сняли откосы с дорог — узел обязан остаться без откосов тоже.
-        D.dropRoadXsSlopes(a);
-        D.dropRoadXsSlopes(b);
-        return { off, solo, withRoad, gone: D.nodeSlopes(node.id), runs: D.nodeOuter(node.id)?.runs.length || 0 };
+        // Откосы строятся САМИ: ни кнопки, ни галочки для них больше нет.
+        const auto = D.nodeSlopes(node.id);
+
+        const brows = D.drawn.filter((r) => /бровка/.test(r.name || '')
+            && !/насыпь|выемк/.test(r.name || ''));
+        const shift = D.worldPointToAbsolute(0, 0, 0);
+        return {
+            auto, trace,
+            runs: D.nodeOuter(node.id)?.runs.length || 0,
+            // Контур узла — в координатах сцены, бровки — в абсолютных.
+            ring: node.outline.map((p) => ({ x: p.x + shift.x, y: p.y + shift.y })),
+            roadBrows: brows.filter((r) => !/×/.test(r.name)).map((r) => ({ name: r.name, pts: r.vertsAbs })),
+            nodeBrows: brows.filter((r) => /×/.test(r.name)).map((r) => ({ name: r.name, pts: r.vertsAbs }))
+        };
     });
     await fs.rm(terrainFile, { force: true });
 
     if (slope.error) {
         check(false, 'откосы узла: ' + slope.error);
     } else {
-        console.log(`  откосы узла: участков ${slope.runs}, сечений ${slope.solo.sections}`
-            + ` (без земли ${slope.solo.sectionsInvalid}), насыпь ${slope.solo.fill.toFixed(1)} м³,`
-            + ` заложение ${slope.solo.layMin?.toFixed(3)}…${slope.solo.layMax?.toFixed(3)}`);
-        check(!slope.off.on && slope.off.models === 0, 'без откосов на дорогах узел их не строит');
-        check(slope.solo.models === slope.runs && slope.runs >= 4,
-            `откос на каждом участке контура, а не по кольцу (${slope.solo.models} при ${slope.runs} участках)`);
-        check(slope.solo.browOff > 0.05,
-            `бровка вынесена за обстройку узла, а не лежит на проезжей части (${slope.solo.browOff.toFixed(2)} м)`);
-        check(slope.solo.sectionsInvalid === 0,
-            `все сечения нашли землю (без земли ${slope.solo.sectionsInvalid})`);
+        (slope.trace || []).forEach((t) => console.log('    ' + t));
+        const A = slope.auto;
+        console.log(`  откосы узла: участков ${slope.runs}, сечений ${A.sections}`
+            + ` (без земли ${A.sectionsInvalid}), насыпь ${A.fill.toFixed(1)} м³,`
+            + ` заложение ${A.layMin?.toFixed(3)}…${A.layMax?.toFixed(3)}`);
+
+        check(A.on && A.models > 0,
+            `откосы построились САМИ, без кнопки и галочки (${A.models})`);
+        check(A.models === slope.runs && slope.runs >= 4,
+            `откос на каждом участке контура, а не по кольцу (${A.models} при ${slope.runs} участках)`);
+        check(A.browOff > 0.05,
+            `бровка вынесена за обстройку узла, а не лежит на проезжей части (${A.browOff.toFixed(2)} м)`);
+        check(A.sectionsInvalid === 0, `все сечения нашли землю (без земли ${A.sectionsInvalid})`);
         // Знак нормали — самая опасная ошибка: внутрь откос закрыл бы сам узел,
         // а объём при этом остался бы правдоподобным.
-        check(slope.solo.outwardMin > 0,
-            `откос уходит НАРУЖУ от узла (минимум ${slope.solo.outwardMin?.toFixed(2)} м)`);
-        check(slope.solo.layOff === 0,
-            `заложение 1:m держится во всех сечениях (мимо ${slope.solo.layOff}`
-            + `${slope.solo.laySample ? ', например ' + JSON.stringify(slope.solo.laySample) : ''})`);
-        check(slope.solo.fill > 100, `насыпь посчитана (${slope.solo.fill.toFixed(1)} м³)`);
-        check(slope.withRoad.models === slope.solo.models && slope.withRoad.layOff === 0,
-            'с откосами на дорогах узел остаётся и стыкуется с ними');
-        check(!slope.gone.on && slope.gone.models === 0,
-            'сняли откосы с дорог — ушли и с узла');
+        check(A.outwardMin > 0, `откос уходит НАРУЖУ от узла (минимум ${A.outwardMin?.toFixed(2)} м)`);
+        check(A.layOff === 0,
+            `заложение 1:m держится во всех сечениях (мимо ${A.layOff}`
+            + `${A.laySample ? ', например ' + JSON.stringify(A.laySample) : ''})`);
+        check(A.fill > 100, `насыпь посчитана (${A.fill.toFixed(1)} м³)`);
+
+        /* Бровка дороги обязана РВАТЬСЯ у узла: одной линией через весь
+         * перекрёсток она шла напрямую, и откос по ней резал покрытие — у
+         * владельца это чёрные клинья у устьев и зелёная линия поперёк узла.
+         *
+         * ⚠️ Считать только ВЕРШИНЫ бесполезно: пикеты внутри узла и так
+         * вырезаны (`applyNodeGapsToStations`), внутрь попадал именно ОТРЕЗОК
+         * между ними. С одними вершинами проверка зелёная при сломанном коде —
+         * замерено 0 из 72. Поэтому берём и середины звеньев: тогда обратная
+         * подстановка даёт 4 из 140. */
+        let inside = 0, total = 0;
+        for (const b of slope.roadBrows) {
+            for (let i = 0; i < b.pts.length; i++) {
+                const p = b.pts[i], n = b.pts[i + 1];
+                total++;
+                if (pointInRing(p, slope.ring)) inside++;
+                if (n) {
+                    total++;
+                    if (pointInRing({ x: (p.x + n.x) / 2, y: (p.y + n.y) / 2 }, slope.ring)) inside++;
+                }
+            }
+        }
+        console.log(`  бровок дороги ${slope.roadBrows.length}, узла ${slope.nodeBrows.length};`
+            + ` точек и середин внутри узла ${inside} из ${total}`);
+        check(slope.roadBrows.length >= 8,
+            `бровка дороги разорвана у узла (${slope.roadBrows.length} участков при 2 осях × 2 стороны)`);
+        check(inside === 0, `бровка дороги не идёт через перекрёсток (${inside} из ${total})`);
+
+        // Стыковка: концы бровок узла и дороги сходятся у устья.
+        let worst = 0;
+        const ends = (b) => [b.pts[0], b.pts[b.pts.length - 1]];
+        for (const nb of slope.nodeBrows) {
+            for (const e of ends(nb)) {
+                let best = Infinity;
+                for (const rb of slope.roadBrows) {
+                    for (const re of ends(rb)) {
+                        best = Math.min(best, Math.hypot(e.x - re.x, e.y - re.y, e.z - re.z));
+                    }
+                }
+                worst = Math.max(worst, best);
+            }
+        }
+        console.log(`  худший стык узел↔дорога: ${worst.toFixed(3)} м`);
+        check(worst < 0.05, `откос узла стыкуется с дорожным (расхождение ${worst.toFixed(3)} м)`);
     }
 
     // --- Параллельные оси не пересекаются ---------------------------------

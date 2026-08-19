@@ -2678,8 +2678,9 @@ async function checkRoadCrossSections(page) {
     if (!chart.profileBtn) {
         problems.push('поперечники: нет кнопки «Профиль»');
     }
-    if (!chart.slopeBtn) {
-        problems.push('поперечники: нет кнопки «Откосы»');
+    // Откосы строятся всегда, кнопки для них нет (просьба владельца).
+    if (chart.slopeBtn) {
+        problems.push('поперечники: кнопка «Откосы» вернулась — откосы должны строиться сами');
     }
 
     const zoom = await page.evaluate(() => {
@@ -2750,14 +2751,14 @@ async function checkRoadCrossSections(page) {
             zMin
         };
     });
-    if (!layer.hasBtn || !layer.hasChk) {
-        problems.push(`поперечники: нет «＋ слой» или галочки откосов (${JSON.stringify(layer)})`);
+    if (!layer.hasBtn) {
+        problems.push(`поперечники: нет кнопки «＋ слой» (${JSON.stringify(layer)})`);
+    }
+    if (layer.hasChk) {
+        problems.push('поперечники: галочка откосов вернулась — откосы строятся всегда');
     }
     if (Math.abs((layer.rbMid ?? 0) + 0.35) > 1e-6) {
         problems.push(`поперечники: смена толщины слоя не сдвинула низ покрытия (${JSON.stringify(layer)})`);
-    }
-    if (!/Откосы до рельефа/.test(layer.slopeLabel)) {
-        problems.push(`поперечники: кнопка откосов без подписи «до рельефа» (${layer.slopeLabel})`);
     }
     if (!layer.profileXs) problems.push('поперечники: нет кнопки в окне профиля');
     if (!layer.bigDraw || !layer.bigRelief) {
@@ -2889,7 +2890,7 @@ async function checkRoadCrossSections(page) {
             ground: D.roadXsChartGround()
         };
     });
-    if (!slopes.hasBtn) problems.push('поперечники: нет кнопки «Откосы»');
+    if (slopes.hasBtn) problems.push('поперечники: кнопка «Откосы» вернулась');
     if (!slopes.hasRay) problems.push('поперечники: на чертеже нет лучей откоса до земли');
     if (!slopes.hasGroundClass) problems.push('поперечники: на чертеже нет линии земли xs-ground');
     const gSlope = slopes.ground;
@@ -3101,13 +3102,14 @@ async function checkRoadCrossSections(page) {
     if (shapeUx.stillCurb || shapeUx.stillT || !shapeUx.stillR) {
         problems.push(`поперечники: удаление бордюра не унесло форму/CURBT или сняло кромку R (${JSON.stringify(shapeUx)})`);
     }
-    if (!shapeUx.slopeBefore || shapeUx.slopeOff || !shapeUx.slopeOn) {
-        problems.push(`поперечники: галочка «откосы» не убирает/не возвращает лучи (${JSON.stringify({
+    // Галочки нет: лучи откоса на чертеже обязаны быть всегда.
+    if (!shapeUx.slopeBefore || !shapeUx.slopeOff || !shapeUx.slopeOn) {
+        problems.push(`поперечники: лучи откоса пропали с чертежа (${JSON.stringify({
             before: shapeUx.slopeBefore, off: shapeUx.slopeOff, on: shapeUx.slopeOn
         })})`);
     }
-    if (shapeUx.groundOff?.edgeR != null && shapeUx.groundOff.maxOff < shapeUx.groundOff.edgeR - 0.05) {
-        problems.push(`поперечники: без откоса земля короче края шаблона (${JSON.stringify(shapeUx.groundOff)})`);
+    if (shapeUx.groundOff?.slopeR != null && shapeUx.groundOff.maxOff < shapeUx.groundOff.slopeR - 0.05) {
+        problems.push(`поперечники: земля короче выхода откоса (${JSON.stringify(shapeUx.groundOff)})`);
     }
     if (shapeUx.groundOn?.slopeR != null && shapeUx.groundOn.maxOff < shapeUx.groundOn.slopeR - 0.05) {
         problems.push(`поперечники: с откосом земля короче выхода на рельеф (${JSON.stringify(shapeUx.groundOn)})`);
