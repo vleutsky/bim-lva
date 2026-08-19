@@ -7398,6 +7398,16 @@
                     zTarget: Number.isFinite(opts.zTarget) ? opts.zTarget : null
                 });
                 if (!result) return null;
+                /* Узел на этой паре осей мог уже стоять — например, его
+                 * построило автопостроение. Боевой путь такой заменяет
+                 * (`forgetIntersection`), а этот — нет, и на паре оказывалось
+                 * ДВА узла: их бровки-откосы копились (замерено 60 вместо 4) и
+                 * шли в расчёт как «земля», отчего насыпь падала с 618 до
+                 * 38 м³. Отладочный вход обязан вести себя как диалог. */
+                const prev = roadIntersections.find((x) =>
+                    (x.poly1Id === p1.id && x.poly2Id === p2.id) ||
+                    (x.poly1Id === p2.id && x.poly2Id === p1.id));
+                if (prev) forgetIntersection(prev);
                 const rec = {
                     id: 'ix-' + Math.random().toString(36).slice(2, 10),
                     name: `${p1.name} × ${p2.name}`,
@@ -43512,7 +43522,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.19',
-            buildId: 'node-slopes',
+            buildId: 'slopes-always',
             released: '2026-08-19',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -43521,6 +43531,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.19: откосы до рельефа строятся сами — кнопки и галочки для них больше нет. У перекрёстка они теперь тоже есть и стыкуются с дорожными (расхождение 6 мм). Бровка рвётся у узла, а не идёт напрямую через перекрёсток — ушли чёрные клинья у устьев.',
                 '2026.08.18: выгрузка в IFC 4.3 дорожными классами — IfcPavement, IfcCourse, IfcKerb, IfcEarthworksFill, IfcAlignment, IfcRoad; тела тесселяцией, мировой сдвиг в размещении IfcSite. Проверяется обратным чтением тем же web-ifc. Плюс выгрузка в DWG (тела сеткой 3DFACE).',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
