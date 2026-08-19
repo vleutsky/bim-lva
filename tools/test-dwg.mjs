@@ -76,6 +76,35 @@ try {
         check(hit, `вершина (${p.x}, ${p.y}, ${p.z}) найдена в прочитанном файле`);
     }
     check(zs.some((z) => Math.abs(z - PTS[0].z) < 1e-6), `отметка ${PTS[0].z} сохранилась (3D-полилиния, а не плоская)`);
+
+    /* Тела: 3DSOLID этой библиотекой не выгрузить — её писатель модельной
+     * геометрии выводит флаги и каркас, а саму ACIS-геометрию не пишет
+     * вовсе, тело вышло бы пустым. Пишем сеткой 3DFACE и проверяем, что
+     * грани реально доехали до файла. */
+    const withBody = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        // Узел даёт покрытие — это и есть тело, которое надо выгрузить.
+        D.clearPolylines();
+        D.setAutoNodes(true);
+        const a = D.createPolylineFromPoints(
+            [{ x: -60, y: 0, z: 5 }, { x: 60, y: 0, z: 5 }], { name: 'A', role: 'road-axis' });
+        D.setRoadWidths(a, 5, 5);
+        D.createPolylineFromPoints(
+            [{ x: 0, y: -60, z: 5 }, { x: 0, y: 60, z: 5 }], { name: 'B', role: 'road-axis' });
+        return { nodes: D.intersections.length, ...(await D.dwgBytes()) };
+    });
+    check(withBody.nodes === 1, `узел для проверки тел построен (${withBody.nodes})`);
+    console.log(`  во второй выгрузке: отрезков ${withBody.lines}, граней ${withBody.faces}`);
+    if (withBody.faces > 0) {
+        const dxf2 = new TextDecoder().decode(await convertDwgToDxf(new Uint8Array(withBody.bytes)));
+        const e2 = dxf2.indexOf('ENTITIES');
+        const b2 = e2 >= 0 ? dxf2.slice(e2, dxf2.indexOf('ENDSEC', e2)) : '';
+        const n3d = (b2.match(/\r?\n3DFACE\r?\n/g) || []).length;
+        console.log(`  прочитано 3DFACE: ${n3d}`);
+        check(n3d === withBody.faces, `грани дошли до файла (${n3d} из ${withBody.faces})`);
+    } else {
+        check(false, 'в выгрузку не попало ни одной грани — тела в DWG не поехали');
+    }
 } catch (e) {
     problems.push('исключение: ' + (e?.message || e));
 } finally {

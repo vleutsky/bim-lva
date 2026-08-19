@@ -19,7 +19,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a2332">
     <link rel="manifest" href="manifest.webmanifest">
-    <title>BIM.LVA Composer IFC · 2026.08.18 · dwg-out</title>
+    <title>BIM.LVA Composer IFC · 2026.08.18 · dwg-mesh</title>
     <!-- Вендоры локальные (assets/vendor, см. tools/vendor.mjs): без них
          офлайн-режим не работал, а загрузка зависела от трёх чужих доменов. -->
     <link href="./assets/vendor/fonts/composer.css" rel="stylesheet">
@@ -4060,7 +4060,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1617665</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 053a9f3</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -8128,7 +8128,7 @@
             /** Байты DWG — тот же путь, что и кнопка выгрузки. */
             async dwgBytes() {
                 const r = await buildDwg(drawnPolylines, coordPins.filter((p) => p.abs));
-                return { bytes: Array.from(r.bytes), lines: r.lines, points: r.points };
+                return { bytes: Array.from(r.bytes), lines: r.lines, points: r.points, faces: r.faces };
             },
             landXmlPreview() {
                 return buildPolylineLandXml();
@@ -13594,8 +13594,18 @@
                 notifyError('Сначала постройте откосы — выгружать нечего.');
                 return false;
             }
-            notifyError('Тела площадок выгружаются пока только в DXF («⬇ DXF»); в DWG идут полилинии и точки.');
-            return false;
+            try {
+                const { bytes, faces } = await buildDwg([], []);
+                if (!faces) { notifyError('В DWG не попало ни одной грани.'); return false; }
+                const slug = String((model || list[0]).name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
+                downloadBinaryFile(bytes, `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dwg`);
+                notify(`DWG: граней 3DFACE ${faces}. Это сетка, а не тело — телами (ACIS) площадка идёт в DXF.`);
+                trackUsage('slope_export_dwg', { faces });
+                return true;
+            } catch (e) {
+                notifyError('DWG не собрался: ' + (e?.message || e));
+                return false;
+            }
         }
 
         function buildPolylineLandXml() {
@@ -13821,14 +13831,15 @@
                 return;
             }
             try {
-                const { bytes, lines, points } = await buildDwg(drawnPolylines, pins);
+                const { bytes, lines, points, faces } = await buildDwg(drawnPolylines, pins);
                 downloadBinaryFile(bytes, `bim-lva-${new Date().toISOString().slice(0, 10)}.dwg`);
                 notify(
-                    `DWG (${DWG_VERSION}, R2004): полилиний ${lines}, точек ${points}, ` +
-                    `${(bytes.length / 1024).toFixed(0)} КБ. Координаты мировые, метры. ` +
-                    'Тела — площадки, узлы, откосы — пока только в DXF.'
+                    `DWG (${DWG_VERSION}, R2004): отрезков ${lines}, точек ${points}` +
+                    (faces ? `, граней 3DFACE ${faces}` : '') +
+                    `, ${(bytes.length / 1024).toFixed(0)} КБ. Координаты мировые, метры. ` +
+                    'Тела идут сеткой граней; телами (ACIS) — только в DXF.'
                 );
-                trackUsage('draw_export_dwg', { lines, points });
+                trackUsage('draw_export_dwg', { lines, points, faces });
             } catch (err) {
                 notifyError('DWG не собрался: ' + (err?.message || err));
                 console.error('DWG export error:', err);
@@ -17069,6 +17080,47 @@
                     lines++;
                 }
             }
+            /* Тела — треугольниками 3DFACE, а не 3DSOLID. Solid3D в acad-ts
+             * есть, но его писатель (`_writeModelerGeometry`) выводит только
+             * флаги, каркас и силуэты — САМУ ACIS-геометрию не пишет вовсе,
+             * то есть тело вышло бы пустым. 3DFACE — обычная сущность без
+             * детей, читается всеми и несёт наш TIN как есть.
+             * Цена: в DWG это сетка граней, а не тело; объём в CAD по ней не
+             * посчитать. Тела как тела — только в DXF (ACIS SAT). */
+            let faces = 0;
+            const addTin = (tin, layer) => {
+                if (!tin?.faces?.length || !tin.points?.length) return;
+                const L = layerFor(layer);
+                for (const f of tin.faces) {
+                    const a = tin.points[f[0]], b = tin.points[f[1]], c = tin.points[f[2]];
+                    if (!a || !b || !c) continue;
+                    const face = new acad.Face3D();
+                    face.firstCorner = new XYZ(a.x, a.y, a.z);
+                    face.secondCorner = new XYZ(b.x, b.y, b.z);
+                    face.thirdCorner = new XYZ(c.x, c.y, c.z);
+                    // Четвёртый угол совпадает с третьим — так треугольник
+                    // записывается вырожденным четырёхугольником, как принято.
+                    face.fourthCorner = new XYZ(c.x, c.y, c.z);
+                    if (L) { try { face.layer = L; } catch (_) {} }
+                    doc.modelSpace.entities.add(face);
+                    faces++;
+                }
+            };
+            const absTin = (tin) => ({
+                points: tin.points.map((p) => scenePointToAbs(p) || p),
+                faces: tin.faces
+            });
+            for (const sm of slopeModels) {
+                if (sm?.tin?.faces?.length) addTin(absTin(sm.tin), DXF_LAYER_SLOPE);
+                for (const mesh of (sm?.kdoMeshes || [])) {
+                    addTin(absTin(weldTin(slopeMeshTriangles(mesh))), DXF_LAYER_KDO);
+                }
+            }
+            for (const ix of roadIntersections) {
+                const tin = nodeSurfaceTin(ix);
+                if (tin) addTin(absTin(tin), DXF_LAYER_NODE);
+            }
+
             for (const pin of (pins || [])) {
                 if (!pin?.abs) continue;
                 const pt = new Point();
@@ -17078,7 +17130,7 @@
             }
             /* Размер буфера заранее неизвестен, при нехватке писатель падает
              * RangeError на DataView — пробуем и удваиваем. */
-            let size = Math.max(1 << 20, (lines + points) * 4096);
+            let size = Math.max(1 << 20, (lines + points + faces) * 4096);
             for (let attempt = 0; attempt < 6; attempt++, size *= 2) {
                 try {
                     const back = new ArrayBuffer(size);
@@ -17086,7 +17138,7 @@
                     const all = new Uint8Array(back);
                     let end = all.length;
                     while (end > 0 && all[end - 1] === 0) end--;
-                    if (end > 0) return { bytes: all.slice(0, end), lines, points };
+                    if (end > 0) return { bytes: all.slice(0, end), lines, points, faces };
                 } catch (e) {
                     if (!(e instanceof RangeError)) throw e;
                 }
@@ -42767,7 +42819,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.18',
-            buildId: '1617665-preview',
+            buildId: '053a9f3-preview',
             released: '2026-08-18',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -42776,7 +42828,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
-                '2026.08.18: выгрузка в DWG заработала (полилинии отрезками и точки, AC1018/R2004) — вендор был неполный, а метод записи выдуман; проверяется чтением обратно независимым движком. Тела пока только в DXF.',
+                '2026.08.18: выгрузка в DWG (AC1018/R2004): полилинии отрезками, метки точками, тела — сеткой 3DFACE (площадки, КДО, узлы). 3DSOLID не пишем: у библиотеки писатель ACIS-геометрию не выводит вовсе. Проверяется чтением обратно независимым движком.',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',
                 '2026.08.17: на профиле ПКМ по вершине — вертикальная кривая (как кривая в угол на плане); панель профиля забирает остаток окна; подписи точек и форм поперечника — кириллицей.',
