@@ -17581,7 +17581,13 @@
         async function buildStep(polylines, slopeModels) {
             let kernel;
             try {
-                const { OcctKernel } = await import('/assets/vendor/occt-wasm/index.js');
+                /* ⚠️ ОТНОСИТЕЛЬНЫЙ путь, не абсолютный. Сайт живёт в подкаталоге
+                 * (`/bim-lva/`), и `/assets/...` уводит на корень домена:
+                 * github.io/assets/vendor/... — 404, «error loading
+                 * dynamically imported module». Локально с корня это не
+                 * ловится, только на Pages. Все прочие вендоры подключены
+                 * через `./assets/...` — эти два были исключением. */
+                const { OcctKernel } = await import('./assets/vendor/occt-wasm/index.js');
                 kernel = await OcctKernel.init();
 
                 const shapes = [];
@@ -17700,7 +17706,8 @@
         const DWG_VERSION = 'AC1018';
 
         async function buildDwg(polylines, pins) {
-            const acad = await import('/assets/vendor/acad-ts/index.js');
+            // Относительный путь: см. комментарий у occt-wasm выше.
+            const acad = await import('./assets/vendor/acad-ts/index.js');
             const { CadDocument, DwgWriter, ACadVersion, Line, Point, XYZ } = acad;
             const doc = new CadDocument();
             doc.header.version = ACadVersion[DWG_VERSION];
