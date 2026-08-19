@@ -2662,6 +2662,11 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: на чертеже нет точек/формы шаблона (${JSON.stringify(chart)})`);
     }
     const xsCaptions = await page.evaluate(() => {
+        /* Откосы теперь на чертеже всегда, и вписывание берёт их выход на
+         * рельеф — на общем виде слой покрытия 10 см это полоска в пару
+         * пикселей, подпись на неё не ставится намеренно (порог 22×14 px).
+         * Подписи проверяем на рабочем зуме, а не на «вписать всё». */
+        window.BimLvaDebug.zoomRoadXs(0.3);
         const html = document.getElementById('roadXsChart')?.innerHTML || '';
         return {
             axis: />Ось</.test(html) || />Ось /.test(html) || html.includes('>Ось<') || /fill="#6a5420">Ось/.test(html),
