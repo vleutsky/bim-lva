@@ -1,1 +1,158 @@
-See artifacts or apply the +105 lines for buildNodeFilletSlopes / nodeRunBrowPts / debug API / buildId node-fillet-slopes. Full HTML is 2.2MB and exceeds single-file MCP update limit; download from conversation artifacts.
+diff --git a/bim-lva-composer-ifc.html b/bim-lva-composer-ifc.html
+index 6c1c763..8e5035a 100644
+--- a/bim-lva-composer-ifc.html
++++ b/bim-lva-composer-ifc.html
+@@ -7471,6 +7471,21 @@
+                     maxOff: Math.max(0, ...d.outer.pts.map((p) => p.off))
+                 };
+             },
++            /** Откосы по скруглениям узла (бровки + модели). */
++            nodeFilletSlopes(ixId) {
++                const rec = roadIntersections.find((x) => x.id === ixId);
++                if (!rec) return null;
++                const brows = drawnPolylines.filter((r) => r.nodeIntersectionId === rec.id);
++                const models = slopeModels.filter((s) => s.nodeIntersectionId === rec.id);
++                return {
++                    arcs: (rec.points?.runs || []).filter((r) => r.kind === 'arc').length,
++                    hasCorridorSlopes: nodeFilletSlopeOpts(rec.points).hasSlopes,
++                    brows: brows.length,
++                    slopes: models.length,
++                    faces: models.reduce((n, s) => n + (s.sides || []).length, 0),
++                    sections: models.reduce((n, s) => n + (s.sides || []).reduce((m, side) => m + (side.sections || []).length, 0), 0)
++                };
++            },
+             /** Задать отметку узла в абсолютных — как ручкой в сцене. */
+             setNodeElevationAbs(ixId, absZ) {
+                 const rec = roadIntersections.find((x) => x.id === ixId);
+@@ -24050,6 +24065,89 @@
+             return out;
+         }
+ 
++        /** Бровка скругления: наружная точка шаблона (max-off от кромки). */
++        function nodeRunBrowPts(data, run) {
++            const pts = run?.pts;
++            if (!pts || pts.length < 2) return null;
++            const profile = data?.outer;
++            let off = 0, dz = 0;
++            if (profile?.pts?.length) {
++                let best = profile.pts[0];
++                for (const q of profile.pts) {
++                    if ((Number(q.off) || 0) > (Number(best.off) || 0) + 1e-9) best = q;
++                }
++                off = Number(best.off) || 0;
++                dz = Number(best.dz) || 0;
++            }
++            return pts.map((p, i) => {
++                const n = outwardNormalAt(pts, i);
++                return { x: p.x + n.x * off, y: p.y + n.y * off, z: p.z + dz };
++            });
++        }
++
++        function dropNodeFilletSlopes(ix) {
++            const id = (ix && typeof ix === 'object') ? ix.id : ix;
++            if (id == null) return;
++            drawnPolylines.filter((r) => r.nodeIntersectionId === id).forEach(dropRoadSlopeBrow);
++        }
++
++        function nodeFilletSlopeOpts(data) {
++            const ids = new Set((data?.arms || []).map((a) => a.polyId));
++            const full = { mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30, fillColor: '#c9793a', side: 'right' };
++            for (const m of roadXsModels) {
++                if (!ids.has(m.polylineId)) continue;
++                for (const sid of (m.slopeModelIds || [])) {
++                    const sm = slopeModels.find((s) => s.id === sid);
++                    if (!sm) continue;
++                    return {
++                        mFill: sm.mFill, mCut: sm.mCut, step: sm.step, maxReach: sm.maxReach,
++                        fillColor: sm.fillColor || full.fillColor, side: 'right', hasSlopes: true
++                    };
++                }
++            }
++            return { ...full, hasSlopes: false };
++        }
++
++        /**
++         * Откосы по скруглениям узла. Коридор обрезан у устья, дуги контура
++         * остаются без бровки. Только kind=arc: прямые кромки — устья, там
++         * откос уже даёт коридор.
++         */
++        function buildNodeFilletSlopes(rec) {
++            const data = rec?.points || rec;
++            const ixId = rec?.id;
++            if (!data || ixId == null) return [];
++            dropNodeFilletSlopes(ixId);
++            const opts = nodeFilletSlopeOpts(data);
++            if (!opts.hasSlopes) return [];
++            const built = [];
++            for (const run of (data.runs || [])) {
++                if (run.kind !== 'arc') continue;
++                const browPts = nodeRunBrowPts(data, run);
++                if (!browPts || browPts.length < 2) continue;
++                const brow = addPolylineFromPoints(browPts, {
++                    role: 'road-slope-brow',
++                    name: 'Бровка узла ' + ixId,
++                    color: '#c9793a',
++                    width: 1
++                });
++                if (!brow) continue;
++                brow.nodeIntersectionId = ixId;
++                if (brow.object) {
++                    brow.object.visible = false;
++                    brow.object.raycast = () => {};
++                }
++                const sm = buildSlopeToTerrain(brow, opts);
++                if (sm) {
++                    sm.nodeIntersectionId = ixId;
++                    built.push({ browId: brow.id, slopeId: sm.id, pts: browPts.length });
++                } else {
++                    dropRoadSlopeBrow(brow);
++                }
++            }
++            return built;
++        }
++
+         /**
+          * Слои одежды под узлом — по шаблону поперечника одной из осей.
+          * Берём толщину каждого конструктивного слоя НА ОСИ (offset ≈ 0):
+@@ -24144,6 +24242,7 @@
+                 : roadIntersections.filter((x) => x.poly1Id === polylineId || x.poly2Id === polylineId);
+             for (const x of doomed) {
+                 removeIntersectionObjects(x.id);
++                dropNodeFilletSlopes(x.id);
+                 dropNodeAnchors(x.id);
+                 const i = roadIntersections.indexOf(x);
+                 if (i >= 0) roadIntersections.splice(i, 1);
+@@ -24244,6 +24343,8 @@
+             ]);
+             tag(new THREE.LineSegments(crossGeom, new THREE.LineBasicMaterial({ color: 0xff5a00 })));
+ 
++            buildNodeFilletSlopes(intersection);
++
+             sceneNeedsRender = true;
+         }
+ 
+@@ -24378,6 +24479,7 @@
+                         ? findAxisCrossing(a1, a2) : null;
+                     if (!hit) {
+                         removeIntersectionObjects(rec.id);
++                        dropNodeFilletSlopes(rec.id);
+                         dropNodeAnchors(rec.id);
+                         roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+                         syncCorridorsForIntersection(rec);
+@@ -25568,6 +25670,7 @@
+             const rec = roadIntersections.find((x) => x.id === btn.dataset.ixDel);
+             if (!rec) return;
+             removeIntersectionObjects(rec.id);
++            dropNodeFilletSlopes(rec.id);
+             dropNodeAnchors(rec.id);
+             roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+             syncCorridorsForIntersection(rec);
+@@ -43148,7 +43251,7 @@ ${componentXml || '    '}
+         const COMPOSER_ABOUT = {
+             product: 'BIM.LVA Composer IFC',
+             version: '2026.08.19',
+-            buildId: 'alignment-full',
++            buildId: 'node-fillet-slopes',
+             released: '2026-08-19',
+             developer: 'Владимир Леуцкий',
+             site: 'https://vleutsky.github.io/bim-lva/',
