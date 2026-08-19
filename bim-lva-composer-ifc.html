@@ -24936,6 +24936,15 @@
          */
         function autoBuildNodesFor(record) {
             if (!autoRoadNodes || record?.role !== 'road-axis') return 0;
+            /* Только по настоящей правке пользователя. Внутренние пересборки
+             * (откосы заводят полилинии-бровки → список полилиний → resync)
+             * тоже сюда доходили, и на каждом витке каскада мог родиться ещё
+             * один узел на той же паре осей: замерено 2 живых узла и 60
+             * бровок вместо 4. `hasNodeForPair` от этого не спасает — новый
+             * узел успевает появиться раньше, чем предыдущий встанет в
+             * список. */
+            if (buildingRoadSlopes || syncingNodeSlopes
+                || refreshingNodesOnPolyline || resyncingNodes) return 0;
             let made = 0;
             for (const other of drawnPolylines) {
                 if (other === record || other.role !== 'road-axis') continue;

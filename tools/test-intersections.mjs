@@ -909,6 +909,7 @@ try {
         const shift = D.worldPointToAbsolute(0, 0, 0);
         return {
             auto, trace,
+            liveNodes: D.intersections.length,
             runs: D.nodeOuter(node.id)?.runs.length || 0,
             // Контур узла — в координатах сцены, бровки — в абсолютных.
             ring: node.outline.map((p) => ({ x: p.x + shift.x, y: p.y + shift.y })),
@@ -929,6 +930,14 @@ try {
 
         check(A.on && A.models > 0,
             `откосы построились САМИ, без кнопки и галочки (${A.models})`);
+        /* Автопостроение включено, и узел на этой паре осей уже был. Ручная
+         * постройка обязана ЗАМЕНИТЬ его, а не добавить второй: на каждом
+         * витке внутренней пересборки рождался ещё один узел, и бровки
+         * копились — замерено 2 живых узла и 60 бровок вместо 4. */
+        check(slope.liveNodes === 1,
+            `узел на паре осей ровно один, а не второй поверх (${slope.liveNodes})`);
+        check(slope.nodeBrows.length === 4,
+            `бровок узла ровно 4, без осиротевших от прежних узлов (${slope.nodeBrows.length})`);
         check(A.models === slope.runs && slope.runs >= 4,
             `откос на каждом участке контура, а не по кольцу (${A.models} при ${slope.runs} участках)`);
         check(A.browOff > 0.05,
