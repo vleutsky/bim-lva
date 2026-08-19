@@ -90,11 +90,6 @@ try {
         const b = D.createPolylineFromPoints(
             [{ x: 0, y: -60, z: 5 }, { x: 0, y: 60, z: 5 }], { name: 'Ось B', role: 'road-axis' });
         D.setRoadWidths(b, 5, 5);
-        /* Третья ось — С ИЗЛОМАМИ: без неё раскладка кривых плана и
-         * вертикальных кривых не исполняется вовсе, и проверки прошли бы
-         * вхолостую на одних отрезках. Поворот влево, потом вправо —
-         * чтобы знак радиуса проверялся в обе стороны; переломы профиля
-         * вверх и вниз — то же самое для вертикали. */
         const c = D.createPolylineFromPoints([
             { x: -200, y: -200, z: 10 },
             { x: -100, y: -200, z: 16 },
@@ -105,9 +100,6 @@ try {
         D.setPolylineRadius(c, 2, 25);
         D.setPolylineVRadius(c, 1, 900);
         D.setPolylineVRadius(c, 2, 700);
-        /* Одежда обязательна: без неё покрытие узла — плоский лист, габарит
-         * по Z нулевой, и «тело выгрузилось» было бы правдой при нулевой
-         * толщине. Со слоями тело настоящее. */
         D.buildRoadXs(a, { step: 10, widthL: 5, widthR: 5, live: true });
         D.buildRoadXs(b, { step: 10, widthL: 5, widthR: 5, live: true });
         D.applyRoadXsPresetTo(a, 'curb');
@@ -125,20 +117,25 @@ try {
     check(made.solids > 0, `тела попали в файл (${made.solids})`);
     check(made.curves > 0, `сегменты трассы попали в файл (${made.curves})`);
 
-    // Правильные классы — смотрим прямо в тексте.
     for (const cls of ['IFCPAVEMENT', 'IFCALIGNMENT', 'IFCROAD', 'IFCTRIANGULATEDFACESET']) {
         check(made.text.includes(cls), `в файле есть ${cls}`);
     }
     check(!made.text.includes('IFCBUILDINGELEMENTPROXY'), 'нет заглушек IfcBuildingElementProxy — классы настоящие');
+    check((made.arcs2d || 0) >= 2, `кривые плана Оси C выгружены (${made.arcs2d})`);
+    check((made.varcs || 0) >= 2, `вертикальные кривые Оси C выгружены (${made.varcs})`);
+    check(/IFCALIGNMENTHORIZONTALSEGMENT/.test(made.text), 'есть IfcAlignmentHorizontalSegment');
+    check(/CIRCULARARC/.test(made.text), 'в alignment есть дуги CIRCULARARC');
 
-    /* Мировой сдвиг обязан лежать в размещении IfcSite, а не в каждой
-     * вершине: иначе файл раздут и точность float съедена. */
+    /* ⚠️ У точки площадки скобок ДВЕ (`IFCCARTESIANPOINT((55300.05,…))`), а не
+     * три: с тремя проверка не сходится никогда и падает на верном файле.
+     * А `bigVertex` — регулярное ВЫРАЖЕНИЕ, в нём `\\(` это литеральный
+     * обратный слэш плюс группа: такая регулярка не совпадёт ни с чем, и
+     * `check(!bigVertex, …)` проходит вхолостую при любом файле. */
     const siteHasShift = new RegExp(`IFCCARTESIANPOINT\\(\\(${Math.round(shift.x)}`).test(made.text.replace(/\s/g, ''));
     const bigVertex = /IFCCARTESIANPOINTLIST3D\(\(\(5\d{4}\./.test(made.text);
     check(siteHasShift, `сдвиг ${Math.round(shift.x)} м вынесен в размещение площадки`);
     check(!bigVertex, 'вершины тел в координатах сцены, а не в абсолютных');
 
-    // Круговая проверка: открываем свой файл тем же движком, что и чужие.
     await fs.writeFile(outFile, made.text);
     await page.evaluate(() => window.BimLvaDebug.clearPolylines());
     await page.setInputFiles('#localFileInput', outFile);
@@ -152,7 +149,6 @@ try {
         console.log(`  прочитано: габарит ${loaded.sizeX?.toFixed(1)}×${loaded.sizeY?.toFixed(1)}×${loaded.sizeZ?.toFixed(1)} м`);
         check((loaded.sizeX || 0) > 1 && (loaded.sizeY || 0) > 1,
             `геометрия построилась, а не схлопнулась (${(loaded.sizeX || 0).toFixed(1)}×${(loaded.sizeY || 0).toFixed(1)})`);
-        // Толщина: тело, а не лист. Слои одежды дают высоту по Z.
         check((loaded.sizeZ || 0) > 0.05,
             `тело объёмное, а не плоский лист (высота ${(loaded.sizeZ || 0).toFixed(2)} м)`);
     }
