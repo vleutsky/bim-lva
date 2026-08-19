@@ -11537,6 +11537,44 @@
          * «профиль по ней» — сплошные переломы. Владелец на это и наткнулся:
          * в окне поперечников выбралась «… — бровка 4 — насыпь (вправо)».
          */
+        /**
+         * Прореживание линии по Дугласу–Пекеру: выбрасывает вершины, которые
+         * лежат к прямой между соседями ближе допуска.
+         *
+         * Линия выхода откоса снимается вместе с сечениями — шаг 0.5 м, и на
+         * прямом участке это десятки вершин подряд на одной прямой (у
+         * владельца 80 вершин на 36 м). Работать с такой линией нельзя: в
+         * профиле она выглядит пилой, в таблице сотни строк, в DXF лишний вес.
+         * Форму допуск 5 см не меняет — при заложении 1:1.5 это 3 см по
+         * горизонтали.
+         */
+        function simplifyPolylinePts(pts, tol = 0.05) {
+            const n = pts?.length || 0;
+            if (n < 3) return pts ? pts.slice() : [];
+            const distToSeg = (p, a, b) => {
+                const ax = p.x - a.x, ay = p.y - a.y, az = p.z - a.z;
+                const bx = b.x - a.x, by = b.y - a.y, bz = b.z - a.z;
+                const bb = bx * bx + by * by + bz * bz;
+                const t = bb > 1e-12
+                    ? Math.max(0, Math.min(1, (ax * bx + ay * by + az * bz) / bb))
+                    : 0;
+                return Math.hypot(ax - bx * t, ay - by * t, az - bz * t);
+            };
+            const keep = new Array(n).fill(false);
+            keep[0] = keep[n - 1] = true;
+            const stack = [[0, n - 1]];
+            while (stack.length) {
+                const [i, j] = stack.pop();
+                let best = -1, bestD = tol;
+                for (let k = i + 1; k < j; k++) {
+                    const d = distToSeg(pts[k], pts[i], pts[j]);
+                    if (d > bestD) { bestD = d; best = k; }
+                }
+                if (best > 0) { keep[best] = true; stack.push([i, best], [best, j]); }
+            }
+            return pts.filter((_, i) => keep[i]);
+        }
+
         function markDerivedPolyline(rec) {
             if (rec) rec.derived = true;
             return rec;
@@ -13089,7 +13127,7 @@
             const groups = slopeExitGroups(tokens, closed, sections.length);
             const exitLines = groups.map((g, gi) => {
                 const modeName = g.mode === 'cut' ? 'выемка' : g.mode === 'fill' ? 'насыпь' : 'откос';
-                return markDerivedPolyline(addPolylineFromPoints(g.pts, {
+                return markDerivedPolyline(addPolylineFromPoints(simplifyPolylinePts(g.pts), {
                     name: `${record.name} — ${modeName} (${side === 'left' ? 'влево' : 'вправо'})` +
                         (groups.length > 1 ? ` #${gi + 1}` : ''),
                     color: g.mode === 'cut' ? '#3a83c9' : (opts.exitColor || '#2c8f4a'),
@@ -13128,7 +13166,7 @@
             rightG.slice().reverse().forEach((p) => ring.push(p));
             if (capExits?.[0]) ring.push(capExits[0]);
             if (ring.length < 3) return null;
-            return markDerivedPolyline(addPolylineFromPoints(ring, {
+            return markDerivedPolyline(addPolylineFromPoints(simplifyPolylinePts(ring), {
                 name: `${record.name} — контур откоса`,
                 color: opts.exitColor || '#2c8f4a',
                 width: 1.5,
@@ -18811,7 +18849,11 @@
             polyProfileActiveVertex = -1;
             const sel = $('polyProfileSelect');
             if (sel) {
-                sel.innerHTML = listedPolylines()
+                // Служебные линии (выход откоса, контур) осью не предлагаем —
+                // они производные, и профиль по ним не имеет смысла.
+                const list = roadStudioAxisCandidates();
+                if (!list.some((r) => r.id === record.id)) list.unshift(record);
+                sel.innerHTML = list
                     .map((r) => `<option value="${r.id}"${r.id === record.id ? ' selected' : ''}>${esc(r.name)}</option>`)
                     .join('');
             }
