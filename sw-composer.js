@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260819-190000';
+const CACHE = 'bimlva-composer-shell-20260819-node-slopes';
 const SHELL = [
   './',
   './index.html',
