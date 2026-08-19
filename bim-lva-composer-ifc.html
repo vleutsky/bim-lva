@@ -17303,7 +17303,12 @@
             const ltypeH = allocHandle();
             const dashedH = allocHandle();
             const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_KDO, DXF_LAYER_XS, DXF_LAYER_NODE, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
-            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3];
+            /* ⚠️ Ровно столько же, сколько слоёв выше: у ROAD_AXIS_LAYER
+             * цвета не хватало, `layerColors[10]` был undefined, и в запись
+             * слоя уходил пустой код цвета (62). Таблица LAYER становилась
+             * битой, а AutoCAD/Civil сообщал про «Ошибку в таблице APPID» —
+             * сообщение уводит в сторону, сама таблица ниже по файлу. */
+            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3, 4];
             const dashedLayers = new Set([ROAD_AXIS_LAYER]);
             const addLayer = (name, color) => {
                 const nm = sanitizeDxfLayer(name, '');
@@ -17496,7 +17501,7 @@
             tableOpen('LAYER', tblLayer, layers.length);
             layers.forEach((name, i) => {
                 recOpen('LAYER', layerH[name], tblLayer, 'AcDbLayerTableRecord');
-                g(2, name); g(70, 0); g(62, layerColors[i]);
+                g(2, name); g(70, 0); g(62, layerColors[i] ?? 7);
                 g(6, dashedLayers.has(name) ? 'DASHED' : 'CONTINUOUS');
                 g(370, -3); g(390, plotStyleH);
             });
