@@ -2668,6 +2668,9 @@ async function checkRoadCrossSections(page) {
          * Подписи проверяем на рабочем зуме, а не на «вписать всё». */
         window.BimLvaDebug.zoomRoadXs(0.3);
         const html = document.getElementById('roadXsChart')?.innerHTML || '';
+        // Вернуть кадр: иначе зум утечёт в следующую проверку — ⤢ сравнивает
+        // масштаб до и после, и «до» окажется моим зумом, а не вписанным.
+        window.BimLvaDebug.fitRoadXs();
         return {
             axis: />Ось</.test(html) || />Ось /.test(html) || html.includes('>Ось<') || /fill="#6a5420">Ось/.test(html),
             pave: /Покрытие/.test(html),
