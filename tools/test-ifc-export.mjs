@@ -15,6 +15,36 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const problems = [];
 const check = (ok, what) => { console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) problems.push(what); };
+/**
+ * Мини-разбор STEP: id → {type, args}. Скобки и кавычки считаем честно —
+ * регуляркой по `);` разбор ломается на первой же строке с вложенным списком.
+ */
+function parseStep(text) {
+    const map = new Map();
+    for (const line of text.split('\n')) {
+        const m = /^#(\d+)\s*=\s*([A-Z0-9_]+)\s*\(/.exec(line.trim());
+        if (!m) continue;
+        const body = line.trim().slice(m[0].length, line.trim().lastIndexOf(')'));
+        map.set('#' + m[1], { type: m[2], args: splitArgs(body) });
+    }
+    return map;
+}
+function splitArgs(s) {
+    const out = []; let depth = 0, quote = false, cur = '';
+    for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (quote) { cur += ch; if (ch === "'") quote = (s[i + 1] === "'") && (cur += s[++i], true); continue; }
+        if (ch === "'") { quote = true; cur += ch; continue; }
+        if (ch === '(') depth++;
+        if (ch === ')') depth--;
+        if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; continue; }
+        cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+}
+const refList = (s) => (s.match(/#\d+/g) || []);
+
 async function chrome() {
     if (process.env.SMOKE_CHROMIUM) return process.env.SMOKE_CHROMIUM;
     const b = process.env.PLAYWRIGHT_BROWSERS_PATH; if (!b) return undefined;
@@ -60,6 +90,21 @@ try {
         const b = D.createPolylineFromPoints(
             [{ x: 0, y: -60, z: 5 }, { x: 0, y: 60, z: 5 }], { name: 'Ось B', role: 'road-axis' });
         D.setRoadWidths(b, 5, 5);
+        /* Третья ось — С ИЗЛОМАМИ: без неё раскладка кривых плана и
+         * вертикальных кривых не исполняется вовсе, и проверки прошли бы
+         * вхолостую на одних отрезках. Поворот влево, потом вправо —
+         * чтобы знак радиуса проверялся в обе стороны; переломы профиля
+         * вверх и вниз — то же самое для вертикали. */
+        const c = D.createPolylineFromPoints([
+            { x: -200, y: -200, z: 10 },
+            { x: -100, y: -200, z: 16 },
+            { x: -100, y: -100, z: 10 },
+            { x: 40, y: -100, z: 14 }
+        ], { name: 'Ось C', role: 'road-axis' });
+        D.setPolylineRadius(c, 1, 30);
+        D.setPolylineRadius(c, 2, 25);
+        D.setPolylineVRadius(c, 1, 900);
+        D.setPolylineVRadius(c, 2, 700);
         /* Одежда обязательна: без неё покрытие узла — плоский лист, габарит
          * по Z нулевой, и «тело выгрузилось» было бы правдой при нулевой
          * толщине. Со слоями тело настоящее. */
@@ -70,7 +115,7 @@ try {
         D.editIntersection(D.intersections[0].id, { radii: {} });
         D.applyRoadXsPresetTo(a, 'curb');
         D.addRoadXsLayer(0.35);
-        try { return { nodes: D.intersections.length, layers: D.nodeLayers(D.intersections[0].id).length, ...D.ifcExport() }; }
+        try { return { nodes: D.intersections.length, layers: D.nodeLayers(D.intersections[0].id).length, axisC: c, ...D.ifcExport() }; }
         catch (e) { return { error: String(e?.message || e) }; }
     });
 

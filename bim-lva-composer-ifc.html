@@ -1921,7 +1921,19 @@
             border: 1px solid var(--line); border-radius: 3px;
             pointer-events: none;
         }
-        .node-corner {
+        /* Слой ручек узла — как #polyline-handles. Без своих правил он был
+           обычным блоком в потоке: 846×51 поверх сцены с pointer-events:auto,
+           то есть ещё и перехватывал клики по модели в этой полосе. */
+        #node-handles {
+            position: absolute; inset: 0;
+            pointer-events: none; z-index: 17; overflow: hidden;
+        }
+        /* ⚠️ Селектор с #node-handles здесь не для красоты: ниже по файлу
+           живёт `[data-tip] { position: relative }` (якорь всплывающей
+           подсказки). Специфичность у него та же, что у голого .node-corner,
+           а идёт он позже — и подпись угла становилась relative-блоком в
+           потоке шириной во весь слой: на экране это полоса до края окна. */
+        #node-handles .node-corner {
             position: absolute; top: 0; left: 0;
             transform-origin: 0 0;
             padding: 1px 5px; margin: -9px 0 0 -18px; white-space: nowrap;
@@ -13837,6 +13849,123 @@
         }
 
         /**
+         * Разложить ось на сегменты трассы IFC.
+         *
+         * Горизонталь — LINE и CIRCULARARC ровно по тем же сопряжениям, что
+         * рисует вьювер (`computeFilletArc`), а не по своей формуле: две
+         * реализации одного и того же обязательно разойдутся.
+         *
+         * Вертикаль — по профилю в плоскости (пикет, отметка), как он и
+         * построен внутри: прямые уклоны между вершинами и дуги там, где
+         * задан вертикальный радиус. Пикеты берутся ПО ТРАССЕ, а не по
+         * ломаной: сопряжения её укорачивают, и профиль на полигональных
+         * пикетах растянулся бы относительно плана.
+         */
+        function alignmentSegmentsFor(record) {
+            const pts = record.pts || [];
+            const radii = record.radii || [];
+            if (pts.length < 2) return null;
+
+            const hor = [];
+            const pvi = [];                 // {sta, z} — вершины по трассе
+            let cur = pts[0].clone();
+            let sta = 0;
+            const dirOf = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
+            const pushLine = (from, to) => {
+                const len = Math.hypot(to.x - from.x, to.y - from.y);
+                if (len < 1e-9) return;
+                hor.push({ type: 'LINE', x: from.x, y: from.y, dir: dirOf(from, to), len, r: 0 });
+                sta += len;
+            };
+
+            pvi.push({ sta: 0, z: pts[0].z, v: 0 });
+            for (let i = 1; i < pts.length - 1; i++) {
+                const arc = (radii[i] || 0) > 0
+                    ? computeFilletArc(pts[i - 1], pts[i], pts[i + 1], radii[i], 8) : null;
+                if (!arc) {
+                    pushLine(cur, pts[i]);
+                    pvi.push({ sta, z: pts[i].z, v: record.vRadii?.[i] || 0 });
+                    cur = pts[i].clone();
+                    continue;
+                }
+                pushLine(cur, arc.tangentIn);
+                // Знак радиуса: положительный — поворот против часовой, как
+                // принято в IFC. Направление берём у самого сопряжения
+                // (`ccw`), а не считаем второй раз: две реализации одного и
+                // того же обязательно разойдутся.
+                const left = arc.ccw ? 1 : -1;
+                const rEff = arc.radius;
+                const sweep = arc.sweep;
+                const arcLen = rEff * sweep;
+                hor.push({
+                    type: 'CIRCULARARC', x: arc.tangentIn.x, y: arc.tangentIn.y,
+                    dir: dirOf(pts[i - 1], pts[i]), len: arcLen, r: left * rEff
+                });
+                // Вершина профиля — середина дуги: она лежит НА трассе, в
+                // отличие от самой вершины полилинии.
+                pvi.push({ sta: sta + arcLen / 2, z: pts[i].z, v: record.vRadii?.[i] || 0 });
+                sta += arcLen;
+                cur = arc.tangentOut.clone();
+            }
+            pushLine(cur, pts[pts.length - 1]);
+            pvi.push({ sta, z: pts[pts.length - 1].z, v: 0 });
+
+            /* Вертикаль: уклон между вершинами, круговая вставка там, где задан
+             * вертикальный радиус. Дугу считает ТОТ ЖЕ `computeFilletArc`, что
+             * рисует профиль во вьювере, только в плоскости (пикет, отметка) —
+             * включая его же ограничение отступа 45% длины плеча. Своя формула
+             * тут неизбежно разошлась бы с чертежом.
+             *
+             * ⚠️ Пикет здесь — ПО ТРАССЕ (сопряжения плана её укорачивают), а
+             * профиль внутри вьювера построен на пикетах по ломаной
+             * (`polylineVertexPlanStations`). Совпадает, пока в плане нет
+             * сопряжений; где они есть, продольный профиль в IFC привязан к
+             * трассе, как того и требует `DistAlong`. Расхождение записано
+             * в CLAUDE.md как хвост вьювера, а не выгрузки. */
+            const ver = [];
+            const prof = pvi.map((p) => new THREE.Vector3(p.sta, p.z, 0));
+            const gradAt = (i) => {
+                const a = prof[i], b = prof[i + 1];
+                return (b.x - a.x) > 1e-9 ? (b.y - a.y) / (b.x - a.x) : 0;
+            };
+            const vArc = prof.map((_, i) => {
+                if (i === 0 || i === prof.length - 1) return null;
+                const rv = pvi[i].v || 0;
+                return rv > 0 ? computeFilletArc(prof[i - 1], prof[i], prof[i + 1], rv, 8) : null;
+            });
+
+            let s0 = prof[0].x, z0 = prof[0].y;
+            for (let i = 0; i < prof.length - 1; i++) {
+                const g = gradAt(i);
+                const arc = vArc[i + 1];
+                const sEnd = arc ? arc.tangentIn.x : prof[i + 1].x;
+                const zEnd = arc ? arc.tangentIn.y : prof[i + 1].y;
+                if (sEnd - s0 > 1e-6) {
+                    ver.push({ type: 'CONSTANTGRADIENT', sta: s0, len: sEnd - s0, z: z0, g0: g, g1: g, r: null });
+                }
+                if (arc) {
+                    const gOut = gradAt(i + 1);
+                    const len = arc.tangentOut.x - arc.tangentIn.x;
+                    // Знак радиуса — по тому же правилу, что на горизонтали:
+                    // положительный при обходе против часовой стрелки. В осях
+                    // (пикет, отметка) это значит «уклон растёт», то есть
+                    // вогнутая кривая (яма); выпуклая (горб) — отрицательный.
+                    if (len > 1e-6) {
+                        ver.push({
+                            type: 'CIRCULARARC', sta: arc.tangentIn.x, len,
+                            z: arc.tangentIn.y, g0: g, g1: gOut,
+                            r: (gOut >= g ? 1 : -1) * arc.radius
+                        });
+                    }
+                    s0 = arc.tangentOut.x; z0 = arc.tangentOut.y;
+                } else {
+                    s0 = prof[i + 1].x; z0 = zEnd;
+                }
+            }
+            return { hor, ver, pvi, total: sta };
+        }
+
+        /**
          * Собрать IFC из начерченного. Возвращает текст и счётчики — по ним
          * и проверяем, что в файл реально что-то попало.
          */
@@ -13875,7 +14004,7 @@
             E(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${site},(${road}))`);
 
             const products = [];
-            let solids = 0, tris = 0, curves = 0;
+            let solids = 0, tris = 0, curves = 0, arcs2d = 0, vgrades = 0, varcs = 0;
 
             /** Тело из TIN: список точек + список треугольников. */
             const addTin = (tin, name, code) => {
@@ -13927,29 +14056,47 @@
                 }
             }
 
-            /* Оси — IfcAlignment: горизонталь из отрезков, вложенная через
-             * IfcRelNests, как задумано в 4.3. Кривые и профиль пока не
-             * раскладываем: неверная раскладка хуже её отсутствия. */
+            /* Оси — IfcAlignment: горизонталь (отрезки и круговые кривые) и
+             * продольный профиль (уклоны и вертикальные кривые), вложенные в
+             * трассу через IfcRelNests, как задумано в 4.3. */
             for (const rec of drawnPolylines) {
                 if (rec.role !== 'road-axis' || (rec.pts?.length || 0) < 2) continue;
-                const segs = [];
-                for (let i = 0; i < rec.pts.length - 1; i++) {
-                    const a = rec.pts[i], b = rec.pts[i + 1];
-                    const len = Math.hypot(b.x - a.x, b.y - a.y);
-                    if (len < 1e-9) continue;
-                    const dir = Math.atan2(b.y - a.y, b.x - a.x);
-                    const p2 = E(`IFCCARTESIANPOINT((${num(a.x)},${num(a.y)}))`);
-                    const h = E(`IFCALIGNMENTHORIZONTALSEGMENT($,$,${p2},${num(dir)},0.,0.,${num(len)},$,.LINE.)`);
-                    segs.push(E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${h})`));
-                    curves++;
-                }
-                if (!segs.length) continue;
+                const lay = alignmentSegmentsFor(rec);
+                if (!lay?.hor.length) continue;
+
+                const hSegs = lay.hor.map((sg) => {
+                    const p2 = E(`IFCCARTESIANPOINT((${num(sg.x)},${num(sg.y)}))`);
+                    // У дуги радиус кривизны задаётся на входе и на выходе —
+                    // для круговой он один и тот же, знак несёт поворот.
+                    const r = sg.type === 'LINE' ? '0.,0.' : `${num(sg.r)},${num(sg.r)}`;
+                    const h = E(`IFCALIGNMENTHORIZONTALSEGMENT($,$,${p2},${num(sg.dir)},${r},${num(sg.len)},$,.${sg.type}.)`);
+                    if (sg.type === 'CIRCULARARC') arcs2d++; else curves++;
+                    return E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${h})`);
+                });
                 const hPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
                 const hor = E(`IFCALIGNMENTHORIZONTAL('${ifcGuid()}',$,'Горизонталь',$,$,${hPl},$)`);
-                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${hor},(${segs.join(',')}))`);
+                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${hor},(${hSegs.join(',')}))`);
+
+                const nested = [hor];
+                if (lay.ver.length) {
+                    const vSegs = lay.ver.map((sg) => {
+                        const v = E(
+                            `IFCALIGNMENTVERTICALSEGMENT($,$,${num(sg.sta)},${num(sg.len)},` +
+                            `${num(sg.z)},${num(sg.g0)},${num(sg.g1)},` +
+                            `${sg.r == null ? '$' : num(sg.r)},.${sg.type}.)`
+                        );
+                        if (sg.type === 'CIRCULARARC') varcs++; else vgrades++;
+                        return E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${v})`);
+                    });
+                    const vPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
+                    const ver = E(`IFCALIGNMENTVERTICAL('${ifcGuid()}',$,'Профиль',$,$,${vPl},$)`);
+                    E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${ver},(${vSegs.join(',')}))`);
+                    nested.push(ver);
+                }
+
                 const alPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
                 const al = E(`IFCALIGNMENT('${ifcGuid()}',$,'${String(rec.name || 'Ось').replace(/'/g, "''")}',$,$,${alPl},$)`);
-                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${al},(${hor}))`);
+                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${al},(${nested.join(',')}))`);
                 E(`IFCRELREFERENCEDINSPATIALSTRUCTURE('${ifcGuid()}',$,$,$,(${al}),${road})`);
             }
 
@@ -13971,7 +14118,7 @@
                 'END-ISO-10303-21;',
                 ''
             ].join('\n');
-            return { text, solids, tris, curves, entities: id };
+            return { text, solids, tris, curves, arcs2d, vgrades, varcs, entities: id };
         }
 
         function exportDrawingIfc() {
@@ -13992,7 +14139,9 @@
                 setTimeout(() => URL.revokeObjectURL(a.href), 2000);
                 notify(
                     `IFC ${IFC_SCHEMA}: тел ${r.solids} (${r.tris} треугольников), ` +
-                    `сегментов трассы ${r.curves}. Классы дорожные: покрытие, слои, бордюр, откосы, оси.`
+                    `трасса: прямых ${r.curves}, кривых плана ${r.arcs2d}, ` +
+                    `уклонов ${r.vgrades}, вертикальных кривых ${r.varcs}. ` +
+                    'Классы дорожные: покрытие, слои, бордюр, откосы, оси.'
                 );
                 trackUsage('draw_export_ifc', { solids: r.solids, curves: r.curves });
             } catch (e) {
@@ -42998,9 +43147,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.08.18',
-            buildId: 'ifc-out',
-            released: '2026-08-18',
+            version: '2026.08.19',
+            buildId: 'alignment-full',
+            released: '2026-08-19',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
