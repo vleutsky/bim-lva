@@ -4246,14 +4246,23 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
                             <button class="btn rbtn-sm" id="btnIntersections" disabled title="Пересечения и примыкания дорог">⛔ Пересечения</button>
-                            <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportIfc" disabled title="Выгрузить в IFC 4.3 дорожными классами: покрытие, слои одежды, бордюр, откосы, оси">⤓ IFC</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnDrawExportIfc" disabled title="Выгрузить в IFC 4.3 дорожными классами: покрытие, слои одежды, бордюр, откосы, оси"><span class="tb-ico">⤓</span><span class="tb-txt">IFC 4.3</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
+                        </div>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
+                        </div>
+                    </div>
+                    <div class="cap">Выгрузка</div>
                 </div>
                 <div class="rpanel">
                     <div class="items">
@@ -14232,7 +14241,9 @@
             if (!groups.length) return;
             treeBox.querySelector('.empty')?.remove();
 
-            const root = drawnTreeRow('Начерчено', 'PROJECT', null);
+            // Имя как у IfcProject в выгрузке — дерево и файл говорят
+            // об одном и том же одинаково.
+            const root = drawnTreeRow('Проект BIM.LVA', 'PROJECT', null);
             root.node.id = 'drawn-root';
             root.node.classList.add('file-root');
             root.row.querySelector('.tlabel').style.cssText = 'font-weight:600;color:var(--blue)';
@@ -17056,16 +17067,10 @@
                 lift.title = 'Поднять или опустить всю линию: на отметку либо на Δ';
                 lift.addEventListener('click', () => liftPolylinePrompt(r));
 
-                /* У оси дороги откосы строятся сами вместе с полотном, кнопка
-                 * там лишняя. Остаётся она только на обычном контуре —
-                 * площадке: строить откос от каждой начерченной линии по
-                 * умолчанию нельзя, это и осевые, и контуры, и линии выхода. */
-                const slope = document.createElement('button');
-                slope.className = 'btn';
-                slope.textContent = '△ Откосы';
-                slope.title = 'Поверхность откоса от этой линии до рельефа, с линией выхода и объёмами';
-                slope.hidden = r.role === 'road-axis';
-                slope.addEventListener('click', () => openSlopeModal(r));
+                /* Кнопки «△ Откосы» в списке больше нет (просьба владельца:
+                 * «они только ломают модель»). Откосы строятся сами вместе с
+                 * полотном; площадку по замкнутому контуру строит «⛰
+                 * Картограмма» и диалог откосов из контекстного меню сцены. */
 
                 const xs = document.createElement('button');
                 xs.className = 'btn';
@@ -17081,7 +17086,7 @@
 
                 const tools = document.createElement('div');
                 tools.className = 'polyline-tools';
-                tools.append(edit, prof, earth, lift, slope, xs, go, plan, del);
+                tools.append(edit, prof, earth, lift, xs, go, plan, del);
                 row.append(nameInput, info, colorInput, widthInput, layerInput, closeBtn, tools);
 
                 const block = document.createElement('div');
