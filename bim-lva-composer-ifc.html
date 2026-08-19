@@ -21197,6 +21197,20 @@
             });
         }
 
+        /**
+         * Разрывы ТОЛЬКО под узлом — для бровки откоса.
+         *
+         * Полный `corridorBreakFlags` рвёт ещё и на вывернутом сечении
+         * (острый угол): полотну это нужно, а бровке нет — она обычная
+         * полилиния и через угол проходит. Зато участок из одной станции
+         * после такого разрыва выбрасывается целиком, и вместе с ним объём:
+         * замерено 0.713 м³ вместо 1.125 на короткой оси из трёх сечений.
+         */
+        function nodeGapBreakFlags(stations, gaps) {
+            return stations.map((st, i) => i < stations.length - 1
+                && stationInsideGaps((st.sta + stations[i + 1].sta) / 2, gaps || []));
+        }
+
         /** Разбить пикеты на непрерывные участки по тем же разрывам. */
         function splitStationsAtBreaks(stations, breaks) {
             const runs = [];
@@ -21924,7 +21938,7 @@
              * сечении. Одной линией через весь узел она шла напрямую через
              * перекрёсток, и откос по ней резал покрытие. */
             const runs = splitStationsAtBreaks(
-                model.stations, corridorBreakFlags(model.stations, model.nodeGaps || [])
+                model.stations, nodeGapBreakFlags(model.stations, model.nodeGaps || [])
             );
             const addSide = (side) => {
                 runs.forEach((run, ri) => {
