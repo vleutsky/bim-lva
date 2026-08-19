@@ -21749,11 +21749,12 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
-            // Откосы идут за полотном ВСЕГДА — и при первой сборке, и при
-            // пересборке после сдвига оси или правки узла. Отдельной кнопки,
-            // включавшей их, больше нет; от рекурсии закрыт сам
-            // buildRoadTemplateSlopes.
-            buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+            // Откосы идут за полотном: держим их свежими, если они уже есть.
+            // Первое построение делает applyRoadTemplateChange / «Построить» —
+            // безусловный вызов ЗДЕСЬ ломал окно поперечника (см. ниже).
+            if ((model.slopeModelIds || []).length) {
+                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+            }
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
@@ -21938,7 +21939,7 @@
              * сечении. Одной линией через весь узел она шла напрямую через
              * перекрёсток, и откос по ней резал покрытие. */
             const runs = splitStationsAtBreaks(
-                model.stations, nodeGapBreakFlags(model.stations, model.nodeGaps || [])
+                model.stations, corridorBreakFlags(model.stations, model.nodeGaps || [])
             );
             const addSide = (side) => {
                 runs.forEach((run, ri) => {
