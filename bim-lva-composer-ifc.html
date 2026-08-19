@@ -4252,13 +4252,15 @@
                 </div>
                 <div class="rpanel">
                     <div class="items">
-                        <button class="btn rbtn-big" id="btnDrawExportIfc" disabled title="Выгрузить в IFC 4.3 дорожными классами: покрытие, слои одежды, бордюр, откосы, оси"><span class="tb-ico">⤓</span><span class="tb-txt">IFC 4.3</span></button>
+                        <button class="btn rbtn-big" id="btnDrawExportIfc" disabled title="IFC 4.3 с дорожными классами: покрытие, слои одежды, бордюр, откосы, трасса IfcAlignment. Открывают Civil 3D 2024+, Revit 2025+, BlenderBIM"><span class="tb-ico">⤓</span><span class="tb-txt">IFC 4.3</span></button>
                         <div class="col">
+                            <button class="btn rbtn-sm" id="btnDrawExportIfc4" disabled title="IFC4 для приложений без поддержки 4.3: те же тела, но классы универсальные (роль элемента — в свойстве ObjectType), ось — ломаной">⤓ IFC4</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportIfc2x3" disabled title="IFC2x3 для Navisworks и другого старого ПО: геометрия оболочкой из граней, ось — ломаной">⤓ IFC2x3</button>
                             <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
                         </div>
                         <div class="col">
+                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
                             <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
                         </div>
                     </div>
@@ -8196,7 +8198,7 @@
                 return buildDxf(drawnPolylines, coordPins);
             },
             /** Текст IFC — тот же путь, что и кнопка выгрузки. */
-            ifcExport() { return buildIfcExport(); },
+            ifcExport(schema) { return buildIfcExport(schema); },
             /** Байты DWG — тот же путь, что и кнопка выгрузки. */
             async dwgBytes() {
                 const r = await buildDwg(drawnPolylines, coordPins.filter((p) => p.abs));
@@ -14331,7 +14333,42 @@
          * Собрать IFC из начерченного. Возвращает текст и счётчики — по ним
          * и проверяем, что в файл реально что-то попало.
          */
-        function buildIfcExport() {
+        /**
+         * Класс для схем БЕЗ дорожного словаря. Дорожных классов
+         * (`IfcPavement`, `IfcCourse`, `IfcKerb`, `IfcEarthworksFill`,
+         * `IfcAlignment`) нет ни в IFC4, ни в IFC2x3 — они появились только
+         * в 4.3. Пишем универсальный `IfcBuildingElementProxy`, а настоящую
+         * роль кладём в `ObjectType`, чтобы смысл не потерялся: в
+         * Navisworks и Civil она видна в свойствах элемента.
+         */
+        function ifcLegacyClassForCode(code) {
+            const c = String(code || '').toUpperCase();
+            const role = {
+                PVMT: 'Покрытие', NODE: 'Покрытие узла', CURB: 'Бордюр',
+                SLOPE: 'Откос', EMBK: 'Земляное полотно', BASE: 'Основание',
+                SUBB: 'Песок', WEDGE: 'Расклин'
+            }[c] || c || 'Элемент';
+            return { cls: 'IFCBUILDINGELEMENTPROXY', type: '.NOTDEFINED.', role };
+        }
+
+        /**
+         * Собрать IFC из начерченного в одной из трёх схем.
+         *
+         * `IFC4X3_ADD2` — настоящие дорожные классы и трасса `IfcAlignment`.
+         * `IFC4` — тела те же (тесселяция есть и в IFC4), но классы
+         *   универсальные: дорожного словаря в схеме нет.
+         * `IFC2X3` — для старых приложений (Navisworks 2022 и подобные).
+         *   Здесь ДВА принципиальных отличия, а не только имена классов:
+         *     · нет `IfcTriangulatedFaceSet` и `IfcCartesianPointList3D` —
+         *       геометрию пишем оболочкой `IfcShellBasedSurfaceModel` из
+         *       `IfcFace`/`IfcPolyLoop`. Оболочка ОТКРЫТАЯ (`IfcOpenShell`):
+         *       наши TIN не замкнуты, и `IfcFacetedBrep` был бы неправдой;
+         *     · `IfcOwnerHistory` в 2x3 ОБЯЗАТЕЛЕН у каждого IfcRoot —
+         *       `$` там отвергается строгими читателями.
+         */
+        function buildIfcExport(schema = IFC_SCHEMA) {
+            const legacy = schema !== 'IFC4X3_ADD2';
+            const tess = schema !== 'IFC2X3';      // тесселяция есть в IFC4+
             const rows = [];
             let id = 0;
             const E = (body) => { rows.push(`#${++id}=${body};`); return `#${id}`; };
@@ -14351,7 +14388,17 @@
             const unitA = E("IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)");
             const unitV = E("IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)");
             const units = E(`IFCUNITASSIGNMENT((${unitL},${unitA},${unitV}))`);
-            const proj = E(`IFCPROJECT('${ifcGuid()}',$,'BIM.LVA',$,$,$,$,(${ctx}),${units})`);
+            /* В IFC2x3 OwnerHistory обязателен у каждого IfcRoot. В IFC4+ он
+             * необязателен, и лишних сущностей мы туда не тащим. */
+            let own = '$';
+            if (schema === 'IFC2X3') {
+                const person = E("IFCPERSON($,'BIM.LVA',$,$,$,$,$,$)");
+                const org = E("IFCORGANIZATION($,'BIM.LVA',$,$,$)");
+                const pao = E(`IFCPERSONANDORGANIZATION(${person},${org},$)`);
+                const app = E(`IFCAPPLICATION(${org},'${COMPOSER_ABOUT.version}','BIM.LVA Composer','BIMLVA')`);
+                own = E(`IFCOWNERHISTORY(${pao},${app},$,.ADDED.,$,$,$,${Math.floor(Date.now() / 1000)})`);
+            }
+            const proj = E(`IFCPROJECT('${ifcGuid()}',${own},'BIM.LVA',$,$,$,$,(${ctx}),${units})`);
 
             // Мировой сдвиг — в размещение площадки; вершины остаются в сцене.
             const shift = worldPointToAbsoluteXYZ(new THREE.Vector3(0, 0, 0))
@@ -14359,28 +14406,68 @@
             const sitePt = E(pt3(shift));
             const siteAxis = E(`IFCAXIS2PLACEMENT3D(${sitePt},${dirZ},${dirX})`);
             const sitePl = E(`IFCLOCALPLACEMENT($,${siteAxis})`);
-            const site = E(`IFCSITE('${ifcGuid()}',$,'Площадка',$,$,${sitePl},$,$,.ELEMENT.,$,$,$,$,$)`);
+            const site = E(`IFCSITE('${ifcGuid()}',${own},'Площадка',$,$,${sitePl},$,$,.ELEMENT.,$,$,$,$,$)`);
             const roadPl = E(`IFCLOCALPLACEMENT(${sitePl},${axis})`);
-            const road = E(`IFCROAD('${ifcGuid()}',$,'Дорога',$,$,${roadPl},$,$,.ELEMENT.,.NOTDEFINED.)`);
-            E(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${proj},(${site}))`);
-            E(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${site},(${road}))`);
+            /* Контейнер под площадкой. В 4.3 это IfcRoad. В IFC4 такого класса
+             * нет; в 2x3 старые читатели вдобавок ждут привычную цепочку
+             * площадка → здание → этаж, поэтому даём именно её — иначе
+             * элементы у части приложений просто не появляются в дереве. */
+            let road, roadKind;
+            if (!legacy) {
+                road = E(`IFCROAD('${ifcGuid()}',${own},'Дорога',$,$,${roadPl},$,$,.ELEMENT.,.NOTDEFINED.)`);
+                roadKind = 'IfcRoad';
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${proj},(${site}))`);
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${site},(${road}))`);
+            } else {
+                const bld = E(`IFCBUILDING('${ifcGuid()}',${own},'Дорога',$,$,${roadPl},$,$,.ELEMENT.,$,$,$)`);
+                const stPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
+                road = E(`IFCBUILDINGSTOREY('${ifcGuid()}',${own},'Проектная отметка',$,$,${stPl},$,$,.ELEMENT.,0.)`);
+                roadKind = 'IfcBuildingStorey';
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${proj},(${site}))`);
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${site},(${bld}))`);
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${bld},(${road}))`);
+            }
 
             const products = [];
             let solids = 0, tris = 0, curves = 0, arcs2d = 0, vgrades = 0, varcs = 0;
 
-            /** Тело из TIN: список точек + список треугольников. */
+            /** Тело из TIN. В IFC4+ — тесселяция, в 2x3 — оболочка из граней. */
             const addTin = (tin, name, code) => {
                 if (!tin?.points?.length || !tin?.faces?.length) return;
-                const coords = tin.points.map((p) => `(${num(p.x)},${num(p.y)},${num(p.z)})`).join(',');
-                const list = E(`IFCCARTESIANPOINTLIST3D((${coords}))`);
-                // Индексы в IFC — с ЕДИНИЦЫ, а не с нуля.
-                const idx = tin.faces.map((f) => `(${f[0] + 1},${f[1] + 1},${f[2] + 1})`).join(',');
-                const tfs = E(`IFCTRIANGULATEDFACESET(${list},$,.T.,(${idx}),$)`);
-                const rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','Tessellation',(${tfs}))`);
+                let rep;
+                if (tess) {
+                    const coords = tin.points.map((p) => `(${num(p.x)},${num(p.y)},${num(p.z)})`).join(',');
+                    const list = E(`IFCCARTESIANPOINTLIST3D((${coords}))`);
+                    // Индексы в IFC — с ЕДИНИЦЫ, а не с нуля.
+                    const idx = tin.faces.map((f) => `(${f[0] + 1},${f[1] + 1},${f[2] + 1})`).join(',');
+                    const tfs = E(`IFCTRIANGULATEDFACESET(${list},$,.T.,(${idx}),$)`);
+                    rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','Tessellation',(${tfs}))`);
+                } else {
+                    /* IFC2x3: ни списка точек, ни тесселяции в схеме нет.
+                     * Точки пишем по одной и переиспользуем по индексу — иначе
+                     * на каждый треугольник ушло бы по три копии вершины. */
+                    const pts = tin.points.map((p) => E(pt3(p)));
+                    const faces = tin.faces.map((f) => {
+                        const loop = E(`IFCPOLYLOOP((${pts[f[0]]},${pts[f[1]]},${pts[f[2]]}))`);
+                        const bound = E(`IFCFACEOUTERBOUND(${loop},.T.)`);
+                        return E(`IFCFACE((${bound}))`);
+                    });
+                    // Оболочка ОТКРЫТАЯ: наш TIN не замкнут, и IfcFacetedBrep
+                    // (он требует замкнутую) был бы неправдой о геометрии.
+                    const shell = E(`IFCOPENSHELL((${faces.join(',')}))`);
+                    const sbsm = E(`IFCSHELLBASEDSURFACEMODEL((${shell}))`);
+                    rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','SurfaceModel',(${sbsm}))`);
+                }
                 const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
                 const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                const { cls, type } = ifcClassForCode(code);
-                products.push(E(`${cls}('${ifcGuid()}',$,'${String(name || code || 'Элемент').replace(/'/g, "''")}',$,$,${pl},${shape},$,${type})`));
+                const nm = String(name || code || 'Элемент').replace(/'/g, "''");
+                if (legacy) {
+                    const { cls, type, role } = ifcLegacyClassForCode(code);
+                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,'${role}',${pl},${shape},$,${type})`));
+                } else {
+                    const { cls, type } = ifcClassForCode(code);
+                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,$,${pl},${shape},$,${type})`));
+                }
                 solids++;
                 tris += tin.faces.length;
             };
@@ -14403,6 +14490,27 @@
                 if (g.kind !== 'alignment') continue;
                 const rec = g.rec;
                 const lay = g.layout;
+
+                if (legacy) {
+                    /* IfcAlignment нет ни в IFC4, ни в 2x3. Терять ось совсем
+                     * нельзя — это главный объект чертежа, поэтому пишем её
+                     * ЛОМАНОЙ по реальным точкам (renderPts, то есть с дугами
+                     * сопряжений) как IfcAnnotation. Пикетажа и параметров
+                     * кривых в ней нет: их в этих схемах выразить нечем, и
+                     * подменять их «похожим» было бы обманом. */
+                    const pts = (rec.renderPts || rec.pts || []);
+                    if (pts.length < 2) continue;
+                    const ids = pts.map((p) => E(pt3(p)));
+                    const poly = E(`IFCPOLYLINE((${ids.join(',')}))`);
+                    const rep = E(`IFCSHAPEREPRESENTATION(${ctx},'Axis','Curve3D',(${poly}))`);
+                    const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
+                    const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
+                    const nm = String(rec.name || 'Ось').replace(/'/g, "''");
+                    products.push(E(`IFCANNOTATION('${ifcGuid()}',${own},'${nm}',$,'Ось трассы',${pl},${shape})`));
+                    curves += lay.hor.length;
+                    arcs2d += lay.hor.filter((x) => x.type === 'CIRCULARARC').length;
+                    continue;
+                }
 
                 const hSegs = lay.hor.map((sg) => {
                     const p2 = E(`IFCCARTESIANPOINT((${num(sg.x)},${num(sg.y)}))`);
@@ -14437,20 +14545,20 @@
                 const alPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
                 const al = E(`IFCALIGNMENT('${ifcGuid()}',$,'${String(rec.name || 'Ось').replace(/'/g, "''")}',$,$,${alPl},$)`);
                 E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${al},(${nested.join(',')}))`);
-                E(`IFCRELREFERENCEDINSPATIALSTRUCTURE('${ifcGuid()}',$,$,$,(${al}),${road})`);
+                E(`IFCRELREFERENCEDINSPATIALSTRUCTURE('${ifcGuid()}',${own},$,$,(${al}),${road})`);
             }
 
             if (products.length) {
-                E(`IFCRELCONTAINEDINSPATIALSTRUCTURE('${ifcGuid()}',$,$,$,(${products.join(',')}),${road})`);
+                E(`IFCRELCONTAINEDINSPATIALSTRUCTURE('${ifcGuid()}',${own},$,$,(${products.join(',')}),${road})`);
             }
 
             const stamp = new Date().toISOString().replace(/\.\d+Z$/, '');
             const text = [
                 'ISO-10303-21;',
                 'HEADER;',
-                "FILE_DESCRIPTION(('ViewDefinition [Alignment-basedReferenceView]'),'2;1');",
+                `FILE_DESCRIPTION(('ViewDefinition [${legacy ? 'CoordinationView_V2.0' : 'Alignment-basedReferenceView'}]'),'2;1');`,
                 `FILE_NAME('bim-lva.ifc','${stamp}',('BIM.LVA'),('BIM.LVA'),'BIM.LVA Composer','BIM.LVA Composer','');`,
-                `FILE_SCHEMA(('${IFC_SCHEMA}'));`,
+                `FILE_SCHEMA(('${schema}'));`,
                 'ENDSEC;',
                 'DATA;',
                 ...rows,
@@ -14458,10 +14566,10 @@
                 'END-ISO-10303-21;',
                 ''
             ].join('\n');
-            return { text, solids, tris, curves, arcs2d, vgrades, varcs, entities: id };
+            return { text, schema, solids, tris, curves, arcs2d, vgrades, varcs, entities: id };
         }
 
-        function exportDrawingIfc() {
+        function exportDrawingIfc(schema = IFC_SCHEMA) {
             const has = slopeModels.some((s) => s?.tin?.faces?.length)
                 || roadIntersections.length
                 || drawnPolylines.some((r) => r.role === 'road-axis');
@@ -14470,20 +14578,23 @@
                 return;
             }
             try {
-                const r = buildIfcExport();
+                const r = buildIfcExport(schema);
                 const blob = new Blob([r.text], { type: 'application/x-step' });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
-                a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}.ifc`;
+                const tag = schema === 'IFC2X3' ? '-ifc2x3' : schema === 'IFC4' ? '-ifc4' : '';
+                a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}${tag}.ifc`;
                 a.click();
                 setTimeout(() => URL.revokeObjectURL(a.href), 2000);
                 notify(
-                    `IFC ${IFC_SCHEMA}: тел ${r.solids} (${r.tris} треугольников), ` +
+                    `IFC ${r.schema}: тел ${r.solids} (${r.tris} треугольников), ` +
                     `трасса: прямых ${r.curves}, кривых плана ${r.arcs2d}, ` +
                     `уклонов ${r.vgrades}, вертикальных кривых ${r.varcs}. ` +
-                    'Классы дорожные: покрытие, слои, бордюр, откосы, оси.'
+                    (schema === IFC_SCHEMA
+                        ? 'Классы дорожные: покрытие, слои, бордюр, откосы, оси.'
+                        : 'Дорожных классов в этой схеме нет — тела универсальные, роль в свойстве ObjectType, ось ломаной.')
                 );
-                trackUsage('draw_export_ifc', { solids: r.solids, curves: r.curves });
+                trackUsage('draw_export_ifc', { solids: r.solids, curves: r.curves, schema });
             } catch (e) {
                 notifyError('IFC не собрался: ' + (e?.message || e));
                 console.error('IFC export error:', e);
@@ -17274,6 +17385,8 @@
             const stepBtn = $('btnDrawExportStep');
             const dwgBtn = $('btnDrawExportDwg');
             const ifcBtn = $('btnDrawExportIfc');
+            const ifc4Btn = $('btnDrawExportIfc4');
+            const ifc23Btn = $('btnDrawExportIfc2x3');
             const intersectionsBtn = $('btnIntersections');
             const hasContent = drawnPolylines.length || coordPins.length || sweptSolids.length
                 || slopeModels.length || roadXsModels.length;
@@ -17282,6 +17395,8 @@
             if (stepBtn) stepBtn.disabled = !hasContent;
             if (dwgBtn) dwgBtn.disabled = !hasContent;
             if (ifcBtn) ifcBtn.disabled = !hasContent;
+            if (ifc4Btn) ifc4Btn.disabled = !hasContent;
+            if (ifc23Btn) ifc23Btn.disabled = !hasContent;
             if (intersectionsBtn) intersectionsBtn.disabled = drawnPolylines.length < 2;
             renderPolylinesList();
             renderPadsList();
@@ -18180,7 +18295,9 @@
         $('btnDrawExportXml')?.addEventListener('click', exportPolylineLandXml);
         $('btnDrawExportStep')?.addEventListener('click', exportDrawingStep);
         $('btnDrawExportDwg')?.addEventListener('click', exportDrawingDwg);
-        $('btnDrawExportIfc')?.addEventListener('click', exportDrawingIfc);
+        $('btnDrawExportIfc')?.addEventListener('click', () => exportDrawingIfc('IFC4X3_ADD2'));
+        $('btnDrawExportIfc4')?.addEventListener('click', () => exportDrawingIfc('IFC4'));
+        $('btnDrawExportIfc2x3')?.addEventListener('click', () => exportDrawingIfc('IFC2X3'));
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
         });
@@ -43833,7 +43950,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.19',
-            buildId: 'dxf-layer-fix',
+            buildId: 'ifc-schemas',
             released: '2026-08-19',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -43842,6 +43959,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.19: выгрузка IFC в трёх схемах: 4.3 с дорожными классами и трассой, IFC4 и IFC2x3 для приложений без поддержки 4.3 (Navisworks). В старых схемах тела универсальным классом, роль — в ObjectType, ось — ломаной; в 2x3 геометрия оболочкой из граней и обязательный OwnerHistory.',
                 '2026.08.19: DXF снова открывается в AutoCAD/Civil — у слоя «Ось» не было цвета, и таблица LAYER выходила битой (сообщение про APPID уводило в сторону).',
                 '2026.08.19: починены DWG и STEP на сайте — путь к вендорам был абсолютным и на GitHub Pages уводил мимо /bim-lva/ (404). Локально не воспроизводилось.',
                 '2026.08.19: выгрузка вынесена в свою панель ленты — «⤓ IFC 4.3» крупной кнопкой, рядом DXF, DWG, LandXML, STEP (раньше их обрезало). Кнопка «△ Откосы» из списка полилиний убрана: откосы строятся сами.',

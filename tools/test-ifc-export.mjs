@@ -111,6 +111,41 @@ try {
         catch (e) { return { error: String(e?.message || e) }; }
     });
 
+    /* Три схемы — три разных файла, и различия НЕ косметические: в IFC4 нет
+     * дорожных классов и IfcAlignment, в IFC2x3 нет ещё и тесселяции, а
+     * IfcOwnerHistory там обязателен. Проверяем каждую отдельно и каждую
+     * читаем обратно. */
+    const legacy = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const out = {};
+        for (const sch of ['IFC4', 'IFC2X3']) {
+            try { out[sch] = D.ifcExport(sch); } catch (e) { out[sch] = { error: String(e?.message || e) }; }
+        }
+        return out;
+    });
+    for (const sch of ['IFC4', 'IFC2X3']) {
+        const r = legacy[sch];
+        check(!r.error, `${sch} собран${r.error ? ': ' + r.error : ''}`);
+        if (r.error) continue;
+        console.log(`  ${sch}: тел ${r.solids} (${r.tris} треугольников), сущностей ${r.entities}`);
+        check(r.text.includes(`FILE_SCHEMA(('${sch}'))`), `${sch}: схема в заголовке`);
+        check(r.solids > 0, `${sch}: тела попали в файл (${r.solids})`);
+        // Дорожных классов в этих схемах НЕТ — если просочились, файл соврал.
+        for (const cls of ['IFCPAVEMENT', 'IFCKERB', 'IFCEARTHWORKSFILL', 'IFCALIGNMENT', 'IFCROAD']) {
+            check(!r.text.includes(cls), `${sch}: нет класса ${cls}, которого в схеме не существует`);
+        }
+        check(r.text.includes('IFCBUILDINGELEMENTPROXY'), `${sch}: тела универсальным классом`);
+        check(r.text.includes('IFCANNOTATION'), `${sch}: ось не потеряна (аннотация с ломаной)`);
+    }
+    // Тесселяции в 2x3 нет — только оболочка из граней.
+    check(!legacy.IFC2X3.text?.includes('IFCTRIANGULATEDFACESET'),
+        'IFC2X3: нет IfcTriangulatedFaceSet, которого в схеме не существует');
+    check(!!legacy.IFC2X3.text?.includes('IFCOPENSHELL'), 'IFC2X3: геометрия оболочкой из граней');
+    check(!!legacy.IFC2X3.text?.includes('IFCOWNERHISTORY'),
+        'IFC2X3: есть IfcOwnerHistory — в этой схеме он обязателен');
+    check(legacy.IFC4.text?.includes('IFCTRIANGULATEDFACESET'),
+        'IFC4: тесселяция на месте (в IFC4 она есть)');
+
     check(!made.error, `IFC собран${made.error ? ': ' + made.error : ''}`);
     if (made.error) throw new Error(made.error);
     console.log(`  узлов ${made.nodes}, слоёв одежды ${made.layers}, тел ${made.solids} (${made.tris} треугольников), сегментов ${made.curves}, сущностей ${made.entities}`);
@@ -135,6 +170,20 @@ try {
     const bigVertex = /IFCCARTESIANPOINTLIST3D\(\(\(5\d{4}\./.test(made.text);
     check(siteHasShift, `сдвиг ${Math.round(shift.x)} м вынесен в размещение площадки`);
     check(!bigVertex, 'вершины тел в координатах сцены, а не в абсолютных');
+
+    for (const sch of ['IFC4', 'IFC2X3']) {
+        const f = path.join(ROOT, 'tools', 'fixtures', `_ifc-${sch}.ifc`);
+        await fs.writeFile(f, legacy[sch].text);
+        await page.evaluate(() => window.BimLvaDebug.clearPolylines());
+        await page.setInputFiles('#localFileInput', f);
+        const ok = await page.waitForFunction(
+            (n) => (window.BimLvaDebug?.modelBounds || []).find((m) => m.file.includes(n)) || null,
+            `_ifc-${sch}`, { timeout: 120_000 }
+        ).then((h) => h.jsonValue()).catch(() => null);
+        check(!!ok && (ok.sizeX || 0) > 1, `${sch}: файл читается обратно и геометрия строится`
+            + (ok ? ` (${(ok.sizeX || 0).toFixed(1)}×${(ok.sizeY || 0).toFixed(1)})` : ''));
+        await fs.rm(f, { force: true });
+    }
 
     await fs.writeFile(outFile, made.text);
     await page.evaluate(() => window.BimLvaDebug.clearPolylines());
