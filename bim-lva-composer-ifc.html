@@ -21836,11 +21836,23 @@
             if (!model?.live) return;
             const rec = drawnPolylines.find((r) => r.id === polylineId);
             if (!rec) { clearRoadXsModels(polylineId); return; }
+            /* ⚠️ Внутренняя пересборка НЕ должна забирать себе активную ось
+             * окна поперечника. `buildRoadCrossSections` в конце делает свою
+             * модель активной — это верно, когда ось строит пользователь, но
+             * сюда мы попадаем из пересчёта узла и сборки откосов, и тогда
+             * фокус уезжал на соседнюю ось. Наружу это выглядело как чужие
+             * числа в окне: замерено «объём откосов 0.713 вместо 1.125» при
+             * разных объёмах слева и справа (0.462 и 0.251) — считалось по
+             * другой оси, а не по той, что открыта. */
+            const keep = { ...roadXsActive };
             buildRoadCrossSections(rec, {
                 step: model.step, stepCurve: model.stepCurve,
                 widthL: model.widthL, widthR: model.widthR,
                 sampleStep: model.sampleStep, color: model.color, live: true
             });
+            if (keep.modelId != null && roadXsModels.some((m) => m.id === keep.modelId)) {
+                roadXsActive = keep;
+            }
         }
 
         function scheduleRoadXsRebuild(polylineId) {
