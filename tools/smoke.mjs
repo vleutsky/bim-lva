@@ -1944,11 +1944,16 @@ async function checkSlopeToTerrain(page) {
         problems.push(`откосы: верхняя площадка не села на поверхность нижней (${JSON.stringify(padWrap)})`);
     }
 
-    // Окно «△ Откосы» настоящими кликами, а не в обход через отладочный API:
-    // проверяем, что кнопка в строке списка находит СВОЮ полилинию, поля
-    // читаются с формы (а не остались значением по умолчанию из прошлого
-    // открытия), и построение через кнопку «Построить» реально появляется в
-    // сцене — то есть весь путь пользователя целиком, не только математику.
+    /* Окно «△ Откосы» — весь путь пользователя целиком, не только математика:
+     * окно находит СВОЮ полилинию, поля читаются с формы (а не остались
+     * значением по умолчанию от прошлого открытия), «Построить» реально
+     * появляется в сцене.
+     *
+     * ⚠️ Кнопки в списке полилиний БОЛЬШЕ НЕТ — владелец попросил её убрать
+     * («только ломает модель»), откосы у дорог и узлов строятся сами. Окно
+     * осталось для площадки по замкнутому контуру и открывается из
+     * контекстного меню сцены, поэтому проверку ведём через него, а не
+     * удаляем: сам диалог обязан работать. */
     await page.evaluate(([g, h]) => {
         window.BimLvaDebug.createPolylineFromPoints(
             [{ x: -20, y: 15, z: g + h }, { x: -15.6, y: 15, z: g + h }],
@@ -1959,10 +1964,13 @@ async function checkSlopeToTerrain(page) {
     const uiOpened = await page.evaluate(() => {
         const rows = [...document.querySelectorAll('#polylinesList .polyline-row')];
         const row = rows.find((r) => r.querySelector('input.editInput')?.value === 'Откос-тест-UI');
-        const btn = [...(row?.querySelectorAll('button') || [])].find((b) => b.textContent.includes('Откосы'));
-        btn?.click();
+        const listBtn = [...(row?.querySelectorAll('button') || [])]
+            .find((b) => b.textContent.includes('Откосы'));
+        const id = window.BimLvaDebug.drawn.find((r) => r.name === 'Откос-тест-UI')?.id;
+        const opened = id != null && window.BimLvaDebug.openSlopeDialog(id);
         return {
-            found: !!btn,
+            // Пункт меню сцены на месте, кнопки в списке нет, окно открылось.
+            found: !!document.getElementById('ctxPolylineSlope') && !listBtn && !!opened,
             modalShown: document.getElementById('slopeModal')?.classList.contains('show'),
             selectHasIt: [...(document.getElementById('slopeSelect')?.options || [])]
                 .some((o) => o.textContent === 'Откос-тест-UI'),
