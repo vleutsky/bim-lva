@@ -14009,6 +14009,92 @@
             return { hor, ver, pvi, total: sta };
         }
 
+        /** Плоский список треугольников из потока координат лофта. */
+        function trianglesFromPositions(pos) {
+            const out = [];
+            for (let i = 0; i + 8 < pos.length; i += 9) {
+                out.push([
+                    new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]),
+                    new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]),
+                    new THREE.Vector3(pos[i + 6], pos[i + 7], pos[i + 8])
+                ]);
+            }
+            return out;
+        }
+
+        /**
+         * ЕДИНАЯ раскладка начерченного по классам IFC: `IfcSite → IfcRoad →`
+         * оси (`IfcAlignment` с вложенными горизонталью и профилем), покрытие
+         * узлов (`IfcPavement`) со слоями одежды (`IfcCourse`), откосы
+         * (`IfcEarthworksFill`).
+         *
+         * Отсюда строится И дерево проекта, И выгрузка. Второй раскладки быть
+         * не должно: разойдутся — и в дереве будет одно, а в файле другое.
+         *
+         * Тела отдаются ленивыми `tin()`: дереву геометрия не нужна вовсе, а
+         * считать её при каждой перерисовке списка полилиний было бы дорого.
+         */
+        function describeDrawnStructure() {
+            const groups = [];
+
+            for (const sm of slopeModels) {
+                const kids = [];
+                if (sm?.tin?.faces?.length) {
+                    kids.push({ code: 'SLOPE', name: sm.name || 'Откос', tin: () => sm.tin });
+                }
+                for (const mesh of (sm?.kdoMeshes || [])) {
+                    kids.push({
+                        code: 'BASE', name: (sm.name || 'Площадка') + ' · КДО',
+                        tin: () => weldTin(slopeMeshTriangles(mesh))
+                    });
+                }
+                if (kids.length) {
+                    groups.push({ kind: 'slope', name: sm.name || 'Откос', slopeId: sm.id, children: kids });
+                }
+            }
+
+            for (const ix of roadIntersections) {
+                const d = ix.points;
+                if (!d) continue;
+                const kids = [];
+                const layers = d.layers || [];
+                if (layers.length) {
+                    let depth = 0;
+                    for (const L of layers) {
+                        const at = depth;                 // глубина фиксируется ДО сдвига
+                        depth += L.thickness;
+                        kids.push({
+                            code: L.code, name: `${ix.name || 'Узел'} · ${L.code}`,
+                            tin: () => {
+                                const solid = buildNodeLayerSolid(d.crossPoint, d.outline, at, L.thickness);
+                                return solid ? weldTin(trianglesFromPositions(solid)) : null;
+                            }
+                        });
+                    }
+                } else if (d.patch) {
+                    kids.push({
+                        code: 'NODE', name: ix.name || 'Узел',
+                        tin: () => weldTin(trianglesFromPositions(d.patch))
+                    });
+                }
+                if (kids.length) {
+                    groups.push({ kind: 'node', name: ix.name || 'Узел', ixId: ix.id, children: kids });
+                }
+            }
+
+            for (const rec of drawnPolylines) {
+                if (rec.role !== 'road-axis' || (rec.pts?.length || 0) < 2) continue;
+                const layout = alignmentSegmentsFor(rec);
+                if (!layout?.hor.length) continue;
+                groups.push({
+                    kind: 'alignment', name: rec.name || 'Ось',
+                    polylineId: rec.id, rec, layout, children: []
+                });
+            }
+
+            return groups;
+        }
+
         /**
          * Собрать IFC из начерченного. Возвращает текст и счётчики — по ним
          * и проверяем, что в файл реально что-то попало.
@@ -14067,46 +14153,24 @@
                 tris += tin.faces.length;
             };
 
-            for (const sm of slopeModels) {
-                if (sm?.tin?.faces?.length) addTin(sm.tin, sm.name || 'Откос', 'SLOPE');
-                for (const mesh of (sm?.kdoMeshes || [])) {
-                    addTin(weldTin(slopeMeshTriangles(mesh)), (sm.name || 'Площадка') + ' · КДО', 'BASE');
-                }
-            }
-            for (const ix of roadIntersections) {
-                const d = ix.points;
-                if (!d) continue;
-                const tri = (pos) => {
-                    const out = [];
-                    for (let i = 0; i + 8 < pos.length; i += 9) {
-                        out.push([
-                            new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]),
-                            new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]),
-                            new THREE.Vector3(pos[i + 6], pos[i + 7], pos[i + 8])
-                        ]);
-                    }
-                    return out;
-                };
-                const layers = d.layers || [];
-                if (layers.length) {
-                    let depth = 0;
-                    for (const L of layers) {
-                        const solid = buildNodeLayerSolid(d.crossPoint, d.outline, depth, L.thickness);
-                        depth += L.thickness;
-                        if (solid) addTin(weldTin(tri(solid)), `${ix.name || 'Узел'} · ${L.code}`, L.code);
-                    }
-                } else if (d.patch) {
-                    addTin(weldTin(tri(d.patch)), ix.name || 'Узел', 'NODE');
+            /* Тела — по той же раскладке, из которой строится дерево проекта.
+             * Отдельного перебора здесь быть не должно: разъедется с деревом. */
+            const structure = describeDrawnStructure();
+            for (const g of structure) {
+                if (g.kind === 'alignment') continue;      // у трассы тела нет
+                for (const el of (g.children || [])) {
+                    const tin = el.tin?.();
+                    if (tin) addTin(tin, el.name, el.code);
                 }
             }
 
             /* Оси — IfcAlignment: горизонталь (отрезки и круговые кривые) и
              * продольный профиль (уклоны и вертикальные кривые), вложенные в
              * трассу через IfcRelNests, как задумано в 4.3. */
-            for (const rec of drawnPolylines) {
-                if (rec.role !== 'road-axis' || (rec.pts?.length || 0) < 2) continue;
-                const lay = alignmentSegmentsFor(rec);
-                if (!lay?.hor.length) continue;
+            for (const g of structure) {
+                if (g.kind !== 'alignment') continue;
+                const rec = g.rec;
+                const lay = g.layout;
 
                 const hSegs = lay.hor.map((sg) => {
                     const p2 = E(`IFCCARTESIANPOINT((${num(sg.x)},${num(sg.y)}))`);
