@@ -5986,6 +5986,7 @@
         }
 
         function dismissToast(entry) {
+            if (!entry) return;
             if (lastToast === entry) lastToast = null;
             clearTimeout(entry.timer);
             entry.el.remove();
@@ -6026,11 +6027,16 @@
             if (!text) return;
 
             if (lastToast && lastToast.text === text && lastToast.type === type) {
-                lastToast.count++;
-                lastToast.countEl.textContent = `×${lastToast.count}`;
-                lastToast.countEl.hidden = false;
-                clearTimeout(lastToast.timer);
-                lastToast.timer = setTimeout(() => dismissToast(lastToast), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
+                /* Тот же тост — только счётчик. Запоминаем ЕГО в локальной
+                 * переменной: `dismissToast(lastToast)` внутри setTimeout читал
+                 * бы `lastToast` в момент СРАБАТЫВАНИЯ, а к тому времени его
+                 * мог обнулить чужой тост — и таймер падал на null. */
+                const same = lastToast;
+                same.count++;
+                same.countEl.textContent = `×${same.count}`;
+                same.countEl.hidden = false;
+                clearTimeout(same.timer);
+                same.timer = setTimeout(() => dismissToast(same), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
                 pushNotifyLog(text, type, true);
                 return;
             }
@@ -7471,6 +7477,38 @@
                     maxOff: Math.max(0, ...d.outer.pts.map((p) => p.off))
                 };
             },
+            /**
+             * Откосы узла: сколько построено, их объёмы и линии выхода.
+             * Бровки — скрытые полилинии, помеченные `nodeIxId`.
+             */
+            nodeSlopes(ixId) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                if (!rec) return null;
+                const brows = drawnPolylines.filter((r) => r.nodeIxId === ixId);
+                const models = brows
+                    .map((b) => slopeModels.find((sm) => sm.polylineId === b.id))
+                    .filter(Boolean);
+                return {
+                    on: !!rec.slopes,
+                    brows: brows.length,
+                    models: models.length,
+                    // Вылет бровки от кромки проезжей части: по нему видно,
+                    // что откос начинается ЗА обстройкой, а не на покрытии.
+                    browOff: Math.max(0, ...(rec.points?.outer?.pts || [{ off: 0 }]).map((p) => p.off)),
+                    fill: models.reduce((s, m) => s + (m.sides || []).reduce((a, x) => a + (x.fill || 0), 0), 0),
+                    cut: models.reduce((s, m) => s + (m.sides || []).reduce((a, x) => a + (x.cut || 0), 0), 0),
+                    faces: models.reduce((s, m) => s + (m.tin?.faces?.length || 0), 0),
+                    ...nodeSlopeGeometryProbe(rec, models)
+                };
+            },
+            /** Построить откосы узла принудительно (без откосов на дорогах). */
+            buildNodeSlopesOn(ixId, opts) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                if (!rec) return null;
+                rec.slopes = true;
+                const built = buildNodeSlopes(rec, { ...readRoadXsSlopeOpts(), ...(opts || {}) });
+                return built ? built.length : 0;
+            },
             /** Задать отметку узла в абсолютных — как ручкой в сцене. */
             setNodeElevationAbs(ixId, absZ) {
                 const rec = roadIntersections.find((x) => x.id === ixId);
@@ -7900,8 +7938,11 @@
                 applyRoadTemplateChange(model, { relink: false });
                 return snapshotRoadTemplate(model.template);
             },
-            dropRoadXsSlopes() {
-                const model = currentRoadXsModel();
+            /** Без аргумента — текущая ось, с id полилинии — именно она. */
+            dropRoadXsSlopes(polylineId) {
+                const model = polylineId != null
+                    ? roadXsModels.find((m) => m.polylineId === polylineId)
+                    : currentRoadXsModel();
                 if (!model) return false;
                 clearRoadXsSlopes(model);
                 if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = false;
@@ -7960,8 +8001,11 @@
                 openPolylineProfile(rec);
                 return true;
             },
+            /** `opts.polylineId` — построить на конкретной оси, иначе на текущей. */
             buildRoadXsSlopes(opts) {
-                const model = currentRoadXsModel();
+                const model = opts?.polylineId != null
+                    ? roadXsModels.find((m) => m.polylineId === opts.polylineId)
+                    : currentRoadXsModel();
                 if (!model) return null;
                 if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = true;
                 const built = buildRoadTemplateSlopes(model, {
@@ -21465,6 +21509,12 @@
             }
             buildRoadCorridor(model);
             if (!preview) {
+                /* Узел живёт по этому же шаблону: от него ширина проезжей
+                 * части (кромка узла), внешний профиль (бордюр по дуге) и
+                 * слои одежды под покрытием. Без пересчёта узел остаётся от
+                 * прежнего шаблона — сменили пресет на «с бордюром», а у узла
+                 * бордюра нет и откос начинается прямо от проезжей части. */
+                refreshNodesOnPolyline(model.polylineId);
                 if ($('roadXsSlopeOn')?.checked && (model.slopeModelIds || []).length) {
                     buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
                 }
@@ -21750,6 +21800,7 @@
             [...new Set(ids)].forEach((id) => {
                 dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
             });
+            syncNodeSlopesForPolyline(model.polylineId);
         }
 
         function buildRoadTemplateSlopes(model, opts) {
@@ -21785,6 +21836,9 @@
                 if (model.slopeBrowIds.includes(id)) return;
                 dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
             });
+            // Узел — часть той же дороги: откосы у него появляются и исчезают
+            // вместе с дорожными, отдельной кнопки для узла нет.
+            syncNodeSlopesForPolyline(model.polylineId);
             renderRoadXsView();
             updateRoadXsStatus();
             markNeedsRender();
@@ -24050,6 +24104,225 @@
             return out;
         }
 
+        /* --- Откосы от узла до рельефа ------------------------------------
+         * То же, что у дороги (`buildRoadTemplateSlopes`), и той же машинкой:
+         * бровка — обычная скрытая полилиния `role='road-slope-brow'`, а тело
+         * откоса считает `buildSlopeToTerrain`. Своего расчёта откоса тут нет
+         * и не должно быть: две реализации разойдутся, а линия выхода узла
+         * обязана стыковаться с линией выхода подходящей дороги.
+         *
+         * Бровка узла — НАРУЖНЫЙ край его обстройки (за бордюром, обочиной,
+         * кюветом), то есть самая дальняя точка того же внешнего профиля,
+         * который тянется по контуру. Где профиля нет — сама кромка проезжей
+         * части.
+         *
+         * ⚠️ Строится по УЧАСТКАМ контура (`runs`), а не по всему кольцу: в
+         * устьях ветвей дорога продолжается, и откос там даёт её коридор.
+         * Замкнуть кольцо значило бы перегородить откосом саму дорогу.
+         * ------------------------------------------------------------------ */
+
+        /** Бровка вдоль одного участка контура узла. */
+        function nodeSlopeBrowRun(profile, run) {
+            if (!run || run.length < 2) return null;
+            // Самая дальняя от оси точка внешнего профиля: за ней и начинается
+            // откос. `off`/`dz` в профиле уже отсчитаны ОТ КРОМКИ.
+            const far = (profile?.pts || []).reduce((b, p) => (!b || p.off > b.off ? p : b), null);
+            const off = far ? far.off : 0;
+            const dz = far ? far.dz : 0;
+            return run.map((p, i) => {
+                const n = outwardNormalAt(run, i);
+                return new THREE.Vector3(p.x + n.x * off, p.y + n.y * off, p.z + dz);
+            });
+        }
+
+        /**
+         * Проверяемые числа по откосам узла: идёт ли откос НАРУЖУ и держится
+         * ли заложение 1:m. Внутрь — самая опасная ошибка знака нормали: узел
+         * закрывается собственным откосом, а объём при этом «правдоподобный».
+         * Считается по сечениям, а не по картинке.
+         */
+        function nodeSlopeGeometryProbe(rec, models) {
+            const c = rec?.points?.crossPoint;
+            if (!c) return {};
+            const rad = (p) => Math.hypot(p.x - c.x, p.y - c.y);
+            let outMin = Infinity, layMin = Infinity, layMax = -Infinity, valid = 0, invalid = 0;
+            let layOff = 0, sample = null;
+            for (const m of models) {
+                for (const s of (m.sides || [])) {
+                    (s.sections || []).forEach((sec, i) => {
+                        const brow = s.brows?.[i];
+                        if (!sec?.valid || !sec.exit || !brow) { invalid++; return; }
+                        valid++;
+                        outMin = Math.min(outMin, rad(sec.exit) - rad(brow));
+                        const depth = Math.abs(brow.z - sec.exit.z);
+                        if (depth <= 0.05) return;
+                        const want = sec.mode === 'cut' ? m.mCut : m.mFill;
+                        const lay = sec.distance / depth;
+                        layMin = Math.min(layMin, lay);
+                        layMax = Math.max(layMax, lay);
+                        if (Math.abs(lay - want) > 0.05) {
+                            layOff++;
+                            if (!sample) {
+                                sample = {
+                                    lay: +lay.toFixed(3), want, mode: sec.mode,
+                                    dist: +sec.distance.toFixed(3),
+                                    depth: +depth.toFixed(3),
+                                    browZ: +brow.z.toFixed(3), exitZ: +sec.exit.z.toFixed(3),
+                                    browR: +rad(brow).toFixed(2), exitR: +rad(sec.exit).toFixed(2)
+                                };
+                            }
+                        }
+                    });
+                }
+            }
+            return {
+                sections: valid,
+                sectionsInvalid: invalid,
+                // >0 — откос уходит от узла; <0 значит нормаль смотрит внутрь.
+                outwardMin: Number.isFinite(outMin) ? outMin : null,
+                layMin: Number.isFinite(layMin) ? layMin : null,
+                layMax: Number.isFinite(layMax) ? layMax : null,
+                layOff, laySample: sample
+            };
+        }
+
+        function ensureNodeSlopeBrow(rec, runIndex, pts) {
+            let poly = drawnPolylines.find((r) => r.nodeIxId === rec.id && r.nodeRunIndex === runIndex);
+            const vecs = pts.map((p) => p.clone());
+            if (!poly) {
+                poly = addPolylineFromPoints(vecs, {
+                    name: `${rec.name || 'Узел'} — бровка ${runIndex + 1}`,
+                    role: 'road-slope-brow',
+                    color: '#c9793a',
+                    width: 1
+                });
+                if (!poly) return null;
+                poly.nodeIxId = rec.id;
+                poly.nodeRunIndex = runIndex;
+            } else {
+                poly.pts = vecs;
+                poly.radii = vecs.map(() => 0);
+                poly.vRadii = vecs.map(() => 0);
+                rebuildPolylineGeometry(poly);
+            }
+            if (poly.object) {
+                poly.object.visible = false;
+                poly.object.raycast = () => {};
+            }
+            return poly;
+        }
+
+        function dropNodeSlopes(ixId) {
+            drawnPolylines
+                .filter((r) => r.nodeIxId === ixId)
+                .forEach((r) => dropRoadSlopeBrow(r));
+        }
+
+        /**
+         * Есть ли откосы у подходящих дорог. Узел достраивает их за собой сам,
+         * как и коридор: отдельной галочки для узла нет — «как у основных
+         * дорог» и значит «по тем же настройкам, что у них».
+         */
+        function nodeSlopesWanted(rec) {
+            return [rec.poly1Id, rec.poly2Id].some((id) => {
+                const m = roadXsModels.find((x) => x.polylineId === id);
+                return (m?.slopeModelIds || []).length > 0;
+            });
+        }
+
+        let syncingNodeSlopes = false;
+        function buildNodeSlopes(rec, opts) {
+            if (syncingNodeSlopes) return null;
+            const data = rec?.points;
+            if (!data?.runs?.length) return null;
+            if (!allMeshes.length) return null;   // без рельефа откосу некуда выходить
+            const full = {
+                mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30, fillColor: '#c9793a',
+                ...(opts || {})
+            };
+            syncingNodeSlopes = true;
+            const built = [];
+            try {
+                const prev = drawnPolylines.filter((r) => r.nodeIxId === rec.id).map((r) => r.id);
+                const alive = new Set();
+                data.runs.forEach((run, i) => {
+                    const pts = nodeSlopeBrowRun(data.outer, run.pts);
+                    if (!pts || pts.length < 2) return;
+                    const poly = ensureNodeSlopeBrow(rec, i, pts);
+                    if (!poly) return;
+                    alive.add(poly.id);
+                    // Контур узла обходится против часовой, наружу смотрит
+                    // ПРАВАЯ нормаль — та же, что у `outwardNormalAt`.
+                    const sm = buildSlopeToTerrain(poly, { ...full, side: 'right' });
+                    if (sm) built.push({ run: i, poly, sm });
+                });
+                prev.forEach((id) => {
+                    if (alive.has(id)) return;
+                    dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
+                });
+            } finally {
+                syncingNodeSlopes = false;
+            }
+            rec.slopeCount = built.length;
+            markNeedsRender();
+            return built;
+        }
+
+        /**
+         * Пересобрать откосы узла под текущее состояние подходящих дорог.
+         * Сняли откосы с дороги — уходят и с узла: иначе на площадке остаётся
+         * висеть откос от конструкции, которой уже нет.
+         */
+        function syncNodeSlopes(rec) {
+            if (!rec || syncingNodeSlopes) return null;
+            /* Пока тянут ручку отметки, `refreshRoadIntersection` зовётся на
+             * КАЖДЫЙ pointermove. Откос — это выборка рельефа лучами с шагом
+             * 0.5 м вокруг всего контура; пересчитывать её в каждом кадре
+             * значит уронить перетаскивание. Пересобираем один раз на
+             * отпускании. (`nodeHandleDrag` объявлен ниже по модулю, но эта
+             * функция исполняется по действию пользователя, а не при
+             * инициализации, — TDZ не грозит.) */
+            if (nodeHandleDrag) return null;
+            if (!nodeSlopesWanted(rec)) {
+                if (rec.slopes) {
+                    dropNodeSlopes(rec.id);
+                    rec.slopes = false;
+                    rec.slopeCount = 0;
+                    markNeedsRender();
+                }
+                return null;
+            }
+            rec.slopes = true;
+            return buildNodeSlopes(rec, readRoadXsSlopeOpts());
+        }
+
+        /**
+         * Пересчитать узлы на этой оси после смены шаблона поперечника.
+         * Флаг нужен: refreshRoadIntersection тянет за собой пересборку
+         * коридоров, а та может вернуться сюда же.
+         */
+        let refreshingNodesOnPolyline = false;
+        function refreshNodesOnPolyline(polyId) {
+            if (refreshingNodesOnPolyline) return 0;
+            const touching = roadIntersections.filter((x) => x.poly1Id === polyId || x.poly2Id === polyId);
+            if (!touching.length) return 0;
+            refreshingNodesOnPolyline = true;
+            let changed = 0;
+            try {
+                for (const rec of touching.slice()) if (refreshRoadIntersection(rec)) changed++;
+            } finally {
+                refreshingNodesOnPolyline = false;
+            }
+            return changed;
+        }
+
+        /** Узлы на этой оси: откосы дороги появились или пропали. */
+        function syncNodeSlopesForPolyline(polyId) {
+            roadIntersections
+                .filter((x) => x.poly1Id === polyId || x.poly2Id === polyId)
+                .forEach((x) => syncNodeSlopes(x));
+        }
+
         /**
          * Слои одежды под узлом — по шаблону поперечника одной из осей.
          * Берём толщину каждого конструктивного слоя НА ОСИ (offset ≈ 0):
@@ -24145,6 +24418,7 @@
             for (const x of doomed) {
                 removeIntersectionObjects(x.id);
                 dropNodeAnchors(x.id);
+                dropNodeSlopes(x.id);
                 const i = roadIntersections.indexOf(x);
                 if (i >= 0) roadIntersections.splice(i, 1);
             }
@@ -24532,6 +24806,8 @@
                     controls.enabled = wasControls;
                     nodeHandleDrag = null;
                     el.classList.remove('is-drag');
+                    // Откосы отложены с перетаскивания — досчитываем здесь.
+                    syncNodeSlopes(rec);
                     trackUsage('road_node_lift', { by: 'handle' });
                 };
                 window.addEventListener('pointermove', move);
@@ -24677,6 +24953,9 @@
         function syncCorridorsForIntersection(rec) {
             if (!rec) return;
             [rec.poly1Id, rec.poly2Id].forEach((id) => rebuildRoadXsForPolyline(id));
+            // Откосы узла — ПОСЛЕ коридоров: бровка узла стоит на его контуре,
+            // а он только что мог сдвинуться вместе с устьями.
+            syncNodeSlopes(rec);
         }
 
         /**
@@ -43148,7 +43427,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.19',
-            buildId: 'alignment-full',
+            buildId: 'node-slopes',
             released: '2026-08-19',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

@@ -840,6 +840,96 @@ try {
     console.log(`  после правки радиуса угла 0: ${nine?.text}`);
     check(nine?.text.startsWith('R 9 '), `подпись угла обновилась под новый радиус (${nine?.text})`);
 
+    /* --- Откосы узла до рельефа ------------------------------------------
+     *
+     * ⚠️ Нужен СПЛОШНОЙ рельеф. Основная фикстура — редкая сетка коробок
+     * (`IFCRECTANGLEPROFILEDEF` задаёт ПОЛНЫЕ размеры: коробка 3×3 при шаге 6,
+     * то есть между ними дыры). Луч откоса проваливается в дыру, проходит
+     * мимо правильной точки выхода и цепляется за землю дальше: замерено 208
+     * сечений из 312 с заложением от 1.5 до 5.56 при заданном 1:1.5 — и это
+     * артефакт фикстуры, а не код. Здесь коробки крупные и смыкаются вплотную
+     * (`boxSize === step`), и заложение держится ровно. Крупные они не для
+     * красоты: слой 210 м из коробок по 3 м — это 4900 сущностей и минуты на
+     * тесселяцию, из коробок по 30 м — 49 штук.
+     */
+    const terrainFile = path.join(ROOT, 'tools', 'fixtures', 'ix-terrain.ifc');
+    await fs.writeFile(terrainFile, makeGeoIfc({
+        worldX: 55300.05, worldY: 33820.60, worldZ: 1600.15,
+        count: 49, cols: 7, step: 30, boxSize: 30, seed: 92, name: 'ix-terrain.ifc'
+    }));
+    await page.setInputFiles('#localFileInput', terrainFile);
+    await page.waitForFunction(
+        () => (window.BimLvaDebug?.modelBounds || []).some((m) => /ix-terrain\.ifc$/i.test(m.file)),
+        null, { timeout: 120_000 }
+    );
+
+    const slope = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        D.clearPolylines();
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const zRoad = g.centerZ + g.sizeZ / 2 + 3;   // дорога на 3 м выше земли — чистая насыпь
+        /* Оси кладём в ЦЕНТР рельефа, а не в ноль сцены: второй файл в сводке
+         * зовёт до-центрирование, и слой земли стоит уже не у нуля. Иначе
+         * половина сечений уходит за край земли — замерено 164 «без земли»
+         * из 320, и проверка заложения считалась бы по огрызку. */
+        const cx = g.centerX, cy = g.centerY;
+        const a = D.createPolylineFromPoints(
+            [{ x: cx - 60, y: cy, z: zRoad }, { x: cx + 60, y: cy, z: zRoad }], { name: 'Ось A', role: 'road-axis' });
+        D.setRoadWidths(a, 5, 5);
+        const b = D.createPolylineFromPoints(
+            [{ x: cx, y: cy - 60, z: zRoad }, { x: cx, y: cy + 60, z: zRoad }], { name: 'Ось B', role: 'road-axis' });
+        D.setRoadWidths(b, 5, 5);
+        D.buildRoadXs(a, { step: 10, widthL: 5, widthR: 5, live: true });
+        D.buildRoadXs(b, { step: 10, widthL: 5, widthR: 5, live: true });
+        /* Пресет с бордюром обязателен: на шаблоне по умолчанию за кромкой
+         * пусто, вылет внешнего профиля 0 — и проверка «бровка вынесена за
+         * обстройку» прошла бы вхолостую при нулевом выносе. */
+        D.applyRoadXsPresetTo(a, 'curb');
+        D.applyRoadXsPresetTo(b, 'curb');
+        const node = D.buildIntersection(a, b, { type: 'cross', radius: 15 });
+        if (!node) return { error: 'узел не построился' };
+        const off = D.nodeSlopes(node.id);          // до откосов на дорогах
+        // Сначала ТОЛЬКО узел: рядом нет чужих площадок, значит каждое
+        // сечение обязано выйти на чистый рельеф ровно с заложением 1:m.
+        const solo = (D.buildNodeSlopesOn(node.id), D.nodeSlopes(node.id));
+        D.buildRoadXsSlopes({ polylineId: a });
+        D.buildRoadXsSlopes({ polylineId: b });
+        const withRoad = D.nodeSlopes(node.id);
+        // Сняли откосы с дорог — узел обязан остаться без откосов тоже.
+        D.dropRoadXsSlopes(a);
+        D.dropRoadXsSlopes(b);
+        return { off, solo, withRoad, gone: D.nodeSlopes(node.id), runs: D.nodeOuter(node.id)?.runs.length || 0 };
+    });
+    await fs.rm(terrainFile, { force: true });
+
+    if (slope.error) {
+        check(false, 'откосы узла: ' + slope.error);
+    } else {
+        console.log(`  откосы узла: участков ${slope.runs}, сечений ${slope.solo.sections}`
+            + ` (без земли ${slope.solo.sectionsInvalid}), насыпь ${slope.solo.fill.toFixed(1)} м³,`
+            + ` заложение ${slope.solo.layMin?.toFixed(3)}…${slope.solo.layMax?.toFixed(3)}`);
+        check(!slope.off.on && slope.off.models === 0, 'без откосов на дорогах узел их не строит');
+        check(slope.solo.models === slope.runs && slope.runs >= 4,
+            `откос на каждом участке контура, а не по кольцу (${slope.solo.models} при ${slope.runs} участках)`);
+        check(slope.solo.browOff > 0.05,
+            `бровка вынесена за обстройку узла, а не лежит на проезжей части (${slope.solo.browOff.toFixed(2)} м)`);
+        check(slope.solo.sectionsInvalid === 0,
+            `все сечения нашли землю (без земли ${slope.solo.sectionsInvalid})`);
+        // Знак нормали — самая опасная ошибка: внутрь откос закрыл бы сам узел,
+        // а объём при этом остался бы правдоподобным.
+        check(slope.solo.outwardMin > 0,
+            `откос уходит НАРУЖУ от узла (минимум ${slope.solo.outwardMin?.toFixed(2)} м)`);
+        check(slope.solo.layOff === 0,
+            `заложение 1:m держится во всех сечениях (мимо ${slope.solo.layOff}`
+            + `${slope.solo.laySample ? ', например ' + JSON.stringify(slope.solo.laySample) : ''})`);
+        check(slope.solo.fill > 100, `насыпь посчитана (${slope.solo.fill.toFixed(1)} м³)`);
+        check(slope.withRoad.models === slope.solo.models && slope.withRoad.layOff === 0,
+            'с откосами на дорогах узел остаётся и стыкуется с ними');
+        check(!slope.gone.on && slope.gone.models === 0,
+            'сняли откосы с дорог — ушли и с узла');
+    }
+
     // --- Параллельные оси не пересекаются ---------------------------------
     const parallel = await page.evaluate(({ r }) => {
         const D = window.BimLvaDebug;

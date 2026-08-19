@@ -21,11 +21,17 @@ function guid(seed) {
  * @param {string} o.schema — FILE_SCHEMA
  * @param {number} o.count — сколько коробок
  * @param {number} o.seed — чтобы GlobalId файлов не совпадали
+ * @param {number} o.boxSize — сторона коробки в плане, м (по умолчанию 3).
+ *        ⚠️ IFCRECTANGLEPROFILEDEF задаёт ПОЛНЫЕ размеры, а не полуразмеры:
+ *        при `step > boxSize` между коробками остаются дыры, и луч выборки
+ *        рельефа в них проваливается. Нужен сплошной слой земли — ставьте
+ *        `step === boxSize` (и лучше крупные коробки: слой 210 м это 49 штук
+ *        при boxSize 30 против 4900 при 3).
  * @param {number} o.lengthToMetres — 1 (метры) или 0.001 (миллиметры, как у
  *        выгрузок Renga/nanoCAD через ODA): величины в файле пишутся в его
  *        единицах, а IFCSIUNIT получает приставку .MILLI.
  */
-export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, seed = 0, name = 'geo.ifc', lengthToMetres = 1, application = 'test', booleanOps = 0 } = {}) {
+export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, boxSize = 3, seed = 0, name = 'geo.ifc', lengthToMetres = 1, application = 'test', booleanOps = 0 } = {}) {
     // Коэффициент «метр → единица файла»
     const k = 1 / lengthToMetres;
     const isMm = Math.abs(lengthToMetres - 0.001) < 1e-12;
@@ -59,7 +65,7 @@ export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4'
         `#16=IFCBUILDINGSTOREY('${guid(seed + 4)}',$,'Level 0',$,$,#15,$,$,.ELEMENT.,0.);`,
         '#17=IFCCARTESIANPOINT((0.,0.));',
         '#18=IFCAXIS2PLACEMENT2D(#17,$);',
-        `#19=IFCRECTANGLEPROFILEDEF(.AREA.,'BoxProfile',#18,${u(3)},${u(3)});`
+        `#19=IFCRECTANGLEPROFILEDEF(.AREA.,'BoxProfile',#18,${u(boxSize)},${u(boxSize)});`
     ];
 
     const body = [];
