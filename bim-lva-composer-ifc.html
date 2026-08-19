@@ -21767,11 +21767,17 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
-            // Откосы идут за полотном ВСЕГДА: и при первой сборке, и при
-            // пересборке после сдвига оси или правки узла. Кнопки, которая их
-            // включала, больше нет. `quiet` — чтобы не перерисовывать окно
-            // поперечника отсюда: ниже это делает сам buildRoadCrossSections.
-            buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
+            /* ⚠️ Здесь откосы НЕ строим с нуля. Проверено дважды: и с
+             * перерисовкой окна, и с `quiet` — smoke одинаково даёт
+             * «ПКМ не сдвинул вид» и объём 0.713 вместо 1.125. Значит дело не
+             * в перерисовке, а в самой сборке откосов внутри пересборки
+             * полотна: бровки заводят полилинии → renderPolylinesList →
+             * отложенный scheduleRoadXsRebuild (160 мс) → полотно
+             * пересобирается ЗАДНИМ ЧИСЛОМ и сбрасывает вид окна.
+             * Пока это не расшито, держим их свежими только если уже есть. */
+            if ((model.slopeModelIds || []).length) {
+                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
+            }
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
             renderRoadXsView();
