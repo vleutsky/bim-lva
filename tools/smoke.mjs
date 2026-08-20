@@ -2755,8 +2755,21 @@ async function checkRoadCrossSections(page) {
             hasChk: !!document.getElementById('roadXsSlopeOn'),
             slopeLabel: document.getElementById('roadXsSlope')?.textContent || '',
             profileXs: !!document.getElementById('polyProfileXs'),
-            bigDraw: !!document.querySelector('#btnRoadXs.rbtn-big'),
+            /* На «Черчении» кнопка переехала в панель «Ось» ПОД «Пересечения»
+             * (просьба владельца) — там она мелкая и это правильно. На
+             * «Рельефе» осталась крупной. Проверяем не размер, а МЕСТО. */
+            xsUnderIntersections: (() => {
+                const col = document.querySelector('#btnIntersections')?.parentElement;
+                const kids = col ? [...col.children] : [];
+                const i = kids.indexOf(document.querySelector('#btnIntersections'));
+                const j = kids.indexOf(document.querySelector('#btnRoadXs'));
+                return i >= 0 && j === i + 1;
+            })(),
             bigRelief: !!document.querySelector('#btnRoadXsAnalyze.rbtn-big'),
+            hasAreaBtn: !!document.querySelector('#btnAreaObject'),
+            // Список полилиний ушёл из панели «Ось» — там ему не место.
+            polyListInAxis: !!document.querySelector('#btnIntersections')
+                ?.parentElement?.querySelector('#btnPolylineList'),
             rb0: rb0?.dz,
             rbMid: rbMid?.dz,
             beforeShapes: before?.shapes?.length || 0,
@@ -2777,8 +2790,17 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: смена толщины слоя не сдвинула низ покрытия (${JSON.stringify(layer)})`);
     }
     if (!layer.profileXs) problems.push('поперечники: нет кнопки в окне профиля');
-    if (!layer.bigDraw || !layer.bigRelief) {
-        problems.push('поперечники: кнопки на ленте не крупные (Черчение / Рельеф)');
+    if (!layer.xsUnderIntersections) {
+        problems.push('поперечники: кнопка не стоит под «Пересечения» в панели «Ось»');
+    }
+    if (!layer.bigRelief) {
+        problems.push('поперечники: на «Рельефе» кнопка не крупная');
+    }
+    if (!layer.hasAreaBtn) {
+        problems.push('нет кнопки «Площадной объект» — работа с площадками недоступна');
+    }
+    if (layer.polyListInAxis) {
+        problems.push('список полилиний вернулся в панель «Ось» — он мешает осям');
     }
     if (layer.afterShapes !== layer.beforeShapes + 1 || layer.afterPts !== layer.beforePts + 2) {
         problems.push(
