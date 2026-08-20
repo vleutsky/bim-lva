@@ -123,6 +123,33 @@ try {
         check(others.length > 0 && intact,
             `соседние сущности на месте (проверено ${others.length})`);
     }
+    /* Удаление из сцены должно доходить до ФАЙЛА: раньше выгрузка отвечала
+     * «Нет изменённых IFC-файлов», хотя из сцены всё убрано.
+     * ⚠️ Проверять надо не флаг «изменено», а сам текст: флаг легко поставить,
+     * а вычеркнуть сущности и почистить связи — совсем другая работа. */
+    const del = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        const mod = D.modelBounds.find((m) => /edit-grid/i.test(m.file));
+        if (!mod) return null;
+        // Берём пару настоящих идентификаторов стен из текста файла.
+        const probe = await D.ifcDeleteProbe('edit-grid', []);
+        const ids = [...(probe.text.matchAll(/#(\d+)=IFCWALL\(/gi))].slice(0, 2)
+            .map((m) => parseInt(m[1], 10));
+        if (ids.length < 2) return { ids: [] };
+        const after = await D.ifcDeleteProbe('edit-grid', ids);
+        return { ids, edited: after.edited, text: after.text };
+    });
+    if (!del || !del.ids.length) {
+        check(false, 'удаление: не нашлось стен для проверки');
+    } else {
+        const gone = del.ids.every((id) => !new RegExp(`#${id}=IFCWALL\\(`, 'i').test(del.text));
+        const dangling = del.ids.some((id) => new RegExp(`\\(#${id}[,)]|,#${id}[,)]`).test(del.text));
+        console.log(`  удаление: вычеркнуты #${del.ids.join(', #')}`);
+        check(del.edited, 'модель помечена изменённой после удаления из сцены');
+        check(gone, `удалённые сущности вычеркнуты из текста (#${del.ids.join(', #')})`);
+        check(!dangling, 'висячих ссылок на удалённое в связях не осталось');
+    }
+
 } catch (error) {
     problems.push('исключение: ' + (error?.message || error));
 } finally {

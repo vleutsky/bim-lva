@@ -4573,7 +4573,7 @@
         <button class="ctx-item" id="ctxRenameBranch" title="Изменить атрибут Name реального IFC-узла">✎ Переименовать ветку</button>
         <button class="ctx-item" id="ctxAddBranch" title="Создать дочернюю пользовательскую ветку под выбранным разделом">＋ Добавить дочернюю ветку</button>
         <button class="ctx-item" id="ctxHide" title="Скрыть геометрию выбранной ветки">👁 Скрыть ветку</button>
-        <button class="ctx-item danger" id="ctxDeleteSel" title="Удалить выделенные элементы из сцены и освободить память. Исходный IFC-файл не меняется">🗑 Удалить выделенное из сцены</button>
+        <button class="ctx-item danger" id="ctxDeleteSel" title="Удалить выделенные элементы из сцены. Выгрузка «Сохранить IFC» соберёт файл уже без них">🗑 Удалить выделенное из сцены</button>
         <div class="ctx-divider"></div>
         <button class="ctx-item" id="ctxReloadFile" title="Перечитать файл с диска, не убирая модель из сцены. Камера и остальные модели остаются на месте">⟳ Обновить модель</button>
         <button class="ctx-item" id="ctxReloadAll" title="Перечитать все загруженные файлы">⟳ Обновить все модели</button>
@@ -4607,7 +4607,7 @@
             <div class="ctx-divider"></div>
             <button class="ctx-item" id="ctxBg" title="Переключить светлый цвет фона 3D-сцены">🎨 Цвет фона</button>
             <button class="ctx-item" id="ctxShowAll" title="Снова показать всю скрытую геометрию">👁‍🗨 Показать скрытое</button>
-            <button class="ctx-item danger" id="ctxDeleteStage" title="Удалить выделенные элементы из сцены и освободить память. Исходный IFC-файл не меняется">🗑 Удалить выделенное</button>
+            <button class="ctx-item danger" id="ctxDeleteStage" title="Удалить выделенные элементы из сцены. Выгрузка «Сохранить IFC» соберёт файл уже без них">🗑 Удалить выделенное</button>
             <button class="ctx-item" id="ctxFit" title="Вписать все модели в окно просмотра">⤢ Вписать всё</button>
         </div>
     </div>
@@ -6877,6 +6877,27 @@
                     built: hasIfcIndex(mod),
                     hasFile: !!mod.ifcFile,
                     entities: mod.ifcIndex ? mod.ifcIndex.slotById.size : 0
+                };
+            },
+            /**
+             * Удалить элементы из сцены и отдать ТЕКСТ выгрузки — тем же
+             * путём, что кнопка «Сохранить IFC». Проверять надо именно текст:
+             * раньше удаление до файла не доходило вовсе.
+             */
+            async ifcDeleteProbe(fileRe, expressIds) {
+                const re = new RegExp(fileRe, 'i');
+                const mod = [...loadedModels.values()]
+                    .find((m) => canEditIfc(m) && re.test(m.filename || ''));
+                if (!mod) return null;
+                await ensureIfcIndex(mod);
+                if (!mod.deletedIds) mod.deletedIds = new Set();
+                expressIds.forEach((id) => mod.deletedIds.add(id));
+                mod.edited = true;
+                return {
+                    edited: !!mod.edited,
+                    deleted: mod.deletedIds.size,
+                    entities: mod.ifcIndex.slotById.size,
+                    text: exportIfcModelText(mod)
                 };
             },
             async ifcEditProbe(fileRe, expressID, newName) {
@@ -35931,8 +35952,8 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             const requested = [...byModel.values()].reduce((n, s) => n + s.size, 0);
             if (!confirm(
                 `Удалить ${requested.toLocaleString('ru-RU')} элементов из сцены?\n\n` +
-                'Геометрия будет выгружена из памяти. Исходный IFC-файл не меняется — ' +
-                'после перезагрузки файла элементы вернутся.'
+                'Геометрия будет выгружена из памяти. Файл на диске не меняется, ' +
+                'но выгрузка «Сохранить IFC» соберёт его уже без этих элементов.'
             )) return;
 
             let removedTotal = 0;
@@ -35966,6 +35987,13 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                         } else kept.push(frag);
                     }
                     mod._fragments = kept;
+                }
+                /* Удаление доходит до файла: без этого выгрузка отвечала
+                 * «Нет изменённых IFC-файлов», хотя из сцены всё убрано. */
+                if (canEditIfc(mod)) {
+                    if (!mod.deletedIds) mod.deletedIds = new Set();
+                    ids.forEach((id) => mod.deletedIds.add(id));
+                    mod.edited = true;
                 }
                 ids.forEach(id => {
                     mod.hiddenIds?.delete(id);
@@ -41162,9 +41190,76 @@ ${componentXml || '    '}
             }
         }
 
+        /**
+         * Убрать сущности из текста IFC.
+         *
+         * Удаление из сцены раньше не доходило до файла вовсе: выгрузка
+         * отвечала «Нет изменённых IFC-файлов», потому что `edited` ставила
+         * только правка свойств. Теперь удалённые элементы вычёркиваются и из
+         * текста — что убрали из сцены, того нет и в выгрузке.
+         *
+         * Что делаем:
+         *  · строку самой сущности вырезаем;
+         *  · у связей `IFCREL*` вычищаем ссылки на удалённое из списков, а
+         *    если набор опустел — убираем и саму связь: связь без участников
+         *    делает файл неверным.
+         *  · если связь ссылается на удалённое НЕ списком, а прямым аргументом
+         *    (так устроены, например, вырезы), убираем связь целиком — иначе
+         *    останется висячая ссылка.
+         *
+         * ⚠️ Геометрия удалённых (представления, точки) остаётся в файле
+         * сиротами. Это осознанно: вычищать её пришлось бы обходом всего
+         * графа ссылок, а на файле в сотни тысяч сущностей это дорого. На
+         * чтение сироты не влияют — их просто никто не показывает.
+         */
+        function ifcTextWithoutEntities(idx, doomed) {
+            if (!idx?.text || !doomed?.size) return idx?.text || '';
+            const text = idx.text;
+            const cuts = [];
+            const hasDoomedRef = (body) => {
+                let m;
+                const re = /#(\d+)/g;
+                while ((m = re.exec(body)) !== null) {
+                    if (doomed.has(parseInt(m[1], 10))) return true;
+                }
+                return false;
+            };
+            for (let k = 0; k < idx.ids.length; k++) {
+                const id = idx.ids[k];
+                const from = idx.starts[k], to = idx.ends[k];
+                if (doomed.has(id)) { cuts.push({ from, to, replace: '' }); continue; }
+                const body = text.slice(from, to);
+                const type = /^#\d+\s*=\s*([A-Z0-9_]+)/i.exec(body)?.[1] || '';
+                if (!/^IFCREL/i.test(type) || !hasDoomedRef(body)) continue;
+                let emptied = false;
+                const next = body.replace(/\(([^()]*)\)/g, (whole, inner) => {
+                    const parts = inner.split(',').map((x) => x.trim()).filter(Boolean);
+                    if (!parts.length || !parts.every((x) => /^#\d+$/.test(x))) return whole;
+                    const kept = parts.filter((x) => !doomed.has(parseInt(x.slice(1), 10)));
+                    if (kept.length === parts.length) return whole;
+                    if (!kept.length) { emptied = true; return '()'; }
+                    return '(' + kept.join(',') + ')';
+                });
+                // Осталась прямая ссылка на удалённое или набор опустел — связь убираем.
+                if (emptied || hasDoomedRef(next)) { cuts.push({ from, to, replace: '' }); continue; }
+                cuts.push({ from, to, replace: next });
+            }
+            if (!cuts.length) return text;
+            let out = text;
+            for (let i = cuts.length - 1; i >= 0; i--) {
+                const c = cuts[i];
+                const tail = c.replace === '' ? out.slice(c.to).replace(/^\r?\n/, '') : out.slice(c.to);
+                out = out.slice(0, c.from) + c.replace + tail;
+            }
+            return out;
+        }
+
         /** Текст IFC для выгрузки. Отдельно от кнопки — чтобы его мог проверить тест. */
         function exportIfcModelText(modData) {
-            return modData.ifcIndex ? modData.ifcIndex.text : '';
+            if (!modData?.ifcIndex) return '';
+            return modData.deletedIds?.size
+                ? ifcTextWithoutEntities(modData.ifcIndex, modData.deletedIds)
+                : modData.ifcIndex.text;
         }
 
         async function downloadEditedIfcModels() {
@@ -45069,7 +45164,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'slope-scope',
+            buildId: 'ifc-delete',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
