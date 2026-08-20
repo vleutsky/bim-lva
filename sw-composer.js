@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260820-tee-elev';
+const CACHE = 'bimlva-composer-shell-20260820-node-curves';
 const SHELL = [
   './',
   './index.html',

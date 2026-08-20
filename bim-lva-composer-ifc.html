@@ -7844,7 +7844,9 @@
                 return {
                     crossZ: +d.crossPoint.z.toFixed(3),
                     outlineZ: { min: +Math.min(...zs).toFixed(3), max: +Math.max(...zs).toFixed(3) },
-                    arms: d.arms.map((a) => ({ i: a.index, poly: a.polyId, sign: a.sign, sta: +(a.sta ?? NaN).toFixed(2), mouth: +a.mouth.toFixed(2) })),
+                    // ux/uy — направление ветви: именно его надо сверять с
+                    // касательной к трассе, когда в ось вписана кривая.
+                    arms: d.arms.map((a) => ({ i: a.index, poly: a.polyId, sign: a.sign, sta: +(a.sta ?? NaN).toFixed(2), mouth: +a.mouth.toFixed(2), ux: a.dir?.x ?? null, uy: a.dir?.y ?? null })),
                     corridorStations: near,
                     corridorMeshes: (model?.corridorMeshes || []).length
                 };
@@ -16294,8 +16296,40 @@
          */
         function buildFilletedPoints(pts, radii, segments = 20, closed = false) {
             const n = pts.length;
-            const prevOf = (i) => pts[(i - 1 + n) % n];
-            const nextOf = (i) => pts[(i + 1) % n];
+            /* Сосед берётся ЧЕРЕЗ вершины, лежащие на самом плече.
+             *
+             * `computeFilletArc` урезает радиус по длине плеча (не длиннее 45%),
+             * а плечо он меряет до СОСЕДНЕЙ вершины. Вершина, поставленная
+             * посреди прямой (так узел отмечает отметку на устье), линию не
+             * гнёт, но плечо для расчёта укорачивает — и соседняя дуга
+             * схлопывается на ровном месте. Замерено: у оси с R=40 вставка
+             * вершины на 47-м метре стометрового плеча уводила трассу на
+             * 13.2 м в сторону, то есть узел ЛОМАЛ дорогу, ничего не двигая
+             * в плане.
+             * Пропуск таких вершин — не хитрость, а сама геометрия: линия
+             * от них не меняется, значит и плечо у дуги прежнее. */
+            const onLine = (p, a, b) => {
+                const vx = b.x - a.x, vy = b.y - a.y;
+                const len = Math.hypot(vx, vy);
+                if (len < 1e-9) return false;
+                const t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / (len * len);
+                if (t < 1e-9 || t > 1 - 1e-9) return false;   // не между ними
+                const d = Math.abs((p.x - a.x) * vy - (p.y - a.y) * vx) / len;
+                return d <= 1e-6;
+            };
+            const step = (i, dir) => {
+                let j = (i + dir + n) % n;
+                for (let guard = 0; guard < n; guard++) {
+                    const k = (j + dir + n) % n;
+                    if (!closed && (dir < 0 ? j <= 0 : j >= n - 1)) break;
+                    if (k === i) break;
+                    if (!onLine(pts[j], pts[k], pts[i])) break;
+                    j = k;
+                }
+                return pts[j];
+            };
+            const prevOf = (i) => step(i, -1);
+            const nextOf = (i) => step(i, +1);
             let clamped = false;
             const guides = [];
             const corner = (i) => {
@@ -24919,9 +24953,23 @@
          * Допуск EPS по параметру позволяет поймать примыкание точно в конец
          * звена (T-образное), где иначе t выходил бы за [0,1] на 1e-16.
          */
+        /**
+         * Линия, по которой РЕАЛЬНО идёт дорога: с исполненными сопряжениями.
+         *
+         * Узел обязан считаться по ней, а не по ломаной `pts`. Иначе при
+         * вписанной кривой пересечение садится на ХОРДУ: замерено 4.730 м в
+         * сторону от полотна, а направление ветви расходится с касательной на
+         * 24.8° — закругления и устья строятся под одним углом, а дорога
+         * приходит под другим. Владелец это и увидел: «пересечение не
+         * понимает кривые и ломает дорогу на стыках».
+         */
+        function axisTrace(poly) {
+            return (poly?.renderPts?.length >= 2) ? poly.renderPts : (poly?.pts || []);
+        }
+
         function findAxisCrossing(poly1, poly2) {
             const EPS = 1e-6;
-            const A = poly1.pts, B = poly2.pts;
+            const A = axisTrace(poly1), B = axisTrace(poly2);
             for (let i = 0; i < A.length - 1; i++) {
                 for (let j = 0; j < B.length - 1; j++) {
                     const hit = segmentIntersectionXY(A[i], A[i + 1], B[j], B[j + 1]);
@@ -24958,9 +25006,10 @@
             };
             const tol = Math.max(1, w(poly1) + w(poly2));
             const near = (poly, pt) => {
+                const pts = axisTrace(poly);
                 let best = null;
-                for (let i = 0; i < poly.pts.length - 1; i++) {
-                    const a = poly.pts[i], b = poly.pts[i + 1];
+                for (let i = 0; i < pts.length - 1; i++) {
+                    const a = pts[i], b = pts[i + 1];
                     const dx = b.x - a.x, dy = b.y - a.y;
                     const len2 = dx * dx + dy * dy;
                     if (len2 < 1e-12) continue;
@@ -24972,8 +25021,11 @@
                 }
                 return best;
             };
-            const ends = (poly) => [{ i: 0, t: 0, p: poly.pts[0] },
-                { i: poly.pts.length - 2, t: 1, p: poly.pts[poly.pts.length - 1] }];
+            const ends = (poly) => {
+                const pts = axisTrace(poly);
+                return [{ i: 0, t: 0, p: pts[0] },
+                    { i: pts.length - 2, t: 1, p: pts[pts.length - 1] }];
+            };
 
             let win = null;
             for (const e of ends(poly1)) {
@@ -24987,7 +25039,8 @@
             if (!win) return null;
 
             const { e, h, swap } = win;
-            const segEnd = { i: e.i, t: e.t, a: (swap ? poly2 : poly1).pts[e.i], b: (swap ? poly2 : poly1).pts[e.i + 1] };
+            const endTrace = axisTrace(swap ? poly2 : poly1);
+            const segEnd = { i: e.i, t: e.t, a: endTrace[e.i], b: endTrace[e.i + 1] };
             const segNear = { i: h.i, t: h.t, a: h.a, b: h.b };
             const zEnd = e.p.z;
             const zNear = h.a.z + h.t * (h.b.z - h.a.z);
@@ -25070,7 +25123,10 @@
          * высоту, что и сам коридор, а не на среднюю по узлу.
          */
         function axisElevationAlong(poly, seg, startT, dirSign, s) {
-            const pts = poly.pts;
+            // По ТРАССЕ: индексы звена приходят из findAxisCrossing, а он
+            // теперь работает на ней же. Смешать их с `pts` значило бы уйти
+            // на чужое звено ровно там, где вписана кривая.
+            const pts = axisTrace(poly);
             let cur = {
                 x: seg.a.x + startT * (seg.b.x - seg.a.x),
                 y: seg.a.y + startT * (seg.b.y - seg.a.y),
@@ -25106,8 +25162,9 @@
                 const fwd = unitXY(seg.a, seg.b);
                 if (!fwd) return;
                 const u = sign > 0 ? fwd : { x: -fwd.x, y: -fwd.y };
+                const nTrace = axisTrace(poly).length;
                 const atStart = seg.i === 0 && seg.t <= 1e-6;
-                const atEnd = seg.i === poly.pts.length - 2 && seg.t >= 1 - 1e-6;
+                const atEnd = seg.i === nTrace - 2 && seg.t >= 1 - 1e-6;
                 if (sign > 0 && atEnd) return;
                 if (sign < 0 && atStart) return;
                 const w = intersectionWidthsFor(poly);
@@ -26141,6 +26198,73 @@
          * профиля посреди дороги — ровно ту «странность», что видна на
          * профиле ломаной пилой.
          */
+        /**
+         * Пикет, на который вершину посадить МОЖНО, не тронув план.
+         *
+         * Внутри сопряжения дорога идёт дугой, а вершина ложится в ЛОМАНУЮ:
+         * `insertPolylineVertexAtStation` находит точку на трассе и проецирует
+         * её на ближайшую хорду. На прямой это одно и то же, а внутри дуги
+         * проекция уезжает на соседнее плечо — ось получает зигзаг. Замерено
+         * на оси из 3 вершин с одним радиусом 40: после узла становилось
+         * 5–6 вершин и `radii [0,0,0,40,0,0]`, полотно ломалось. Это и есть
+         * «пересечение ломает дорогу на стыках» со скриншота владельца.
+         *
+         * Поэтому пикет отодвигается к ближайшей точке КАСАНИЯ — туда, где
+         * трасса и ломаная совпадают. Перелом профиля встаёт на границе
+         * кривой, а план остаётся ровно таким, каким его начертили.
+         */
+        function stationOffFillet(record, sta) {
+            const rp = record?.renderPts;
+            if (!rp || rp.length < 2) return sta;
+            if (!(record.radii || []).some((r) => Math.abs(r) > 0)) return sta;
+            const cum = [0];
+            for (let i = 1; i < rp.length; i++) {
+                cum.push(cum[i - 1] + Math.hypot(rp[i].x - rp[i - 1].x, rp[i].y - rp[i - 1].y));
+            }
+            const total = cum[cum.length - 1];
+            const s = Math.max(0, Math.min(total, Number(sta)));
+            // Точка трассы лежит на ломаной? Тогда вставка её не деформирует.
+            const onChord = (p) => {
+                const near = nearestPolylineSegment(record, p);
+                return !near || near.point.distanceTo(p) <= 1e-6;
+            };
+            const at = (station) => {
+                let hi = 1;
+                while (hi < cum.length - 1 && cum[hi] < station) hi++;
+                const lo = hi - 1;
+                const seg = cum[hi] - cum[lo];
+                const t = seg < 1e-9 ? 0 : (station - cum[lo]) / seg;
+                return rp[lo].clone().lerp(rp[hi], t);
+            };
+            if (onChord(at(s))) return s;
+            /* Внутри дуги. Идём от неё в обе стороны по точкам трассы и берём
+             * ближайшую, которая на ломаной, — это и есть точка касания. */
+            let lo = 0;
+            while (lo < cum.length - 1 && cum[lo + 1] <= s) lo++;
+            let back = null, fwd = null;
+            for (let i = lo; i >= 0; i--) { if (onChord(rp[i])) { back = cum[i]; break; } }
+            for (let i = lo + 1; i < rp.length; i++) { if (onChord(rp[i])) { fwd = cum[i]; break; } }
+            if (back == null) return fwd == null ? s : fwd;
+            if (fwd == null) return back;
+            return (s - back) <= (fwd - s) ? back : fwd;
+        }
+
+        /** Отметка оси на пикете — по трассе, с исполненными сопряжениями. */
+        function elevationAtStation(record, sta) {
+            const rp = record?.renderPts;
+            if (!rp || rp.length < 2) return null;
+            let acc = 0;
+            for (let i = 1; i < rp.length; i++) {
+                const d = Math.hypot(rp[i].x - rp[i - 1].x, rp[i].y - rp[i - 1].y);
+                if (acc + d >= sta || i === rp.length - 1) {
+                    const t = d < 1e-9 ? 0 : Math.max(0, Math.min(1, (sta - acc) / d));
+                    return rp[i - 1].z + t * (rp[i].z - rp[i - 1].z);
+                }
+                acc += d;
+            }
+            return rp[rp.length - 1].z;
+        }
+
         function setNodeAnchorVertex(poly, ixId, key, sta, z) {
             /* Прежнюю вершину СНИМАЕМ и ставим заново, а не двигаем на месте.
              * Якорь — сам вершина оси, и сдвигая его мы деформируем линию:
@@ -26155,7 +26279,15 @@
                 if (Array.isArray(poly.vRadii)) poly.vRadii.splice(old, 1);
                 rebuildPolylineGeometry(poly);
             }
-            const idx = insertPolylineVertexAtStation(poly, sta);
+            /* Отметка на этом пикете уже такая — вершина не нужна ВОВСЕ.
+             * Обычный случай: у сквозной оси узел берёт её собственную
+             * отметку, и якоря были чистой прибавкой вершин (а на кривой ещё
+             * и деформировали план). Ставим только там, где профиль правда
+             * надо согнуть. */
+            const have = elevationAtStation(poly, sta);
+            if (have != null && Math.abs(have - z) <= 1e-3) return false;
+            // Внутрь сопряжения вершину не сажаем — см. stationOffFillet.
+            const idx = insertPolylineVertexAtStation(poly, stationOffFillet(poly, sta));
             if (idx < 0) return false;
             poly.pts[idx].nodeAnchor = ixId;
             poly.pts[idx].nodeAnchorKey = key;
@@ -26310,7 +26442,24 @@
                  * `id` зависит ширина проезжей части, а от неё — допуск
                  * примыкания. С голым объектом ширина падала в ноль, допуск
                  * схлопывался до метра, и живой узел сносило. */
-                const authored = (poly) => ({ ...poly, pts: poly.pts.filter((p) => !p.nodeAnchor) });
+                /* ⚠️ Копии нужна СВОЯ трасса. Пересечение теперь ищется по
+                 * трассе (с исполненными дугами), а `{ ...poly }` тянет
+                 * `renderPts` исходной оси — то есть построенную ПО ЯКОРЯМ,
+                 * которые мы только что выбросили. С такой копией узел не
+                 * замечал ни сдвига оси, ни развода осей: замерено — устье
+                 * стояло на месте, а разведённые на 400 м оси всё ещё
+                 * «пересекались». Радиусы фильтруем ТЕМ ЖЕ ключом, иначе они
+                 * разъедутся с вершинами. */
+                const authored = (poly) => {
+                    const keep = poly.pts.map((p, i) => i).filter((i) => !poly.pts[i].nodeAnchor);
+                    const pts = keep.map((i) => poly.pts[i]);
+                    const radii = keep.map((i) => (poly.radii || [])[i] || 0);
+                    const copy = { ...poly, pts, radii };
+                    copy.renderPts = pts.length >= 2
+                        ? buildFilletedPoints(pts, radii, 20, !!poly.closed).points
+                        : pts;
+                    return copy;
+                };
                 for (const rec of touching.slice()) {
                     const p1 = drawnPolylines.find((r) => r.id === rec.poly1Id);
                     const p2 = drawnPolylines.find((r) => r.id === rec.poly2Id);
@@ -26550,7 +26699,7 @@
                 // Конец оси на чужой оси — примыкание, а не крест.
                 const atEnd = (poly, seg) =>
                     (seg.i === 0 && seg.t <= 1e-6) ||
-                    (seg.i === poly.pts.length - 2 && seg.t >= 1 - 1e-6);
+                    (seg.i === axisTrace(poly).length - 2 && seg.t >= 1 - 1e-6);
                 const type = (atEnd(record, hit.seg1) || atEnd(other, hit.seg2)) ? 't-junction' : 'cross';
                 const radius = defaultNodeRadius();
                 const points = calculateIntersection(record, other, type, radius);
@@ -45461,7 +45610,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'tee-elev',
+            buildId: 'node-curves',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

@@ -1281,6 +1281,132 @@ try {
         check(tilt < 0.01, `сквозную ось не потянуло к отметке съезда (перепад ${tilt.toFixed(3)} м)`);
     }
 
+
+    /* ВПИСАННАЯ КРИВАЯ В ОСИ. Владелец: «если вписывать кривые в оси дорог,
+     * то пересечение их не понимает и ломает дорогу на стыках».
+     * ⚠️ Прежняя фикстура была НЕ ТА: пересечение ложилось на прямой участок
+     * ЗА дугой (угол на ПК 80, конец сопряжения 105, пересечение 140) — там
+     * хорда и трасса совпадают, и проверка проходила вхолостую. Здесь ось B
+     * пересекает ось A ВНУТРИ дуги: |CROSS_X| < R.
+     * Меряем ТРИ числа, потому что каждое ловит свой дефект. */
+    const CURVE_R = 40, CROSS_X = -20;
+    const curve = await page.evaluate(async ({ R, X }) => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections(); D.clearPolylines(); D.clearSlopes();
+        D.setAutoNodes(false);
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const z0 = g.centerZ + g.sizeZ / 2 + 3;
+        const cx = g.centerX, cy = g.centerY;
+        const a = D.createPolylineFromPoints([
+            { x: cx - 100, y: cy, z: z0 },
+            { x: cx, y: cy, z: z0 },
+            { x: cx, y: cy + 100, z: z0 }
+        ], { name: 'Ось A', role: 'road-axis' });
+        D.setRoadWidths(a, 5, 5);
+        D.setPolylineRadius(a, 1, R);
+        const b = D.createPolylineFromPoints([
+            { x: cx + X, y: cy - 60, z: z0 },
+            { x: cx + X, y: cy + 60, z: z0 }
+        ], { name: 'Ось B', role: 'road-axis' });
+        D.setRoadWidths(b, 5, 5);
+        D.buildRoadXs(a, { step: 10, widthL: 5, widthR: 5, live: true });
+        D.buildRoadXs(b, { step: 10, widthL: 5, widthR: 5, live: true });
+        await new Promise((r) => setTimeout(r, 800));
+        // Снимок ДО узла: с ним и сравниваем — ось не должна измениться.
+        const recBefore = D.drawn.find((r) => r.id === a);
+        const before = {
+            trace: recBefore.abs.map((p) => ({ x: p.x, y: p.y })),
+            verts: recBefore.vertsAbs.length,
+            radii: recBefore.radii.slice()
+        };
+        const res = D.buildIntersection(a, b, { type: 'cross', radius: 15 });
+        if (!res) return { error: 'узел на кривой не построился' };
+        /* ⚠️ Узел ОБЯЗАТЕЛЬНО поднимаем. На ровных осях отметка узла равна
+         * собственной отметке оси, якорь не нужен и не ставится вовсе — а
+         * значит вся посадка вершин внутрь дуги остаётся непроверенной
+         * (замерено: без подъёма обратная подстановка проходит вхолостую). */
+        const zNode = D.nodeElevation(res.id).abs;
+        D.setNodeElevationAbs(res.id, zNode + 3);
+        await new Promise((r) => setTimeout(r, 600));
+        const recA = D.drawn.find((r) => r.id === a);
+        return {
+            error: null, a, b, before,
+            after: { verts: recA.vertsAbs.length, radii: recA.radii.slice(), trace: recA.abs.length },
+            afterTrace: recA.abs.map((p) => ({ x: p.x, y: p.y })),
+            cross: D.worldPointToAbsolute(res.cross.x, res.cross.y, res.cross.z),
+            arms: D.nodeGeometryDump(res.id).arms,
+            gaps: D.nodeGaps(a),
+            stations: D.corridorStations(a),
+            anchors: (D.axisProfile(a) || []).filter((p) => p.anchor).length,
+            nodeZ: D.nodeElevation(res.id).abs, wantZ: zNode + 3
+        };
+    }, { R: CURVE_R, X: CROSS_X });
+
+    if (curve.error) {
+        check(false, curve.error);
+    } else {
+        const nearOn = (pts, q) => {
+            let best = null;
+            for (let i = 0; i + 1 < pts.length; i++) {
+                const p = pts[i], r = pts[i + 1];
+                const dx = r.x - p.x, dy = r.y - p.y;
+                const l2 = dx * dx + dy * dy || 1;
+                let t = ((q.x - p.x) * dx + (q.y - p.y) * dy) / l2;
+                t = Math.max(0, Math.min(1, t));
+                const d = Math.hypot(q.x - (p.x + dx * t), q.y - (p.y + dy * t));
+                if (!best || d < best.d) best = { d, ux: dx / Math.sqrt(l2), uy: dy / Math.sqrt(l2) };
+            }
+            return best;
+        };
+        /* 1. Ось не деформирована. Якорь узла сажался ПО ПИКЕТУ ТРАССЫ, а
+         * ложился в ломаную: внутри дуги проекция уезжала на соседнее плечо,
+         * и ось получала зигзаг. Обратная подстановка даёт 5-6 вершин. */
+        // 2. Узел стоит НА трассе, а не на хорде — и сама трасса не сдвинулась.
+        console.log(`  кривая: вершин ${curve.before.verts} → ${curve.after.verts},`
+            + ` радиусы ${JSON.stringify(curve.before.radii)} → ${JSON.stringify(curve.after.radii)},`
+            + ` точек трассы ${curve.before.trace.length} → ${curve.after.trace}`);
+        console.log(`  кривая: узел поднят до ${curve.nodeZ.toFixed(3)} (просили ${curve.wantZ.toFixed(3)}),`
+            + ` якорей на оси ${curve.anchors}`);
+        check(Math.abs(curve.nodeZ - curve.wantZ) < 0.05,
+            `узел встал на заданную отметку (${curve.nodeZ.toFixed(3)})`);
+        check(curve.anchors > 0, `подъём узла посадил якоря — есть что проверять (${curve.anchors})`);
+        /* ⚠️ Считать ВЕРШИНЫ бесполезно: якорей ровно столько же и при верной
+         * посадке, и при посадке внутрь дуги — проверка прошла бы на
+         * заведомо согнутой оси (проверено подстановкой). Мерить надо саму
+         * ТРАССУ: якорь лежит НА линии, значит дорога не должна сдвинуться
+         * никуда. */
+        const devi = curve.afterTrace.reduce((m, q) => Math.max(m, nearOn(curve.before.trace, q).d), 0);
+        console.log(`  кривая: трасса ушла от исходной на ${devi.toFixed(3)} м`);
+        check(devi < 0.05, `узел не согнул саму ось (трасса ушла на ${devi.toFixed(3)} м)`);
+
+        const on = nearOn(curve.before.trace, curve.cross);
+        console.log(`  кривая: отход узла от трассы ${on.d.toFixed(3)} м`);
+        check(on.d < 0.05, `узел стоит на трассе, а не на хорде (отход ${on.d.toFixed(3)} м)`);
+
+        /* 3. Ветвь идёт по КАСАТЕЛЬНОЙ. По ней строятся закругления и устья:
+         * с хордой они смотрят в одну сторону, а дорога приходит в другую —
+         * это и есть «ломает на стыках». Обратная подстановка: 24.8°. */
+        let worst = 0;
+        for (const arm of curve.arms) {
+            if (arm.poly !== curve.a) continue;
+            const dot = Math.max(-1, Math.min(1, Math.abs(arm.ux * on.ux + arm.uy * on.uy)));
+            worst = Math.max(worst, Math.acos(dot) * 180 / Math.PI);
+        }
+        console.log(`  кривая: ветвь против касательной — ${worst.toFixed(2)}°`);
+        check(worst < 1, `ветвь узла идёт по касательной к дуге (${worst.toFixed(2)}°)`);
+
+        // 4. Коридор обрывается ровно у узла, а не лезет под покрытие.
+        const gap = curve.gaps[0];
+        const st = curve.stations || [];
+        const inside = st.filter((x) => x > gap.from + 1e-3 && x < gap.to - 1e-3).length;
+        const onEdge = (v) => st.some((x) => Math.abs(x - v) < 1e-3);
+        console.log(`  кривая: разрыв коридора [${gap.from.toFixed(2)}, ${gap.to.toFixed(2)}],`
+            + ` станций внутри ${inside}, торцы на границах`
+            + ` ${onEdge(gap.from) ? 'да' : 'НЕТ'}/${onEdge(gap.to) ? 'да' : 'НЕТ'}`);
+        check(inside === 0, `коридор не идёт через узел на кривой (станций внутри ${inside})`);
+        check(onEdge(gap.from) && onEdge(gap.to), 'торцы коридора встали заподлицо с устьями');
+    }
+
     await fs.rm(terrainFile, { force: true });
 
     if (slope.error) {
