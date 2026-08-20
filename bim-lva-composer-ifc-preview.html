@@ -4072,7 +4072,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 22797c9</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 00d113a</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -14449,6 +14449,20 @@
          * Тела отдаются ленивыми `tin()`: дереву геометрия не нужна вовсе, а
          * считать её при каждой перерисовке списка полилиний было бы дорого.
          */
+        /** Человеческое имя слоя шаблона — для дерева и для имени в IFC. */
+        const ROAD_SHAPE_NAMES = {
+            PVMT: 'Покрытие', BASE: 'Основание', SUBB: 'Песок', SUB2: 'Основание 2',
+            SUB3: 'Основание 3', SUB4: 'Основание 4', CURB: 'Бордюр', BED: 'Подстилающий слой',
+            WEDGE: 'Расклин', TROUGH: 'Лоток', EMBK: 'Земляное полотно', SLOPE: 'Откос',
+            SHLD: 'Обочина', SHLDU: 'Обочина укреплённая', DITCH: 'Кювет', WALK: 'Тротуар',
+            MEDIAN: 'Разделительная полоса'
+        };
+
+        function roadShapeName(code) {
+            const c = String(code || '').toUpperCase();
+            return ROAD_SHAPE_NAMES[c] || c || 'Слой';
+        }
+
         function describeDrawnStructure() {
             const groups = [];
 
@@ -14497,6 +14511,31 @@
                 }
             }
 
+            /* Тело дороги по оси: полотно и слои одежды из поперечника.
+             * Раньше в выгрузку уходили только откосы, узлы и сами оси —
+             * владелец увидел файл без самой дороги. Меши уже посчитаны
+             * (`corridorMeshes`, по одному на форму шаблона), второй раз
+             * лофтить нельзя: разойдётся с картинкой. */
+            for (const model of roadXsModels) {
+                const kids = [];
+                for (const mesh of (model.corridorMeshes || [])) {
+                    const pos = mesh?.geometry?.attributes?.position?.array;
+                    if (!pos || pos.length < 9) continue;
+                    const code = mesh.userData?.shapeCode || 'PVMT';
+                    kids.push({
+                        code,
+                        name: `${model.name || 'Ось'} · ${roadShapeName(code)}`,
+                        tin: () => weldTin(trianglesFromPositions(pos))
+                    });
+                }
+                if (kids.length) {
+                    groups.push({
+                        kind: 'corridor', name: `${model.name || 'Ось'} · полотно`,
+                        polylineId: model.polylineId, children: kids
+                    });
+                }
+            }
+
             for (const rec of drawnPolylines) {
                 if (rec.role !== 'road-axis' || (rec.pts?.length || 0) < 2) continue;
                 const layout = alignmentSegmentsFor(rec);
@@ -14534,6 +14573,11 @@
             } else if (g.kind === 'slope') {
                 const sm = slopeModels.find((m) => m.id === g.slopeId);
                 (sm?.tin?.points || []).forEach(add);
+            } else if (g.kind === 'corridor') {
+                const model = roadXsModels.find((m) => m.polylineId === g.polylineId);
+                (model?.corridorMeshes || []).forEach((mesh) => {
+                    if (mesh?.geometry?.boundingBox) box.union(mesh.geometry.boundingBox);
+                });
             }
             return box.isEmpty() ? null : box;
         }
@@ -14594,7 +14638,9 @@
             /* Порядок для ЧЕЛОВЕКА, а не порядок записи в файл: сначала оси —
              * они первичны, от них всё остальное, потом узлы, потом откосы.
              * В выгрузке порядок свой и трогать его незачем. */
-            const rank = (g) => (g.kind === 'alignment' ? 0 : g.kind === 'node' ? 1 : 2);
+            const rank = (g) => (g.kind === 'alignment' ? 0
+                : g.kind === 'corridor' ? 1
+                    : g.kind === 'node' ? 2 : 3);
             const ordered = groups.slice().sort((a, b) => rank(a) - rank(b));
             // Откосов много (на каждый участок бровки свой) — прячем их в одну
             // группу, иначе они забивают дерево длиннее самих дорог.
@@ -14780,16 +14826,48 @@
             const products = [];
             let solids = 0, tris = 0, curves = 0, arcs2d = 0, vgrades = 0, varcs = 0;
 
+            /* --- Цвет тела ------------------------------------------------
+             * Без стиля вьювер красит всё серым, и в дереве Navisworks дорога
+             * неотличима от откоса. Цвет берём ТОТ ЖЕ, что на чертеже
+             * поперечника (`roadShapeStyle`), — иначе картинка и файл
+             * разъедутся.
+             * ⚠️ `IfcPresentationStyleAssignment` в IFC4X3 УДАЛЁН (в IFC4 он
+             * лишь устарел). Поэтому в 4.3 стиль кладётся в `IfcStyledItem`
+             * напрямую, а в старых схемах — через обёртку, которую они ждут.
+             * Стиль на цвет заводится ОДИН раз и переиспользуется: иначе на
+             * каждое тело уезжает свой набор сущностей.
+             */
+            const styleCache = new Map();
+            const styleFor = (css) => {
+                const key = String(css || '').toLowerCase();
+                if (styleCache.has(key)) return styleCache.get(key);
+                const col = new THREE.Color(0x9a9a9a);
+                try {
+                    // three разбирает hsl только с запятыми, а стили чертежа
+                    // записаны через пробел — приводим к его виду.
+                    col.set(key.replace(/^hsl\(\s*([\d.]+)\s+([\d.]+%)\s+([\d.]+%)\s*\)$/, 'hsl($1,$2,$3)'));
+                } catch (_) { /* остаётся серый */ }
+                const rgb = E(`IFCCOLOURRGB($,${num(col.r)},${num(col.g)},${num(col.b)})`);
+                const shading = E(`IFCSURFACESTYLESHADING(${rgb}${schema === 'IFC2X3' ? '' : ',0.'})`);
+                const surf = E(`IFCSURFACESTYLE($,.BOTH.,(${shading}))`);
+                const style = schema === 'IFC4X3_ADD2'
+                    ? surf
+                    : E(`IFCPRESENTATIONSTYLEASSIGNMENT((${surf}))`);
+                styleCache.set(key, style);
+                return style;
+            };
+
             /** Тело из TIN. В IFC4+ — тесселяция, в 2x3 — оболочка из граней. */
-            const addTin = (tin, name, code) => {
+            const addTin = (tin, name, code, css) => {
                 if (!tin?.points?.length || !tin?.faces?.length) return;
-                let rep;
+                let rep, item;
                 if (tess) {
                     const coords = tin.points.map((p) => `(${num(p.x)},${num(p.y)},${num(p.z)})`).join(',');
                     const list = E(`IFCCARTESIANPOINTLIST3D((${coords}))`);
                     // Индексы в IFC — с ЕДИНИЦЫ, а не с нуля.
                     const idx = tin.faces.map((f) => `(${f[0] + 1},${f[1] + 1},${f[2] + 1})`).join(',');
                     const tfs = E(`IFCTRIANGULATEDFACESET(${list},$,.T.,(${idx}),$)`);
+                    item = tfs;
                     rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','Tessellation',(${tfs}))`);
                 } else {
                     /* IFC2x3: ни списка точек, ни тесселяции в схеме нет.
@@ -14805,8 +14883,10 @@
                     // (он требует замкнутую) был бы неправдой о геометрии.
                     const shell = E(`IFCOPENSHELL((${faces.join(',')}))`);
                     const sbsm = E(`IFCSHELLBASEDSURFACEMODEL((${shell}))`);
+                    item = sbsm;
                     rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','SurfaceModel',(${sbsm}))`);
                 }
+                if (item) E(`IFCSTYLEDITEM(${item},(${styleFor(css || roadShapeStyle(code).fill)}),$)`);
                 const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
                 const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
                 const nm = ifcText(name || code || 'Элемент');
@@ -14828,7 +14908,7 @@
                 if (g.kind === 'alignment') continue;      // у трассы тела нет
                 for (const el of (g.children || [])) {
                     const tin = el.tin?.();
-                    if (tin) addTin(tin, el.name, el.code);
+                    if (tin) addTin(tin, el.name, el.code, el.color);
                 }
             }
 
@@ -22310,6 +22390,9 @@
             mesh.renderOrder = 3;
             mesh.userData.roadCorridor = extra?.modelId;
             mesh.userData.shapeId = extra?.shapeId;
+            // Код формы нужен выгрузке: по нему выбирается класс IFC
+            // (покрытие / бордюр / слой одежды), а не только цвет на чертеже.
+            mesh.userData.shapeCode = extra?.shapeCode || null;
             mesh.userData.isOverlay = true;
             mesh.raycast = () => {};
             return mesh;
@@ -22400,7 +22483,8 @@
                     const style = roadShapeStyle(sh.code);
                     const mesh = makeRoadCorridorMesh(positions, style.fill, 'RoadCorridor:' + (sh.code || sh.id), {
                         modelId: model.id,
-                        shapeId: sh.id
+                        shapeId: sh.id,
+                        shapeCode: sh.code || null
                     });
                     if (!mesh) return;
                     const rank = roadXsDrawRank(sh.code);
@@ -44522,7 +44606,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: '22797c9-preview',
+            buildId: '00d113a-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

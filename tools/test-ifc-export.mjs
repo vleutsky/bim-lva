@@ -161,6 +161,29 @@ try {
     check(/IFCALIGNMENTHORIZONTALSEGMENT/.test(made.text), 'есть IfcAlignmentHorizontalSegment');
     check(/CIRCULARARC/.test(made.text), 'в alignment есть дуги CIRCULARARC');
 
+    /* Тело дороги по оси и слои одежды из поперечника. Раньше в файл уходили
+     * только откосы, узлы и сами оси — владелец получил выгрузку без самой
+     * дороги. Меши коридора уже посчитаны, второй раз лофтить нельзя: файл
+     * разошёлся бы с картинкой. */
+    check(made.solids >= 6, `тела коридора попали в файл (всего тел ${made.solids}, было 3)`);
+    check(/IFCPAVEMENT/.test(made.text), 'покрытие дороги ушло IfcPavement');
+
+    /* Цвет: без стиля читатель красит всё серым, и дорога в дереве
+     * неотличима от откоса.
+     * ⚠️ `IfcPresentationStyleAssignment` в IFC4X3 УДАЛЁН (в IFC4 лишь
+     * устарел) — в 4.3 стиль обязан лежать в IfcStyledItem напрямую. */
+    for (const [sch, r] of Object.entries({ IFC4X3_ADD2: made, ...legacy })) {
+        if (!r?.text) continue;
+        check(/IFCSTYLEDITEM/.test(r.text), `${sch}: у тел есть стиль (IfcStyledItem)`);
+        check(/IFCCOLOURRGB/.test(r.text), `${sch}: цвет записан (IfcColourRgb)`);
+        const wrapped = /IFCPRESENTATIONSTYLEASSIGNMENT/.test(r.text);
+        check(sch === 'IFC4X3_ADD2' ? !wrapped : wrapped,
+            `${sch}: обёртка стиля по схеме (${wrapped ? 'есть' : 'нет'})`);
+    }
+    /* Цвета РАЗНЫЕ: один стиль на всё прошёл бы проверку выше вхолостую. */
+    const colours = new Set((made.text.match(/IFCCOLOURRGB\([^)]*\)/g) || []));
+    check(colours.size >= 2, `цвета элементов различаются (${colours.size} разных)`);
+
     /* Кириллица в STEP — только `\X2\<UTF-16 hex>\X0\`. Сырой UTF-8 читатель
      * разбирает как ANSI, и в дереве Navisworks вместо имён иероглифы (так и
      * было). Проверяем ОБА конца: сырых не-ASCII в файле нет вовсе, а обратный

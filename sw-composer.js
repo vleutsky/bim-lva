@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260820-fold-probe';
+const CACHE = 'bimlva-composer-shell-20260820-ifc-bodies';
 const SHELL = [
   './',
   './index.html',
