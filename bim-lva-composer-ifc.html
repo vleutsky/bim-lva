@@ -26469,16 +26469,37 @@
                 box.innerHTML = '<div class="bulk-note" style="margin:0">Узлов пока нет.</div>';
                 return;
             }
-            const rows = roadIntersections.map((rec) => {
+            /* Подписи для ЧЕЛОВЕКА (просьба владельца): у узла свой номер и
+             * тип, оси названы по-отдельности, а строки ветвей различаются.
+             * Раньше карточка была подписана «Ось трассы 2 × Ось трассы», а
+             * четыре строки уширения читались как «Ось трассы 2 — уширение» и
+             * «Ось трассы — уширение» ДВАЖДЫ подряд: какая из них какая ветвь,
+             * понять было нельзя.
+             * ⚠️ `rec.name` НЕ трогаем: от него зависят имена бровок откосов и
+             * тел в IFC («Ось B × Ось A · Покрытие»), и переименование увело бы
+             * за собой выгрузку. Меняем только то, что видно в окне. */
+            const IX_TYPE = {
+                cross: 'крестообразное',
+                't-junction': 'Т-образное примыкание',
+                merge: 'слияние'
+            };
+            const rows = roadIntersections.map((rec, ixNo) => {
                 const d = rec.points || {};
+                const axisName = (id) => {
+                    const poly = drawnPolylines.find((r) => r.id === id);
+                    return poly?.name || `ось #${id}`;
+                };
                 const corners = (d.corners || []).map((c) => `
                     <label class="ix-cell">угол ${c.index + 1}
                         <input class="editInput" type="number" min="1" step="1"
                                data-ix="${escAttr(rec.id)}" data-corner="${c.index}"
                                value="${c.radius.toFixed(0)}">
                     </label>`).join('');
-                const arms = (d.arms || []).map((a) => `
-                    <label class="ix-cell">${esc(a.name || 'ветвь')} — уширение
+                /* Ветвь = ось + направление от узла. Знак `sign` и есть это
+                 * направление: по пикетажу вперёд или назад. Без него две
+                 * ветви одной оси в списке неотличимы. */
+                const arms = (d.arms || []).map((a, i) => `
+                    <label class="ix-cell">ветвь ${i + 1} · ${esc(a.name || 'ось')} ${a.sign < 0 ? '←' : '→'} — уширение
                         <input class="editInput" type="number" min="0" step="0.25"
                                data-ix="${escAttr(rec.id)}" data-flare="${a.index}"
                                value="${(a.flare || 0).toFixed(2)}">
@@ -26493,9 +26514,14 @@
                 const abs = d.crossPoint ? scenePointToAbs(d.crossPoint) : null;
                 return `<div class="ix-row" data-ix-row="${escAttr(rec.id)}">
                     <div class="ix-head">
-                        <b>${esc(rec.name || 'Узел')}</b>
+                        <b>Пересечение ${ixNo + 1}</b>
+                        <span class="mono">${esc(IX_TYPE[rec.type] || rec.type || '—')}</span>
                         <span class="mono">${(d.corners || []).length} закр. · ${(d.arms || []).length} ветв.</span>
                         <button class="btn" data-ix-del="${escAttr(rec.id)}" title="Убрать узел">✕</button>
+                    </div>
+                    <div class="ix-grid">
+                        <span class="ix-cell mono">Ось 1: ${esc(axisName(rec.poly1Id))}</span>
+                        <span class="ix-cell mono">Ось 2: ${esc(axisName(rec.poly2Id))}</span>
                     </div>
                     <div class="ix-grid">
                         <label class="ix-cell">отметка узла
@@ -44942,7 +44968,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'ui-tidy',
+            buildId: 'ix-labels',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
