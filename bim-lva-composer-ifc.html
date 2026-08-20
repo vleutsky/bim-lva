@@ -13353,11 +13353,27 @@
             const skippedNotReached = sections.filter((s) => !s.valid && s.reason === 'not-reached').length;
             const tokens = slopeExitTokens(sections, brows, closed, sampleZ, opts.step);
             const groups = slopeExitGroups(tokens, closed, sections.length);
-            const exitLines = groups.map((g, gi) => {
+            /* Сечение «вровень с землёй» откоса не даёт вовсе: точка выхода
+             * совпадает с бровкой, объём нулевой. Рисовать по такой группе
+             * линию выхода нельзя — на площадке, где ось идёт по существующей
+             * отметке, в списке появляется линия НУЛЕВОЙ длины на каждое
+             * сечение (замерено 843 штуки против 5 у обычной насыпи), и вместе
+             * с ними пухнут дерево проекта и выгрузка. Владелец это и заметил:
+             * «ось вровень с площадкой, откосы не знают куда выходить». */
+            /* ⚠️ Отсеивать такие группы ПО ДЛИНЕ бесполезно: соседние «плоские»
+             * точки стоят на соседних станциях, то есть в полуметре друг от
+             * друга, и любой порог длины они проходят. Признак — режим:
+             * `slopeExitGroups` начинает на плоском сечении новую группу с
+             * `mode = null`, а настоящий режим (`fill`/`cut`) группа получает
+             * от первой же не-плоской станции. Значит группа без режима — это
+             * ровное место, и линии выхода там нет. */
+            const exitLines = groups
+                .filter((g) => g.mode && g.mode !== 'flat')
+                .map((g, gi) => {
                 const modeName = g.mode === 'cut' ? 'выемка' : g.mode === 'fill' ? 'насыпь' : 'откос';
                 return markDerivedPolyline(addPolylineFromPoints(simplifyPolylinePts(g.pts), {
                     name: `${record.name} — ${modeName} (${side === 'left' ? 'влево' : 'вправо'})` +
-                        (groups.length > 1 ? ` #${gi + 1}` : ''),
+                        (gi > 0 ? ` #${gi + 1}` : ''),
                     color: g.mode === 'cut' ? '#3a83c9' : (opts.exitColor || '#2c8f4a'),
                     width: 1.5,
                     closed: g.closed
@@ -13421,6 +13437,10 @@
 
         /** Построить откосы по всей линии — одна или обе стороны. */
         function buildSlopeToTerrain(record, opts) {
+            return withDrawUiBatch(() => buildSlopeToTerrainInner(record, opts));
+        }
+
+        function buildSlopeToTerrainInner(record, opts) {
             if (!record.renderPts || record.renderPts.length < 2) return null;
             if (!allMeshes.length) return null;
             // Повторное «Построить» по той же бровке заменяет старое, а не
@@ -17600,7 +17620,33 @@
             list.replaceChildren(frag);
         }
 
+        /* Список полилиний перестраивается ЦЕЛИКОМ: DOM строк, обработчики,
+         * подсказки, выпадающие списки. Пока это делалось на КАЖДУЮ созданную
+         * полилинию, сборка откосов давала квадрат по DOM — а линий выхода
+         * там сотни. Замерено на площадке ВРОВЕНЬ с землёй: одна ось считалась
+         * 111 секунд, и профиль показал 39.5% времени в `renderPolylinesList`,
+         * вызванном из `addPolylineFromPoints`; самих выборок рельефа при этом
+         * было всего 846, то есть к лучам и геометрии это отношения не имело.
+         * Поэтому пакетный режим: внутри него запросы копятся, панель
+         * перерисовывается один раз на выходе. */
+        let drawUiBatch = 0;
+        let drawUiDirty = false;
+
+        function withDrawUiBatch(fn) {
+            drawUiBatch++;
+            try {
+                return fn();
+            } finally {
+                drawUiBatch--;
+                if (!drawUiBatch && drawUiDirty) {
+                    drawUiDirty = false;
+                    updateDrawUi();
+                }
+            }
+        }
+
         function updateDrawUi() {
+            if (drawUiBatch) { drawUiDirty = true; return; }
             const btn = $('btnDrawExport');
             const xmlBtn = $('btnDrawExportXml');
             const stepBtn = $('btnDrawExportStep');
@@ -22618,6 +22664,10 @@
          *   1.125). Вызывающий и так рисует окно сам — пусть рисует один раз.
          */
         function buildRoadTemplateSlopes(model, opts, flags = {}) {
+            return withDrawUiBatch(() => buildRoadTemplateSlopesInner(model, opts, flags));
+        }
+
+        function buildRoadTemplateSlopesInner(model, opts, flags = {}) {
             if (!model?.stations || model.stations.length < 2) return null;
             /* Откосы теперь строятся всегда и из нескольких мест сразу
              * (сборка полотна, правка шаблона, пересчёт узла). Сами они
@@ -25025,6 +25075,10 @@
 
         let syncingNodeSlopes = false;
         function buildNodeSlopes(rec, opts) {
+            return withDrawUiBatch(() => buildNodeSlopesInner(rec, opts));
+        }
+
+        function buildNodeSlopesInner(rec, opts) {
             if (syncingNodeSlopes) return null;
             const data = rec?.points;
             if (!data?.runs?.length) return null;
@@ -44245,7 +44299,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'ray-index',
+            buildId: 'flat-axis',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

@@ -966,6 +966,40 @@ try {
     check(drawn.faces > 0, `у откосов есть грани (${drawn.faces})`);
     check(drawn.fill > 1, `объём насыпи ненулевой (${drawn.fill.toFixed(2)} м³)`);
 
+    /* Ось ВРОВЕНЬ с площадкой: откоса нет ни в насыпь, ни в выемку.
+     * Здесь была самая дорогая ошибка дня: `slopeExitGroups` начинала на
+     * каждом «плоском» сечении НОВУЮ группу, и на каждую заводилась линия
+     * выхода — 843 полилинии вместо 3, а список полилиний перестраивался
+     * целиком на каждую. Замерено: одна ось считалась 111 секунд.
+     * ⚠️ Отсеивать такие группы по ДЛИНЕ нельзя — соседние плоские точки
+     * стоят на соседних станциях, в полуметре друг от друга, и любой порог
+     * длины проходят. Признак — пустой режим группы.
+     * Проверяем не время (оно зависит от машины), а число полилиний. */
+    const levelAxis = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        D.clearPolylines();
+        D.clearSlopes();
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const z = g.centerZ + g.sizeZ / 2;      // ровно по верху рельефа
+        D.startRoadAxisDraw();
+        D.addDrawWorldPoint(g.centerX - 40, g.centerY, z);
+        D.addDrawWorldPoint(g.centerX + 40, g.centerY, z);
+        D.finishRoadAxisDraw();
+        await new Promise((r) => setTimeout(r, 1200));
+        const sl = D.slopes || [];
+        return {
+            polylines: (D.drawn || []).length,
+            sections: sl.reduce((n, s) => n + (s.sides || []).reduce((m, x) => m + x.sections, 0), 0),
+            volume: sl.reduce((n, s) => n + (s.sides || []).reduce((m, x) => m + x.fill + x.cut, 0), 0)
+        };
+    });
+    console.log(`  ось вровень с площадкой: полилиний ${levelAxis.polylines},`
+        + ` сечений ${levelAxis.sections}, объём ${levelAxis.volume.toFixed(2)} м³`);
+    check(levelAxis.sections > 10, `сечения всё же считались (${levelAxis.sections})`);
+    check(levelAxis.polylines <= 6,
+        `ровное место не плодит линии выхода (${levelAxis.polylines} полилиний, было 843)`);
+
     await fs.rm(terrainFile, { force: true });
 
     if (slope.error) {
