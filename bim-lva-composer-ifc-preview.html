@@ -4072,7 +4072,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 00d113a</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 9bd56a9</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -14301,6 +14301,8 @@
             if (c === 'PVMT' || c === 'NODE') return { cls: 'IFCPAVEMENT', type: '.FLEXIBLE.' };
             if (c === 'CURB') return { cls: 'IFCKERB', type: '.NOTDEFINED.' };
             if (c === 'SLOPE' || c === 'EMBK') return { cls: 'IFCEARTHWORKSFILL', type: '.SLOPEFILL.' };
+            // Выемка — СВОЙ класс в 4.3, а не насыпь с другим именем.
+            if (c === 'CUT') return { cls: 'IFCEARTHWORKSCUT', type: '.CUT.' };
             if (['BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4', 'WEDGE'].includes(c)) {
                 return { cls: 'IFCCOURSE', type: '.PAVEMENT.' };
             }
@@ -14468,8 +14470,42 @@
 
             for (const sm of slopeModels) {
                 const kids = [];
-                if (sm?.tin?.faces?.length) {
-                    kids.push({ code: 'SLOPE', name: sm.name || 'Откос', tin: () => sm.tin });
+                /* Насыпь и выемка — РАЗНЫЕ тела и разные объёмы: это разные
+                 * работы в смете и разные классы в IFC 4.3
+                 * (IfcEarthworksFill против IfcEarthworksCut). Раньше всё
+                 * сваливалось в один TIN, и в файле их было не различить.
+                 * Меши уже посчитаны по режимам (`s.mesh` / `s.cutMesh`) —
+                 * берём готовые, а не режем TIN заново. */
+                const fillTris = [], cutTris = [];
+                (sm.sides || []).forEach((side) => {
+                    slopeMeshTriangles(side.mesh).forEach((t) => fillTris.push(t));
+                    if (side.cutMesh && side.cutMesh !== side.mesh) {
+                        slopeMeshTriangles(side.cutMesh).forEach((t) => cutTris.push(t));
+                    }
+                });
+                const fillVol = (sm.sides || []).reduce((n, x) => n + (x.fill || 0), 0) + (sm.capFill || 0);
+                const cutVol = (sm.sides || []).reduce((n, x) => n + (x.cut || 0), 0) + (sm.capCut || 0);
+                /* Площадка и торцы прикладываются к насыпи: своего режима у них
+                 * нет, а болтаться отдельным телом им незачем. Если насыпи в
+                 * этом построении вовсе нет — уходят к выемке. */
+                const extra = [];
+                if (sm.padTriangles?.length) extra.push(...sm.padTriangles);
+                else if (sm.padMesh) extra.push(...slopeMeshTriangles(sm.padMesh));
+                (sm.capMeshes || []).forEach((m) => extra.push(...slopeMeshTriangles(m)));
+                (fillTris.length ? fillTris : cutTris).push(...extra);
+                if (fillTris.length) {
+                    kids.push({
+                        code: 'SLOPE', name: `${sm.name || 'Откос'} · насыпь`,
+                        volume: fillVol, color: sm.fillColor || '#c9793a',
+                        tin: () => weldTin(fillTris)
+                    });
+                }
+                if (cutTris.length) {
+                    kids.push({
+                        code: 'CUT', name: `${sm.name || 'Откос'} · выемка`,
+                        volume: cutVol, color: '#3a83c9',
+                        tin: () => weldTin(cutTris)
+                    });
                 }
                 for (const mesh of (sm?.kdoMeshes || [])) {
                     kids.push({
@@ -14493,7 +14529,7 @@
                         const at = depth;                 // глубина фиксируется ДО сдвига
                         depth += L.thickness;
                         kids.push({
-                            code: L.code, name: `${ix.name || 'Узел'} · ${L.code}`,
+                            code: L.code, name: `${ix.name || 'Узел'} · ${roadShapeName(L.code)}`,
                             tin: () => {
                                 const solid = buildNodeLayerSolid(d.crossPoint, d.outline, at, L.thickness);
                                 return solid ? weldTin(trianglesFromPositions(solid)) : null;
@@ -14504,6 +14540,25 @@
                     kids.push({
                         code: 'NODE', name: ix.name || 'Узел',
                         tin: () => weldTin(trianglesFromPositions(d.patch))
+                    });
+                }
+                /* Обстройка узла — бордюр, обочина, кювет по скруглениям. Она
+                 * строится тем же профилем, что и на подходящей дороге, но в
+                 * выгрузку не попадала вовсе: владелец увидел, что по осям
+                 * бордюр есть, а по перекрёстку нет.
+                 * Зовём ТУ ЖЕ функцию, что рисует её в сцене, — свой второй
+                 * расчёт разошёлся бы с картинкой. */
+                if (d.outer) {
+                    (d.runs || []).forEach((run, ri) => {
+                        sweepOuterProfileAlongRun(d.outer, run.pts).forEach((piece) => {
+                            if (!piece?.positions?.length) return;
+                            kids.push({
+                                code: piece.code,
+                                name: `${ix.name || 'Узел'} · ${roadShapeName(piece.code)}`
+                                    + ((d.runs || []).length > 1 ? ` ${ri + 1}` : ''),
+                                tin: () => weldTin(trianglesFromPositions(piece.positions))
+                            });
+                        });
                     });
                 }
                 if (kids.length) {
@@ -14692,8 +14747,13 @@
                     const ch = drawnTreeChildren(top.node);
                     top.node.classList.add('collapsed');
                     kids.forEach((el) => {
+                        // Объём прямо в строке: насыпь и выемка теперь разные
+                        // тела, и число рядом с ними — главное, что смотрят.
+                        const label = el.volume > 0
+                            ? `${el.name} · ${el.volume.toFixed(1)} м³`
+                            : el.name;
                         ch.appendChild(drawnTreeRow(
-                            el.name, short(ifcClassForCode(el.code).cls), pick).node);
+                            label, short(ifcClassForCode(el.code).cls), pick).node);
                     });
                 }
             }
@@ -14716,7 +14776,8 @@
             const c = String(code || '').toUpperCase();
             const role = {
                 PVMT: 'Покрытие', NODE: 'Покрытие узла', CURB: 'Бордюр',
-                SLOPE: 'Откос', EMBK: 'Земляное полотно', BASE: 'Основание',
+                SLOPE: 'Откос (насыпь)', CUT: 'Откос (выемка)',
+                EMBK: 'Земляное полотно', BASE: 'Основание',
                 SUBB: 'Песок', WEDGE: 'Расклин'
             }[c] || c || 'Элемент';
             return { cls: 'IFCBUILDINGELEMENTPROXY', type: '.NOTDEFINED.', role };
@@ -14858,7 +14919,18 @@
             };
 
             /** Тело из TIN. В IFC4+ — тесселяция, в 2x3 — оболочка из граней. */
-            const addTin = (tin, name, code, css) => {
+            /* Объём — свойством элемента, а не только в подписи на экране:
+             * иначе в Navisworks выемку от насыпи не отличить числом.
+             * ⚠️ У `IfcQuantityVolume` в IFC2x3 ЧЕТЫРЕ атрибута, в IFC4+
+             * добавлен пятый (Formula) — схемы тут расходятся. */
+            const addVolumeQty = (product, m3) => {
+                if (!(m3 > 0)) return;
+                const v = E(`IFCQUANTITYVOLUME('NetVolume',$,$,${num(m3)}${schema === 'IFC2X3' ? '' : ',$'})`);
+                const q = E(`IFCELEMENTQUANTITY('${ifcGuid()}',${own},'BaseQuantities',$,$,(${v}))`);
+                E(`IFCRELDEFINESBYPROPERTIES('${ifcGuid()}',${own},$,$,(${product}),${q})`);
+            };
+
+            const addTin = (tin, name, code, css, volume) => {
                 if (!tin?.points?.length || !tin?.faces?.length) return;
                 let rep, item;
                 if (tess) {
@@ -14890,13 +14962,16 @@
                 const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
                 const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
                 const nm = ifcText(name || code || 'Элемент');
+                let product;
                 if (legacy) {
                     const { cls, type, role } = ifcLegacyClassForCode(code);
-                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,'${ifcText(role)}',${pl},${shape},$,${type})`));
+                    product = E(`${cls}('${ifcGuid()}',${own},'${nm}',$,'${ifcText(role)}',${pl},${shape},$,${type})`);
                 } else {
                     const { cls, type } = ifcClassForCode(code);
-                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,$,${pl},${shape},$,${type})`));
+                    product = E(`${cls}('${ifcGuid()}',${own},'${nm}',$,$,${pl},${shape},$,${type})`);
                 }
+                products.push(product);
+                addVolumeQty(product, volume);
                 solids++;
                 tris += tin.faces.length;
             };
@@ -14908,7 +14983,7 @@
                 if (g.kind === 'alignment') continue;      // у трассы тела нет
                 for (const el of (g.children || [])) {
                     const tin = el.tin?.();
-                    if (tin) addTin(tin, el.name, el.code, el.color);
+                    if (tin) addTin(tin, el.name, el.code, el.color, el.volume);
                 }
             }
 
@@ -44606,7 +44681,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: '00d113a-preview',
+            buildId: '9bd56a9-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

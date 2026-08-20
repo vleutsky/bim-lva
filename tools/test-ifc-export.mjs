@@ -60,7 +60,10 @@ async function chrome() {
 const geoFile = path.join(ROOT, 'tools', 'fixtures', '_ifc-exp-geo.ifc');
 await fs.writeFile(geoFile, makeGeoIfc({
     worldX: 55300.05, worldY: 33820.60, worldZ: 1600.15,
-    count: 24, cols: 6, step: 6, seed: 77, name: '_ifc-exp-geo.ifc'
+    /* Уклон обязателен: на плоской площадке ось либо везде выше земли, либо
+     * везде ниже, выемки не возникает вовсе, и проверка её тела прошла бы
+     * вхолостую. */
+    count: 24, cols: 6, step: 6, seed: 77, tilt: 0.35, name: '_ifc-exp-geo.ifc'
 }));
 
 const { server, port } = await startStaticServer(ROOT);
@@ -167,6 +170,36 @@ try {
      * разошёлся бы с картинкой. */
     check(made.solids >= 6, `тела коридора попали в файл (всего тел ${made.solids}, было 3)`);
     check(/IFCPAVEMENT/.test(made.text), 'покрытие дороги ушло IfcPavement');
+
+    /* Выемка — ОТДЕЛЬНОЕ тело и отдельный класс: в 4.3 это IfcEarthworksCut,
+     * а не насыпь с другим именем. Раньше насыпь и выемка сваливались в один
+     * TIN, и в файле их было не различить. */
+    check(/IFCEARTHWORKSFILL/.test(made.text), 'насыпь ушла IfcEarthworksFill');
+    check(/IFCEARTHWORKSCUT/.test(made.text), 'выемка ушла ОТДЕЛЬНЫМ телом IfcEarthworksCut');
+
+    /* Объём — свойством элемента, иначе в Navisworks выемку от насыпи не
+     * отличить числом. */
+    const vols = (made.text.match(/IFCQUANTITYVOLUME\('NetVolume',\$,\$,([-\d.eE]+)/g) || []);
+    check(vols.length >= 2, `объёмы записаны свойством (${vols.length} шт.)`);
+    check(/IFCRELDEFINESBYPROPERTIES/.test(made.text), 'объём привязан к элементу');
+
+    /* Обстройка УЗЛА: бордюр по скруглениям. Владелец заметил, что по осям он
+     * есть, а по перекрёстку нет — сама обстройка строилась, но в структуру не
+     * попадала. ⚠️ Имена в файле закодированы \X2\, искать по сырому тексту
+     * бесполезно: раскодируем. */
+    const plain = made.text.replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/g,
+        (_, hex) => hex.match(/.{4}/g).map((h) => String.fromCharCode(parseInt(h, 16))).join(''));
+    /* ⚠️ Имя узла — это «Ось B × Ось A», слова «Узел» в нём нет: искать по
+     * нему бесполезно (уже потрачен заход). Признак узла — «×» в имени.
+     * И код обстройки зависит от того, у КАКОЙ оси узел взял шаблон: если у
+     * той, где бордюра нет, обстройка уходит обочиной. Поэтому проверяем сам
+     * факт, что тела обстройки узла в файле есть. */
+    const nodeOuter = plain.split('\n').filter((l) =>
+        /^#\d+=IFC(KERB|COURSE|PAVEMENT)\(/.test(l) && /×/.test(l));
+    console.log('  тела узла: ' + (nodeOuter
+        .map((l) => (l.match(/,'([^']*)'/) || [])[1]).join(', ') || 'нет'));
+    check(nodeOuter.length >= 4,
+        `обстройка узла (бордюр/обочина по скруглениям) ушла в файл (${nodeOuter.length} тел)`);
 
     /* Цвет: без стиля читатель красит всё серым, и дорога в дереве
      * неотличима от откоса.
