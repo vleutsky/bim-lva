@@ -21,6 +21,9 @@ function guid(seed) {
  * @param {string} o.schema — FILE_SCHEMA
  * @param {number} o.count — сколько коробок
  * @param {number} o.seed — чтобы GlobalId файлов не совпадали
+ * @param {number} o.tilt — уклон площадки по X (м высоты на метр). Нужен там,
+ *   где важен ПЕРЕХОД насыпь↔выемка: на плоской площадке ось либо везде выше
+ *   земли, либо везде ниже, и стык двух режимов не воспроизводится вовсе.
  * @param {number} o.boxSize — сторона коробки в плане, м (по умолчанию 3).
  *        ⚠️ IFCRECTANGLEPROFILEDEF задаёт ПОЛНЫЕ размеры, а не полуразмеры:
  *        при `step > boxSize` между коробками остаются дыры, и луч выборки
@@ -31,7 +34,7 @@ function guid(seed) {
  *        выгрузок Renga/nanoCAD через ODA): величины в файле пишутся в его
  *        единицах, а IFCSIUNIT получает приставку .MILLI.
  */
-export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, boxSize = 3, seed = 0, name = 'geo.ifc', lengthToMetres = 1, application = 'test', booleanOps = 0 } = {}) {
+export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4', count = 400, cols = 20, step = 6, boxSize = 3, seed = 0, name = 'geo.ifc', lengthToMetres = 1, application = 'test', booleanOps = 0, tilt = 0 } = {}) {
     // Коэффициент «метр → единица файла»
     const k = 1 / lengthToMetres;
     const isMm = Math.abs(lengthToMetres - 0.001) < 1e-12;
@@ -79,7 +82,7 @@ export function makeGeoIfc({ worldX = 0, worldY = 0, worldZ = 0, schema = 'IFC4'
             `#${pt}=IFCCARTESIANPOINT((${x.toFixed(1)},${y.toFixed(1)},0.));`,
             `#${axis}=IFCAXIS2PLACEMENT3D(#${pt},#2,#3);`,
             `#${placement}=IFCLOCALPLACEMENT(#15,#${axis});`,
-            `#${solid}=IFCEXTRUDEDAREASOLID(#19,#4,#2,${u(3)});`,
+            `#${solid}=IFCEXTRUDEDAREASOLID(#19,#4,#2,${u(Math.max(0.5, 3 + tilt * x / k))});`,
             `#${shape}=IFCSHAPEREPRESENTATION(#9,'Body','SweptSolid',(#${solid}));`,
             `#${product}=IFCPRODUCTDEFINITIONSHAPE($,$,(#${shape}));`,
             `#${wall}=IFCWALL('${guid(seed + 10 + i)}',$,'Wall ${i + 1}',$,$,#${placement},#${product},$,$);`
