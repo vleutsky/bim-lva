@@ -226,6 +226,27 @@ try {
     const colours = new Set((made.text.match(/IFCCOLOURRGB\([^)]*\)/g) || []));
     check(colours.size >= 2, `цвета элементов различаются (${colours.size} разных)`);
 
+    /* КОНВЕРТАЦИЯ СХЕМЫ. Требование владельца: класса нет в целевой схеме —
+     * геометрия НЕ пропадает, элемент остаётся с универсальным классом, а
+     * настоящее имя уходит в ObjectType.
+     * ⚠️ Проверять это можно только на файле, где такие классы ЕСТЬ: наш 4.3
+     * с дорожными. На обычном файле заменять было бы нечего, и проверка
+     * прошла бы вхолостую. */
+    const conv = await page.evaluate((src) => window.BimLvaDebug.ifcConvertText(src, 'IFC4'), made.text);
+    const cntBefore = (made.text.match(/^#\d+=IFC/gmi) || []).length;
+    const cntAfter = (conv.text.match(/^#\d+=IFC/gmi) || []).length;
+    console.log(`  конвертация 4.3 → IFC4: заменено ${conv.changed} классов`
+        + ` (${Object.keys(conv.byClass).join(', ') || '—'}), сущностей ${cntBefore} → ${cntAfter}`);
+    check(/FILE_SCHEMA\(\('IFC4'\)\)/.test(conv.text), 'конвертация: схема в заголовке переписана');
+    check(conv.changed > 0, `конвертация: дорожные классы заменены (${conv.changed})`);
+    for (const cls of ['IFCPAVEMENT', 'IFCKERB', 'IFCEARTHWORKSFILL', 'IFCEARTHWORKSCUT']) {
+        check(!conv.text.includes(cls + '('), `конвертация: в IFC4 нет ${cls}`);
+    }
+    check(cntAfter === cntBefore,
+        `конвертация: ни одна сущность не потеряна (${cntAfter} из ${cntBefore})`);
+    check(/IFCBUILDINGELEMENTPROXY/.test(conv.text), 'конвертация: тела под универсальным классом');
+    check(/'IFCPAVEMENT'/.test(conv.text), 'конвертация: настоящее имя класса сохранено в ObjectType');
+
     /* Кириллица в STEP — только `\X2\<UTF-16 hex>\X0\`. Сырой UTF-8 читатель
      * разбирает как ANSI, и в дереве Navisworks вместо имён иероглифы (так и
      * было). Проверяем ОБА конца: сырых не-ASCII в файле нет вовсе, а обратный

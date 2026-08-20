@@ -4128,7 +4128,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · b1a8da2</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 259d91d</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4417,6 +4417,7 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnMergeIFC" disabled title="Объединить все IFC в один">🧩 Объединить</button>
                             <button class="btn rbtn-sm" id="btnExportIFC" disabled title="Скачать изменённые IFC">⬇ Экспорт IFC</button>
+                            <button class="btn rbtn-sm" id="btnConvertIfcSchema" disabled title="Пересобрать загруженные IFC под другую схему. Классов, которых в схеме нет, не теряем: элемент остаётся с универсальным классом, а настоящее имя уходит в ObjectType">⇄ Схема IFC</button>
                         </div>
                     </div>
                     <div class="cap">Файл</div>
@@ -6903,6 +6904,21 @@
              * путём, что кнопка «Сохранить IFC». Проверять надо именно текст:
              * раньше удаление до файла не доходило вовсе.
              */
+            /** Конвертация ЛЮБОГО текста IFC — вход для проверки без загрузки. */
+            ifcConvertText(text, target) {
+                const res = convertIfcSchemaText(indexIfcText(String(text || '')), target);
+                return { target, changed: res.changed, byClass: res.byClass, tess: res.tess, text: res.text };
+            },
+            /** Пересобрать текст модели под другую схему — вход для проверки. */
+            async ifcConvertProbe(fileRe, target) {
+                const re = new RegExp(fileRe, 'i');
+                const mod = [...loadedModels.values()]
+                    .find((m) => canEditIfc(m) && re.test(m.filename || ''));
+                if (!mod) return null;
+                await ensureIfcIndex(mod);
+                const res = convertIfcSchemaText(mod.ifcIndex, target);
+                return { target, changed: res.changed, byClass: res.byClass, tess: res.tess, text: res.text };
+            },
             async ifcDeleteProbe(fileRe, expressIds) {
                 const re = new RegExp(fileRe, 'i');
                 const mod = [...loadedModels.values()]
@@ -10809,7 +10825,8 @@
             'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash',
             'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView',
             'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw',
-            'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'btnAreaObject', 'drawModeSelect',
+            'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'btnAreaObject',
+            'btnConvertIfcSchema', 'drawModeSelect',
             'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile',
             'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'
         ];
@@ -41231,6 +41248,129 @@ ${componentXml || '    '}
          * графа ссылок, а на файле в сотни тысяч сущностей это дорого. На
          * чтение сироты не влияют — их просто никто не показывает.
          */
+        /* --- Конвертация схемы IFC ------------------------------------------
+         * Просьба владельца: «если каких-то классов в схеме нет, геометрия не
+         * должна пропадать, а должна оставаться но с другим классом».
+         *
+         * ⚠️ Это НЕ смена строки `FILE_SCHEMA`: у схем разный СОСТАВ классов.
+         * Дорожные классы и `IfcAlignment` появились только в 4.3, тесселяция
+         * (`IfcTriangulatedFaceSet` + `IfcCartesianPointList3D`) — только в
+         * IFC4. Просто переписать заголовок значит выдать файл, который
+         * читатель разберёт неверно или не разберёт вовсе.
+         *
+         * Правило замены — то же, что в нашей собственной выгрузке
+         * (`ifcLegacyClassForCode`): класса нет — ставим универсальный
+         * `IfcBuildingElementProxy`, а НАСТОЯЩЕЕ имя класса кладём в
+         * `ObjectType`, если оно там пустое. Геометрия и размещение остаются
+         * своими, теряется только точность классификации — и об этом надо
+         * честно сказать в уведомлении, а не молчать.
+         */
+        const IFC_SCHEMA_TARGETS = ['IFC2X3', 'IFC4', 'IFC4X3_ADD2'];
+
+        /** Классы, которых в схеме нет, и чем их заменить. */
+        const IFC_CLASS_SINCE = {
+            // появились в IFC4
+            IFCBUILTELEMENT: 'IFC4', IFCCHIMNEY: 'IFC4', IFCSHADINGDEVICE: 'IFC4',
+            IFCGEOGRAPHICELEMENT: 'IFC4', IFCCIVILELEMENT: 'IFC4',
+            IFCSYSTEMFURNITUREELEMENT: 'IFC4', IFCVOIDINGFEATURE: 'IFC4',
+            // появились в IFC4.3
+            IFCPAVEMENT: 'IFC4X3_ADD2', IFCKERB: 'IFC4X3_ADD2',
+            IFCCOURSE: 'IFC4X3_ADD2', IFCEARTHWORKSFILL: 'IFC4X3_ADD2',
+            IFCEARTHWORKSCUT: 'IFC4X3_ADD2', IFCEARTHWORKSELEMENT: 'IFC4X3_ADD2',
+            IFCROAD: 'IFC4X3_ADD2', IFCRAILWAY: 'IFC4X3_ADD2',
+            IFCBRIDGE: 'IFC4X3_ADD2', IFCMARINEFACILITY: 'IFC4X3_ADD2',
+            IFCFACILITY: 'IFC4X3_ADD2', IFCFACILITYPART: 'IFC4X3_ADD2',
+            IFCALIGNMENT: 'IFC4X3_ADD2', IFCALIGNMENTHORIZONTAL: 'IFC4X3_ADD2',
+            IFCALIGNMENTVERTICAL: 'IFC4X3_ADD2', IFCALIGNMENTSEGMENT: 'IFC4X3_ADD2',
+            IFCALIGNMENTHORIZONTALSEGMENT: 'IFC4X3_ADD2',
+            IFCALIGNMENTVERTICALSEGMENT: 'IFC4X3_ADD2'
+        };
+
+        const IFC_SCHEMA_RANK = { IFC2X3: 0, IFC4: 1, IFC4X3_ADD2: 2, IFC4X3: 2, IFC4X1: 2, IFC4X2: 2 };
+
+        /** Чем заменить класс, которого в целевой схеме нет. */
+        function ifcFallbackClass(cls, target) {
+            const c = String(cls || '').toUpperCase();
+            if (/^IFCALIGNMENT/.test(c)) return 'IFCANNOTATION';
+            if (/^IFC(ROAD|RAILWAY|BRIDGE|MARINEFACILITY|FACILITY)/.test(c)) {
+                return target === 'IFC2X3' ? 'IFCBUILDING' : 'IFCBUILDING';
+            }
+            return 'IFCBUILDINGELEMENTPROXY';
+        }
+
+        function ifcClassExistsIn(cls, target) {
+            const since = IFC_CLASS_SINCE[String(cls || '').toUpperCase()];
+            if (!since) return true;
+            return (IFC_SCHEMA_RANK[target] ?? 2) >= (IFC_SCHEMA_RANK[since] ?? 2);
+        }
+
+        /**
+         * Пересобрать текст IFC под другую схему.
+         * Возвращает { text, changed, byClass, tess } — что именно заменили,
+         * чтобы это можно было показать пользователю и проверить тестом.
+         */
+        function convertIfcSchemaText(idx, target) {
+            const text = idx?.text || '';
+            if (!text) return { text: '', changed: 0, byClass: {}, tess: 0 };
+            const byClass = {};
+            const cuts = [];
+            let tess = 0;
+            for (let k = 0; k < idx.ids.length; k++) {
+                const from = idx.starts[k], to = idx.ends[k];
+                const body = text.slice(from, to);
+                const m = /^#(\d+)\s*=\s*([A-Z0-9_]+)\s*\(/i.exec(body);
+                if (!m) continue;
+                const cls = m[2].toUpperCase();
+                if (target === 'IFC2X3' && (cls === 'IFCTRIANGULATEDFACESET' || cls === 'IFCPOLYGONALFACESET'
+                    || cls === 'IFCCARTESIANPOINTLIST3D')) {
+                    tess++;
+                    continue;               // геометрию не трогаем, но скажем о ней
+                }
+                if (ifcClassExistsIn(cls, target)) continue;
+                const next = ifcFallbackClass(cls, target);
+                /* Настоящее имя класса — в ObjectType (5-й аргумент у
+                 * IfcObject), если он пуст. Так в дереве видно, чем элемент
+                 * был до понижения схемы. */
+                let rewritten = body.replace(/^(#\d+\s*=\s*)[A-Z0-9_]+/i, `$1${next}`);
+                const args = rewritten.slice(rewritten.indexOf('(') + 1, rewritten.lastIndexOf(')'));
+                const parts = splitIfcArgs(args);
+                if (parts.length >= 5 && parts[4].trim() === '$') {
+                    parts[4] = `'${cls}'`;
+                    rewritten = `${rewritten.slice(0, rewritten.indexOf('(') + 1)}${parts.join(',')})` +
+                        rewritten.slice(rewritten.lastIndexOf(')') + 1);
+                }
+                byClass[cls] = (byClass[cls] || 0) + 1;
+                cuts.push({ from, to, replace: rewritten });
+            }
+            let out = text;
+            for (let i = cuts.length - 1; i >= 0; i--) {
+                out = out.slice(0, cuts[i].from) + cuts[i].replace + out.slice(cuts[i].to);
+            }
+            out = out.replace(/FILE_SCHEMA\s*\(\s*\(\s*'[^']*'\s*\)\s*\)/i, `FILE_SCHEMA(('${target}'))`);
+            return { text: out, changed: cuts.length, byClass, tess };
+        }
+
+        /** Разбор списка аргументов STEP: скобки и кавычки считаем честно. */
+        function splitIfcArgs(sArgs) {
+            const out = [];
+            let depth = 0, quote = false, cur = '';
+            for (let i = 0; i < sArgs.length; i++) {
+                const ch = sArgs[i];
+                if (quote) {
+                    cur += ch;
+                    if (ch === "'") { if (sArgs[i + 1] === "'") cur += sArgs[++i]; else quote = false; }
+                    continue;
+                }
+                if (ch === "'") { quote = true; cur += ch; continue; }
+                if (ch === '(') depth++;
+                if (ch === ')') depth--;
+                if (ch === ',' && depth === 0) { out.push(cur); cur = ''; continue; }
+                cur += ch;
+            }
+            out.push(cur);
+            return out;
+        }
+
         function ifcTextWithoutEntities(idx, doomed) {
             if (!idx?.text || !doomed?.size) return idx?.text || '';
             const text = idx.text;
@@ -41308,6 +41448,55 @@ ${componentXml || '    '}
                 }, index * 200);
             });
         }
+        /**
+         * Пересобрать загруженные IFC под другую схему и скачать.
+         * Спрашиваем схему простым выбором: отдельное окно ради одного
+         * значения — лишнее движение, а их владелец просил не плодить.
+         */
+        async function convertLoadedIfcSchema() {
+            await ensureIfcIndexes(loadedModels.values());
+            const models = [...loadedModels.values()].filter((m) => canEditIfc(m) && m.ifcIndex);
+            if (!models.length) { notifyError('Нет загруженных IFC для конвертации.'); return; }
+            const raw = prompt(
+                'Схема, в которую пересобрать:\n' +
+                '1 — IFC2x3 (Navisworks и старое ПО)\n' +
+                '2 — IFC4\n' +
+                '3 — IFC4.3 (дорожные классы)',
+                '2'
+            );
+            if (raw == null) return;
+            const target = IFC_SCHEMA_TARGETS[Math.max(0, Math.min(2, (parseInt(raw, 10) || 2) - 1))];
+            let total = 0, tess = 0;
+            const seen = {};
+            models.forEach((mod, i) => {
+                const res = convertIfcSchemaText(
+                    mod.deletedIds?.size
+                        ? indexIfcText(ifcTextWithoutEntities(mod.ifcIndex, mod.deletedIds))
+                        : mod.ifcIndex,
+                    target
+                );
+                total += res.changed;
+                tess += res.tess;
+                Object.entries(res.byClass).forEach(([k, n]) => { seen[k] = (seen[k] || 0) + n; });
+                const base = (mod.filename || 'model').replace(/\.ifc$/i, '');
+                setTimeout(() => {
+                    downloadBinaryFile(new TextEncoder().encode(res.text),
+                        `${base}_${target.toLowerCase()}.ifc`);
+                }, i * 200);
+            });
+            const listed = Object.entries(seen)
+                .sort((a, b) => b[1] - a[1]).slice(0, 4)
+                .map(([k, n]) => `${k} ×${n}`).join(', ');
+            notify(
+                `Схема ${target}: файлов ${models.length}, заменено классов ${total}` +
+                (listed ? ` (${listed})` : '') + '. ' +
+                (tess
+                    ? `⚠️ Тесселяции ${tess} — в IFC2x3 такой геометрии нет, она оставлена как есть и старым ПО прочитана не будет.`
+                    : 'Геометрия не потеряна: элементы остались с универсальным классом, настоящее имя — в ObjectType.')
+            );
+            trackUsage('ifc_convert_schema', { target, changed: total });
+        }
+        $('btnConvertIfcSchema')?.addEventListener('click', convertLoadedIfcSchema);
         $('btnExportIFC').addEventListener('click', async () => {
             await ensureIfcIndexes(loadedModels.values());
             downloadEditedIfcModels();
@@ -45183,7 +45372,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: 'b1a8da2-preview',
+            buildId: '259d91d-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
