@@ -1921,7 +1921,19 @@
             border: 1px solid var(--line); border-radius: 3px;
             pointer-events: none;
         }
-        .node-corner {
+        /* Слой ручек узла — как #polyline-handles. Без своих правил он был
+           обычным блоком в потоке: 846×51 поверх сцены с pointer-events:auto,
+           то есть ещё и перехватывал клики по модели в этой полосе. */
+        #node-handles {
+            position: absolute; inset: 0;
+            pointer-events: none; z-index: 17; overflow: hidden;
+        }
+        /* ⚠️ Селектор с #node-handles здесь не для красоты: ниже по файлу
+           живёт `[data-tip] { position: relative }` (якорь всплывающей
+           подсказки). Специфичность у него та же, что у голого .node-corner,
+           а идёт он позже — и подпись угла становилась relative-блоком в
+           потоке шириной во весь слой: на экране это полоса до края окна. */
+        #node-handles .node-corner {
             position: absolute; top: 0; left: 0;
             transform-origin: 0 0;
             padding: 1px 5px; margin: -9px 0 0 -18px; white-space: nowrap;
@@ -4060,7 +4072,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1907540</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 49031e2</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4253,14 +4265,25 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnPolylineList" disabled title="Список полилиний">📐 Полилинии: <span id="polylinesCount">0</span></button>
                             <button class="btn rbtn-sm" id="btnIntersections" disabled title="Пересечения и примыкания дорог">⛔ Пересечения</button>
-                            <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
-                            <button class="btn rbtn-sm" id="btnDrawExportIfc" disabled title="Выгрузить в IFC 4.3 дорожными классами: покрытие, слои одежды, бордюр, откосы, оси">⤓ IFC</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <button class="btn rbtn-big" id="btnDrawExportIfc" disabled title="IFC 4.3 с дорожными классами: покрытие, слои одежды, бордюр, откосы, трасса IfcAlignment. Открывают Civil 3D 2024+, Revit 2025+, BlenderBIM"><span class="tb-ico">⤓</span><span class="tb-txt">IFC 4.3</span></button>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnDrawExportIfc4" disabled title="IFC4 для приложений без поддержки 4.3: те же тела, но классы универсальные (роль элемента — в свойстве ObjectType), ось — ломаной">⤓ IFC4</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportIfc2x3" disabled title="IFC2x3 для Navisworks и другого старого ПО: геометрия оболочкой из граней, ось — ломаной">⤓ IFC2x3</button>
+                            <button class="btn rbtn-sm" id="btnDrawExport" disabled title="Выгрузить начерченное в DXF">⤓ DXF</button>
+                        </div>
+                        <div class="col">
+                            <button class="btn rbtn-sm" id="btnDrawExportDwg" disabled title="Выгрузить начерченное в DWG">⤓ DWG</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportXml" disabled title="Выгрузить полилинии в LandXML (Alignments): Civil 3D → Import LandXML">⤓ LandXML</button>
+                            <button class="btn rbtn-sm" id="btnDrawExportStep" disabled title="Выгрузить полилинии и поверхности в STEP">⤓ STEP</button>
+                        </div>
+                    </div>
+                    <div class="cap">Выгрузка</div>
                 </div>
                 <div class="rpanel">
                     <div class="items">
@@ -5364,9 +5387,6 @@
                 <label data-tip="Заложение откоса выемки: 1 : m.">1:m выем.
                     <input class="editInput" id="roadXsMCut" type="number" min="0.1" step="0.1" value="1">
                 </label>
-                <label class="chk" data-tip="Строить откосы от кромок до рельефа вместе с «Построить». Снимите галочку — откосы пропадут с чертежа и из сцены.">
-                    <input type="checkbox" id="roadXsSlopeOn"> откосы
-                </label>
                 <button type="button" class="btn load-btn" id="roadXsApply" data-tip="Протянуть шаблон вдоль оси: полотно в сцене и чертёж сечения.">Построить</button>
                 <details class="rs-more" style="margin:0">
                     <summary data-tip="Шаг по сечению, цвет, связь с осью, вылет откоса, слои DXF.">ещё</summary>
@@ -5450,7 +5470,6 @@
                         <span class="fill"></span>
                         <button class="btn" id="roadXsFit" data-tip="Вписать сечение. Масштаб всегда 1:1. Колесо — зум к курсору, ПКМ — сдвиг.">⤢</button>
                         <button class="btn" id="roadXsProfile" data-tip="Продольный профиль этой оси">〰 профиль</button>
-                        <button class="btn load-btn" id="roadXsSlope" data-tip="Откосы от кромок шаблона до рельефа">△ Откосы до рельефа</button>
                         <button class="btn" id="roadXsCsv" data-tip="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
                         <button class="btn" id="roadXsDxf" data-tip="Поперечники 3D-полилиниями на слое «Поперечник»">⬇ DXF</button>
                         <button class="btn" id="roadXsClear">Убрать</button>
@@ -5993,6 +6012,7 @@
         }
 
         function dismissToast(entry) {
+            if (!entry) return;
             if (lastToast === entry) lastToast = null;
             clearTimeout(entry.timer);
             entry.el.remove();
@@ -6033,11 +6053,16 @@
             if (!text) return;
 
             if (lastToast && lastToast.text === text && lastToast.type === type) {
-                lastToast.count++;
-                lastToast.countEl.textContent = `×${lastToast.count}`;
-                lastToast.countEl.hidden = false;
-                clearTimeout(lastToast.timer);
-                lastToast.timer = setTimeout(() => dismissToast(lastToast), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
+                /* Тот же тост — только счётчик. Запоминаем ЕГО в локальной
+                 * переменной: `dismissToast(lastToast)` внутри setTimeout читал
+                 * бы `lastToast` в момент СРАБАТЫВАНИЯ, а к тому времени его
+                 * мог обнулить чужой тост — и таймер падал на null. */
+                const same = lastToast;
+                same.count++;
+                same.countEl.textContent = `×${same.count}`;
+                same.countEl.hidden = false;
+                clearTimeout(same.timer);
+                same.timer = setTimeout(() => dismissToast(same), TOAST_TIMEOUT[type] ?? TOAST_TIMEOUT.info);
                 pushNotifyLog(text, type, true);
                 return;
             }
@@ -7140,6 +7165,16 @@
                 fillRoadAxisStyleForm({ role: 'road-axis' });
                 setDrawMode(true);
             },
+            /**
+             * Завершение оси — ТОЛЬКО через `setDrawMode(false)`: поперечники,
+             * сопряжения и откосы висят там, а не в `finishDrawPolyline`.
+             * `finishDrawnPolyline()` их не запускает и для оси не годится —
+             * на этом уже потеряли заход (ось создавалась, поперечников ноль).
+             */
+            finishRoadAxisDraw() {
+                setDrawMode(false);
+                return drawnPolylines[drawnPolylines.length - 1]?.id ?? null;
+            },
             addDrawWorldPoint(x, y, z) {
                 addDrawPoint(new THREE.Vector3(x, y, z));
                 return drawPoints.length;
@@ -7208,7 +7243,14 @@
                     .filter((ch) => !keep.has(ch))
                     .map((ch) => ch.type || ch.name || '?');
             },
-            /** Откосы до рельефа по выбранной линии — тот же путь, что кнопка «△ Откосы». */
+            /** Открыть окно откосов по линии — тот же путь, что пункт меню сцены. */
+            openSlopeDialog(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                openSlopeModal(rec);
+                return true;
+            },
+            /** Откосы до рельефа по выбранной линии — тот же путь, что пункт «△ Откосы». */
             buildSlopeOnPolyline(id, opts) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 if (!rec) return null;
@@ -7403,6 +7445,16 @@
                     zTarget: Number.isFinite(opts.zTarget) ? opts.zTarget : null
                 });
                 if (!result) return null;
+                /* Узел на этой паре осей мог уже стоять — например, его
+                 * построило автопостроение. Боевой путь такой заменяет
+                 * (`forgetIntersection`), а этот — нет, и на паре оказывалось
+                 * ДВА узла: их бровки-откосы копились (замерено 60 вместо 4) и
+                 * шли в расчёт как «земля», отчего насыпь падала с 618 до
+                 * 38 м³. Отладочный вход обязан вести себя как диалог. */
+                const prev = roadIntersections.find((x) =>
+                    (x.poly1Id === p1.id && x.poly2Id === p2.id) ||
+                    (x.poly1Id === p2.id && x.poly2Id === p1.id));
+                if (prev) forgetIntersection(prev);
                 const rec = {
                     id: 'ix-' + Math.random().toString(36).slice(2, 10),
                     name: `${p1.name} × ${p2.name}`,
@@ -7477,6 +7529,51 @@
                     // бордюр действительно вынесен за проезжую часть.
                     maxOff: Math.max(0, ...d.outer.pts.map((p) => p.off))
                 };
+            },
+            /**
+             * Откосы узла: сколько построено, их объёмы и линии выхода.
+             * Бровки — скрытые полилинии, помеченные `nodeIxId`.
+             */
+            nodeSlopes(ixId) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                if (!rec) return null;
+                const brows = drawnPolylines.filter((r) => r.nodeIxId === ixId);
+                const models = brows
+                    .map((b) => slopeModels.find((sm) => sm.polylineId === b.id))
+                    .filter(Boolean);
+                return {
+                    on: !!rec.slopes,
+                    brows: brows.length,
+                    models: models.length,
+                    // Вылет бровки от кромки проезжей части: по нему видно,
+                    // что откос начинается ЗА обстройкой, а не на покрытии.
+                    browOff: Math.max(0, ...(rec.points?.outer?.pts || [{ off: 0 }]).map((p) => p.off)),
+                    fill: models.reduce((s, m) => s + (m.sides || []).reduce((a, x) => a + (x.fill || 0), 0), 0),
+                    cut: models.reduce((s, m) => s + (m.sides || []).reduce((a, x) => a + (x.cut || 0), 0), 0),
+                    faces: models.reduce((s, m) => s + (m.tin?.faces?.length || 0), 0),
+                    ...nodeSlopeGeometryProbe(rec, models)
+                };
+            },
+            /** Построить откосы узла принудительно (без откосов на дорогах). */
+            buildNodeSlopesOn(ixId, opts) {
+                const rec = roadIntersections.find((x) => x.id === ixId);
+                if (!rec) return null;
+                rec.slopes = true;
+                const built = buildNodeSlopes(rec, { ...readRoadXsSlopeOpts(), ...(opts || {}) });
+                return built ? built.length : 0;
+            },
+            /** Дерево начерченного: строки как в панели «Структура». */
+            drawnTree() {
+                renderDrawnTree();
+                const root = document.getElementById('drawn-root');
+                if (!root) return null;
+                return [...root.querySelectorAll('.trow')].map((r) => ({
+                    name: r.querySelector('.tlabel')?.textContent || '',
+                    type: r.querySelector('.ttype')?.textContent || '',
+                    depth: (() => { let d = 0, n = r.parentElement;
+                        while (n && n !== root) { if (n.classList.contains('children')) d++; n = n.parentElement; }
+                        return d; })()
+                }));
             },
             /** Задать отметку узла в абсолютных — как ручкой в сцене. */
             setNodeElevationAbs(ixId, absZ) {
@@ -7700,9 +7797,8 @@
                 const resolved = model.template
                     ? resolveTemplatePoints(model.template, st).filter((p) => !p.hide)
                     : [];
-                const slopeOn = !!$('roadXsSlopeOn')?.checked;
                 const slopeSecs = [];
-                if (slopeOn) {
+                {
                     const opts = readRoadXsSlopeOpts();
                     const edgePts = templateEdgePoints({ points: resolved });
                     [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
@@ -7907,11 +8003,13 @@
                 applyRoadTemplateChange(model, { relink: false });
                 return snapshotRoadTemplate(model.template);
             },
-            dropRoadXsSlopes() {
-                const model = currentRoadXsModel();
+            /** Без аргумента — текущая ось, с id полилинии — именно она. */
+            dropRoadXsSlopes(polylineId) {
+                const model = polylineId != null
+                    ? roadXsModels.find((m) => m.polylineId === polylineId)
+                    : currentRoadXsModel();
                 if (!model) return false;
                 clearRoadXsSlopes(model);
-                if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = false;
                 renderRoadXsView();
                 updateRoadXsStatus();
                 markNeedsRender();
@@ -7967,10 +8065,12 @@
                 openPolylineProfile(rec);
                 return true;
             },
+            /** `opts.polylineId` — построить на конкретной оси, иначе на текущей. */
             buildRoadXsSlopes(opts) {
-                const model = currentRoadXsModel();
+                const model = opts?.polylineId != null
+                    ? roadXsModels.find((m) => m.polylineId === opts.polylineId)
+                    : currentRoadXsModel();
                 if (!model) return null;
-                if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = true;
                 const built = buildRoadTemplateSlopes(model, {
                     mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30,
                     ...(opts || {})
@@ -8127,7 +8227,7 @@
                 return buildDxf(drawnPolylines, coordPins);
             },
             /** Текст IFC — тот же путь, что и кнопка выгрузки. */
-            ifcExport() { return buildIfcExport(); },
+            ifcExport(schema) { return buildIfcExport(schema); },
             /** Байты DWG — тот же путь, что и кнопка выгрузки. */
             async dwgBytes() {
                 const r = await buildDwg(drawnPolylines, coordPins.filter((p) => p.abs));
@@ -11489,6 +11589,62 @@
             return r?.role === 'road-slope-brow';
         }
 
+        /**
+         * Производная линия: её начертил не пользователь, а расчёт (линия
+         * выхода откоса на рельеф, контур откоса). В списке полилиний она
+         * нужна — это результат, который смотрят и выгружают. А вот ОСЬЮ она
+         * быть не может: у линии выхода вершины идут через полметра, и
+         * «профиль по ней» — сплошные переломы. Владелец на это и наткнулся:
+         * в окне поперечников выбралась «… — бровка 4 — насыпь (вправо)».
+         */
+        /**
+         * Прореживание линии по Дугласу–Пекеру: выбрасывает вершины, которые
+         * лежат к прямой между соседями ближе допуска.
+         *
+         * Линия выхода откоса снимается вместе с сечениями — шаг 0.5 м, и на
+         * прямом участке это десятки вершин подряд на одной прямой (у
+         * владельца 80 вершин на 36 м). Работать с такой линией нельзя: в
+         * профиле она выглядит пилой, в таблице сотни строк, в DXF лишний вес.
+         * Форму допуск 5 см не меняет — при заложении 1:1.5 это 3 см по
+         * горизонтали.
+         */
+        function simplifyPolylinePts(pts, tol = 0.05) {
+            const n = pts?.length || 0;
+            if (n < 3) return pts ? pts.slice() : [];
+            const distToSeg = (p, a, b) => {
+                const ax = p.x - a.x, ay = p.y - a.y, az = p.z - a.z;
+                const bx = b.x - a.x, by = b.y - a.y, bz = b.z - a.z;
+                const bb = bx * bx + by * by + bz * bz;
+                const t = bb > 1e-12
+                    ? Math.max(0, Math.min(1, (ax * bx + ay * by + az * bz) / bb))
+                    : 0;
+                return Math.hypot(ax - bx * t, ay - by * t, az - bz * t);
+            };
+            const keep = new Array(n).fill(false);
+            keep[0] = keep[n - 1] = true;
+            const stack = [[0, n - 1]];
+            while (stack.length) {
+                const [i, j] = stack.pop();
+                let best = -1, bestD = tol;
+                for (let k = i + 1; k < j; k++) {
+                    const d = distToSeg(pts[k], pts[i], pts[j]);
+                    if (d > bestD) { bestD = d; best = k; }
+                }
+                if (best > 0) { keep[best] = true; stack.push([i, best], [best, j]); }
+            }
+            return pts.filter((_, i) => keep[i]);
+        }
+
+        function markDerivedPolyline(rec) {
+            if (rec) rec.derived = true;
+            return rec;
+        }
+
+        /** Что можно взять осью в окне «План, профиль, поперечник». */
+        function roadStudioAxisCandidates() {
+            return listedPolylines().filter((r) => !r.derived && (r.pts?.length || 0) >= 2);
+        }
+
         function listedPolylines() {
             return drawnPolylines.filter((r) => !isInternalPolyline(r));
         }
@@ -13031,13 +13187,13 @@
             const groups = slopeExitGroups(tokens, closed, sections.length);
             const exitLines = groups.map((g, gi) => {
                 const modeName = g.mode === 'cut' ? 'выемка' : g.mode === 'fill' ? 'насыпь' : 'откос';
-                return addPolylineFromPoints(g.pts, {
+                return markDerivedPolyline(addPolylineFromPoints(simplifyPolylinePts(g.pts), {
                     name: `${record.name} — ${modeName} (${side === 'left' ? 'влево' : 'вправо'})` +
                         (groups.length > 1 ? ` #${gi + 1}` : ''),
                     color: g.mode === 'cut' ? '#3a83c9' : (opts.exitColor || '#2c8f4a'),
                     width: 1.5,
                     closed: g.closed
-                });
+                }));
             });
 
             return {
@@ -13070,12 +13226,12 @@
             rightG.slice().reverse().forEach((p) => ring.push(p));
             if (capExits?.[0]) ring.push(capExits[0]);
             if (ring.length < 3) return null;
-            return addPolylineFromPoints(ring, {
+            return markDerivedPolyline(addPolylineFromPoints(simplifyPolylinePts(ring), {
                 name: `${record.name} — контур откоса`,
                 color: opts.exitColor || '#2c8f4a',
                 width: 1.5,
                 closed: true
-            });
+            }));
         }
 
         function collectSlopeTin(model) {
@@ -13856,10 +14012,392 @@
         }
 
         /**
+         * Разложить ось на сегменты трассы IFC.
+         *
+         * Горизонталь — LINE и CIRCULARARC ровно по тем же сопряжениям, что
+         * рисует вьювер (`computeFilletArc`), а не по своей формуле: две
+         * реализации одного и того же обязательно разойдутся.
+         *
+         * Вертикаль — по профилю в плоскости (пикет, отметка), как он и
+         * построен внутри: прямые уклоны между вершинами и дуги там, где
+         * задан вертикальный радиус. Пикеты берутся ПО ТРАССЕ, а не по
+         * ломаной: сопряжения её укорачивают, и профиль на полигональных
+         * пикетах растянулся бы относительно плана.
+         */
+        function alignmentSegmentsFor(record) {
+            const pts = record.pts || [];
+            const radii = record.radii || [];
+            if (pts.length < 2) return null;
+
+            const hor = [];
+            const pvi = [];                 // {sta, z} — вершины по трассе
+            let cur = pts[0].clone();
+            let sta = 0;
+            const dirOf = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
+            const pushLine = (from, to) => {
+                const len = Math.hypot(to.x - from.x, to.y - from.y);
+                if (len < 1e-9) return;
+                hor.push({ type: 'LINE', x: from.x, y: from.y, dir: dirOf(from, to), len, r: 0 });
+                sta += len;
+            };
+
+            pvi.push({ sta: 0, z: pts[0].z, v: 0 });
+            for (let i = 1; i < pts.length - 1; i++) {
+                const arc = (radii[i] || 0) > 0
+                    ? computeFilletArc(pts[i - 1], pts[i], pts[i + 1], radii[i], 8) : null;
+                if (!arc) {
+                    pushLine(cur, pts[i]);
+                    pvi.push({ sta, z: pts[i].z, v: record.vRadii?.[i] || 0 });
+                    cur = pts[i].clone();
+                    continue;
+                }
+                pushLine(cur, arc.tangentIn);
+                // Знак радиуса: положительный — поворот против часовой, как
+                // принято в IFC. Направление берём у самого сопряжения
+                // (`ccw`), а не считаем второй раз: две реализации одного и
+                // того же обязательно разойдутся.
+                const left = arc.ccw ? 1 : -1;
+                const rEff = arc.radius;
+                const sweep = arc.sweep;
+                const arcLen = rEff * sweep;
+                hor.push({
+                    type: 'CIRCULARARC', x: arc.tangentIn.x, y: arc.tangentIn.y,
+                    dir: dirOf(pts[i - 1], pts[i]), len: arcLen, r: left * rEff
+                });
+                // Вершина профиля — середина дуги: она лежит НА трассе, в
+                // отличие от самой вершины полилинии.
+                pvi.push({ sta: sta + arcLen / 2, z: pts[i].z, v: record.vRadii?.[i] || 0 });
+                sta += arcLen;
+                cur = arc.tangentOut.clone();
+            }
+            pushLine(cur, pts[pts.length - 1]);
+            pvi.push({ sta, z: pts[pts.length - 1].z, v: 0 });
+
+            /* Вертикаль: уклон между вершинами, круговая вставка там, где задан
+             * вертикальный радиус. Дугу считает ТОТ ЖЕ `computeFilletArc`, что
+             * рисует профиль во вьювере, только в плоскости (пикет, отметка) —
+             * включая его же ограничение отступа 45% длины плеча. Своя формула
+             * тут неизбежно разошлась бы с чертежом.
+             *
+             * ⚠️ Пикет здесь — ПО ТРАССЕ (сопряжения плана её укорачивают), а
+             * профиль внутри вьювера построен на пикетах по ломаной
+             * (`polylineVertexPlanStations`). Совпадает, пока в плане нет
+             * сопряжений; где они есть, продольный профиль в IFC привязан к
+             * трассе, как того и требует `DistAlong`. Расхождение записано
+             * в CLAUDE.md как хвост вьювера, а не выгрузки. */
+            const ver = [];
+            const prof = pvi.map((p) => new THREE.Vector3(p.sta, p.z, 0));
+            const gradAt = (i) => {
+                const a = prof[i], b = prof[i + 1];
+                return (b.x - a.x) > 1e-9 ? (b.y - a.y) / (b.x - a.x) : 0;
+            };
+            const vArc = prof.map((_, i) => {
+                if (i === 0 || i === prof.length - 1) return null;
+                const rv = pvi[i].v || 0;
+                return rv > 0 ? computeFilletArc(prof[i - 1], prof[i], prof[i + 1], rv, 8) : null;
+            });
+
+            let s0 = prof[0].x, z0 = prof[0].y;
+            for (let i = 0; i < prof.length - 1; i++) {
+                const g = gradAt(i);
+                const arc = vArc[i + 1];
+                const sEnd = arc ? arc.tangentIn.x : prof[i + 1].x;
+                const zEnd = arc ? arc.tangentIn.y : prof[i + 1].y;
+                if (sEnd - s0 > 1e-6) {
+                    ver.push({ type: 'CONSTANTGRADIENT', sta: s0, len: sEnd - s0, z: z0, g0: g, g1: g, r: null });
+                }
+                if (arc) {
+                    const gOut = gradAt(i + 1);
+                    const len = arc.tangentOut.x - arc.tangentIn.x;
+                    // Знак радиуса — по тому же правилу, что на горизонтали:
+                    // положительный при обходе против часовой стрелки. В осях
+                    // (пикет, отметка) это значит «уклон растёт», то есть
+                    // вогнутая кривая (яма); выпуклая (горб) — отрицательный.
+                    if (len > 1e-6) {
+                        ver.push({
+                            type: 'CIRCULARARC', sta: arc.tangentIn.x, len,
+                            z: arc.tangentIn.y, g0: g, g1: gOut,
+                            r: (gOut >= g ? 1 : -1) * arc.radius
+                        });
+                    }
+                    s0 = arc.tangentOut.x; z0 = arc.tangentOut.y;
+                } else {
+                    s0 = prof[i + 1].x; z0 = zEnd;
+                }
+            }
+            return { hor, ver, pvi, total: sta };
+        }
+
+        /** Плоский список треугольников из потока координат лофта. */
+        function trianglesFromPositions(pos) {
+            const out = [];
+            for (let i = 0; i + 8 < pos.length; i += 9) {
+                out.push([
+                    new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]),
+                    new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]),
+                    new THREE.Vector3(pos[i + 6], pos[i + 7], pos[i + 8])
+                ]);
+            }
+            return out;
+        }
+
+        /**
+         * ЕДИНАЯ раскладка начерченного по классам IFC: `IfcSite → IfcRoad →`
+         * оси (`IfcAlignment` с вложенными горизонталью и профилем), покрытие
+         * узлов (`IfcPavement`) со слоями одежды (`IfcCourse`), откосы
+         * (`IfcEarthworksFill`).
+         *
+         * Отсюда строится И дерево проекта, И выгрузка. Второй раскладки быть
+         * не должно: разойдутся — и в дереве будет одно, а в файле другое.
+         *
+         * Тела отдаются ленивыми `tin()`: дереву геометрия не нужна вовсе, а
+         * считать её при каждой перерисовке списка полилиний было бы дорого.
+         */
+        function describeDrawnStructure() {
+            const groups = [];
+
+            for (const sm of slopeModels) {
+                const kids = [];
+                if (sm?.tin?.faces?.length) {
+                    kids.push({ code: 'SLOPE', name: sm.name || 'Откос', tin: () => sm.tin });
+                }
+                for (const mesh of (sm?.kdoMeshes || [])) {
+                    kids.push({
+                        code: 'BASE', name: (sm.name || 'Площадка') + ' · КДО',
+                        tin: () => weldTin(slopeMeshTriangles(mesh))
+                    });
+                }
+                if (kids.length) {
+                    groups.push({ kind: 'slope', name: sm.name || 'Откос', slopeId: sm.id, children: kids });
+                }
+            }
+
+            for (const ix of roadIntersections) {
+                const d = ix.points;
+                if (!d) continue;
+                const kids = [];
+                const layers = d.layers || [];
+                if (layers.length) {
+                    let depth = 0;
+                    for (const L of layers) {
+                        const at = depth;                 // глубина фиксируется ДО сдвига
+                        depth += L.thickness;
+                        kids.push({
+                            code: L.code, name: `${ix.name || 'Узел'} · ${L.code}`,
+                            tin: () => {
+                                const solid = buildNodeLayerSolid(d.crossPoint, d.outline, at, L.thickness);
+                                return solid ? weldTin(trianglesFromPositions(solid)) : null;
+                            }
+                        });
+                    }
+                } else if (d.patch) {
+                    kids.push({
+                        code: 'NODE', name: ix.name || 'Узел',
+                        tin: () => weldTin(trianglesFromPositions(d.patch))
+                    });
+                }
+                if (kids.length) {
+                    groups.push({ kind: 'node', name: ix.name || 'Узел', ixId: ix.id, children: kids });
+                }
+            }
+
+            for (const rec of drawnPolylines) {
+                if (rec.role !== 'road-axis' || (rec.pts?.length || 0) < 2) continue;
+                const layout = alignmentSegmentsFor(rec);
+                if (!layout?.hor.length) continue;
+                groups.push({
+                    kind: 'alignment', name: rec.name || 'Ось',
+                    polylineId: rec.id, rec, layout, children: []
+                });
+            }
+
+            return groups;
+        }
+
+        /* --- Дерево проекта: начерченное ---------------------------------
+         * Просьба владельца: «всё, что создаётся — полилинии, трассы,
+         * перекрёстки — надо формировать в дереве проекта, структуру этих
+         * элементов так, как они находятся в IFC».
+         *
+         * Ветка строится из `describeDrawnStructure` — того же источника, из
+         * которого собирается выгрузка. Заводить для дерева вторую раскладку
+         * нельзя: разойдутся, и в дереве будет одно, а в файле другое.
+         * ------------------------------------------------------------------ */
+
+        /** Габарит элемента дерева — по нему наводится камера при клике. */
+        function drawnNodeBox(g) {
+            const box = new THREE.Box3();
+            const add = (p) => box.expandByPoint(new THREE.Vector3(p.x, p.y, p.z));
+            if (g.kind === 'alignment') {
+                const rec = drawnPolylines.find((r) => r.id === g.polylineId);
+                (rec?.renderPts || []).forEach(add);
+            } else if (g.kind === 'node') {
+                const d = roadIntersections.find((x) => x.id === g.ixId)?.points;
+                (d?.outline || []).forEach(add);
+                if (d?.crossPoint) add(d.crossPoint);
+            } else if (g.kind === 'slope') {
+                const sm = slopeModels.find((m) => m.id === g.slopeId);
+                (sm?.tin?.points || []).forEach(add);
+            }
+            return box.isEmpty() ? null : box;
+        }
+
+        /** Строка дерева в том же виде, что у загруженных моделей. */
+        function drawnTreeRow(name, type, onPick) {
+            const node = document.createElement('div');
+            node.className = 'tnode';
+            const row = document.createElement('div');
+            row.className = 'trow';
+            row.innerHTML = `<span class="caret">▾</span>`
+                + `<span class="tlabel">${esc(name)}</span>`
+                + `<span class="ttype">${esc(type || '')}</span>`;
+            node.appendChild(row);
+            row.addEventListener('click', (e) => {
+                if (e.target.classList.contains('caret')) { node.classList.toggle('collapsed'); return; }
+                if (onPick) onPick(); else node.classList.toggle('collapsed');
+            });
+            return { node, row };
+        }
+
+        function drawnTreeChildren(node) {
+            const box = document.createElement('div');
+            box.className = 'children';
+            node.appendChild(box);
+            return box;
+        }
+
+        /**
+         * Ветка «Начерчено» рядом с файлами моделей. Иерархия — ровно как в
+         * выгрузке: IfcSite → IfcRoad → оси (IfcAlignment с вложенными
+         * горизонталью и профилем), покрытие узлов (IfcPavement) со слоями
+         * одежды (IfcCourse), откосы (IfcEarthworksFill).
+         */
+        function renderDrawnTree() {
+            if (!treeBox) return;
+            treeBox.querySelector('#drawn-root')?.remove();
+            const groups = describeDrawnStructure();
+            if (!groups.length) return;
+            treeBox.querySelector('.empty')?.remove();
+
+            // Имя как у IfcProject в выгрузке — дерево и файл говорят
+            // об одном и том же одинаково.
+            const root = drawnTreeRow('Проект BIM.LVA', 'PROJECT', null);
+            root.node.id = 'drawn-root';
+            root.node.classList.add('file-root');
+            root.row.querySelector('.tlabel').style.cssText = 'font-weight:600;color:var(--blue)';
+            const rootCh = drawnTreeChildren(root.node);
+
+            const site = drawnTreeRow('Площадка', 'SITE', null);
+            rootCh.appendChild(site.node);
+            const siteCh = drawnTreeChildren(site.node);
+            const road = drawnTreeRow('Дорога', 'ROAD', null);
+            siteCh.appendChild(road.node);
+            const roadCh = drawnTreeChildren(road.node);
+
+            const short = (cls) => String(cls || '').replace(/^IFC/, '');
+            /* Порядок для ЧЕЛОВЕКА, а не порядок записи в файл: сначала оси —
+             * они первичны, от них всё остальное, потом узлы, потом откосы.
+             * В выгрузке порядок свой и трогать его незачем. */
+            const rank = (g) => (g.kind === 'alignment' ? 0 : g.kind === 'node' ? 1 : 2);
+            const ordered = groups.slice().sort((a, b) => rank(a) - rank(b));
+            // Откосов много (на каждый участок бровки свой) — прячем их в одну
+            // группу, иначе они забивают дерево длиннее самих дорог.
+            const slopeBox = ordered.some((g) => g.kind === 'slope')
+                ? (() => {
+                    const n = ordered.filter((g) => g.kind === 'slope').length;
+                    const t = drawnTreeRow(`Откосы · ${n}`, 'EARTHWORKSFILL', null);
+                    t.node.classList.add('collapsed');
+                    roadCh.appendChild(t.node);
+                    return drawnTreeChildren(t.node);
+                })()
+                : null;
+            for (const g of ordered) {
+                const pick = () => {
+                    const box = drawnNodeBox(g);
+                    if (box) frameBox(box);
+                };
+                if (g.kind === 'alignment') {
+                    const al = drawnTreeRow(g.name, 'ALIGNMENT', pick);
+                    roadCh.appendChild(al.node);
+                    const ch = drawnTreeChildren(al.node);
+                    al.node.classList.add('collapsed');
+                    const hor = g.layout?.hor?.length || 0;
+                    const ver = g.layout?.ver?.length || 0;
+                    const arcs = (g.layout?.hor || []).filter((x) => x.type === 'CIRCULARARC').length;
+                    ch.appendChild(drawnTreeRow(
+                        `Горизонталь · ${hor} сегм. (дуг ${arcs})`, 'ALIGNMENTHORIZONTAL', pick).node);
+                    if (ver) {
+                        const varcs = (g.layout.ver || []).filter((x) => x.type === 'CIRCULARARC').length;
+                        ch.appendChild(drawnTreeRow(
+                            `Профиль · ${ver} сегм. (кривых ${varcs})`, 'ALIGNMENTVERTICAL', pick).node);
+                    }
+                    continue;
+                }
+                // Узел и откос: класс берём у первого тела — из того же
+                // ifcClassForCode, по которому пишется файл.
+                const kids = g.children || [];
+                const cls = short(ifcClassForCode(kids[0]?.code).cls);
+                /* «Ось A — бровка Л» это имя служебной линии, по которой
+                 * считался откос. В дереве человеку нужен сам откос. */
+                const label = g.kind === 'slope'
+                    ? g.name.replace(/—\s*бровка\s*/i, '— откос ')
+                        .replace(/откос\s*Л\b/i, 'откос слева')
+                        .replace(/откос\s*П\b/i, 'откос справа')
+                    : g.name;
+                const top = drawnTreeRow(label, cls, pick);
+                (g.kind === 'slope' && slopeBox ? slopeBox : roadCh).appendChild(top.node);
+                if (kids.length > 1) {
+                    const ch = drawnTreeChildren(top.node);
+                    top.node.classList.add('collapsed');
+                    kids.forEach((el) => {
+                        ch.appendChild(drawnTreeRow(
+                            el.name, short(ifcClassForCode(el.code).cls), pick).node);
+                    });
+                }
+            }
+            treeBox.appendChild(root.node);
+        }
+
+        /**
          * Собрать IFC из начерченного. Возвращает текст и счётчики — по ним
          * и проверяем, что в файл реально что-то попало.
          */
-        function buildIfcExport() {
+        /**
+         * Класс для схем БЕЗ дорожного словаря. Дорожных классов
+         * (`IfcPavement`, `IfcCourse`, `IfcKerb`, `IfcEarthworksFill`,
+         * `IfcAlignment`) нет ни в IFC4, ни в IFC2x3 — они появились только
+         * в 4.3. Пишем универсальный `IfcBuildingElementProxy`, а настоящую
+         * роль кладём в `ObjectType`, чтобы смысл не потерялся: в
+         * Navisworks и Civil она видна в свойствах элемента.
+         */
+        function ifcLegacyClassForCode(code) {
+            const c = String(code || '').toUpperCase();
+            const role = {
+                PVMT: 'Покрытие', NODE: 'Покрытие узла', CURB: 'Бордюр',
+                SLOPE: 'Откос', EMBK: 'Земляное полотно', BASE: 'Основание',
+                SUBB: 'Песок', WEDGE: 'Расклин'
+            }[c] || c || 'Элемент';
+            return { cls: 'IFCBUILDINGELEMENTPROXY', type: '.NOTDEFINED.', role };
+        }
+
+        /**
+         * Собрать IFC из начерченного в одной из трёх схем.
+         *
+         * `IFC4X3_ADD2` — настоящие дорожные классы и трасса `IfcAlignment`.
+         * `IFC4` — тела те же (тесселяция есть и в IFC4), но классы
+         *   универсальные: дорожного словаря в схеме нет.
+         * `IFC2X3` — для старых приложений (Navisworks 2022 и подобные).
+         *   Здесь ДВА принципиальных отличия, а не только имена классов:
+         *     · нет `IfcTriangulatedFaceSet` и `IfcCartesianPointList3D` —
+         *       геометрию пишем оболочкой `IfcShellBasedSurfaceModel` из
+         *       `IfcFace`/`IfcPolyLoop`. Оболочка ОТКРЫТАЯ (`IfcOpenShell`):
+         *       наши TIN не замкнуты, и `IfcFacetedBrep` был бы неправдой;
+         *     · `IfcOwnerHistory` в 2x3 ОБЯЗАТЕЛЕН у каждого IfcRoot —
+         *       `$` там отвергается строгими читателями.
+         */
+        function buildIfcExport(schema = IFC_SCHEMA) {
+            const legacy = schema !== 'IFC4X3_ADD2';
+            const tess = schema !== 'IFC2X3';      // тесселяция есть в IFC4+
             const rows = [];
             let id = 0;
             const E = (body) => { rows.push(`#${++id}=${body};`); return `#${id}`; };
@@ -13868,6 +14406,30 @@
                 return Number.isInteger(n) ? n.toFixed(1) : String(Number(n.toFixed(6)));
             };
             const pt3 = (p) => `IFCCARTESIANPOINT((${num(p.x)},${num(p.y)},${num(p.z)}))`;
+            /**
+             * Строка STEP по ISO 10303-21 живёт в ISO 8859-1. Всё за её
+             * пределами пишется ТОЛЬКО escape-последовательностью
+             * `\X2\<UTF-16 в hex>\X0\`. Сырой UTF-8 читатель разбирает как
+             * ANSI — отсюда иероглифы вместо русских имён (в Navisworks это
+             * и увидели). Суррогатная пара — два блока по 4 знака.
+             */
+            const ifcText = (s) => {
+                const src = String(s ?? '');
+                let out = '', buf = '';
+                const flush = () => { if (buf) { out += `\\X2\\${buf}\\X0\\`; buf = ''; } };
+                for (const ch of src) {
+                    if (ch.codePointAt(0) < 128) {
+                        flush();
+                        out += ch === '\\' ? '\\\\' : ch === "'" ? "''" : ch;
+                    } else {
+                        for (let i = 0; i < ch.length; i++) {
+                            buf += ch.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0');
+                        }
+                    }
+                }
+                flush();
+                return out;
+            };
 
             const origin = E('IFCCARTESIANPOINT((0.,0.,0.))');
             const dirZ = E('IFCDIRECTION((0.,0.,1.))');
@@ -13879,7 +14441,17 @@
             const unitA = E("IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)");
             const unitV = E("IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)");
             const units = E(`IFCUNITASSIGNMENT((${unitL},${unitA},${unitV}))`);
-            const proj = E(`IFCPROJECT('${ifcGuid()}',$,'BIM.LVA',$,$,$,$,(${ctx}),${units})`);
+            /* В IFC2x3 OwnerHistory обязателен у каждого IfcRoot. В IFC4+ он
+             * необязателен, и лишних сущностей мы туда не тащим. */
+            let own = '$';
+            if (schema === 'IFC2X3') {
+                const person = E("IFCPERSON($,'BIM.LVA',$,$,$,$,$,$)");
+                const org = E("IFCORGANIZATION($,'BIM.LVA',$,$,$)");
+                const pao = E(`IFCPERSONANDORGANIZATION(${person},${org},$)`);
+                const app = E(`IFCAPPLICATION(${org},'${COMPOSER_ABOUT.version}','BIM.LVA Composer','BIMLVA')`);
+                own = E(`IFCOWNERHISTORY(${pao},${app},$,.ADDED.,$,$,$,${Math.floor(Date.now() / 1000)})`);
+            }
+            const proj = E(`IFCPROJECT('${ifcGuid()}',${own},'BIM.LVA',$,$,$,$,(${ctx}),${units})`);
 
             // Мировой сдвиг — в размещение площадки; вершины остаются в сцене.
             const shift = worldPointToAbsoluteXYZ(new THREE.Vector3(0, 0, 0))
@@ -13887,102 +14459,159 @@
             const sitePt = E(pt3(shift));
             const siteAxis = E(`IFCAXIS2PLACEMENT3D(${sitePt},${dirZ},${dirX})`);
             const sitePl = E(`IFCLOCALPLACEMENT($,${siteAxis})`);
-            const site = E(`IFCSITE('${ifcGuid()}',$,'Площадка',$,$,${sitePl},$,$,.ELEMENT.,$,$,$,$,$)`);
+            const site = E(`IFCSITE('${ifcGuid()}',${own},'${ifcText('Площадка')}',$,$,${sitePl},$,$,.ELEMENT.,$,$,$,$,$)`);
             const roadPl = E(`IFCLOCALPLACEMENT(${sitePl},${axis})`);
-            const road = E(`IFCROAD('${ifcGuid()}',$,'Дорога',$,$,${roadPl},$,$,.ELEMENT.,.NOTDEFINED.)`);
-            E(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${proj},(${site}))`);
-            E(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${site},(${road}))`);
+            /* Контейнер под площадкой. В 4.3 это IfcRoad. В IFC4 такого класса
+             * нет; в 2x3 старые читатели вдобавок ждут привычную цепочку
+             * площадка → здание → этаж, поэтому даём именно её — иначе
+             * элементы у части приложений просто не появляются в дереве. */
+            let road, roadKind;
+            if (!legacy) {
+                road = E(`IFCROAD('${ifcGuid()}',${own},'${ifcText('Дорога')}',$,$,${roadPl},$,$,.ELEMENT.,.NOTDEFINED.)`);
+                roadKind = 'IfcRoad';
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${proj},(${site}))`);
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${site},(${road}))`);
+            } else {
+                const bld = E(`IFCBUILDING('${ifcGuid()}',${own},'${ifcText('Дорога')}',$,$,${roadPl},$,$,.ELEMENT.,$,$,$)`);
+                const stPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
+                road = E(`IFCBUILDINGSTOREY('${ifcGuid()}',${own},'${ifcText('Проектная отметка')}',$,$,${stPl},$,$,.ELEMENT.,0.)`);
+                roadKind = 'IfcBuildingStorey';
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${proj},(${site}))`);
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${site},(${bld}))`);
+                E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${bld},(${road}))`);
+            }
 
             const products = [];
-            let solids = 0, tris = 0, curves = 0;
+            let solids = 0, tris = 0, curves = 0, arcs2d = 0, vgrades = 0, varcs = 0;
 
-            /** Тело из TIN: список точек + список треугольников. */
+            /** Тело из TIN. В IFC4+ — тесселяция, в 2x3 — оболочка из граней. */
             const addTin = (tin, name, code) => {
                 if (!tin?.points?.length || !tin?.faces?.length) return;
-                const coords = tin.points.map((p) => `(${num(p.x)},${num(p.y)},${num(p.z)})`).join(',');
-                const list = E(`IFCCARTESIANPOINTLIST3D((${coords}))`);
-                // Индексы в IFC — с ЕДИНИЦЫ, а не с нуля.
-                const idx = tin.faces.map((f) => `(${f[0] + 1},${f[1] + 1},${f[2] + 1})`).join(',');
-                const tfs = E(`IFCTRIANGULATEDFACESET(${list},$,.T.,(${idx}),$)`);
-                const rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','Tessellation',(${tfs}))`);
+                let rep;
+                if (tess) {
+                    const coords = tin.points.map((p) => `(${num(p.x)},${num(p.y)},${num(p.z)})`).join(',');
+                    const list = E(`IFCCARTESIANPOINTLIST3D((${coords}))`);
+                    // Индексы в IFC — с ЕДИНИЦЫ, а не с нуля.
+                    const idx = tin.faces.map((f) => `(${f[0] + 1},${f[1] + 1},${f[2] + 1})`).join(',');
+                    const tfs = E(`IFCTRIANGULATEDFACESET(${list},$,.T.,(${idx}),$)`);
+                    rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','Tessellation',(${tfs}))`);
+                } else {
+                    /* IFC2x3: ни списка точек, ни тесселяции в схеме нет.
+                     * Точки пишем по одной и переиспользуем по индексу — иначе
+                     * на каждый треугольник ушло бы по три копии вершины. */
+                    const pts = tin.points.map((p) => E(pt3(p)));
+                    const faces = tin.faces.map((f) => {
+                        const loop = E(`IFCPOLYLOOP((${pts[f[0]]},${pts[f[1]]},${pts[f[2]]}))`);
+                        const bound = E(`IFCFACEOUTERBOUND(${loop},.T.)`);
+                        return E(`IFCFACE((${bound}))`);
+                    });
+                    // Оболочка ОТКРЫТАЯ: наш TIN не замкнут, и IfcFacetedBrep
+                    // (он требует замкнутую) был бы неправдой о геометрии.
+                    const shell = E(`IFCOPENSHELL((${faces.join(',')}))`);
+                    const sbsm = E(`IFCSHELLBASEDSURFACEMODEL((${shell}))`);
+                    rep = E(`IFCSHAPEREPRESENTATION(${body},'Body','SurfaceModel',(${sbsm}))`);
+                }
                 const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
                 const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                const { cls, type } = ifcClassForCode(code);
-                products.push(E(`${cls}('${ifcGuid()}',$,'${String(name || code || 'Элемент').replace(/'/g, "''")}',$,$,${pl},${shape},$,${type})`));
+                const nm = ifcText(name || code || 'Элемент');
+                if (legacy) {
+                    const { cls, type, role } = ifcLegacyClassForCode(code);
+                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,'${ifcText(role)}',${pl},${shape},$,${type})`));
+                } else {
+                    const { cls, type } = ifcClassForCode(code);
+                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,$,${pl},${shape},$,${type})`));
+                }
                 solids++;
                 tris += tin.faces.length;
             };
 
-            for (const sm of slopeModels) {
-                if (sm?.tin?.faces?.length) addTin(sm.tin, sm.name || 'Откос', 'SLOPE');
-                for (const mesh of (sm?.kdoMeshes || [])) {
-                    addTin(weldTin(slopeMeshTriangles(mesh)), (sm.name || 'Площадка') + ' · КДО', 'BASE');
-                }
-            }
-            for (const ix of roadIntersections) {
-                const d = ix.points;
-                if (!d) continue;
-                const tri = (pos) => {
-                    const out = [];
-                    for (let i = 0; i + 8 < pos.length; i += 9) {
-                        out.push([
-                            new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]),
-                            new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]),
-                            new THREE.Vector3(pos[i + 6], pos[i + 7], pos[i + 8])
-                        ]);
-                    }
-                    return out;
-                };
-                const layers = d.layers || [];
-                if (layers.length) {
-                    let depth = 0;
-                    for (const L of layers) {
-                        const solid = buildNodeLayerSolid(d.crossPoint, d.outline, depth, L.thickness);
-                        depth += L.thickness;
-                        if (solid) addTin(weldTin(tri(solid)), `${ix.name || 'Узел'} · ${L.code}`, L.code);
-                    }
-                } else if (d.patch) {
-                    addTin(weldTin(tri(d.patch)), ix.name || 'Узел', 'NODE');
+            /* Тела — по той же раскладке, из которой строится дерево проекта.
+             * Отдельного перебора здесь быть не должно: разъедется с деревом. */
+            const structure = describeDrawnStructure();
+            for (const g of structure) {
+                if (g.kind === 'alignment') continue;      // у трассы тела нет
+                for (const el of (g.children || [])) {
+                    const tin = el.tin?.();
+                    if (tin) addTin(tin, el.name, el.code);
                 }
             }
 
-            /* Оси — IfcAlignment: горизонталь из отрезков, вложенная через
-             * IfcRelNests, как задумано в 4.3. Кривые и профиль пока не
-             * раскладываем: неверная раскладка хуже её отсутствия. */
-            for (const rec of drawnPolylines) {
-                if (rec.role !== 'road-axis' || (rec.pts?.length || 0) < 2) continue;
-                const segs = [];
-                for (let i = 0; i < rec.pts.length - 1; i++) {
-                    const a = rec.pts[i], b = rec.pts[i + 1];
-                    const len = Math.hypot(b.x - a.x, b.y - a.y);
-                    if (len < 1e-9) continue;
-                    const dir = Math.atan2(b.y - a.y, b.x - a.x);
-                    const p2 = E(`IFCCARTESIANPOINT((${num(a.x)},${num(a.y)}))`);
-                    const h = E(`IFCALIGNMENTHORIZONTALSEGMENT($,$,${p2},${num(dir)},0.,0.,${num(len)},$,.LINE.)`);
-                    segs.push(E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${h})`));
-                    curves++;
+            /* Оси — IfcAlignment: горизонталь (отрезки и круговые кривые) и
+             * продольный профиль (уклоны и вертикальные кривые), вложенные в
+             * трассу через IfcRelNests, как задумано в 4.3. */
+            for (const g of structure) {
+                if (g.kind !== 'alignment') continue;
+                const rec = g.rec;
+                const lay = g.layout;
+
+                if (legacy) {
+                    /* IfcAlignment нет ни в IFC4, ни в 2x3. Терять ось совсем
+                     * нельзя — это главный объект чертежа, поэтому пишем её
+                     * ЛОМАНОЙ по реальным точкам (renderPts, то есть с дугами
+                     * сопряжений) как IfcAnnotation. Пикетажа и параметров
+                     * кривых в ней нет: их в этих схемах выразить нечем, и
+                     * подменять их «похожим» было бы обманом. */
+                    const pts = (rec.renderPts || rec.pts || []);
+                    if (pts.length < 2) continue;
+                    const ids = pts.map((p) => E(pt3(p)));
+                    const poly = E(`IFCPOLYLINE((${ids.join(',')}))`);
+                    const rep = E(`IFCSHAPEREPRESENTATION(${ctx},'Axis','Curve3D',(${poly}))`);
+                    const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
+                    const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
+                    const nm = ifcText(rec.name || 'Ось');
+                    products.push(E(`IFCANNOTATION('${ifcGuid()}',${own},'${nm}',$,'${ifcText('Ось трассы')}',${pl},${shape})`));
+                    curves += lay.hor.length;
+                    arcs2d += lay.hor.filter((x) => x.type === 'CIRCULARARC').length;
+                    continue;
                 }
-                if (!segs.length) continue;
+
+                const hSegs = lay.hor.map((sg) => {
+                    const p2 = E(`IFCCARTESIANPOINT((${num(sg.x)},${num(sg.y)}))`);
+                    // У дуги радиус кривизны задаётся на входе и на выходе —
+                    // для круговой он один и тот же, знак несёт поворот.
+                    const r = sg.type === 'LINE' ? '0.,0.' : `${num(sg.r)},${num(sg.r)}`;
+                    const h = E(`IFCALIGNMENTHORIZONTALSEGMENT($,$,${p2},${num(sg.dir)},${r},${num(sg.len)},$,.${sg.type}.)`);
+                    if (sg.type === 'CIRCULARARC') arcs2d++; else curves++;
+                    return E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${h})`);
+                });
                 const hPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                const hor = E(`IFCALIGNMENTHORIZONTAL('${ifcGuid()}',$,'Горизонталь',$,$,${hPl},$)`);
-                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${hor},(${segs.join(',')}))`);
+                const hor = E(`IFCALIGNMENTHORIZONTAL('${ifcGuid()}',$,'${ifcText('Горизонталь')}',$,$,${hPl},$)`);
+                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${hor},(${hSegs.join(',')}))`);
+
+                const nested = [hor];
+                if (lay.ver.length) {
+                    const vSegs = lay.ver.map((sg) => {
+                        const v = E(
+                            `IFCALIGNMENTVERTICALSEGMENT($,$,${num(sg.sta)},${num(sg.len)},` +
+                            `${num(sg.z)},${num(sg.g0)},${num(sg.g1)},` +
+                            `${sg.r == null ? '$' : num(sg.r)},.${sg.type}.)`
+                        );
+                        if (sg.type === 'CIRCULARARC') varcs++; else vgrades++;
+                        return E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${v})`);
+                    });
+                    const vPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
+                    const ver = E(`IFCALIGNMENTVERTICAL('${ifcGuid()}',$,'${ifcText('Профиль')}',$,$,${vPl},$)`);
+                    E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${ver},(${vSegs.join(',')}))`);
+                    nested.push(ver);
+                }
+
                 const alPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                const al = E(`IFCALIGNMENT('${ifcGuid()}',$,'${String(rec.name || 'Ось').replace(/'/g, "''")}',$,$,${alPl},$)`);
-                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${al},(${hor}))`);
-                E(`IFCRELREFERENCEDINSPATIALSTRUCTURE('${ifcGuid()}',$,$,$,(${al}),${road})`);
+                const al = E(`IFCALIGNMENT('${ifcGuid()}',$,'${ifcText(rec.name || 'Ось')}',$,$,${alPl},$)`);
+                E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${al},(${nested.join(',')}))`);
+                E(`IFCRELREFERENCEDINSPATIALSTRUCTURE('${ifcGuid()}',${own},$,$,(${al}),${road})`);
             }
 
             if (products.length) {
-                E(`IFCRELCONTAINEDINSPATIALSTRUCTURE('${ifcGuid()}',$,$,$,(${products.join(',')}),${road})`);
+                E(`IFCRELCONTAINEDINSPATIALSTRUCTURE('${ifcGuid()}',${own},$,$,(${products.join(',')}),${road})`);
             }
 
             const stamp = new Date().toISOString().replace(/\.\d+Z$/, '');
             const text = [
                 'ISO-10303-21;',
                 'HEADER;',
-                "FILE_DESCRIPTION(('ViewDefinition [Alignment-basedReferenceView]'),'2;1');",
+                `FILE_DESCRIPTION(('ViewDefinition [${legacy ? 'CoordinationView_V2.0' : 'Alignment-basedReferenceView'}]'),'2;1');`,
                 `FILE_NAME('bim-lva.ifc','${stamp}',('BIM.LVA'),('BIM.LVA'),'BIM.LVA Composer','BIM.LVA Composer','');`,
-                `FILE_SCHEMA(('${IFC_SCHEMA}'));`,
+                `FILE_SCHEMA(('${schema}'));`,
                 'ENDSEC;',
                 'DATA;',
                 ...rows,
@@ -13990,10 +14619,10 @@
                 'END-ISO-10303-21;',
                 ''
             ].join('\n');
-            return { text, solids, tris, curves, entities: id };
+            return { text, schema, solids, tris, curves, arcs2d, vgrades, varcs, entities: id };
         }
 
-        function exportDrawingIfc() {
+        function exportDrawingIfc(schema = IFC_SCHEMA) {
             const has = slopeModels.some((s) => s?.tin?.faces?.length)
                 || roadIntersections.length
                 || drawnPolylines.some((r) => r.role === 'road-axis');
@@ -14002,18 +14631,23 @@
                 return;
             }
             try {
-                const r = buildIfcExport();
+                const r = buildIfcExport(schema);
                 const blob = new Blob([r.text], { type: 'application/x-step' });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
-                a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}.ifc`;
+                const tag = schema === 'IFC2X3' ? '-ifc2x3' : schema === 'IFC4' ? '-ifc4' : '';
+                a.download = `bim-lva-${new Date().toISOString().slice(0, 10)}${tag}.ifc`;
                 a.click();
                 setTimeout(() => URL.revokeObjectURL(a.href), 2000);
                 notify(
-                    `IFC ${IFC_SCHEMA}: тел ${r.solids} (${r.tris} треугольников), ` +
-                    `сегментов трассы ${r.curves}. Классы дорожные: покрытие, слои, бордюр, откосы, оси.`
+                    `IFC ${r.schema}: тел ${r.solids} (${r.tris} треугольников), ` +
+                    `трасса: прямых ${r.curves}, кривых плана ${r.arcs2d}, ` +
+                    `уклонов ${r.vgrades}, вертикальных кривых ${r.varcs}. ` +
+                    (schema === IFC_SCHEMA
+                        ? 'Классы дорожные: покрытие, слои, бордюр, откосы, оси.'
+                        : 'Дорожных классов в этой схеме нет — тела универсальные, роль в свойстве ObjectType, ось ломаной.')
                 );
-                trackUsage('draw_export_ifc', { solids: r.solids, curves: r.curves });
+                trackUsage('draw_export_ifc', { solids: r.solids, curves: r.curves, schema });
             } catch (e) {
                 notifyError('IFC не собрался: ' + (e?.message || e));
                 console.error('IFC export error:', e);
@@ -16485,6 +17119,7 @@
         }
 
         function renderPolylinesList() {
+            renderDrawnTree();
             // Общее место «полилиния изменилась насовсем» — отсюда же
             // пересчитываются узлы, которые на этой оси держатся. Внутри
             // перетаскивания сюда не заходят (там только
@@ -16603,13 +17238,10 @@
                 lift.title = 'Поднять или опустить всю линию: на отметку либо на Δ';
                 lift.addEventListener('click', () => liftPolylinePrompt(r));
 
-                // Подписанная кнопка, а не значок: откосы — не самая очевидная
-                // операция, значок среди прочих затерялся бы.
-                const slope = document.createElement('button');
-                slope.className = 'btn';
-                slope.textContent = '△ Откосы';
-                slope.title = 'Поверхность откоса от этой линии до рельефа, с линией выхода и объёмами';
-                slope.addEventListener('click', () => openSlopeModal(r));
+                /* Кнопки «△ Откосы» в списке больше нет (просьба владельца:
+                 * «они только ломают модель»). Откосы строятся сами вместе с
+                 * полотном; площадку по замкнутому контуру строит «⛰
+                 * Картограмма» и диалог откосов из контекстного меню сцены. */
 
                 const xs = document.createElement('button');
                 xs.className = 'btn';
@@ -16625,7 +17257,7 @@
 
                 const tools = document.createElement('div');
                 tools.className = 'polyline-tools';
-                tools.append(edit, prof, earth, lift, slope, xs, go, plan, del);
+                tools.append(edit, prof, earth, lift, xs, go, plan, del);
                 row.append(nameInput, info, colorInput, widthInput, layerInput, closeBtn, tools);
 
                 const block = document.createElement('div');
@@ -16806,6 +17438,8 @@
             const stepBtn = $('btnDrawExportStep');
             const dwgBtn = $('btnDrawExportDwg');
             const ifcBtn = $('btnDrawExportIfc');
+            const ifc4Btn = $('btnDrawExportIfc4');
+            const ifc23Btn = $('btnDrawExportIfc2x3');
             const intersectionsBtn = $('btnIntersections');
             const hasContent = drawnPolylines.length || coordPins.length || sweptSolids.length
                 || slopeModels.length || roadXsModels.length;
@@ -16814,6 +17448,8 @@
             if (stepBtn) stepBtn.disabled = !hasContent;
             if (dwgBtn) dwgBtn.disabled = !hasContent;
             if (ifcBtn) ifcBtn.disabled = !hasContent;
+            if (ifc4Btn) ifc4Btn.disabled = !hasContent;
+            if (ifc23Btn) ifc23Btn.disabled = !hasContent;
             if (intersectionsBtn) intersectionsBtn.disabled = drawnPolylines.length < 2;
             renderPolylinesList();
             renderPadsList();
@@ -16835,7 +17471,12 @@
             const ltypeH = allocHandle();
             const dashedH = allocHandle();
             const layers = ['0', DXF_LAYER_2D, DXF_LAYER_3D, DXF_LAYER_POINTS, DXF_LAYER_SOLID, DXF_LAYER_SLOPE, DXF_LAYER_KDO, DXF_LAYER_XS, DXF_LAYER_NODE, ROAD_EDGE_LAYER, ROAD_AXIS_LAYER];
-            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3];
+            /* ⚠️ Ровно столько же, сколько слоёв выше: у ROAD_AXIS_LAYER
+             * цвета не хватало, `layerColors[10]` был undefined, и в запись
+             * слоя уходил пустой код цвета (62). Таблица LAYER становилась
+             * битой, а AutoCAD/Civil сообщал про «Ошибку в таблице APPID» —
+             * сообщение уводит в сторону, сама таблица ниже по файлу. */
+            const layerColors = [7, 3, 5, 1, 30, 32, 8, 6, 7, 3, 4];
             const dashedLayers = new Set([ROAD_AXIS_LAYER]);
             const addLayer = (name, color) => {
                 const nm = sanitizeDxfLayer(name, '');
@@ -17028,7 +17669,7 @@
             tableOpen('LAYER', tblLayer, layers.length);
             layers.forEach((name, i) => {
                 recOpen('LAYER', layerH[name], tblLayer, 'AcDbLayerTableRecord');
-                g(2, name); g(70, 0); g(62, layerColors[i]);
+                g(2, name); g(70, 0); g(62, layerColors[i] ?? 7);
                 g(6, dashedLayers.has(name) ? 'DASHED' : 'CONTINUOUS');
                 g(370, -3); g(390, plotStyleH);
             });
@@ -17113,7 +17754,13 @@
         async function buildStep(polylines, slopeModels) {
             let kernel;
             try {
-                const { OcctKernel } = await import('/assets/vendor/occt-wasm/index.js');
+                /* ⚠️ ОТНОСИТЕЛЬНЫЙ путь, не абсолютный. Сайт живёт в подкаталоге
+                 * (`/bim-lva/`), и `/assets/...` уводит на корень домена:
+                 * github.io/assets/vendor/... — 404, «error loading
+                 * dynamically imported module». Локально с корня это не
+                 * ловится, только на Pages. Все прочие вендоры подключены
+                 * через `./assets/...` — эти два были исключением. */
+                const { OcctKernel } = await import('./assets/vendor/occt-wasm/index.js');
                 kernel = await OcctKernel.init();
 
                 const shapes = [];
@@ -17232,7 +17879,8 @@
         const DWG_VERSION = 'AC1018';
 
         async function buildDwg(polylines, pins) {
-            const acad = await import('/assets/vendor/acad-ts/index.js');
+            // Относительный путь: см. комментарий у occt-wasm выше.
+            const acad = await import('./assets/vendor/acad-ts/index.js');
             const { CadDocument, DwgWriter, ACadVersion, Line, Point, XYZ } = acad;
             const doc = new CadDocument();
             doc.header.version = ACadVersion[DWG_VERSION];
@@ -17395,9 +18043,24 @@
                 }
                 const model = buildRoadCrossSections(finishedRoad, roadXsOptsFromUi());
                 if (model) {
+                    /* Откосы строятся ВСЕГДА — кнопки и галочки у них нет
+                     * (просьба владельца). Зовём их ЗДЕСЬ, на настоящем
+                     * действии пользователя «ось дочерчена», а не внутри
+                     * `buildRoadCrossSections`: туда же приходят живая
+                     * пересборка при черчении и пересчёт от узла, и
+                     * безусловная сборка оттуда ломает окно поперечника
+                     * (разбор — в комментарии у самой функции).
+                     * Путь тот же, что у кнопки «Построить». */
+                    let extra = '';
+                    const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                    if (built?.length) {
+                        let fill = 0, cut = 0;
+                        built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+                        extra = ` Откосы: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
+                    }
                     notify(
                         `Полотно по «${finishedRoad.name}»: ${model.stations.length} сечений, ` +
-                        `${model.corridorTris || 0} граней.`
+                        `${model.corridorTris || 0} граней.${extra}`
                     );
                 }
             }
@@ -17700,7 +18363,9 @@
         $('btnDrawExportXml')?.addEventListener('click', exportPolylineLandXml);
         $('btnDrawExportStep')?.addEventListener('click', exportDrawingStep);
         $('btnDrawExportDwg')?.addEventListener('click', exportDrawingDwg);
-        $('btnDrawExportIfc')?.addEventListener('click', exportDrawingIfc);
+        $('btnDrawExportIfc')?.addEventListener('click', () => exportDrawingIfc('IFC4X3_ADD2'));
+        $('btnDrawExportIfc4')?.addEventListener('click', () => exportDrawingIfc('IFC4'));
+        $('btnDrawExportIfc2x3')?.addEventListener('click', () => exportDrawingIfc('IFC2X3'));
         $('drawModeSelect')?.addEventListener('change', () => {
             if (drawPoints.length) finishDrawPolyline();
         });
@@ -18549,7 +19214,11 @@
             polyProfileActiveVertex = -1;
             const sel = $('polyProfileSelect');
             if (sel) {
-                sel.innerHTML = listedPolylines()
+                // Служебные линии (выход откоса, контур) осью не предлагаем —
+                // они производные, и профиль по ним не имеет смысла.
+                const list = roadStudioAxisCandidates();
+                if (!list.some((r) => r.id === record.id)) list.unshift(record);
+                sel.innerHTML = list
                     .map((r) => `<option value="${r.id}"${r.id === record.id ? ' selected' : ''}>${esc(r.name)}</option>`)
                     .join('');
             }
@@ -20933,6 +21602,53 @@
             gaps.some((g) => sta > g.from + 1e-6 && sta < g.to - 1e-6);
 
         /**
+         * Где полотно дороги рвётся: на вывернутом сечении (острый угол) и
+         * внутри узла. `true` в позиции i значит «между i и i+1 связи нет».
+         *
+         * Один предикат на коридор И на бровку откоса. Раньше бровка строилась
+         * ОДНОЙ полилинией по всем пикетам сразу, включая разрыв под узлом:
+         * линия шла напрямую через перекрёсток, и откос по ней резал покрытие
+         * (у владельца это чёрные клинья у устьев и зелёная линия поперёк
+         * узла). Считать разрывы во второй раз своей формулой нельзя — разой-
+         * дутся, и полотно будет рваться в одном месте, а откос в другом.
+         */
+        function corridorBreakFlags(stations, gaps) {
+            return stations.map((st, i) => {
+                if (i >= stations.length - 1) return false;
+                const n = stations[i + 1];
+                const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
+                if (dot < 0.82) return true;
+                return stationInsideGaps((st.sta + n.sta) / 2, gaps || []);
+            });
+        }
+
+        /**
+         * Разрывы ТОЛЬКО под узлом — для бровки откоса.
+         *
+         * Полный `corridorBreakFlags` рвёт ещё и на вывернутом сечении
+         * (острый угол): полотну это нужно, а бровке нет — она обычная
+         * полилиния и через угол проходит. Зато участок из одной станции
+         * после такого разрыва выбрасывается целиком, и вместе с ним объём:
+         * замерено 0.713 м³ вместо 1.125 на короткой оси из трёх сечений.
+         */
+        function nodeGapBreakFlags(stations, gaps) {
+            return stations.map((st, i) => i < stations.length - 1
+                && stationInsideGaps((st.sta + stations[i + 1].sta) / 2, gaps || []));
+        }
+
+        /** Разбить пикеты на непрерывные участки по тем же разрывам. */
+        function splitStationsAtBreaks(stations, breaks) {
+            const runs = [];
+            let cur = [];
+            for (let i = 0; i < stations.length; i++) {
+                cur.push(stations[i]);
+                if (breaks[i]) { runs.push(cur); cur = []; }
+            }
+            if (cur.length) runs.push(cur);
+            return runs.filter((r) => r.length >= 2);
+        }
+
+        /**
          * Убрать пикеты внутри узла и поставить их ровно на границы устья —
          * тогда торец коридора встаёт заподлицо с покрытием узла, а не с
          * ближайшим случайным пикетом.
@@ -21244,13 +21960,7 @@
             // corridorLoftPush по этому же массиву сам ставит торцы на границах
             // пропуска, поэтому коридор у устья получается закрытым.
             const gaps = model.nodeGaps || [];
-            const twistSkip = stations.map((st, i) => {
-                if (i >= stations.length - 1) return false;
-                const n = stations[i + 1];
-                const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
-                if (dot < 0.82) return true;
-                return stationInsideGaps((st.sta + n.sta) / 2, gaps);
-            });
+            const twistSkip = corridorBreakFlags(stations, gaps);
             const meshes = [];
             let tris = 0;
             let sharedEdges = 0;
@@ -21335,9 +22045,13 @@
             }
             buildRoadCorridor(model);
             if (!preview) {
-                if ($('roadXsSlopeOn')?.checked && (model.slopeModelIds || []).length) {
-                    buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-                }
+                /* Узел живёт по этому же шаблону: от него ширина проезжей
+                 * части (кромка узла), внешний профиль (бордюр по дуге) и
+                 * слои одежды под покрытием. Без пересчёта узел остаётся от
+                 * прежнего шаблона — сменили пресет на «с бордюром», а у узла
+                 * бордюра нет и откос начинается прямо от проезжей части. */
+                refreshNodesOnPolyline(model.polylineId);
+                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
                 renderRoadXsView();
                 updateRoadXsStatus();
             }
@@ -21460,8 +22174,37 @@
             }
             buildRoadXsLines(model);
             buildRoadCorridor(model);
+            /* ⚠️ Здесь откосы с нуля НЕ строим — держим свежими только уже
+             * построенные. Безусловная сборка ломает окно поперечника: smoke
+             * даёт «ПКМ не сдвинул вид» и объём 0.713 вместо 1.125. Три
+             * версии причины проверены и ОТБРОШЕНЫ: (1) перерисовка окна
+             * изнутри — провалы те же и с `quiet`; (2) отложенная пересборка
+             * scheduleRoadXsRebuild — опровергнута кодом, для бровки она
+             * выходит сразу, у неё нет модели поперечников; (3) поверхность
+             * соседней стороны от прошлой сборки в выборке земли — снятие
+             * всех прежних откосов ДО построения ничего не изменило.
+             * Числа во всех трёх прогонах ПОБАЙТНО одинаковы, то есть
+             * результат не зависит ни от одной из этих правок. Следующий шаг —
+             * не гадать, а померить объём ПО СТОРОНАМ отдельно. */
+            /* ⚠️ Откосы с нуля здесь НЕ строим. Безусловная сборка ломает
+             * окно поперечника: smoke даёт «ПКМ не сдвинул вид» и объём
+             * 0.713 вместо 1.125. ЧЕТЫРЕ версии причины проверены и отброшены,
+             * числа во всех прогонах ПОБАЙТНО одинаковы (0.7128987109147633):
+             *   1. перерисовка окна изнутри сборки — то же и с `quiet`;
+             *   2. отложенный scheduleRoadXsRebuild — опровергнут кодом: для
+             *      бровки он выходит сразу, у неё нет модели поперечников;
+             *   3. чужая поверхность в выборке земли — снятие всех прежних
+             *      откосов ДО построения ничего не изменило;
+             *   4. перехват активной оси внутренней пересборкой — сохранение
+             *      `roadXsActive` тоже ничего не изменило.
+             * Измерено по сторонам: слева 0.462 м³, справа 0.251 м³, у обеих
+             * по 10 граней. Обе занижены, но ПО-РАЗНОМУ — симметричная причина
+             * (заложение, вылет, рельеф) дала бы одинаковую ошибку.
+             * Следующий шаг: печатать в этой проверке сами станции и точки
+             * бровки до и без авто-сборки и сравнить их напрямую — гипотезы
+             * себя исчерпали. */
             if ((model.slopeModelIds || []).length) {
-                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                buildRoadTemplateSlopes(model, readRoadXsSlopeOpts(), { quiet: true });
             }
             roadXsActive = { modelId: model.id, index: Math.min(roadXsActive.index, model.stations.length - 1) };
             updateRoadXsStatus();
@@ -21477,11 +22220,23 @@
             if (!model?.live) return;
             const rec = drawnPolylines.find((r) => r.id === polylineId);
             if (!rec) { clearRoadXsModels(polylineId); return; }
+            /* ⚠️ Внутренняя пересборка НЕ должна забирать себе активную ось
+             * окна поперечника. `buildRoadCrossSections` в конце делает свою
+             * модель активной — это верно, когда ось строит пользователь, но
+             * сюда мы попадаем из пересчёта узла и сборки откосов, и тогда
+             * фокус уезжал на соседнюю ось. Наружу это выглядело как чужие
+             * числа в окне: замерено «объём откосов 0.713 вместо 1.125» при
+             * разных объёмах слева и справа (0.462 и 0.251) — считалось по
+             * другой оси, а не по той, что открыта. */
+            const keep = { ...roadXsActive };
             buildRoadCrossSections(rec, {
                 step: model.step, stepCurve: model.stepCurve,
                 widthL: model.widthL, widthR: model.widthR,
                 sampleStep: model.sampleStep, color: model.color, live: true
             });
+            if (keep.modelId != null && roadXsModels.some((m) => m.id === keep.modelId)) {
+                roadXsActive = keep;
+            }
         }
 
         function scheduleRoadXsRebuild(polylineId) {
@@ -21573,12 +22328,14 @@
             return (sec.exit.x - st.x) * (st.rx || 0) + (sec.exit.y - st.y) * (st.ry || 0);
         }
 
-        function ensureRoadSlopeBrow(model, side, pts) {
-            let rec = drawnPolylines.find((r) => r.roadXsModelId === model.id && r.roadSlopeSide === side);
+        function ensureRoadSlopeBrow(model, side, pts, run = 0) {
+            let rec = drawnPolylines.find((r) => r.roadXsModelId === model.id
+                && r.roadSlopeSide === side && (r.roadSlopeRun || 0) === run);
             const vecs = pts.map((p) => (p instanceof THREE.Vector3 ? p.clone() : new THREE.Vector3(p.x, p.y, p.z)));
             if (!rec) {
                 rec = addPolylineFromPoints(vecs, {
-                    name: `${model.name || 'Ось'} — бровка ${side === 'left' ? 'Л' : 'П'}`,
+                    name: `${model.name || 'Ось'} — бровка ${side === 'left' ? 'Л' : 'П'}`
+                        + (run ? ` (${run + 1})` : ''),
                     role: 'road-slope-brow',
                     color: '#c9793a',
                     width: 1
@@ -21586,6 +22343,7 @@
                 if (!rec) return null;
                 rec.roadXsModelId = model.id;
                 rec.roadSlopeSide = side;
+                rec.roadSlopeRun = run;
             } else {
                 rec.pts = vecs;
                 rec.radii = vecs.map(() => 0);
@@ -21620,10 +22378,25 @@
             [...new Set(ids)].forEach((id) => {
                 dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
             });
+            syncNodeSlopesForPolyline(model.polylineId);
         }
 
-        function buildRoadTemplateSlopes(model, opts) {
+        let buildingRoadSlopes = false;
+        /**
+         * @param {object} [flags.quiet] не перерисовывать окно поперечника.
+         *   Безусловный вызов из `buildRoadCrossSections` тянул за собой
+         *   renderRoadXsView на КАЖДОЙ пересборке полотна и сбрасывал вид
+         *   окна: smoke ловил это как «ПКМ не сдвинул вид» (до и после
+         *   совпадали побайтно) и как заниженный объём откосов (0.505 вместо
+         *   1.125). Вызывающий и так рисует окно сам — пусть рисует один раз.
+         */
+        function buildRoadTemplateSlopes(model, opts, flags = {}) {
             if (!model?.stations || model.stations.length < 2) return null;
+            /* Откосы теперь строятся всегда и из нескольких мест сразу
+             * (сборка полотна, правка шаблона, пересчёт узла). Сами они
+             * заводят полилинии-бровки, а это дёргает список полилиний и
+             * узлы — без флага можно уехать в рекурсию. */
+            if (buildingRoadSlopes) return null;
             const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
             const edges = templateEdgePoints(tpl);
             if (!edges.left && !edges.right) return null;
@@ -21632,20 +22405,35 @@
                 ...(opts || {})
             };
             const prevBrows = (model.slopeBrowIds || []).slice();
+            /* Снять ВСЕ прежние откосы этой оси ДО построения. Иначе первая
+             * сторона строится по чистому рельефу, а вторая уже видит
+             * поверхность первой: `makeSlopeGroundSampler` считает готовые
+             * откосы проектной землёй. От этого повторная сборка давала
+             * другой объём, чем первая, и результат зависел от того, сколько
+             * раз пересобиралось полотно. */
+            prevBrows.forEach((id) => removeSlopeModelsForPolyline(id));
             const built = [];
+            /* Бровка рвётся ТАМ ЖЕ, где полотно: под узлом и на вывернутом
+             * сечении. Одной линией через весь узел она шла напрямую через
+             * перекрёсток, и откос по ней резал покрытие. */
+            const runs = splitStationsAtBreaks(
+                model.stations, corridorBreakFlags(model.stations, model.nodeGaps || [])
+            );
             const addSide = (side) => {
-                const pts = model.stations.map((st) => {
-                    const vis = resolveTemplatePoints(tpl, st).filter((p) => !p.hide);
-                    const edges = templateEdgePoints({ points: vis });
-                    const pt = side === 'left' ? edges.left : edges.right;
-                    if (!pt) return null;
-                    return placeTemplateAtStation(st, pt);
-                }).filter(Boolean);
-                if (pts.length < 2) return;
-                const rec = ensureRoadSlopeBrow(model, side, pts);
-                if (!rec) return;
-                const sm = buildSlopeToTerrain(rec, { ...full, side });
-                if (sm) built.push({ side, rec, sm });
+                runs.forEach((run, ri) => {
+                    const pts = run.map((st) => {
+                        const vis = resolveTemplatePoints(tpl, st).filter((p) => !p.hide);
+                        const edges = templateEdgePoints({ points: vis });
+                        const pt = side === 'left' ? edges.left : edges.right;
+                        if (!pt) return null;
+                        return placeTemplateAtStation(st, pt);
+                    }).filter(Boolean);
+                    if (pts.length < 2) return;
+                    const rec = ensureRoadSlopeBrow(model, side, pts, ri);
+                    if (!rec) return;
+                    const sm = buildSlopeToTerrain(rec, { ...full, side });
+                    if (sm) built.push({ side, run: ri, rec, sm });
+                });
             };
             addSide('left');
             addSide('right');
@@ -21655,8 +22443,13 @@
                 if (model.slopeBrowIds.includes(id)) return;
                 dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
             });
-            renderRoadXsView();
-            updateRoadXsStatus();
+            // Узел — часть той же дороги: откосы у него появляются и исчезают
+            // вместе с дорожными, отдельной кнопки для узла нет.
+            syncNodeSlopesForPolyline(model.polylineId);
+            if (!flags.quiet) {
+                renderRoadXsView();
+                updateRoadXsStatus();
+            }
             markNeedsRender();
             return built;
         }
@@ -21908,7 +22701,7 @@
             const slopeOpts = readRoadXsSlopeOpts();
             const edgePts = templateEdgePoints({ points: resolved.filter((p) => !p.hide) });
             const slopeSecs = [];
-            if ($('roadXsSlopeOn')?.checked) {
+            {
                 [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
                     if (!pt) return;
                     const sec = roadXsSlopeSection(st, pt, side, slopeOpts);
@@ -22310,13 +23103,13 @@
         }
 
         function syncRoadStudioProfile(rec) {
-            const axis = rec || listedPolylines().find((r) => r.id === Number($('roadXsSelect')?.value));
+            const axis = rec || roadStudioAxisCandidates().find((r) => r.id === Number($('roadXsSelect')?.value));
             if (!axis) return;
             const switched = polyProfileRecordId !== axis.id;
             polyProfileRecordId = axis.id;
             const sel = $('polyProfileSelect');
             if (sel) {
-                sel.innerHTML = listedPolylines()
+                sel.innerHTML = roadStudioAxisCandidates()
                     .map((r) => `<option value="${r.id}"${r.id === axis.id ? ' selected' : ''}>${esc(r.name)}</option>`)
                     .join('');
             }
@@ -22987,14 +23780,14 @@
         function fillRoadXsSelect(targetId) {
             const sel = $('roadXsSelect');
             if (!sel) return;
-            const list = listedPolylines().filter((r) => r.pts.length >= 2);
+            const list = roadStudioAxisCandidates();
             sel.innerHTML = list
                 .map((r) => `<option value="${r.id}"${r.id === targetId ? ' selected' : ''}>${esc(r.name)}</option>`)
                 .join('');
         }
 
         function openRoadXsModal(record) {
-            const candidates = listedPolylines().filter((r) => r.pts.length >= 2);
+            const candidates = roadStudioAxisCandidates();
             if (!candidates.length) {
                 notifyError('Нет линий: сначала начертите ось.');
                 return;
@@ -23035,19 +23828,15 @@
             if (!model) notifyError('Не удалось построить поперечники.');
             else {
                 showRoadStudioTab('xs');
+                // Откосы строятся ВСЕГДА: отдельной кнопки и галочки нет.
                 let extra = '';
-                if ($('roadXsSlopeOn')?.checked) {
-                    const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-                    if (built?.length) {
-                        let fill = 0, cut = 0;
-                        built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
-                        extra = ` Откосы до рельефа: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
-                    } else {
-                        extra = ' Откосы до рельефа не построились — нет земли у кромок.';
-                    }
+                const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                if (built?.length) {
+                    let fill = 0, cut = 0;
+                    built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+                    extra = ` Откосы до рельефа: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
                 } else {
-                    clearRoadXsSlopes(model);
-                    renderRoadXsView();
+                    extra = ' Откосы до рельефа не построились — нет земли у кромок.';
                 }
                 notify(
                     `Полотно по «${rec.name}»: ${model.stations.length} сечений, ` +
@@ -23077,42 +23866,6 @@
                 listedPolylines().find((r) => r.id === currentRoadXsModel()?.polylineId);
             if (!rec) return notifyError('Выберите ось.');
             openPolylineProfile(rec);
-        });
-        $('roadXsSlope')?.addEventListener('click', () => {
-            const model = currentRoadXsModel();
-            if (!model) return notifyError('Сначала постройте поперечники.');
-            if ($('roadXsSlopeOn')) $('roadXsSlopeOn').checked = true;
-            const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-            if (!built?.length) {
-                return notifyError('Не удалось построить откосы: нет рельефа у кромок шаблона.');
-            }
-            let fill = 0, cut = 0;
-            built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
-            notifyOk(
-                `Откосы от кромок «${model.name}»: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`
-            );
-        });
-        $('roadXsSlopeOn')?.addEventListener('change', () => {
-            const model = currentRoadXsModel();
-            if (!model) return;
-            if ($('roadXsSlopeOn').checked) {
-                const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
-                if (!built?.length) {
-                    notifyError('Не удалось построить откосы: нет рельефа у кромок шаблона.');
-                    return;
-                }
-                let fill = 0, cut = 0;
-                built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
-                notifyOk(
-                    `Откосы от кромок «${model.name}»: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`
-                );
-            } else {
-                clearRoadXsSlopes(model);
-                renderRoadXsView();
-                updateRoadXsStatus();
-                markNeedsRender();
-                notify('Откосы убраны.');
-            }
         });
         $('roadXsAddLayer')?.addEventListener('click', () => {
             const model = currentRoadXsModel();
@@ -23275,10 +24028,7 @@
             const prev = roadIntersections.find((x) =>
                 (x.poly1Id === poly1.id && x.poly2Id === poly2.id) ||
                 (x.poly1Id === poly2.id && x.poly2Id === poly1.id));
-            if (prev) {
-                removeIntersectionObjects(prev.id);
-                roadIntersections.splice(roadIntersections.indexOf(prev), 1);
-            }
+            if (prev) forgetIntersection(prev);
 
             const intersection = {
                 id: 'ix-' + Math.random().toString(36).slice(2, 10),
@@ -23920,6 +24670,225 @@
             return out;
         }
 
+        /* --- Откосы от узла до рельефа ------------------------------------
+         * То же, что у дороги (`buildRoadTemplateSlopes`), и той же машинкой:
+         * бровка — обычная скрытая полилиния `role='road-slope-brow'`, а тело
+         * откоса считает `buildSlopeToTerrain`. Своего расчёта откоса тут нет
+         * и не должно быть: две реализации разойдутся, а линия выхода узла
+         * обязана стыковаться с линией выхода подходящей дороги.
+         *
+         * Бровка узла — НАРУЖНЫЙ край его обстройки (за бордюром, обочиной,
+         * кюветом), то есть самая дальняя точка того же внешнего профиля,
+         * который тянется по контуру. Где профиля нет — сама кромка проезжей
+         * части.
+         *
+         * ⚠️ Строится по УЧАСТКАМ контура (`runs`), а не по всему кольцу: в
+         * устьях ветвей дорога продолжается, и откос там даёт её коридор.
+         * Замкнуть кольцо значило бы перегородить откосом саму дорогу.
+         * ------------------------------------------------------------------ */
+
+        /** Бровка вдоль одного участка контура узла. */
+        function nodeSlopeBrowRun(profile, run) {
+            if (!run || run.length < 2) return null;
+            // Самая дальняя от оси точка внешнего профиля: за ней и начинается
+            // откос. `off`/`dz` в профиле уже отсчитаны ОТ КРОМКИ.
+            const far = (profile?.pts || []).reduce((b, p) => (!b || p.off > b.off ? p : b), null);
+            const off = far ? far.off : 0;
+            const dz = far ? far.dz : 0;
+            return run.map((p, i) => {
+                const n = outwardNormalAt(run, i);
+                return new THREE.Vector3(p.x + n.x * off, p.y + n.y * off, p.z + dz);
+            });
+        }
+
+        /**
+         * Проверяемые числа по откосам узла: идёт ли откос НАРУЖУ и держится
+         * ли заложение 1:m. Внутрь — самая опасная ошибка знака нормали: узел
+         * закрывается собственным откосом, а объём при этом «правдоподобный».
+         * Считается по сечениям, а не по картинке.
+         */
+        function nodeSlopeGeometryProbe(rec, models) {
+            const c = rec?.points?.crossPoint;
+            if (!c) return {};
+            const rad = (p) => Math.hypot(p.x - c.x, p.y - c.y);
+            let outMin = Infinity, layMin = Infinity, layMax = -Infinity, valid = 0, invalid = 0;
+            let layOff = 0, sample = null;
+            for (const m of models) {
+                for (const s of (m.sides || [])) {
+                    (s.sections || []).forEach((sec, i) => {
+                        const brow = s.brows?.[i];
+                        if (!sec?.valid || !sec.exit || !brow) { invalid++; return; }
+                        valid++;
+                        outMin = Math.min(outMin, rad(sec.exit) - rad(brow));
+                        const depth = Math.abs(brow.z - sec.exit.z);
+                        if (depth <= 0.05) return;
+                        const want = sec.mode === 'cut' ? m.mCut : m.mFill;
+                        const lay = sec.distance / depth;
+                        layMin = Math.min(layMin, lay);
+                        layMax = Math.max(layMax, lay);
+                        if (Math.abs(lay - want) > 0.05) {
+                            layOff++;
+                            if (!sample) {
+                                sample = {
+                                    lay: +lay.toFixed(3), want, mode: sec.mode,
+                                    dist: +sec.distance.toFixed(3),
+                                    depth: +depth.toFixed(3),
+                                    browZ: +brow.z.toFixed(3), exitZ: +sec.exit.z.toFixed(3),
+                                    browR: +rad(brow).toFixed(2), exitR: +rad(sec.exit).toFixed(2)
+                                };
+                            }
+                        }
+                    });
+                }
+            }
+            return {
+                sections: valid,
+                sectionsInvalid: invalid,
+                // >0 — откос уходит от узла; <0 значит нормаль смотрит внутрь.
+                outwardMin: Number.isFinite(outMin) ? outMin : null,
+                layMin: Number.isFinite(layMin) ? layMin : null,
+                layMax: Number.isFinite(layMax) ? layMax : null,
+                layOff, laySample: sample
+            };
+        }
+
+        function ensureNodeSlopeBrow(rec, runIndex, pts) {
+            let poly = drawnPolylines.find((r) => r.nodeIxId === rec.id && r.nodeRunIndex === runIndex);
+            const vecs = pts.map((p) => p.clone());
+            if (!poly) {
+                poly = addPolylineFromPoints(vecs, {
+                    name: `${rec.name || 'Узел'} — бровка ${runIndex + 1}`,
+                    role: 'road-slope-brow',
+                    color: '#c9793a',
+                    width: 1
+                });
+                if (!poly) return null;
+                poly.nodeIxId = rec.id;
+                poly.nodeRunIndex = runIndex;
+            } else {
+                poly.pts = vecs;
+                poly.radii = vecs.map(() => 0);
+                poly.vRadii = vecs.map(() => 0);
+                rebuildPolylineGeometry(poly);
+            }
+            if (poly.object) {
+                poly.object.visible = false;
+                poly.object.raycast = () => {};
+            }
+            return poly;
+        }
+
+        function dropNodeSlopes(ixId) {
+            drawnPolylines
+                .filter((r) => r.nodeIxId === ixId)
+                .forEach((r) => dropRoadSlopeBrow(r));
+        }
+
+        /**
+         * Узлу нужны откосы, как только у подходящих дорог есть полотно: они
+         * строятся ВСЕГДА, отдельной кнопки и галочки нет ни у дороги, ни у
+         * узла. Без полотна строить не от чего — у узла нет ни ширины кромки,
+         * ни внешнего профиля.
+         */
+        function nodeSlopesWanted(rec) {
+            return [rec.poly1Id, rec.poly2Id].some(
+                (id) => roadXsModels.some((x) => x.polylineId === id)
+            );
+        }
+
+        let syncingNodeSlopes = false;
+        function buildNodeSlopes(rec, opts) {
+            if (syncingNodeSlopes) return null;
+            const data = rec?.points;
+            if (!data?.runs?.length) return null;
+            if (!allMeshes.length) return null;   // без рельефа откосу некуда выходить
+            const full = {
+                mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30, fillColor: '#c9793a',
+                ...(opts || {})
+            };
+            syncingNodeSlopes = true;
+            const built = [];
+            try {
+                const prev = drawnPolylines.filter((r) => r.nodeIxId === rec.id).map((r) => r.id);
+                const alive = new Set();
+                data.runs.forEach((run, i) => {
+                    const pts = nodeSlopeBrowRun(data.outer, run.pts);
+                    if (!pts || pts.length < 2) return;
+                    const poly = ensureNodeSlopeBrow(rec, i, pts);
+                    if (!poly) return;
+                    alive.add(poly.id);
+                    // Контур узла обходится против часовой, наружу смотрит
+                    // ПРАВАЯ нормаль — та же, что у `outwardNormalAt`.
+                    const sm = buildSlopeToTerrain(poly, { ...full, side: 'right' });
+                    if (sm) built.push({ run: i, poly, sm });
+                });
+                prev.forEach((id) => {
+                    if (alive.has(id)) return;
+                    dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
+                });
+            } finally {
+                syncingNodeSlopes = false;
+            }
+            rec.slopeCount = built.length;
+            markNeedsRender();
+            return built;
+        }
+
+        /**
+         * Пересобрать откосы узла под текущее состояние подходящих дорог.
+         * Сняли откосы с дороги — уходят и с узла: иначе на площадке остаётся
+         * висеть откос от конструкции, которой уже нет.
+         */
+        function syncNodeSlopes(rec) {
+            if (!rec || syncingNodeSlopes) return null;
+            /* Пока тянут ручку отметки, `refreshRoadIntersection` зовётся на
+             * КАЖДЫЙ pointermove. Откос — это выборка рельефа лучами с шагом
+             * 0.5 м вокруг всего контура; пересчитывать её в каждом кадре
+             * значит уронить перетаскивание. Пересобираем один раз на
+             * отпускании. (`nodeHandleDrag` объявлен ниже по модулю, но эта
+             * функция исполняется по действию пользователя, а не при
+             * инициализации, — TDZ не грозит.) */
+            if (nodeHandleDrag) return null;
+            if (!nodeSlopesWanted(rec)) {
+                if (rec.slopes) {
+                    dropNodeSlopes(rec.id);
+                    rec.slopes = false;
+                    rec.slopeCount = 0;
+                    markNeedsRender();
+                }
+                return null;
+            }
+            rec.slopes = true;
+            return buildNodeSlopes(rec, readRoadXsSlopeOpts());
+        }
+
+        /**
+         * Пересчитать узлы на этой оси после смены шаблона поперечника.
+         * Флаг нужен: refreshRoadIntersection тянет за собой пересборку
+         * коридоров, а та может вернуться сюда же.
+         */
+        let refreshingNodesOnPolyline = false;
+        function refreshNodesOnPolyline(polyId) {
+            if (refreshingNodesOnPolyline) return 0;
+            const touching = roadIntersections.filter((x) => x.poly1Id === polyId || x.poly2Id === polyId);
+            if (!touching.length) return 0;
+            refreshingNodesOnPolyline = true;
+            let changed = 0;
+            try {
+                for (const rec of touching.slice()) if (refreshRoadIntersection(rec)) changed++;
+            } finally {
+                refreshingNodesOnPolyline = false;
+            }
+            return changed;
+        }
+
+        /** Узлы на этой оси: откосы дороги появились или пропали. */
+        function syncNodeSlopesForPolyline(polyId) {
+            roadIntersections
+                .filter((x) => x.poly1Id === polyId || x.poly2Id === polyId)
+                .forEach((x) => syncNodeSlopes(x));
+        }
+
         /**
          * Слои одежды под узлом — по шаблону поперечника одной из осей.
          * Берём толщину каждого конструктивного слоя НА ОСИ (offset ≈ 0):
@@ -24008,16 +24977,28 @@
          * Зовётся из удаления полилинии — иначе закругление остаётся висеть
          * в сцене без оси, к которой было касательным.
          */
+        /**
+         * Снять узел НАСОВСЕМ: объекты сцены, вершины-якоря на осях, откосы и
+         * запись в списке. Одно место на все четыре пути снятия (замена узла
+         * на той же паре осей, развод осей, кнопка в списке, полная очистка):
+         * порознь про откосы уже забыли — за прогон теста накопилось 60
+         * бровок вместо 4, и они же попадали в расчёт как «земля», отчего
+         * насыпь падала с 618 до 38 м³.
+         */
+        function forgetIntersection(rec) {
+            if (!rec) return;
+            removeIntersectionObjects(rec.id);
+            dropNodeAnchors(rec.id);
+            dropNodeSlopes(rec.id);
+            const i = roadIntersections.indexOf(rec);
+            if (i >= 0) roadIntersections.splice(i, 1);
+        }
+
         function clearRoadIntersections(polylineId) {
             const doomed = polylineId == null
                 ? roadIntersections.slice()
                 : roadIntersections.filter((x) => x.poly1Id === polylineId || x.poly2Id === polylineId);
-            for (const x of doomed) {
-                removeIntersectionObjects(x.id);
-                dropNodeAnchors(x.id);
-                const i = roadIntersections.indexOf(x);
-                if (i >= 0) roadIntersections.splice(i, 1);
-            }
+            for (const x of doomed) forgetIntersection(x);
             // Разрыв в коридоре держался этим узлом — без него дорога снова
             // сплошная. Полилиния может быть уже удалена, тогда пересобирать
             // нечего, и rebuildRoadXsForPolyline сам это увидит.
@@ -24247,9 +25228,7 @@
                     const hit = (a1.pts.length >= 2 && a2.pts.length >= 2)
                         ? findAxisCrossing(a1, a2) : null;
                     if (!hit) {
-                        removeIntersectionObjects(rec.id);
-                        dropNodeAnchors(rec.id);
-                        roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+                        forgetIntersection(rec);
                         syncCorridorsForIntersection(rec);
                         changed++;
                         continue;
@@ -24402,6 +25381,8 @@
                     controls.enabled = wasControls;
                     nodeHandleDrag = null;
                     el.classList.remove('is-drag');
+                    // Откосы отложены с перетаскивания — досчитываем здесь.
+                    syncNodeSlopes(rec);
                     trackUsage('road_node_lift', { by: 'handle' });
                 };
                 window.addEventListener('pointermove', move);
@@ -24460,6 +25441,15 @@
          */
         function autoBuildNodesFor(record) {
             if (!autoRoadNodes || record?.role !== 'road-axis') return 0;
+            /* Только по настоящей правке пользователя. Внутренние пересборки
+             * (откосы заводят полилинии-бровки → список полилиний → resync)
+             * тоже сюда доходили, и на каждом витке каскада мог родиться ещё
+             * один узел на той же паре осей: замерено 2 живых узла и 60
+             * бровок вместо 4. `hasNodeForPair` от этого не спасает — новый
+             * узел успевает появиться раньше, чем предыдущий встанет в
+             * список. */
+            if (buildingRoadSlopes || syncingNodeSlopes
+                || refreshingNodesOnPolyline || resyncingNodes) return 0;
             let made = 0;
             for (const other of drawnPolylines) {
                 if (other === record || other.role !== 'road-axis') continue;
@@ -24547,6 +25537,15 @@
         function syncCorridorsForIntersection(rec) {
             if (!rec) return;
             [rec.poly1Id, rec.poly2Id].forEach((id) => rebuildRoadXsForPolyline(id));
+            /* Откосы узла — ПОСЛЕ коридоров: бровка узла стоит на его контуре,
+             * а он только что мог сдвинуться вместе с устьями.
+             *
+             * ⚠️ Но `clearRoadIntersections` зовёт нас УЖЕ ПОСЛЕ того, как
+             * вычеркнул узел, — чтобы дорога снова стала сплошной. Без этой
+             * проверки откосы воскресали для снятого узла и оставались в сцене
+             * навсегда: за прогон теста накопилось 60 бровок вместо 4. */
+            if (roadIntersections.includes(rec)) syncNodeSlopes(rec);
+            else dropNodeSlopes(rec.id);
         }
 
         /**
@@ -24555,6 +25554,7 @@
          * узел на месте — заново выбирать оси не нужно.
          */
         function renderIntersectionsList() {
+            renderDrawnTree();
             const box = $('intersectionsList');
             if (!box) return;
             if (!roadIntersections.length) {
@@ -25437,9 +26437,7 @@
             if (!btn) return;
             const rec = roadIntersections.find((x) => x.id === btn.dataset.ixDel);
             if (!rec) return;
-            removeIntersectionObjects(rec.id);
-            dropNodeAnchors(rec.id);
-            roadIntersections.splice(roadIntersections.indexOf(rec), 1);
+            forgetIntersection(rec);
             syncCorridorsForIntersection(rec);
             rebuildNodeHandles();
             markNeedsRender();
@@ -41157,6 +42155,8 @@ ${componentXml || '    '}
             $('ctxPolylineGroup').hidden = !stageContextPolyline;
             $('ctxStageGeneric').hidden = !!stageContextPolyline;
             $('ctxPolylineFillet').classList.toggle('disabled', stageContextVertex < 0);
+            // У оси дороги откосы строятся сами вместе с полотном — пункт лишний.
+            $('ctxPolylineSlope').hidden = stageContextPolyline?.role === 'road-axis';
             const noPolys = !drawnPolylines.length;
             $('ctxPolylineTable')?.classList.toggle('disabled', noPolys);
             $('ctxPolylineTableEmpty')?.classList.toggle('disabled', noPolys);
@@ -43017,9 +44017,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.18',
-            buildId: '1907540-preview',
-            released: '2026-08-18',
+            version: '2026.08.20',
+            buildId: '49031e2-preview',
+            released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -43027,6 +44027,12 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.19: выгрузка IFC в трёх схемах: 4.3 с дорожными классами и трассой, IFC4 и IFC2x3 для приложений без поддержки 4.3 (Navisworks). В старых схемах тела универсальным классом, роль — в ObjectType, ось — ломаной; в 2x3 геометрия оболочкой из граней и обязательный OwnerHistory.',
+                '2026.08.19: DXF снова открывается в AutoCAD/Civil — у слоя «Ось» не было цвета, и таблица LAYER выходила битой (сообщение про APPID уводило в сторону).',
+                '2026.08.19: починены DWG и STEP на сайте — путь к вендорам был абсолютным и на GitHub Pages уводил мимо /bim-lva/ (404). Локально не воспроизводилось.',
+                '2026.08.19: выгрузка вынесена в свою панель ленты — «⤓ IFC 4.3» крупной кнопкой, рядом DXF, DWG, LandXML, STEP (раньше их обрезало). Кнопка «△ Откосы» из списка полилиний убрана: откосы строятся сами.',
+                '2026.08.19: начерченное — в дереве проекта: оси, узлы и откосы стоят той же иерархией, что уходит в IFC (IfcSite → IfcRoad → IfcAlignment / IfcPavement / IfcCourse / IfcEarthworksFill). Клик по строке наводит камеру.',
+                '2026.08.19: откосы до рельефа строятся сами — кнопки и галочки для них больше нет. У перекрёстка они теперь тоже есть и стыкуются с дорожными (расхождение 6 мм). Бровка рвётся у узла, а не идёт напрямую через перекрёсток — ушли чёрные клинья у устьев.',
                 '2026.08.18: выгрузка в IFC 4.3 дорожными классами — IfcPavement, IfcCourse, IfcKerb, IfcEarthworksFill, IfcAlignment, IfcRoad; тела тесселяцией, мировой сдвиг в размещении IfcSite. Проверяется обратным чтением тем же web-ifc. Плюс выгрузка в DWG (тела сеткой 3DFACE).',
                 '2026.08.17: полотно на вертикальной кривой профиля — мелкий шаг станций как на дуге плана; слои одежды у укреплённой обочины обрываются вертикально у внутренней кромки.',
                 '2026.08.17: поперечник как типовой чертёж ОД — размерная цепочка сверху, уклоны 20‰ / 40‰ и 1:1,5; обочина СП — продолжение верха с 40‰ (укреплённая, затем присыпная).',

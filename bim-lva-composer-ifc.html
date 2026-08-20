@@ -7146,6 +7146,16 @@
                 fillRoadAxisStyleForm({ role: 'road-axis' });
                 setDrawMode(true);
             },
+            /**
+             * Завершение оси — ТОЛЬКО через `setDrawMode(false)`: поперечники,
+             * сопряжения и откосы висят там, а не в `finishDrawPolyline`.
+             * `finishDrawnPolyline()` их не запускает и для оси не годится —
+             * на этом уже потеряли заход (ось создавалась, поперечников ноль).
+             */
+            finishRoadAxisDraw() {
+                setDrawMode(false);
+                return drawnPolylines[drawnPolylines.length - 1]?.id ?? null;
+            },
             addDrawWorldPoint(x, y, z) {
                 addDrawPoint(new THREE.Vector3(x, y, z));
                 return drawPoints.length;
@@ -14377,6 +14387,30 @@
                 return Number.isInteger(n) ? n.toFixed(1) : String(Number(n.toFixed(6)));
             };
             const pt3 = (p) => `IFCCARTESIANPOINT((${num(p.x)},${num(p.y)},${num(p.z)}))`;
+            /**
+             * Строка STEP по ISO 10303-21 живёт в ISO 8859-1. Всё за её
+             * пределами пишется ТОЛЬКО escape-последовательностью
+             * `\X2\<UTF-16 в hex>\X0\`. Сырой UTF-8 читатель разбирает как
+             * ANSI — отсюда иероглифы вместо русских имён (в Navisworks это
+             * и увидели). Суррогатная пара — два блока по 4 знака.
+             */
+            const ifcText = (s) => {
+                const src = String(s ?? '');
+                let out = '', buf = '';
+                const flush = () => { if (buf) { out += `\\X2\\${buf}\\X0\\`; buf = ''; } };
+                for (const ch of src) {
+                    if (ch.codePointAt(0) < 128) {
+                        flush();
+                        out += ch === '\\' ? '\\\\' : ch === "'" ? "''" : ch;
+                    } else {
+                        for (let i = 0; i < ch.length; i++) {
+                            buf += ch.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0');
+                        }
+                    }
+                }
+                flush();
+                return out;
+            };
 
             const origin = E('IFCCARTESIANPOINT((0.,0.,0.))');
             const dirZ = E('IFCDIRECTION((0.,0.,1.))');
@@ -14406,7 +14440,7 @@
             const sitePt = E(pt3(shift));
             const siteAxis = E(`IFCAXIS2PLACEMENT3D(${sitePt},${dirZ},${dirX})`);
             const sitePl = E(`IFCLOCALPLACEMENT($,${siteAxis})`);
-            const site = E(`IFCSITE('${ifcGuid()}',${own},'Площадка',$,$,${sitePl},$,$,.ELEMENT.,$,$,$,$,$)`);
+            const site = E(`IFCSITE('${ifcGuid()}',${own},'${ifcText('Площадка')}',$,$,${sitePl},$,$,.ELEMENT.,$,$,$,$,$)`);
             const roadPl = E(`IFCLOCALPLACEMENT(${sitePl},${axis})`);
             /* Контейнер под площадкой. В 4.3 это IfcRoad. В IFC4 такого класса
              * нет; в 2x3 старые читатели вдобавок ждут привычную цепочку
@@ -14414,14 +14448,14 @@
              * элементы у части приложений просто не появляются в дереве. */
             let road, roadKind;
             if (!legacy) {
-                road = E(`IFCROAD('${ifcGuid()}',${own},'Дорога',$,$,${roadPl},$,$,.ELEMENT.,.NOTDEFINED.)`);
+                road = E(`IFCROAD('${ifcGuid()}',${own},'${ifcText('Дорога')}',$,$,${roadPl},$,$,.ELEMENT.,.NOTDEFINED.)`);
                 roadKind = 'IfcRoad';
                 E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${proj},(${site}))`);
                 E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${site},(${road}))`);
             } else {
-                const bld = E(`IFCBUILDING('${ifcGuid()}',${own},'Дорога',$,$,${roadPl},$,$,.ELEMENT.,$,$,$)`);
+                const bld = E(`IFCBUILDING('${ifcGuid()}',${own},'${ifcText('Дорога')}',$,$,${roadPl},$,$,.ELEMENT.,$,$,$)`);
                 const stPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                road = E(`IFCBUILDINGSTOREY('${ifcGuid()}',${own},'Проектная отметка',$,$,${stPl},$,$,.ELEMENT.,0.)`);
+                road = E(`IFCBUILDINGSTOREY('${ifcGuid()}',${own},'${ifcText('Проектная отметка')}',$,$,${stPl},$,$,.ELEMENT.,0.)`);
                 roadKind = 'IfcBuildingStorey';
                 E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${proj},(${site}))`);
                 E(`IFCRELAGGREGATES('${ifcGuid()}',${own},$,$,${site},(${bld}))`);
@@ -14460,10 +14494,10 @@
                 }
                 const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
                 const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                const nm = String(name || code || 'Элемент').replace(/'/g, "''");
+                const nm = ifcText(name || code || 'Элемент');
                 if (legacy) {
                     const { cls, type, role } = ifcLegacyClassForCode(code);
-                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,'${role}',${pl},${shape},$,${type})`));
+                    products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,'${ifcText(role)}',${pl},${shape},$,${type})`));
                 } else {
                     const { cls, type } = ifcClassForCode(code);
                     products.push(E(`${cls}('${ifcGuid()}',${own},'${nm}',$,$,${pl},${shape},$,${type})`));
@@ -14505,8 +14539,8 @@
                     const rep = E(`IFCSHAPEREPRESENTATION(${ctx},'Axis','Curve3D',(${poly}))`);
                     const shape = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
                     const pl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                    const nm = String(rec.name || 'Ось').replace(/'/g, "''");
-                    products.push(E(`IFCANNOTATION('${ifcGuid()}',${own},'${nm}',$,'Ось трассы',${pl},${shape})`));
+                    const nm = ifcText(rec.name || 'Ось');
+                    products.push(E(`IFCANNOTATION('${ifcGuid()}',${own},'${nm}',$,'${ifcText('Ось трассы')}',${pl},${shape})`));
                     curves += lay.hor.length;
                     arcs2d += lay.hor.filter((x) => x.type === 'CIRCULARARC').length;
                     continue;
@@ -14522,7 +14556,7 @@
                     return E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${h})`);
                 });
                 const hPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                const hor = E(`IFCALIGNMENTHORIZONTAL('${ifcGuid()}',$,'Горизонталь',$,$,${hPl},$)`);
+                const hor = E(`IFCALIGNMENTHORIZONTAL('${ifcGuid()}',$,'${ifcText('Горизонталь')}',$,$,${hPl},$)`);
                 E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${hor},(${hSegs.join(',')}))`);
 
                 const nested = [hor];
@@ -14537,13 +14571,13 @@
                         return E(`IFCALIGNMENTSEGMENT('${ifcGuid()}',$,$,$,$,$,$,${v})`);
                     });
                     const vPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                    const ver = E(`IFCALIGNMENTVERTICAL('${ifcGuid()}',$,'Профиль',$,$,${vPl},$)`);
+                    const ver = E(`IFCALIGNMENTVERTICAL('${ifcGuid()}',$,'${ifcText('Профиль')}',$,$,${vPl},$)`);
                     E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${ver},(${vSegs.join(',')}))`);
                     nested.push(ver);
                 }
 
                 const alPl = E(`IFCLOCALPLACEMENT(${roadPl},${axis})`);
-                const al = E(`IFCALIGNMENT('${ifcGuid()}',$,'${String(rec.name || 'Ось').replace(/'/g, "''")}',$,$,${alPl},$)`);
+                const al = E(`IFCALIGNMENT('${ifcGuid()}',$,'${ifcText(rec.name || 'Ось')}',$,$,${alPl},$)`);
                 E(`IFCRELNESTS('${ifcGuid()}',$,$,$,${al},(${nested.join(',')}))`);
                 E(`IFCRELREFERENCEDINSPATIALSTRUCTURE('${ifcGuid()}',${own},$,$,(${al}),${road})`);
             }
@@ -17990,9 +18024,24 @@
                 }
                 const model = buildRoadCrossSections(finishedRoad, roadXsOptsFromUi());
                 if (model) {
+                    /* Откосы строятся ВСЕГДА — кнопки и галочки у них нет
+                     * (просьба владельца). Зовём их ЗДЕСЬ, на настоящем
+                     * действии пользователя «ось дочерчена», а не внутри
+                     * `buildRoadCrossSections`: туда же приходят живая
+                     * пересборка при черчении и пересчёт от узла, и
+                     * безусловная сборка оттуда ломает окно поперечника
+                     * (разбор — в комментарии у самой функции).
+                     * Путь тот же, что у кнопки «Построить». */
+                    let extra = '';
+                    const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
+                    if (built?.length) {
+                        let fill = 0, cut = 0;
+                        built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+                        extra = ` Откосы: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
+                    }
                     notify(
                         `Полотно по «${finishedRoad.name}»: ${model.stations.length} сечений, ` +
-                        `${model.corridorTris || 0} граней.`
+                        `${model.corridorTris || 0} граней.${extra}`
                     );
                 }
             }
@@ -43949,9 +43998,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.08.19',
-            buildId: 'ifc-schemas',
-            released: '2026-08-19',
+            version: '2026.08.20',
+            buildId: 'ifc-text-slopes',
+            released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',

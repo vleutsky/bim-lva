@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260819-ifc-schemas';
+const CACHE = 'bimlva-composer-shell-20260820-ifc-text-slopes';
 const SHELL = [
   './',
   './index.html',

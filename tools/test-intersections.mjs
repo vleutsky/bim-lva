@@ -917,6 +917,43 @@ try {
             nodeBrows: brows.filter((r) => /×/.test(r.name)).map((r) => ({ name: r.name, pts: r.vertsAbs }))
         };
     });
+
+    /* Откосы дороги на НАСТОЯЩЕМ пути пользователя: режим оси → точки → Esc.
+     * Отдельной кнопки у откосов больше нет, поэтому если этот путь их не
+     * строит — их нет нигде (владелец увидел ровно это: полотно и узел есть,
+     * откосов нет, и в выгрузку они, соответственно, тоже не попали).
+     * ⚠️ Завершать ось надо `finishRoadAxisDraw` (это `setDrawMode(false)`),
+     * а не `finishDrawnPolyline`: поперечники и откосы висят там. С
+     * `finishDrawnPolyline` ось создаётся, а поперечников ноль — заход уже
+     * потерян на этом. */
+    const drawn = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        D.clearPolylines();
+        D.clearSlopes();
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const z = g.centerZ + g.sizeZ / 2 + 3;
+        D.startRoadAxisDraw();
+        D.addDrawWorldPoint(g.centerX - 40, g.centerY, z);
+        D.addDrawWorldPoint(g.centerX + 40, g.centerY, z);
+        D.finishRoadAxisDraw();
+        await new Promise((r) => setTimeout(r, 1200));
+        const sl = D.slopes || [];
+        return {
+            xs: (D.roadXs || []).length,
+            models: sl.length,
+            fill: sl.reduce((n, s) => n + (s.sides || []).reduce((m, x) => m + x.fill, 0), 0),
+            faces: sl.reduce((n, s) => n + (s.tin?.faces || 0), 0),
+            noGround: sl.reduce((n, s) => n + (s.sides || []).reduce((m, x) => m + x.skippedNoGround, 0), 0)
+        };
+    });
+    console.log(`  дочерченная ось: поперечников ${drawn.xs}, откосов ${drawn.models},`
+        + ` насыпь ${drawn.fill.toFixed(2)} м³, граней ${drawn.faces}, без земли ${drawn.noGround}`);
+    check(drawn.xs === 1, `дочерченная ось построила поперечники (${drawn.xs})`);
+    check(drawn.models === 2, `откосы построились САМИ на обе стороны (${drawn.models})`);
+    check(drawn.faces > 0, `у откосов есть грани (${drawn.faces})`);
+    check(drawn.fill > 1, `объём насыпи ненулевой (${drawn.fill.toFixed(2)} м³)`);
+
     await fs.rm(terrainFile, { force: true });
 
     if (slope.error) {

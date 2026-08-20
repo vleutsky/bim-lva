@@ -161,6 +161,24 @@ try {
     check(/IFCALIGNMENTHORIZONTALSEGMENT/.test(made.text), 'есть IfcAlignmentHorizontalSegment');
     check(/CIRCULARARC/.test(made.text), 'в alignment есть дуги CIRCULARARC');
 
+    /* Кириллица в STEP — только `\X2\<UTF-16 hex>\X0\`. Сырой UTF-8 читатель
+     * разбирает как ANSI, и в дереве Navisworks вместо имён иероглифы (так и
+     * было). Проверяем ОБА конца: сырых не-ASCII в файле нет вовсе, а обратный
+     * разбор escape-последовательностей даёт настоящее русское слово — без
+     * второй половины проверка прошла бы и на файле, где имена просто
+     * выброшены. */
+    const unescapeStep = (s) => s.replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/g,
+        (_, hex) => hex.match(/.{4}/g).map((h) => String.fromCharCode(parseInt(h, 16))).join(''));
+    for (const [sch, r] of Object.entries({ IFC4X3_ADD2: made, ...legacy })) {
+        if (!r?.text) continue;
+        const raw = [...r.text].filter((c) => c.codePointAt(0) > 127);
+        check(raw.length === 0,
+            `${sch}: сырой кириллицы в файле нет (${raw.length ? 'найдено ' + raw.length + ': ' + raw.slice(0, 8).join('') : 'чисто'})`);
+        check(/\\X2\\[0-9A-F]+\\X0\\/.test(r.text), `${sch}: имена ушли escape-последовательностями \\X2\\`);
+        check(unescapeStep(r.text).includes('Площадка'),
+            `${sch}: обратный разбор \\X2\\ даёт «Площадка»`);
+    }
+
     /* ⚠️ У точки площадки скобок ДВЕ (`IFCCARTESIANPOINT((55300.05,…))`), а не
      * три: с тремя проверка не сходится никогда и падает на верном файле.
      * А `bigVertex` — регулярное ВЫРАЖЕНИЕ, в нём `\\(` это литеральный
