@@ -1946,6 +1946,14 @@
         .node-corner:hover { border-color: var(--accent); color: var(--accent); }
         .node-handle:hover::before { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); }
         .node-handle.is-drag::before { background: var(--accent); }
+        /* Ручка «на руках»: кнопка отпущена, ручка едет за курсором до клика.
+           Пунктир — чтобы это состояние было видно и не путалось с обычным
+           наведением. */
+        .poly-handle.is-carry,
+        .node-handle.is-carry::before {
+            border-style: dashed;
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+        }
         .poly-handle:hover { background: #d8f3e6; }
         .poly-handle:active { cursor: grabbing; }
         .poly-handle.is-end { border-radius: 50%; }
@@ -4072,7 +4080,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 3e62557</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d790339</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -17299,8 +17307,8 @@
                 el.className = 'poly-handle';
                 if (idx === 0 || idx === rec.pts.length - 1) el.classList.add('is-end');
                 el.title =
-                    `Вершина #${idx + 1}: тяните — двигать по плану, ` +
-                    'Ctrl + тянуть — только по высоте';
+                    `Вершина #${idx + 1}: клик — взять, довести, клик — положить ` +
+                    '(можно и тянуть с зажатой кнопкой). Ctrl — только по высоте, Esc — отмена';
                 polylineHandlesLayer.appendChild(el);
                 attachPolylineHandleDrag(rec, idx, el);
                 polylineHandles.push({ el, idx });
@@ -17332,6 +17340,61 @@
          * Масштаб перевода пикселей в метры берём из текущего охвата кадра,
          * иначе на общем виде вершина летала бы, а вблизи почти не двигалась.
          */
+        /**
+         * Жест ручки: «нажал — взял, довёл, нажал — положил», как гриппы в
+         * AutoCAD. Тянуть с зажатой кнопкой тоже можно — этот путь остаётся
+         * рабочим, на нём держатся уже написанные проверки.
+         *
+         * Зачем: с зажатой кнопкой курсор дрожит на отпускании, и привязка
+         * срабатывает в последний момент не туда. Отпущенная кнопка позволяет
+         * спокойно навести на нужную точку и подтвердить кликом.
+         *
+         * Esc возвращает ручку на место — иначе взятую «на руки» вершину
+         * некуда деть, кроме как поставить куда попало.
+         */
+        const GRAB_CLICK_PX = 4;
+
+        function runGrabHandle(el, down, handlers) {
+            let moved = false;
+            const move = (e) => {
+                if (!moved && Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) > GRAB_CLICK_PX) {
+                    moved = true;
+                }
+                handlers.move(e);
+            };
+            const finish = (cancelled) => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up, true);
+                window.removeEventListener('pointerdown', drop, true);
+                window.removeEventListener('keydown', key, true);
+                el.classList.remove('is-carry');
+                if (cancelled) handlers.cancel?.();
+                handlers.finish(cancelled);
+            };
+            const up = () => {
+                if (moved) { finish(false); return; }
+                // Клик без сдвига — ручка остаётся «на руках», кнопку отпускаем.
+                window.removeEventListener('pointerup', up, true);
+                window.addEventListener('pointerdown', drop, true);
+                el.classList.add('is-carry');
+            };
+            const drop = (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                finish(false);
+            };
+            const key = (e) => {
+                if (e.key !== 'Escape') return;
+                e.preventDefault();
+                e.stopPropagation();
+                finish(true);
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up, true);
+            window.addEventListener('keydown', key, true);
+        }
+
         function attachPolylineHandleDrag(record, idx, el) {
             el.addEventListener('pointerdown', (down) => {
                 if (down.button !== 0) return;
@@ -17347,6 +17410,7 @@
                 const zMode = down.ctrlKey || down.metaKey;
                 const startY = down.clientY;
                 const startZ = record.pts[idx].z;
+                const origin = record.pts[idx].clone();   // для отмены по Esc
                 // Метров на пиксель по вертикали в текущем кадре
                 const mPerPx = currentFrameHeight() / Math.max(stage.clientHeight, 1);
                 el.classList.toggle('is-z', zMode);
@@ -17372,18 +17436,22 @@
                     rebuildPolylineGeometry(record);
                     updatePolylineHandles();
                 };
-                const up = () => {
-                    window.removeEventListener('pointermove', move);
-                    window.removeEventListener('pointerup', up);
-                    controls.enabled = wasControls;
-                    polylineHandleDrag = null;
-                    el.classList.remove('is-z');
-                    renderPolylinePointsEditor(record);
-                    renderPolylinesList();
-                    trackUsage('polyline_vertex_drag', { mode: zMode ? 'z' : 'plan' });
-                };
-                window.addEventListener('pointermove', move);
-                window.addEventListener('pointerup', up);
+                runGrabHandle(el, down, {
+                    move,
+                    cancel: () => {
+                        record.pts[idx].copy(origin);
+                        rebuildPolylineGeometry(record);
+                        updatePolylineHandles();
+                    },
+                    finish: (cancelled) => {
+                        controls.enabled = wasControls;
+                        polylineHandleDrag = null;
+                        el.classList.remove('is-z');
+                        renderPolylinePointsEditor(record);
+                        renderPolylinesList();
+                        if (!cancelled) trackUsage('polyline_vertex_drag', { mode: zMode ? 'z' : 'plan' });
+                    }
+                });
 
                 if (zMode && record.kind === '2d') {
                     notify('У 2D-полилинии все точки на одной отметке — высоту вершины не изменить.');
@@ -26190,18 +26258,18 @@
                     setNodeElevation(rec, startZ + (startY - e.clientY) * mPerPx);
                     updateNodeHandles();
                 };
-                const up = () => {
-                    window.removeEventListener('pointermove', move);
-                    window.removeEventListener('pointerup', up);
-                    controls.enabled = wasControls;
-                    nodeHandleDrag = null;
-                    el.classList.remove('is-drag');
-                    // Откосы отложены с перетаскивания — досчитываем здесь.
-                    syncNodeSlopes(rec);
-                    trackUsage('road_node_lift', { by: 'handle' });
-                };
-                window.addEventListener('pointermove', move);
-                window.addEventListener('pointerup', up);
+                runGrabHandle(el, down, {
+                    move,
+                    cancel: () => setNodeElevation(rec, startZ),
+                    finish: (cancelled) => {
+                        controls.enabled = wasControls;
+                        nodeHandleDrag = null;
+                        el.classList.remove('is-drag');
+                        // Откосы отложены с перетаскивания — досчитываем здесь.
+                        syncNodeSlopes(rec);
+                        if (!cancelled) trackUsage('road_node_lift', { by: 'handle' });
+                    }
+                });
             });
 
             el.addEventListener('dblclick', (ev) => {
@@ -44844,7 +44912,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: '3e62557-preview',
+            buildId: 'd790339-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

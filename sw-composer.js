@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260820-axis-snap';
+const CACHE = 'bimlva-composer-shell-20260820-grab-handles';
 const SHELL = [
   './',
   './index.html',
