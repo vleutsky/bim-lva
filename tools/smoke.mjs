@@ -4385,6 +4385,7 @@ async function main() {
     // строится по порогу, и путь пикинга через дерево остался бы непроверенным.
     let ifcLoaded = null;
     let pick = null;
+    let treeState = null;
     let selectSimilar = null;
     let toast = null;
     let clash = null;
@@ -4415,7 +4416,37 @@ async function main() {
                 // выделено, а прогон коллизий выделяет тысячи элементов —
                 // поэтому уведомления идут первыми, коллизии последними.
                 toast = await checkNotifications(page);
+
+                /* Дерево: файл открывается СВЁРНУТЫМ (просьба владельца — при загрузке
+                 * нужен список файлов, а не тысячи элементов), но показ по выбору в сцене
+                 * обязан остаться.
+                 * ⚠️ Два конца проверки РАЗВЕДЕНЫ ПО ВРЕМЕНИ, и это не мелочь: пикинг
+                 * зовёт `expandTreeAncestors` и снимает `collapsed`. Замер «свёрнут»
+                 * ПОСЛЕ пикинга показывает раскрытое дерево при полностью исправном
+                 * коде — на это уже потрачен прогон. Поэтому «свёрнут» снимается здесь,
+                 * до выбора, а «раскрылось» — ниже, по настоящему выбору в сцене. */
+                const treeCollapsedAtLoad = await page.evaluate(() => {
+                    const root = document.querySelector('.file-root');
+                    return root ? root.classList.contains('collapsed') : null;
+                });
+
                 pick = await checkPicking(page);
+
+                /* Раскрытие проверяем ПО ФАКТУ выбора: выделенная строка обязана быть
+                 * видима, то есть ни один её предок не свёрнут. Снимать `collapsed`
+                 * руками бессмысленно — это проверило бы classList, а не вьювер. */
+                treeState = await page.evaluate((collapsed) => {
+                    const sel = document.querySelector('.file-root .children .trow.sel');
+                    if (!sel) return { collapsed, revealed: null };
+                    let node = sel.closest('.tnode');
+                    let revealed = true;
+                    while (node) {
+                        if (node.classList.contains('collapsed')) revealed = false;
+                        const par = node.parentElement?.closest?.('.children');
+                        node = par ? par.closest('.tnode') : null;
+                    }
+                    return { collapsed, revealed };
+                }, treeCollapsedAtLoad);
                 const panelTabs = await checkPanelTabs(page);
                 if (panelTabs) {
                     console.log(
@@ -4496,6 +4527,8 @@ async function main() {
         console.log(`скриншот:  ${process.env.SMOKE_SHOT}`);
     }
 
+
+
     await browser.close();
     server.close();
 
@@ -4562,6 +4595,15 @@ async function main() {
         );
     }
     if (pick) console.log(`пикинг:    ${pick.ok ? `элемент выбран (${pick.label})` : 'НЕ РАБОТАЕТ'}`);
+    if (!treeState) {
+        problems.push('дерево: нет корня файла');
+    } else {
+        console.log(`дерево:    файл свёрнут ${treeState.collapsed ? 'да' : 'НЕТ'},`
+            + ` раскрытие до элемента ${treeState.revealed === null ? '—' : (treeState.revealed ? 'ок' : 'СЛОМАНО')}`);
+        if (!treeState.collapsed) problems.push('дерево: файл раскрыт сразу при загрузке');
+        if (treeState.revealed === false) problems.push('дерево: раскрытие до выбранного элемента сломано');
+    }
+
     if (selectSimilar) {
         console.log(`подобные:  ${selectSimilar.ok ? `${selectSimilar.before} → ${selectSimilar.after}` : 'НЕ РАБОТАЕТ'}`);
     }
