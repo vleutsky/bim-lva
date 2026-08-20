@@ -4128,7 +4128,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · f27fc15</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 8cbd200</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -7632,18 +7632,23 @@
                     created: new Date(), points: result
                 };
                 roadIntersections.push(rec);
+                settleNodeElevations(rec);   // как в диалоге, см. пометку выше
                 visualizeIntersection(rec);
                 syncCorridorsForIntersection(rec);
                 rebuildNodeHandles();
+                /* Отдаём то, что ЛЕЖИТ В ЗАПИСИ, а не `result`: связывание
+                 * отметок пересчитывает узел, и старый снимок разошёлся бы с
+                 * тем, что в сцене. */
+                const out = rec.points;
                 return {
                     id: rec.id,
-                    cross: { x: result.crossPoint.x, y: result.crossPoint.y, z: result.crossPoint.z },
-                    arms: result.arms,
-                    corners: result.corners,
-                    tapers: result.tapers.length,
-                    patchTris: result.patch ? result.patch.length / 9 : 0,
-                    outline: result.outline.map((p) => ({ x: p.x, y: p.y, z: p.z })),
-                    arcs: result.arcs.map((a) => ({
+                    cross: { x: out.crossPoint.x, y: out.crossPoint.y, z: out.crossPoint.z },
+                    arms: out.arms,
+                    corners: out.corners,
+                    tapers: out.tapers.length,
+                    patchTris: out.patch ? out.patch.length / 9 : 0,
+                    outline: out.outline.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+                    arcs: out.arcs.map((a) => ({
                         tangentDist: a.tangentDist,
                         center: a.center,
                         pts: a.pts.map((p) => ({ x: p.x, y: p.y, z: p.z }))
@@ -7862,6 +7867,11 @@
                     corridorStations: near,
                     corridorMeshes: (model?.corridorMeshes || []).length
                 };
+            },
+            /** Трасса вызовов syncAxisElevationsForNode: включить, потом снять. */
+            nodeSyncTrace(on) {
+                if (on) { nodeSyncTrace = []; return null; }
+                const out = nodeSyncTrace; nodeSyncTrace = null; return out;
             },
             /** Отметка узла: абсолютная и целевая. */
             nodeElevation(ixId) {
@@ -24880,6 +24890,7 @@
                 points: result
             };
             roadIntersections.push(intersection);
+            settleNodeElevations(intersection);   // одна отметка на обе оси
             visualizeIntersection(intersection);
             syncCorridorsForIntersection(intersection);
             rebuildNodeHandles();
@@ -25225,14 +25236,28 @@
             // Тип отсекает ветви второстепенной оси: примыкание — одна,
             // слияние — по одной от каждой.
             if (type === 't-junction' || type === 'merge') {
+                const of = (poly) => arms.filter((a) => a.poly === poly);
                 const keep = new Set();
-                const first = (poly) => arms.find((a) => a.poly === poly);
-                keep.add(first(poly1));
-                if (type !== 'merge') {
-                    const back1 = arms.filter((a) => a.poly === poly1)[1];
-                    if (back1) keep.add(back1);
+                if (type === 'merge') {
+                    keep.add(of(poly1)[0]);
+                    keep.add(of(poly2)[0]);
+                } else {
+                    /* Сквозная ось — та, у которой ветвей ДВЕ, и решает это
+                     * ГЕОМЕТРИЯ, а не порядок аргументов. Автопостроение
+                     * подставляет первой только что начерченную ось — то есть
+                     * как раз примыкающую, и при жёстком «poly1 сквозная» у
+                     * главной дороги терялась вторая ветвь: замерено 2 ветви
+                     * вместо 3, узел обрывал главную с одной стороны, а
+                     * связывание отметок не могло понять, чей профиль главный.
+                     * Если сквозные обе (тип задан руками на кресте) —
+                     * остаётся прежний порядок. */
+                    const a1 = of(poly1), a2 = of(poly2);
+                    const through = (a1.length >= 2 || a2.length < 2) ? a1 : a2;
+                    const side = through === a1 ? a2 : a1;
+                    keep.add(through[0]);
+                    if (through[1]) keep.add(through[1]);
+                    keep.add(side[0]);
                 }
-                keep.add(first(poly2));
                 arms = arms.filter((a) => keep.has(a));
             }
             if (arms.length < 2) return null;
@@ -26183,8 +26208,15 @@
             return best ? best.z : null;
         }
 
+        /* Счётчик вызовов: включается из BimLvaDebug.nodeSyncTrace(true).
+         * Именно он показал, что на постройке примыкания связывание не
+         * звалось НИ РАЗУ — после трёх правок «вслепую» внутри самой функции,
+         * ни одна из которых не сдвинула расхождение. Приём дешёвый, а
+         * догадки в этом месте уже трижды выходили мимо. */
+        let nodeSyncTrace = null;
         function syncAxisElevationsForNode(rec) {
             const d = rec?.points;
+            if (nodeSyncTrace) nodeSyncTrace.push({ ev: 'call', ix: rec?.id, hasCross: !!d?.crossPoint, zTarget: rec?.zTarget ?? null, arms: (d?.arms || []).map((a) => ({ i: a.index, poly: a.polyId, sign: a.sign, sta: a.sta, mouth: a.mouth })) });
             if (!d?.crossPoint) return false;
             /* Отметка связывает оси ВСЕГДА, а не только когда задана вручную.
              * Раньше при `zTarget == null` («по осям») выход был здесь же, и
@@ -26210,6 +26242,7 @@
                     const zt = poly ? polylineElevationAtPoint(poly, d.crossPoint) : null;
                     if (Number.isFinite(zt)) z = zt;
                 }
+                if (nodeSyncTrace) nodeSyncTrace.push({ ev: 'z', crossZ: d.crossPoint.z, byPoly: [...byPoly.entries()], through, z });
             }
             let touched = false;
             const polys = new Set();
@@ -26231,6 +26264,7 @@
                 const dF = Math.hypot(first.x - d.crossPoint.x, first.y - d.crossPoint.y);
                 const dL = Math.hypot(last.x - d.crossPoint.x, last.y - d.crossPoint.y);
                 const end = dF <= dL ? first : last;
+                if (nodeSyncTrace) nodeSyncTrace.push({ ev: 'end', poly: polyId, dF: +dF.toFixed(2), dL: +dL.toFixed(2), was: end.z, z });
                 if (Math.abs(end.z - z) > 1e-6) {
                     end.z = z;
                     touched = true;
@@ -26241,7 +26275,9 @@
                 const poly = drawnPolylines.find((r) => r.id === arm.polyId);
                 if (!poly || arm.sta == null || !(arm.mouth > 0)) continue;
                 const sta = arm.sta + arm.sign * arm.mouth;
-                if (setNodeAnchorVertex(poly, rec.id, 'mouth' + arm.index, sta, z)) {
+                const okA = setNodeAnchorVertex(poly, rec.id, 'mouth' + arm.index, sta, z);
+                if (nodeSyncTrace) nodeSyncTrace.push({ ev: 'anchor', poly: arm.polyId, arm: arm.index, sta: +sta.toFixed(2), z, ok: okA, pts: poly.pts.map((p) => ({ x: +p.x.toFixed(1), y: +p.y.toFixed(1), z: +p.z.toFixed(3), a: p.nodeAnchorKey || null })) });
+                if (okA) {
                     polys.add(poly);
                     touched = true;
                 }
@@ -26546,6 +26582,10 @@
                     created: new Date(), points, auto: true
                 };
                 roadIntersections.push(rec);
+                // Отметку связываем СРАЗУ при создании, а не только при
+                // правке: автопостроение — главный путь, и без этого
+                // примыкание расходилось по высоте (см. settleNodeElevations).
+                settleNodeElevations(rec);
                 visualizeIntersection(rec);
                 syncCorridorsForIntersection(rec);
                 made++;
@@ -26560,45 +26600,68 @@
             return made;
         }
 
-        /** Пересчитать узел под новые радиусы и уширения и перерисовать. */
-        function refreshRoadIntersection(rec) {
-            if (!rec) return false;
-            const p1 = drawnPolylines.find((r) => r.id === rec.poly1Id);
-            const p2 = drawnPolylines.find((r) => r.id === rec.poly2Id);
+        /**
+         * Связать профили осей с отметкой узла и досчитать узел до схождения.
+         *
+         * ⚠️ Это ОБЩАЯ точка для всех путей: диалог, автопостроение, правка,
+         * отладочный вход. Раньше связывание жило внутри
+         * `refreshRoadIntersection`, то есть срабатывало ТОЛЬКО на правке уже
+         * построенного узла. Свежесозданный (а автопостроение — главный путь
+         * владельца: подвёл ось к оси, узел появился сам) оставался без него,
+         * и полотна расходились ступенькой. Замерено счётчиком внутри
+         * `syncAxisElevationsForNode`: на постройке примыкания она звалась
+         * НОЛЬ раз — поэтому три предыдущие правки внутри неё и не сдвинули
+         * расхождение ни на миллиметр.
+         *
+         * Профили идут за узлом, а узел — за профилями: посадка вершин меняет
+         * пикетаж, от которого считались устья. Крутим до СХОЖДЕНИЯ, иначе
+         * якоря остаются от предыдущего расчёта и промахиваются мимо устья
+         * (замерено ПК 65.8 при устье 82.5, а второй якорь и вовсе садился на
+         * конец трассы). Двух-трёх проходов хватает: вершины ставятся НА
+         * линию, форма от этого не меняется, и пикетаж сходится сразу.
+         */
+        function settleNodeElevations(rec) {
+            const p1 = drawnPolylines.find((r) => r.id === rec?.poly1Id);
+            const p2 = drawnPolylines.find((r) => r.id === rec?.poly2Id);
             if (!p1 || !p2) return false;
             const calc = () => calculateIntersection(p1, p2, rec.type, rec.radius, {
                 radii: rec.radii || {},
                 flares: rec.flares || {},
                 zTarget: rec.zTarget
             });
-            const next = calc();
-            if (!next) return false;
-            rec.points = next;
-            /* Профили осей идут за узлом, а узел — за профилями: посадка
-             * вершин меняет пикетаж, от которого считались устья. Крутим до
-             * СХОЖДЕНИЯ, иначе якоря остаются от предыдущего расчёта и
-             * промахиваются мимо устья (замерено ПК 65.8 при устье 82.5, а
-             * второй якорь и вовсе садился на конец трассы).
-             * Двух-трёх проходов хватает: вершины ставятся НА линию, форма от
-             * этого не меняется, и пикетаж сходится сразу. */
             const armSig = (pts) => (pts?.arms || [])
                 .map((a) => `${a.polyId}:${(a.sta ?? 0).toFixed(4)}:${a.mouth.toFixed(4)}`).join('|');
-            /* ⚠️ Раньше здесь стояло `if (rec.zTarget != null)`, и связывание
-             * профилей работало ТОЛЬКО у узла с отметкой, заданной руками. В
-             * режиме «по осям» каждая ось оставалась при своей отметке, и на
-             * примыкании полотна расходились ступенькой: замерено 4.000 м на
-             * съезде, положенном на 4 м ниже главной. Крутим всегда — сама
-             * `syncAxisElevationsForNode` решает, чья отметка главная. */
-            {
-                for (let pass = 0; pass < 3; pass++) {
-                    const before = armSig(rec.points);
-                    if (!syncAxisElevationsForNode(rec)) break;
-                    const again = calc();
-                    if (!again) break;
-                    rec.points = again;
-                    if (armSig(rec.points) === before) break;
-                }
+            /* ⚠️ Здесь когда-то стояло `if (rec.zTarget != null)`, и связывание
+             * работало только у узла с отметкой, заданной руками. Крутим
+             * всегда — чья отметка главная, решает сама
+             * `syncAxisElevationsForNode`. */
+            let moved = false;
+            for (let pass = 0; pass < 3; pass++) {
+                const before = armSig(rec.points);
+                if (!syncAxisElevationsForNode(rec)) break;
+                moved = true;
+                const again = calc();
+                if (!again) break;
+                rec.points = again;
+                if (armSig(rec.points) === before) break;
             }
+            return moved;
+        }
+
+        /** Пересчитать узел под новые радиусы и уширения и перерисовать. */
+        function refreshRoadIntersection(rec) {
+            if (!rec) return false;
+            const p1 = drawnPolylines.find((r) => r.id === rec.poly1Id);
+            const p2 = drawnPolylines.find((r) => r.id === rec.poly2Id);
+            if (!p1 || !p2) return false;
+            const next = calculateIntersection(p1, p2, rec.type, rec.radius, {
+                radii: rec.radii || {},
+                flares: rec.flares || {},
+                zTarget: rec.zTarget
+            });
+            if (!next) return false;
+            rec.points = next;
+            settleNodeElevations(rec);
             visualizeIntersection(rec);
             syncCorridorsForIntersection(rec);
             // Углов могло стать больше или меньше — подписи пересобираем,
@@ -45417,7 +45480,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: 'f27fc15-preview',
+            buildId: '8cbd200-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

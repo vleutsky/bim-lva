@@ -1214,11 +1214,29 @@ try {
             return best ? best.z : null;
         };
         const nodeAbs = D.nodeElevation ? D.nodeElevation(ix.id) : null;
-        return { error: null, ixId: ix.id, main, branch, nodeAbs };
+        const dump = D.nodeGeometryDump(ix.id);
+        return {
+            error: null, ixId: ix.id, main, branch, nodeAbs,
+            arms: (dump?.arms || []).map((a) => ({ poly: a.poly, sign: a.sign }))
+        };
     });
     if (tee.error) {
         check(false, `примыкание: ${tee.error}`);
     } else {
+        /* Ветви — причина, отметка — следствие. Проверяем обе: сквозная ось
+         * обязана иметь ДВЕ ветви, примыкающая одну.
+         * ⚠️ Раньше сквозной считалась `poly1`, то есть просто первый
+         * аргумент, а автопостроение подставляет первой ТОЛЬКО ЧТО
+         * начерченную ось — примыкающую. У главной дороги терялась вторая
+         * ветвь (2 вместо 3), узел обрывал её с одной стороны, а связывание
+         * отметок не понимало, чей профиль главный. Ось, начерченная второй,
+         * здесь именно съезд — иначе проверка пройдёт вхолостую. */
+        const armsOfMain = tee.arms.filter((a) => a.poly === tee.main).length;
+        const armsOfBranch = tee.arms.filter((a) => a.poly === tee.branch).length;
+        console.log(`  ветви узла: главная ${armsOfMain}, съезд ${armsOfBranch} (всего ${tee.arms.length})`);
+        check(armsOfMain === 2, `у сквозной оси две ветви (получено ${armsOfMain})`);
+        check(armsOfBranch === 1, `у примыкающей одна ветвь (получено ${armsOfBranch})`);
+
         const zz = await page.evaluate(({ main, branch }) => {
             const D = window.BimLvaDebug;
             const at = (id) => {
@@ -1250,6 +1268,17 @@ try {
         console.log(`  примыкание: съезд ${bEnd.z.toFixed(3)}, главная ${nearest.z.toFixed(3)},`
             + ` расхождение ${dz.toFixed(3)} м`);
         check(dz < 0.05, `отметка на примыкании общая у обеих осей (расхождение ${dz.toFixed(3)} м)`);
+
+        /* ⚠️ Одного «расхождения» МАЛО, и это измерено, а не предположено:
+         * со связыванием, но без починки ветвей обе оси сходились на 2.5 м —
+         * съезд поднимался, а ГЛАВНУЮ тянуло вниз, и проверка выше была бы
+         * зелёной на заведомо сломанном результате. Главная в фикстуре
+         * горизонтальна, значит связывание обязано оставить её горизонтальной:
+         * тянуть сквозную дорогу к отметке съезда неверно. */
+        const zs = zz.main.map((p) => p.z);
+        const tilt = Math.max(...zs) - Math.min(...zs);
+        console.log(`  профиль главной: перепад ${tilt.toFixed(3)} м (была горизонтальна)`);
+        check(tilt < 0.01, `сквозную ось не потянуло к отметке съезда (перепад ${tilt.toFixed(3)} м)`);
     }
 
     await fs.rm(terrainFile, { force: true });

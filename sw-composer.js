@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260820-tree-collapse';
+const CACHE = 'bimlva-composer-shell-20260820-tee-elev';
 const SHELL = [
   './',
   './index.html',
