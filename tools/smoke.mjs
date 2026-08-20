@@ -2837,6 +2837,26 @@ async function checkRoadCrossSections(page) {
         problems.push(`окна: главная кнопка не крайняя справа (${chrome.badFoot.join(', ')})`);
     }
 
+    /* Окно «Схема IFC»: показывает файлы с их схемами и даёт кнопки целевых
+     * схем. Ввод цифрой был лишним движением, а какая схема у модели — вообще
+     * нигде не показывалось. */
+    const schemaWin = await page.evaluate(() => {
+        const m = document.getElementById('ifcSchemaModal');
+        if (!m) return null;
+        const btns = [...m.querySelectorAll('[data-schema]')].map((b) => b.dataset.schema);
+        return { btns, hasList: !!document.getElementById('ifcSchemaList') };
+    });
+    if (!schemaWin) {
+        problems.push('нет окна «Схема IFC»');
+    } else {
+        if (!schemaWin.hasList) problems.push('окно схем: нет списка файлов со схемами');
+        for (const want of ['IFC2X3', 'IFC4', 'IFC4X3_ADD2']) {
+            if (!schemaWin.btns.includes(want)) {
+                problems.push(`окно схем: нет кнопки ${want} (есть ${schemaWin.btns.join(', ')})`);
+            }
+        }
+    }
+
     if (!layer.xsUnderIntersections) {
         problems.push('поперечники: кнопка не стоит под «Пересечения» в панели «Ось»');
     }

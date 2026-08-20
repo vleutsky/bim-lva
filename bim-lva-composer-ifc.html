@@ -5792,6 +5792,22 @@
         </div>
     </div>
 
+    <div class="modal-backdrop" id="ifcSchemaModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ifcSchemaTitle" style="width:min(560px,100%)">
+            <h3 id="ifcSchemaTitle">Схема IFC</h3>
+            <div class="bulk-note">
+                Класса, которого в целевой схеме нет, элемент не теряет: он остаётся с
+                универсальным классом, а настоящее имя уходит в свойство ObjectType.
+            </div>
+            <div id="ifcSchemaList" class="prop small"></div>
+            <div class="modal-actions">
+                <button class="btn" id="ifcSchemaClose">Закрыть</button>
+                <button class="btn load-btn" data-schema="IFC2X3">IFC2x3</button>
+                <button class="btn load-btn" data-schema="IFC4">IFC4</button>
+                <button class="btn load-btn" data-schema="IFC4X3_ADD2">IFC4.3</button>
+            </div>
+        </div>
+    </div>
     <div class="modal-backdrop" id="colorByModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="colorByModalTitle" style="width:min(480px,100%)">
             <h3 id="colorByModalTitle">Цвет по классу / параметру</h3>
@@ -41246,6 +41262,7 @@ ${componentXml || '    '}
          * своими, теряется только точность классификации — и об этом надо
          * честно сказать в уведомлении, а не молчать.
          */
+        /* Целевые схемы — те же, что кнопки в окне «Схема IFC». */
         const IFC_SCHEMA_TARGETS = ['IFC2X3', 'IFC4', 'IFC4X3_ADD2'];
 
         /** Классы, которых в схеме нет, и чем их заменить. */
@@ -41434,19 +41451,34 @@ ${componentXml || '    '}
          * Спрашиваем схему простым выбором: отдельное окно ради одного
          * значения — лишнее движение, а их владелец просил не плодить.
          */
-        async function convertLoadedIfcSchema() {
+        /**
+         * Окно схем: показывает, какая схема у КАЖДОГО загруженного файла, и
+         * даёт кнопки целевых схем. Ввод цифрой был лишним движением — не то,
+         * что нужно, когда файлов несколько и надо сначала посмотреть, что
+         * вообще загружено.
+         */
+        async function openIfcSchemaModal() {
+            await ensureIfcIndexes(loadedModels.values());
+            const models = [...loadedModels.values()].filter((m) => canEditIfc(m) && m.ifcIndex);
+            const box = $('ifcSchemaList');
+            if (box) {
+                box.innerHTML = models.length
+                    ? models.map((m) => {
+                        const sch = m.ifcSchema
+                            || detectIfcSchemaFromText(m.ifcIndex.text.slice(0, 4096))
+                            || '—';
+                        return `<div class="k">${esc(m.filename || 'без имени')}</div>`
+                            + `<div class="v mono">${esc(sch)}</div>`;
+                    }).join('')
+                    : '<div class="k">Нет загруженных IFC</div><div class="v">—</div>';
+            }
+            $('ifcSchemaModal')?.classList.add('show');
+        }
+
+        async function convertLoadedIfcSchema(target) {
             await ensureIfcIndexes(loadedModels.values());
             const models = [...loadedModels.values()].filter((m) => canEditIfc(m) && m.ifcIndex);
             if (!models.length) { notifyError('Нет загруженных IFC для конвертации.'); return; }
-            const raw = prompt(
-                'Схема, в которую пересобрать:\n' +
-                '1 — IFC2x3 (Navisworks и старое ПО)\n' +
-                '2 — IFC4\n' +
-                '3 — IFC4.3 (дорожные классы)',
-                '2'
-            );
-            if (raw == null) return;
-            const target = IFC_SCHEMA_TARGETS[Math.max(0, Math.min(2, (parseInt(raw, 10) || 2) - 1))];
             let total = 0, tess = 0;
             const seen = {};
             models.forEach((mod, i) => {
@@ -41477,7 +41509,14 @@ ${componentXml || '    '}
             );
             trackUsage('ifc_convert_schema', { target, changed: total });
         }
-        $('btnConvertIfcSchema')?.addEventListener('click', convertLoadedIfcSchema);
+        $('btnConvertIfcSchema')?.addEventListener('click', openIfcSchemaModal);
+        $('ifcSchemaClose')?.addEventListener('click', () => $('ifcSchemaModal')?.classList.remove('show'));
+        $('ifcSchemaModal')?.querySelectorAll('[data-schema]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                $('ifcSchemaModal')?.classList.remove('show');
+                convertLoadedIfcSchema(btn.dataset.schema);
+            });
+        });
         $('btnExportIFC').addEventListener('click', async () => {
             await ensureIfcIndexes(loadedModels.values());
             downloadEditedIfcModels();
@@ -45353,7 +45392,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'ifc-schema',
+            buildId: 'schema-win',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
