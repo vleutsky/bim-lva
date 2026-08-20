@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260820-profile-scale';
+const CACHE = 'bimlva-composer-shell-20260820-brow-stitch';
 const SHELL = [
   './',
   './index.html',

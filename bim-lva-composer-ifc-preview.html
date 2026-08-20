@@ -4072,7 +4072,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 2e82718</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 96c3db4</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -8084,14 +8084,14 @@
                 });
                 if (!built?.length) return null;
                 return {
-                    sides: built.map((b) => ({
+                    sides: built.filter((b) => b.sm).map((b) => ({
                         side: b.side,
                         fill: b.sm.sides.reduce((n, s) => n + s.fill, 0),
                         cut: b.sm.sides.reduce((n, s) => n + s.cut, 0),
                         tinFaces: b.sm.tin?.faces?.length || 0,
                         polylineId: b.rec.id
                     })),
-                    tinFaces: built.reduce((n, b) => n + (b.sm.tin?.faces?.length || 0), 0)
+                    tinFaces: built.reduce((n, b) => n + (b.sm?.tin?.faces?.length || 0), 0)
                 };
             },
             /**
@@ -18347,7 +18347,7 @@
                     const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
                     if (built?.length) {
                         let fill = 0, cut = 0;
-                        built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+                        built.forEach((b) => (b.sm?.sides || []).forEach((s) => { fill += s.fill; cut += s.cut; }));
                         extra = ` Откосы: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
                     }
                     notify(
@@ -22731,6 +22731,7 @@
             const runs = splitStationsAtBreaks(
                 model.stations, corridorBreakFlags(model.stations, model.nodeGaps || [])
             );
+            const nodeEnds = liveNodeBrowEnds();
             const addSide = (side) => {
                 runs.forEach((run, ri) => {
                     const pts = run.map((st) => {
@@ -22743,6 +22744,15 @@
                     if (pts.length < 2) return;
                     const rec = ensureRoadSlopeBrow(model, side, pts, ri);
                     if (!rec) return;
+                    /* Кусок, упирающийся в узел, СВОЕГО откоса не получает:
+                     * его подберёт сшитая линия узла (плечо → дуга → плечо).
+                     * Запись при этом остаётся — она нужна и как геометрия для
+                     * сшивки, и чтобы уборка бровок осталась там же, где была. */
+                    if (browTouchesAny(pts, nodeEnds)) {
+                        removeSlopeModelsForPolyline(rec.id);
+                        built.push({ side, run: ri, rec, sm: null, stitched: true });
+                        return;
+                    }
                     const sm = buildSlopeToTerrain(rec, { ...full, side });
                     if (sm) built.push({ side, run: ri, rec, sm });
                 });
@@ -22750,7 +22760,7 @@
             addSide('left');
             addSide('right');
             model.slopeBrowIds = built.map((b) => b.rec.id);
-            model.slopeModelIds = built.map((b) => b.sm.id);
+            model.slopeModelIds = built.filter((b) => b.sm).map((b) => b.sm.id);
             prevBrows.forEach((id) => {
                 if (model.slopeBrowIds.includes(id)) return;
                 dropRoadSlopeBrow(drawnPolylines.find((r) => r.id === id));
@@ -24145,7 +24155,7 @@
                 const built = buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
                 if (built?.length) {
                     let fill = 0, cut = 0;
-                    built.forEach((b) => b.sm.sides.forEach((s) => { fill += s.fill; cut += s.cut; }));
+                    built.forEach((b) => (b.sm?.sides || []).forEach((s) => { fill += s.fill; cut += s.cut; }));
                     extra = ` Откосы до рельефа: насыпь ${fill.toFixed(2)} м³, выемка ${cut.toFixed(2)} м³.`;
                 } else {
                     extra = ' Откосы до рельефа не построились — нет земли у кромок.';
@@ -25113,6 +25123,85 @@
             return withDrawUiBatch(() => buildNodeSlopesInner(rec, opts));
         }
 
+        /* --- Сшивка бровок у узла ------------------------------------------
+         * Бровка дороги обрывается у устья, бровка узла начинается там же —
+         * замерено, концы сходятся в 0.000 м. Но откосы по ним считались
+         * ДВУМЯ отдельными поверхностями, и на стыке оставался шов, а на
+         * вогнутом углу — перехлёст («бабочка», владелец прислал скриншот).
+         * Сшитая линия лечит шов сама: в углу, где соседние точки бровки
+         * совпадают, построитель уже ставит веер (`dist < 1e-6`), и второй
+         * механизм заводить не надо.
+         *
+         * Владелец узла — САМ УЗЕЛ, а не ось: цепочка идёт через ДВЕ оси
+         * (плечо A → дуга узла → плечо B), и приписать её одной оси нельзя.
+         * Дорожные куски при этом остаются своими записями (их убирает
+         * дорожный проход), просто откос по ним не строится отдельно.
+         */
+        const NODE_BROW_STITCH_TOL = 0.35;
+
+        function nodeBrowRunsFor(ix) {
+            const d = ix?.points;
+            if (!d?.runs?.length) return [];
+            return d.runs
+                .map((run) => nodeSlopeBrowRun(d.outer, run.pts))
+                .filter((pts) => pts && pts.length >= 2);
+        }
+
+        /** Концы бровок ВСЕХ живых узлов — к ним и приклеиваются дорожные. */
+        function liveNodeBrowEnds() {
+            const ends = [];
+            roadIntersections.forEach((ix) => {
+                nodeBrowRunsFor(ix).forEach((pts) => {
+                    ends.push(pts[0], pts[pts.length - 1]);
+                });
+            });
+            return ends;
+        }
+
+        function browTouchesAny(pts, ends, tol = NODE_BROW_STITCH_TOL) {
+            if (!pts?.length || !ends.length) return false;
+            const test = [pts[0], pts[pts.length - 1]];
+            return test.some((p) => ends.some((q) =>
+                Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) <= tol));
+        }
+
+        /**
+         * Дорожная бровка, приклеенная к точке `pt`.
+         * `want` = 'in'  — кусок должен ЗАКАНЧИВАТЬСЯ в этой точке (идёт перед
+         *                  дугой узла), 'out' — начинаться (идёт после).
+         * Возвращает точки, уже развёрнутые так, чтобы наружу смотрела ПРАВАЯ
+         * нормаль — тот же обход, что у контура узла. Если разворот выходит
+         * против стороны шаблона (правая бровка вперёд / левая назад), кусок
+         * НЕ берём: иначе откос вывернется внутрь, а объём останется
+         * правдоподобным — ловится только знаком выноса.
+         */
+        function roadBrowAttachedAt(pt, want, used) {
+            const near = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= NODE_BROW_STITCH_TOL;
+            for (const rec of drawnPolylines) {
+                if (rec.role !== 'road-slope-brow' || rec.roadXsModelId == null) continue;
+                if (used.has(rec.id)) continue;
+                const pts = rec.pts || [];
+                if (pts.length < 2) continue;
+                const first = pts[0], last = pts[pts.length - 1];
+                let reversed = null;
+                if (want === 'in') {
+                    if (near(last, pt)) reversed = false;
+                    else if (near(first, pt)) reversed = true;
+                } else {
+                    if (near(first, pt)) reversed = false;
+                    else if (near(last, pt)) reversed = true;
+                }
+                if (reversed == null) continue;
+                const outwardRight = reversed ? rec.roadSlopeSide === 'left' : rec.roadSlopeSide === 'right';
+                if (!outwardRight) continue;
+                const out = pts.map((p) => p.clone());
+                if (reversed) out.reverse();
+                used.add(rec.id);
+                return { rec, pts: out };
+            }
+            return null;
+        }
+
         function buildNodeSlopesInner(rec, opts) {
             if (syncingNodeSlopes) return null;
             const data = rec?.points;
@@ -25127,10 +25216,20 @@
             try {
                 const prev = drawnPolylines.filter((r) => r.nodeIxId === rec.id).map((r) => r.id);
                 const alive = new Set();
+                const usedRoadBrows = new Set();
                 data.runs.forEach((run, i) => {
                     const pts = nodeSlopeBrowRun(data.outer, run.pts);
                     if (!pts || pts.length < 2) return;
-                    const poly = ensureNodeSlopeBrow(rec, i, pts);
+                    /* Сшиваем в ОДНУ линию: плечо → дуга узла → плечо.
+                     * Совпавшую точку не дублируем — иначе в цепочке два
+                     * подряд одинаковых узла, и веер в углу вырождается. */
+                    const before = roadBrowAttachedAt(pts[0], 'in', usedRoadBrows);
+                    const after = roadBrowAttachedAt(pts[pts.length - 1], 'out', usedRoadBrows);
+                    const chain = [];
+                    if (before) chain.push(...before.pts.slice(0, -1));
+                    chain.push(...pts.map((p) => p.clone()));
+                    if (after) chain.push(...after.pts.slice(1));
+                    const poly = ensureNodeSlopeBrow(rec, i, chain);
                     if (!poly) return;
                     alive.add(poly.id);
                     // Контур узла обходится против часовой, наружу смотрит
@@ -44334,7 +44433,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: '2e82718-preview',
+            buildId: '96c3db4-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
