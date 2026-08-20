@@ -4072,7 +4072,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 51941e4</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 2e82718</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5432,8 +5432,8 @@
                             </label>
                             <label data-tip="Во сколько раз вертикаль растянута относительно плана.">верт.
                                 <select class="editInput" id="polyProfileExag">
-                                    <option value="auto" selected>авто</option>
-                                    <option value="1">1 : 1</option>
+                                    <option value="auto">авто</option>
+                                    <option value="1" selected>1 : 1</option>
                                     <option value="2">2 : 1</option>
                                     <option value="5">5 : 1</option>
                                     <option value="10">10 : 1</option>
@@ -18927,7 +18927,12 @@
 
         /* Окно просмотра профиля: какой участок пикетажа виден и с каким
          * вертикальным растяжением. exag = null — вписать всё. */
-        let polyProfileView = { from: 0, to: 0, exag: null, zCentre: null };
+        /* Вертикальный масштаб по умолчанию — 1:1, то есть натуральный, как
+         * просил владелец: «авто» вписывало перепад в окно и растягивало
+         * отметки на произвольную величину, и с чертежом было не работать.
+         * Горизонтальный при этом НЕ трогается ничем: `profileFrame` считает
+         * `mPerPxX` только из окна пикетажа, а вертикаль выводит из него. */
+        let polyProfileView = { from: 0, to: 0, exag: 1, exagAuto: true, zCentre: null };
         let polyProfileActiveVertex = -1;
 
         /**
@@ -18995,10 +19000,19 @@
             if (zMax - zMin < 1e-6) { zMin -= 0.5; zMax += 0.5; }
 
             let mPerPxY;
+            const fitY = (zMax - zMin) * 1.12 / ih;       // вписать с полями
             if (polyProfileView.exag == null) {
-                mPerPxY = (zMax - zMin) * 1.12 / ih;      // вписать с полями
+                mPerPxY = fitY;
             } else {
                 mPerPxY = mPerPxX / polyProfileView.exag;
+                /* Масштаб по умолчанию (1:1) НЕ должен выкидывать чертёж за
+                 * кадр: на короткой оси с большим перепадом натуральный
+                 * масштаб не помещается, и подписи отметок, уклонов и Rв
+                 * уезжают за край — `placeChartLabel` их просто отбрасывает,
+                 * и панель выглядит пустой. Поэтому умолчание отступает до
+                 * вписывания; ЯВНО выбранный пользователем масштаб держим как
+                 * есть — он его и просил. */
+                if (polyProfileView.exagAuto && fitY > mPerPxY) mPerPxY = fitY;
             }
             const centre = polyProfileView.zCentre != null
                 ? polyProfileView.zCentre
@@ -19630,6 +19644,7 @@
                 const cur = polyProfileView.exag == null ? f.exag : polyProfileView.exag;
                 const next = Math.min(500, Math.max(0.2, cur / k));
                 polyProfileView.exag = next;
+                polyProfileView.exagAuto = false;
                 polyProfileView.zCentre = f.zAt(p.y);
                 const sel = $('polyProfileExag');
                 if (sel) sel.value = 'auto';
@@ -19840,6 +19855,7 @@
         $('polyProfileExag')?.addEventListener('change', (ev) => {
             const v = ev.target.value;
             polyProfileView.exag = v === 'auto' ? null : Number(v);
+            polyProfileView.exagAuto = false;   // выбор руками важнее умолчания
             if (v === 'auto') polyProfileView.zCentre = null;
             renderPolylineProfile();
         });
@@ -44318,7 +44334,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: '51941e4-preview',
+            buildId: '2e82718-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
