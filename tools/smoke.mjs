@@ -2790,6 +2790,53 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: смена толщины слоя не сдвинула низ покрытия (${JSON.stringify(layer)})`);
     }
     if (!layer.profileXs) problems.push('поперечники: нет кнопки в окне профиля');
+    /* Кнопки не должны «разъезжаться»: на одной вкладке ленты крупные кнопки
+     * обязаны быть одного роста, а в подвале немодального окна главная кнопка
+     * — крайней справа. Замерено до правки: на «Черчении» три разные высоты
+     * (56/70/74), а главная кнопка шла первой в трёх окнах из двадцати с
+     * лишним. Проверяем ЧИСЛОМ, а не глазами: скриншот в headless врёт на
+     * полупрозрачных накладках (см. грабли оформления). */
+    const chrome = await page.evaluate(() => {
+        const tabs = {};
+        document.querySelectorAll('.rpage').forEach((pg) => {
+            pg.style.display = 'block';
+            const hs = [...pg.querySelectorAll('.rbtn-big')].map((b) => b.offsetHeight);
+            if (hs.length) tabs[pg.dataset.rp] = [...new Set(hs)];
+            pg.style.display = '';
+        });
+        const badFoot = [];
+        document.querySelectorAll('.modal-actions').forEach((f) => {
+            const btns = [...f.querySelectorAll('.btn')];
+            const primary = btns.filter((b) => b.classList.contains('load-btn'));
+            if (!primary.length || btns.length < 2) return;
+            /* ⚠️ Мерить положение НЕЛЬЗЯ: окна закрыты (display:none), и
+             * getBoundingClientRect у всех даёт нули — сортировка «по экрану»
+             * бессмысленна и метит окна наугад. Так эта проверка и соврала на
+             * четырёх окнах при верном CSS. Считаем порядок так же, как его
+             * считает flexbox: сначала `order`, при равенстве — порядок в
+             * разметке. */
+            const sorted = btns.map((b, i) => ({ b, i, o: +getComputedStyle(b).order || 0 }))
+                .sort((x, y) => (x.o - y.o) || (x.i - y.i))
+                .map((x) => x.b);
+            if (!primary.includes(sorted[sorted.length - 1])) {
+                badFoot.push(f.closest('.modal-backdrop')?.id || '?');
+            }
+        });
+        return { tabs, badFoot };
+    });
+    const ragged = Object.entries(chrome.tabs).filter(([, hs]) => hs.length > 1);
+    const allH = [...new Set(Object.values(chrome.tabs).flat())];
+    console.log(`  лента: высот крупных кнопок ${allH.join('/')}, вкладок вразнобой ${ragged.length}`);
+    if (ragged.length) {
+        problems.push(`лента: крупные кнопки разной высоты (${ragged.map(([t, hs]) => `${t}: ${hs.join('/')}`).join('; ')})`);
+    }
+    if (allH.length > 1) {
+        problems.push(`лента: вкладки с разной высотой кнопок (${allH.join('/')})`);
+    }
+    if (chrome.badFoot.length) {
+        problems.push(`окна: главная кнопка не крайняя справа (${chrome.badFoot.join(', ')})`);
+    }
+
     if (!layer.xsUnderIntersections) {
         problems.push('поперечники: кнопка не стоит под «Пересечения» в панели «Ось»');
     }

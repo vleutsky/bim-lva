@@ -459,8 +459,41 @@
             text-align: center;
             white-space: normal;
         }
-        .rbtn-big .tb-ico { font-size: 18px; width: auto; }
-        .rbtn-big .tb-txt { white-space: normal; }
+        /* Иконка и подпись — В ФИКСИРОВАННЫХ слотах, иначе кнопки на одной
+           вкладке разной высоты: замерено 56 / 70 / 74 px на «Черчении» —
+           короткая подпись в одну строку, длинная в две, а рисованная иконка
+           выше символьной. Слоты равняют всё разом, без подгонки под каждую
+           надпись. */
+        /* Один рост у всех крупных кнопок ленты — включая вкладку «Файл», где
+           у части кнопок нет иконки (замерено 67 против 72).
+           ⚠️ Селектор ОБЯЗАН быть не слабее `.top .rpanel .btn`, который выше
+           ставит `min-height: 0`: у него три класса, у голого `.rbtn-big` один,
+           и правило молча проигрывало — высота не менялась вовсе. */
+        .top .rpanel .rbtn-big,
+        .rpage .rpanel .rbtn-big,
+        .rpage .items .rbtn-big,
+        /* «Локально» на вкладке «Файл» — это <label>, и его ловит правило
+           `.top .rpanel label.btn { min-height: 0 }`. Селектор с элементом
+           обязателен, иначе кнопка остаётся на 67 px против 72 у остальных. */
+        .top .rpanel label.rbtn-big,
+        .rpage .rpanel label.rbtn-big { min-height: 72px; }
+        .rbtn-big .tb-ico {
+            font-size: 18px;
+            line-height: 1;
+            width: auto;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .rbtn-big .tb-txt {
+            white-space: normal;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            min-height: 2.3em;      /* две строки всегда, даже если подпись одна */
+        }
         .rbtn-sm {
             display: inline-flex;
             align-items: center;
@@ -3163,9 +3196,20 @@
             display: flex;
             flex-wrap: wrap;
             justify-content: flex-end;
+            align-items: center;
             gap: 8px;
             margin-top: 14px;
         }
+        /* Главная кнопка окна — ВСЕГДА крайняя справа, в каком бы порядке она
+           ни стояла в разметке. Замерено: у «Сканировать» (4D), «Поставить по
+           координатам» (выравнивание) и «Открыть папку» (Яндекс.Диск) она шла
+           ПЕРВОЙ, а в остальных двадцати окнах — последней. Правило в CSS
+           дешевле и надёжнее, чем переставлять кнопки в двадцати местах
+           разметки: там легко пропустить окно и снова получить разнобой. */
+        .modal-actions > * { order: 1; }
+        .modal-actions .load-btn,
+        .modal-actions .btn-cloud { order: 2; }
+        .modal-actions .btn { min-height: 28px; }
 
         /* Плавающая панель коллизий: сцена кликабельна, окно можно таскать */
         .modal-backdrop.floating-panel {
@@ -4084,7 +4128,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · d695317</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 6e75eb2</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -44917,7 +44961,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: 'd695317-preview',
+            buildId: '6e75eb2-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
