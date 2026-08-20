@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260820-ix-labels';
+const CACHE = 'bimlva-composer-shell-20260820-slope-scope';
 const SHELL = [
   './',
   './index.html',

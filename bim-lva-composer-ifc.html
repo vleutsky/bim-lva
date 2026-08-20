@@ -7410,7 +7410,9 @@
                     padColor: sm.padColor || null
                 }));
             },
-            /** Убрать все построенные откосы (то же, что «Убрать откосы»). */
+            /** Убрать откосы площадок — то же, что кнопка «Убрать откосы». */
+            clearPadSlopes() { clearSlopeModels('pads'); },
+            /** Убрать ВСЕ откосы (сброс сцены в тестах). */
             clearSlopes() {
                 clearSlopeModels();
                 return true;
@@ -15246,10 +15248,31 @@
             if (touched) { updateDrawUi(); updateSlopeStatus(); markNeedsRender(); }
         }
 
-        function clearSlopeModels() {
+        /**
+         * Откос площадки или откос дороги — разные вещи.
+         *
+         * У дорожного и узлового откоса бровка — СЛУЖЕБНАЯ линия
+         * (`role === 'road-slope-brow'`), её строит расчёт полотна, и живёт
+         * она вместе с осью. Откос площадки построен по линии, которую
+         * начертил пользователь.
+         *
+         * Раньше «Убрать откосы» в окне площадок сносило и то и другое —
+         * владелец жал кнопку у площадки и терял откосы у всех дорог и
+         * перекрёстков. Поэтому у уборки есть область.
+         */
+        function isPadSlopeModel(sm) {
+            const rec = drawnPolylines.find((r) => r.id === sm.polylineId);
+            return rec?.role !== 'road-slope-brow';
+        }
+
+        function clearSlopeModels(scope) {
             if (!slopeModels.length) return;
-            slopeModels.forEach(disposeSlopeModel);
-            slopeModels = [];
+            const mine = scope === 'pads'
+                ? slopeModels.filter(isPadSlopeModel)
+                : slopeModels.slice();
+            if (!mine.length) return;
+            mine.forEach(disposeSlopeModel);
+            slopeModels = slopeModels.filter((sm) => !mine.includes(sm));
             updateDrawUi();
             updateSlopeStatus();
             markNeedsRender();
@@ -27219,7 +27242,9 @@
         $('slopeSelect')?.addEventListener('change', () => {
             slopeRecordId = Number($('slopeSelect').value);
         });
-        $('slopeClear')?.addEventListener('click', clearSlopeModels);
+        /* Только откосы площадок: дорожные и узловые живут вместе со своими
+         * осями и убираются вместе с ними, а не этой кнопкой. */
+        $('slopeClear')?.addEventListener('click', () => clearSlopeModels('pads'));
         $('slopeCancel')?.addEventListener('click', () => {
             $('slopeModal').classList.remove('show');
             slopePanel.reset();
@@ -45044,7 +45069,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'ix-labels',
+            buildId: 'slope-scope',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

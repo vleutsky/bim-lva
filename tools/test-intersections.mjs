@@ -1134,6 +1134,43 @@ try {
             `обстройка сведена на нет к оси без неё (${tapered.length} из ${(mixed.runs || []).length} участков)`);
     }
 
+    /* «Убрать откосы» в окне площадок НЕ должна трогать откосы дорог и узлов.
+     * Владелец жал кнопку у площадки и терял всё построенное по осям.
+     * ⚠️ Проверять надо, что дорожные ОСТАЛИСЬ, а не что кнопка «что-то
+     * убрала»: старая уборка сносила всё подряд и такую проверку прошла бы. */
+    const scoped = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections(); D.clearPolylines(); D.clearSlopes();
+        D.setAutoNodes(true);
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const z = g.centerZ + g.sizeZ / 2 + 3;
+        const cx = g.centerX, cy = g.centerY;
+        const a = D.createPolylineFromPoints(
+            [{ x: cx - 50, y: cy, z }, { x: cx + 50, y: cy, z }], { name: 'Дорога', role: 'road-axis' });
+        D.setRoadWidths(a, 5, 5);
+        D.buildRoadXs(a, { step: 10, widthL: 5, widthR: 5, live: true });
+        D.buildRoadXsSlopes({ polylineId: a });
+        // Площадка: обычный замкнутый контур в стороне от дороги.
+        const pad = D.createPolylineFromPoints([
+            { x: cx - 40, y: cy + 40, z }, { x: cx + 0, y: cy + 40, z },
+            { x: cx + 0, y: cy + 70, z }, { x: cx - 40, y: cy + 70, z }
+        ], { name: 'Площадка', closed: true });
+        D.buildSlopeOnPolyline(pad, { side: 'both', mFill: 1.5, mCut: 1, step: 0.5, maxReach: 30 });
+        await new Promise((r) => setTimeout(r, 400));
+        const road = () => (D.slopes || []).filter((s) => /бровка/.test(s.name || '')).length;
+        const pads = () => (D.slopes || []).filter((s) => !/бровка/.test(s.name || '')).length;
+        const before = { road: road(), pads: pads() };
+        D.clearPadSlopes();
+        return { before, after: { road: road(), pads: pads() } };
+    });
+    console.log(`  уборка площадок: дорожных ${scoped.before.road}→${scoped.after.road},`
+        + ` площадочных ${scoped.before.pads}→${scoped.after.pads}`);
+    check(scoped.before.road > 0 && scoped.before.pads > 0,
+        `сцена собрана: дорожных ${scoped.before.road}, площадочных ${scoped.before.pads}`);
+    check(scoped.after.pads === 0, 'откосы площадки убраны');
+    check(scoped.after.road === scoped.before.road,
+        `откосы дорог и узлов НЕ тронуты (${scoped.after.road} из ${scoped.before.road})`);
+
     /* ПРИМЫКАНИЕ: отметка берётся у сквозной оси и фиксируется у ОБЕИХ.
      * Раньше профили связывались только когда отметку задавали вручную, а в
      * режиме «по осям» каждая ось оставалась при своей — на стыке полотна

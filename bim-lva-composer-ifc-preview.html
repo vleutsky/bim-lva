@@ -4128,7 +4128,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 5184f33</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · bea28ec</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -7429,7 +7429,9 @@
                     padColor: sm.padColor || null
                 }));
             },
-            /** Убрать все построенные откосы (то же, что «Убрать откосы»). */
+            /** Убрать откосы площадок — то же, что кнопка «Убрать откосы». */
+            clearPadSlopes() { clearSlopeModels('pads'); },
+            /** Убрать ВСЕ откосы (сброс сцены в тестах). */
             clearSlopes() {
                 clearSlopeModels();
                 return true;
@@ -15265,10 +15267,31 @@
             if (touched) { updateDrawUi(); updateSlopeStatus(); markNeedsRender(); }
         }
 
-        function clearSlopeModels() {
+        /**
+         * Откос площадки или откос дороги — разные вещи.
+         *
+         * У дорожного и узлового откоса бровка — СЛУЖЕБНАЯ линия
+         * (`role === 'road-slope-brow'`), её строит расчёт полотна, и живёт
+         * она вместе с осью. Откос площадки построен по линии, которую
+         * начертил пользователь.
+         *
+         * Раньше «Убрать откосы» в окне площадок сносило и то и другое —
+         * владелец жал кнопку у площадки и терял откосы у всех дорог и
+         * перекрёстков. Поэтому у уборки есть область.
+         */
+        function isPadSlopeModel(sm) {
+            const rec = drawnPolylines.find((r) => r.id === sm.polylineId);
+            return rec?.role !== 'road-slope-brow';
+        }
+
+        function clearSlopeModels(scope) {
             if (!slopeModels.length) return;
-            slopeModels.forEach(disposeSlopeModel);
-            slopeModels = [];
+            const mine = scope === 'pads'
+                ? slopeModels.filter(isPadSlopeModel)
+                : slopeModels.slice();
+            if (!mine.length) return;
+            mine.forEach(disposeSlopeModel);
+            slopeModels = slopeModels.filter((sm) => !mine.includes(sm));
             updateDrawUi();
             updateSlopeStatus();
             markNeedsRender();
@@ -26084,12 +26107,82 @@
          * Привязать профили обеих осей к отметке узла. Вершины ставятся на
          * устья — там, где кончается коридор и начинается покрытие узла.
          */
+        /**
+         * Отметка оси в точке плана — по её собственной геометрии, а не по
+         * отметке узла: именно ею примыкание и «садится» на главную дорогу.
+         */
+        function polylineElevationAtPoint(poly, p) {
+            const pts = (poly?.renderPts?.length >= 2) ? poly.renderPts : poly?.pts;
+            if (!pts || pts.length < 2) return null;
+            let best = null;
+            for (let i = 0; i + 1 < pts.length; i++) {
+                const a = pts[i], b = pts[i + 1];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const len2 = dx * dx + dy * dy;
+                if (len2 < 1e-12) continue;
+                let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+                t = Math.max(0, Math.min(1, t));
+                const qx = a.x + dx * t, qy = a.y + dy * t;
+                const d = Math.hypot(p.x - qx, p.y - qy);
+                if (!best || d < best.d) best = { d, z: a.z + (b.z - a.z) * t };
+            }
+            return best ? best.z : null;
+        }
+
         function syncAxisElevationsForNode(rec) {
             const d = rec?.points;
-            if (!d?.crossPoint || rec.zTarget == null) return false;
-            const z = d.crossPoint.z;
+            if (!d?.crossPoint) return false;
+            /* Отметка связывает оси ВСЕГДА, а не только когда задана вручную.
+             * Раньше при `zTarget == null` («по осям») выход был здесь же, и
+             * каждая ось оставалась при своём профиле: на примыкании полотна
+             * расходились по высоте ступенькой — владелец прислал скриншот.
+             * Одна отметка на узел и две вершины-якоря на обеих осях — это и
+             * значит «взялась и зафиксировалась в одном месте».
+             *
+             * Чья отметка главная: у примыкания — СКВОЗНОЙ оси, а не той, что
+             * упирается. Сквозная узнаётся по числу ветвей: у неё их две (в
+             * обе стороны от узла), у примыкающей одна. Тянуть главную дорогу
+             * к отметке съезда было бы неверно.
+             */
+            let z = d.crossPoint.z;
+            if (rec.zTarget == null) {
+                const byPoly = new Map();
+                for (const arm of (d.arms || [])) {
+                    byPoly.set(arm.polyId, (byPoly.get(arm.polyId) || 0) + 1);
+                }
+                const through = [...byPoly.entries()].find(([, n]) => n >= 2)?.[0];
+                if (through != null && byPoly.size > 1) {
+                    const poly = drawnPolylines.find((r) => r.id === through);
+                    const zt = poly ? polylineElevationAtPoint(poly, d.crossPoint) : null;
+                    if (Number.isFinite(zt)) z = zt;
+                }
+            }
             let touched = false;
             const polys = new Set();
+            /* Ось, которая КОНЧАЕТСЯ на узле (примыкание), должна сесть на его
+             * отметку самим концом: якоря на устьях её не спасают — за устьем
+             * у неё остаётся собственная последняя вершина, и полотна
+             * расходятся ступенькой. Замерено: съезд на 4 м ниже главной так и
+             * оставался на 4 м ниже. У сквозной оси конец далеко и не трогаем.
+             * Признак примыкающей — одна ветвь на узле, а не две. */
+            const armCount = new Map();
+            for (const arm of (d.arms || [])) {
+                armCount.set(arm.polyId, (armCount.get(arm.polyId) || 0) + 1);
+            }
+            for (const [polyId, n] of armCount) {
+                if (n !== 1) continue;
+                const poly = drawnPolylines.find((r) => r.id === polyId);
+                if (!poly || poly.pts.length < 2) continue;
+                const first = poly.pts[0], last = poly.pts[poly.pts.length - 1];
+                const dF = Math.hypot(first.x - d.crossPoint.x, first.y - d.crossPoint.y);
+                const dL = Math.hypot(last.x - d.crossPoint.x, last.y - d.crossPoint.y);
+                const end = dF <= dL ? first : last;
+                if (Math.abs(end.z - z) > 1e-6) {
+                    end.z = z;
+                    touched = true;
+                    polys.add(poly);
+                }
+            }
             for (const arm of (d.arms || [])) {
                 const poly = drawnPolylines.find((r) => r.id === arm.polyId);
                 if (!poly || arm.sta == null || !(arm.mouth > 0)) continue;
@@ -26436,7 +26529,13 @@
              * этого не меняется, и пикетаж сходится сразу. */
             const armSig = (pts) => (pts?.arms || [])
                 .map((a) => `${a.polyId}:${(a.sta ?? 0).toFixed(4)}:${a.mouth.toFixed(4)}`).join('|');
-            if (rec.zTarget != null) {
+            /* ⚠️ Раньше здесь стояло `if (rec.zTarget != null)`, и связывание
+             * профилей работало ТОЛЬКО у узла с отметкой, заданной руками. В
+             * режиме «по осям» каждая ось оставалась при своей отметке, и на
+             * примыкании полотна расходились ступенькой: замерено 4.000 м на
+             * съезде, положенном на 4 м ниже главной. Крутим всегда — сама
+             * `syncAxisElevationsForNode` решает, чья отметка главная. */
+            {
                 for (let pass = 0; pass < 3; pass++) {
                     const before = armSig(rec.points);
                     if (!syncAxisElevationsForNode(rec)) break;
@@ -27162,7 +27261,9 @@
         $('slopeSelect')?.addEventListener('change', () => {
             slopeRecordId = Number($('slopeSelect').value);
         });
-        $('slopeClear')?.addEventListener('click', clearSlopeModels);
+        /* Только откосы площадок: дорожные и узловые живут вместе со своими
+         * осями и убираются вместе с ними, а не этой кнопкой. */
+        $('slopeClear')?.addEventListener('click', () => clearSlopeModels('pads'));
         $('slopeCancel')?.addEventListener('click', () => {
             $('slopeModal').classList.remove('show');
             slopePanel.reset();
@@ -44987,7 +45088,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: '5184f33-preview',
+            buildId: 'bea28ec-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
