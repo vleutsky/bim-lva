@@ -1028,6 +1028,46 @@ try {
     check(levelAxis.polylines <= 6,
         `ровное место не плодит линии выхода (${levelAxis.polylines} полилиний, было 843)`);
 
+    /* РАЗНЫЕ КОНСТРУКЦИИ на осях. Бордюр задан ТОЛЬКО на одной — узел обязан
+     * взять его у той ветви, где он есть, и СВЕСТИ НА НЕТ к кромке соседней.
+     * Обрыв на конце участка даёт ступеньку высотой в бордюр и клин в откосе
+     * (владелец прислал скриншот).
+     * ⚠️ Своя сцена: в блоке выше пресет `curb` стоит на ОБЕИХ осях, и там
+     * веса равны единице — проверка сведения прошла бы вхолостую. */
+    const mixed = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections();
+        D.clearPolylines();
+        D.clearSlopes();
+        D.setAutoNodes(true);
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const z = g.centerZ + g.sizeZ / 2 + 3;
+        const cx = g.centerX, cy = g.centerY;
+        const a = D.createPolylineFromPoints(
+            [{ x: cx - 60, y: cy, z }, { x: cx + 60, y: cy, z }], { name: 'С бордюром', role: 'road-axis' });
+        D.setRoadWidths(a, 5, 5);
+        const b = D.createPolylineFromPoints(
+            [{ x: cx, y: cy - 60, z }, { x: cx, y: cy + 60, z }], { name: 'Без бордюра', role: 'road-axis' });
+        D.setRoadWidths(b, 5, 5);
+        D.buildRoadXs(a, { step: 10, widthL: 5, widthR: 5, live: true });
+        D.buildRoadXs(b, { step: 10, widthL: 5, widthR: 5, live: true });
+        D.applyRoadXsPresetTo(a, 'curb');      // только одна ось
+        await new Promise((r) => setTimeout(r, 600));
+        const ix = D.intersections[0];
+        return ix ? D.nodeOuter(ix.id) : null;
+    });
+    if (!mixed) {
+        check(false, 'обстройка узла не описана — nodeOuter вернул пусто');
+    } else {
+        const ends = (mixed.runs || []).map((r) => `${r.outStart}→${r.outEnd}`).join('  ');
+        console.log(`  разные конструкции, вылет обстройки на концах участков: ${ends}`);
+        const tapered = (mixed.runs || []).filter((r) =>
+            (r.outStart > 0.01 && r.outEnd < 0.01) || (r.outEnd > 0.01 && r.outStart < 0.01));
+        check((mixed.runs || []).length > 0, 'участки контура есть');
+        check(tapered.length === (mixed.runs || []).length,
+            `обстройка сведена на нет к оси без неё (${tapered.length} из ${(mixed.runs || []).length} участков)`);
+    }
+
     await fs.rm(terrainFile, { force: true });
 
     if (slope.error) {

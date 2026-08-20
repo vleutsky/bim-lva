@@ -7549,18 +7549,34 @@
             nodeOuter(ixId) {
                 const rec = roadIntersections.find((x) => x.id === ixId);
                 const d = rec?.points;
-                if (!d?.outer) return null;
-                const swept = (d.runs || []).flatMap((run) => sweepOuterProfileAlongRun(d.outer, run.pts));
+                if (!d?.runs?.length) return null;
+                const swept = (d.runs || []).flatMap((run) =>
+                    (() => { const o = nodeRunOuter(d, run);
+                        return sweepOuterProfileAlongRun(o.profile, run.pts,
+                            nodeRunWeights(run.pts, o.w0, o.w1)); })());
                 return {
-                    edgeOff: d.outer.edgeOff,
-                    profilePts: d.outer.pts.length,
-                    shapes: d.outer.shapes.map((sh) => sh.code),
-                    runs: (d.runs || []).map((r) => ({ kind: r.kind, pts: r.pts.length })),
+                    edgeOff: d.outer?.edgeOff ?? null,
+                    profilePts: d.outer?.pts.length ?? 0,
+                    shapes: (d.outer?.shapes || []).map((sh) => sh.code),
+                    /* На участке видно ГЛАВНОЕ по разным конструкциям: с какой
+                     * стороны обстройка в полную величину, а с какой сходит на
+                     * ноль. `outStart`/`outEnd` — вылет профиля на концах. */
+                    runs: (d.runs || []).map((r) => {
+                        const o = nodeRunOuter(d, r);
+                        const w = nodeRunWeights(r.pts, o.w0, o.w1);
+                        const far = Math.max(0, ...((o.profile?.pts || []).map((p) => p.off)), 0);
+                        return {
+                            kind: r.kind, pts: r.pts.length,
+                            shapes: (o.profile?.shapes || []).map((sh) => sh.code),
+                            outStart: +(far * (w ? w[0] : 1)).toFixed(4),
+                            outEnd: +(far * (w ? w[w.length - 1] : 1)).toFixed(4)
+                        };
+                    }),
                     sweptPieces: swept.length,
                     sweptTris: swept.reduce((s, p) => s + p.positions.length / 9, 0),
                     // Наружный вылет профиля от кромки — по нему видно, что
                     // бордюр действительно вынесен за проезжую часть.
-                    maxOff: Math.max(0, ...d.outer.pts.map((p) => p.off))
+                    maxOff: Math.max(0, ...((d.outer?.pts || []).map((p) => p.off)), 0)
                 };
             },
             /**
@@ -14529,9 +14545,14 @@
                  * бордюр есть, а по перекрёстку нет.
                  * Зовём ТУ ЖЕ функцию, что рисует её в сцене, — свой второй
                  * расчёт разошёлся бы с картинкой. */
-                if (d.outer) {
+                /* Проверять d.outer нельзя: он один на весь узел и пуст, когда
+                 * обстройка есть только у ОДНОЙ оси — а это и есть случай,
+                 * ради которого профиль стал участковым. */
+                {
                     (d.runs || []).forEach((run, ri) => {
-                        sweepOuterProfileAlongRun(d.outer, run.pts).forEach((piece) => {
+                        const o = nodeRunOuter(d, run);
+                        sweepOuterProfileAlongRun(o.profile, run.pts,
+                            nodeRunWeights(run.pts, o.w0, o.w1)).forEach((piece) => {
                             if (!piece?.positions?.length) return;
                             kids.push({
                                 code: piece.code,
@@ -25038,7 +25059,13 @@
                     } else {
                         run = dedupe([edgePoint(s.armA, 'left'), edgePoint(s.armB, 'right')]);
                     }
-                    runs.push({ kind: s.corner ? 'arc' : 'edge', pts: run });
+                    /* Ветви участка нужны обстройке: бордюр берётся у ТОЙ оси,
+                     * где он есть, а не один на весь узел. */
+                    runs.push({
+                        kind: s.corner ? 'arc' : 'edge', pts: run,
+                        polyA: s.armA?.poly?.id ?? null,
+                        polyB: s.armB?.poly?.id ?? null
+                    });
                     outline.push(...run);
                 }
             }
@@ -25189,16 +25216,74 @@
          * Участки — дуги и прямые кромки, но НЕ устья ветвей: там дорога
          * продолжается, и бордюр даёт уже сам коридор.
          */
-        function sweepOuterProfileAlongRun(profile, run) {
+        /**
+         * Внешний профиль для КОНКРЕТНОГО участка контура узла.
+         *
+         * Раньше он был один на весь узел — от «более мощной» оси
+         * (`nodeTemplateSource`). Если бордюр был только у одной дороги, то
+         * либо его не было нигде, либо он появлялся и вокруг устьев той оси,
+         * где его нет. Владелец увидел первое: «по осям бордюр есть, а по
+         * перекрёстку нет».
+         *
+         * Правило: участок соединяет ДВЕ ветви, и профиль берётся у той из
+         * них, где обстройка есть. Если есть у обеих — у более мощной.
+         * ⚠️ «Дошёл до узла и встал» буквально понимать нельзя: у участка два
+         * конца от РАЗНЫХ осей, и обрыв на въезде оставил бы само закругление
+         * без бордюра — ровно там, где он виднее всего. Поэтому профиль идёт
+         * по всему участку и кончается у кромки той дороги, где его нет: так
+         * бордюр огибает закругление и упирается в край, как в проекте.
+         */
+        function nodeRunOuter(data, run) {
+            const plain = { profile: data?.outer || null, w0: 1, w1: 1 };
+            const idA = run?.polyA ?? null, idB = run?.polyB ?? null;
+            if (idA == null && idB == null) return plain;
+            const of = (id) => {
+                if (id == null) return null;
+                const model = roadXsModels.find((m) => m.polylineId === id);
+                const prof = model ? nodeOuterProfile(model) : null;
+                return prof && (prof.shapes || []).length ? prof : null;
+            };
+            const pA = of(idA), pB = of(idB);
+            if (pA && pB) {
+                /* У обеих ветвей обстройка есть — берём более мощную, тем же
+                 * мерилом, что и одежду под узлом. */
+                const src = nodeTemplateSource([idA, idB]);
+                return { profile: (src ? nodeOuterProfile(src) : null) || pA, w0: 1, w1: 1 };
+            }
+            /* Разные конструкции: у одной ветви бордюр есть, у другой нет.
+             * Обрывать его на конце участка НЕЛЬЗЯ — на стыке остаётся
+             * ступенька высотой в бордюр, и в откосе зияет клин (владелец
+             * прислал скриншот). Поэтому профиль СХОДИТ НА НЕТ вдоль участка:
+             * у своей ветви он в полную величину, у чужой — в ноль, заподлицо
+             * с кромкой. Так бордюр и умирает на закруглении в проекте. */
+            if (pA) return { profile: pA, w0: 1, w1: 0 };
+            if (pB) return { profile: pB, w0: 0, w1: 1 };
+            return plain;
+        }
+
+        /** Веса профиля по точкам участка — по накопленной длине в плане. */
+        function nodeRunWeights(run, w0, w1) {
+            const n = run.length;
+            if (n < 2 || w0 === w1) return null;
+            const cum = [0];
+            for (let i = 1; i < n; i++) {
+                cum.push(cum[i - 1] + Math.hypot(run[i].x - run[i - 1].x, run[i].y - run[i - 1].y));
+            }
+            const total = cum[n - 1] || 1;
+            return cum.map((d) => w0 + (w1 - w0) * (d / total));
+        }
+
+        function sweepOuterProfileAlongRun(profile, run, weights) {
             if (!profile || run.length < 2) return [];
             const placed = run.map((p, i) => {
                 const n = outwardNormalAt(run, i);
+                const w = weights ? weights[i] : 1;
                 const map = new Map();
                 for (const q of profile.pts) {
                     map.set(q.id, {
-                        x: p.x + n.x * q.off,
-                        y: p.y + n.y * q.off,
-                        z: p.z + q.dz
+                        x: p.x + n.x * q.off * w,
+                        y: p.y + n.y * q.off * w,
+                        z: p.z + q.dz * w
                     });
                 }
                 return map;
@@ -25239,7 +25324,7 @@
          * ------------------------------------------------------------------ */
 
         /** Бровка вдоль одного участка контура узла. */
-        function nodeSlopeBrowRun(profile, run) {
+        function nodeSlopeBrowRun(profile, run, weights) {
             if (!run || run.length < 2) return null;
             // Самая дальняя от оси точка внешнего профиля: за ней и начинается
             // откос. `off`/`dz` в профиле уже отсчитаны ОТ КРОМКИ.
@@ -25248,7 +25333,9 @@
             const dz = far ? far.dz : 0;
             return run.map((p, i) => {
                 const n = outwardNormalAt(run, i);
-                return new THREE.Vector3(p.x + n.x * off, p.y + n.y * off, p.z + dz);
+                // Тот же вес, что у обстройки: иначе откос начнётся не от её края.
+                const w = weights ? weights[i] : 1;
+                return new THREE.Vector3(p.x + n.x * off * w, p.y + n.y * off * w, p.z + dz * w);
             });
         }
 
@@ -25372,7 +25459,10 @@
             const d = ix?.points;
             if (!d?.runs?.length) return [];
             return d.runs
-                .map((run) => nodeSlopeBrowRun(d.outer, run.pts))
+                .map((run) => {
+                    const o = nodeRunOuter(d, run);
+                    return nodeSlopeBrowRun(o.profile, run.pts, nodeRunWeights(run.pts, o.w0, o.w1));
+                })
                 .filter((pts) => pts && pts.length >= 2);
         }
 
@@ -25447,7 +25537,11 @@
                 const alive = new Set();
                 const usedRoadBrows = new Set();
                 data.runs.forEach((run, i) => {
-                    const pts = nodeSlopeBrowRun(data.outer, run.pts);
+                    // Бровка — от ТОГО ЖЕ профиля, что и обстройка участка:
+                    // иначе откос начнётся не от края обстройки.
+                    const o = nodeRunOuter(data, run);
+                    const pts = nodeSlopeBrowRun(o.profile, run.pts,
+                        nodeRunWeights(run.pts, o.w0, o.w1));
                     if (!pts || pts.length < 2) return;
                     /* Сшиваем в ОДНУ линию: плечо → дуга узла → плечо.
                      * Совпавшую точку не дублируем — иначе в цепочке два
@@ -25705,9 +25799,11 @@
             // Бордюр / обочина / кювет по краю узла — тот же профиль, что на
             // подходящей дороге. Без этого у устьев зияли разрывы: коридор
             // обрезан, а покрытие узла кончается на кромке проезжей части.
-            if (data.outer) {
+            {
                 for (const run of (data.runs || [])) {
-                    for (const piece of sweepOuterProfileAlongRun(data.outer, run.pts)) {
+                    const o = nodeRunOuter(data, run);
+                    for (const piece of sweepOuterProfileAlongRun(o.profile, run.pts,
+                        nodeRunWeights(run.pts, o.w0, o.w1))) {
                         const mesh = makeRoadCorridorMesh(piece.positions, roadShapeStyle(piece.code).fill,
                             'RoadIntersection:' + piece.code, { modelId: intersection.id });
                         if (mesh) tag(mesh);
@@ -44662,7 +44758,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'cut-volumes',
+            buildId: 'node-outer',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
