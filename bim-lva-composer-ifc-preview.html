@@ -4072,7 +4072,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 49031e2</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 026844b</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -8231,7 +8231,7 @@
             /** Байты DWG — тот же путь, что и кнопка выгрузки. */
             async dwgBytes() {
                 const r = await buildDwg(drawnPolylines, coordPins.filter((p) => p.abs));
-                return { bytes: Array.from(r.bytes), lines: r.lines, points: r.points, faces: r.faces };
+                return { bytes: Array.from(r.bytes), lines: r.lines, points: r.points, faces: r.faces, solids: r.solids };
             },
             landXmlPreview() {
                 return buildPolylineLandXml();
@@ -13754,12 +13754,12 @@
                 return false;
             }
             try {
-                const { bytes, faces } = await buildDwg([], []);
-                if (!faces) { notifyError('В DWG не попало ни одной грани.'); return false; }
+                const { bytes, faces, solids } = await buildDwg([], []);
+                if (!faces && !solids) { notifyError('В DWG не попало ни одного тела.'); return false; }
                 const slug = String((model || list[0]).name || 'pad').replace(/[^\wа-яА-ЯёЁ-]+/gi, '_').slice(0, 40);
                 downloadBinaryFile(bytes, `bim-lva-pad-${slug}-${new Date().toISOString().slice(0, 10)}.dwg`);
-                notify(`DWG: граней 3DFACE ${faces}. Это сетка, а не тело — телами (ACIS) площадка идёт в DXF.`);
-                trackUsage('slope_export_dwg', { faces });
+                notify(`DWG: тел 3DSOLID ${solids}` + (faces ? `, граней 3DFACE ${faces}` : '') + '.');
+                trackUsage('slope_export_dwg', { faces, solids });
                 return true;
             } catch (e) {
                 notifyError('DWG не собрался: ' + (e?.message || e));
@@ -14661,15 +14661,15 @@
                 return;
             }
             try {
-                const { bytes, lines, points, faces } = await buildDwg(drawnPolylines, pins);
+                const { bytes, lines, points, faces, solids } = await buildDwg(drawnPolylines, pins);
                 downloadBinaryFile(bytes, `bim-lva-${new Date().toISOString().slice(0, 10)}.dwg`);
                 notify(
                     `DWG (${DWG_VERSION}, R2004): отрезков ${lines}, точек ${points}` +
+                    (solids ? `, тел 3DSOLID ${solids}` : '') +
                     (faces ? `, граней 3DFACE ${faces}` : '') +
-                    `, ${(bytes.length / 1024).toFixed(0)} КБ. Координаты мировые, метры. ` +
-                    'Тела идут сеткой граней; телами (ACIS) — только в DXF.'
+                    `, ${(bytes.length / 1024).toFixed(0)} КБ. Координаты мировые, метры.`
                 );
-                trackUsage('draw_export_dwg', { lines, points, faces });
+                trackUsage('draw_export_dwg', { lines, points, faces, solids });
             } catch (err) {
                 notifyError('DWG не собрался: ' + (err?.message || err));
                 console.error('DWG export error:', err);
@@ -17926,16 +17926,17 @@
                     lines++;
                 }
             }
-            /* Тела — треугольниками 3DFACE, а не 3DSOLID. Solid3D в acad-ts
-             * есть, но его писатель (`_writeModelerGeometry`) выводит только
-             * флаги, каркас и силуэты — САМУ ACIS-геометрию не пишет вовсе,
-             * то есть тело вышло бы пустым. 3DFACE — обычная сущность без
-             * детей, читается всеми и несёт наш TIN как есть.
-             * Цена: в DWG это сетка граней, а не тело; объём в CAD по ней не
-             * посчитать. Тела как тела — только в DXF (ACIS SAT). */
-            let faces = 0;
-            const addTin = (tin, layer) => {
-                if (!tin?.faces?.length || !tin.points?.length) return;
+            /* Тела — НАСТОЯЩИМИ 3DSOLID. Писатель acad-ts сам ACIS не пишет
+             * (бит «acis empty» у него всегда единица), поэтому в вендор
+             * добавлен патч `tools/acad-ts-acis-patch.mjs`: он дописывает
+             * запись ровно по той раскладке, которую разбирает ЧИТАТЕЛЬ той
+             * же библиотеки, и переживает `npm run vendor`.
+             * SAT берём тот же, что уходит в DXF (`acisSatFromMesh`), — второй
+             * конвейер неминуемо разошёлся бы с первым.
+             * 3DFACE остаётся запасным путём: если SAT почему-то не собрался,
+             * лучше сетка граней, чем пустой слой. */
+            let faces = 0, solids = 0;
+            const addFaces = (tin, layer) => {
                 const L = layerFor(layer);
                 for (const f of tin.faces) {
                     const a = tin.points[f[0]], b = tin.points[f[1]], c = tin.points[f[2]];
@@ -17952,6 +17953,20 @@
                     faces++;
                 }
             };
+            const addTin = (tin, layer) => {
+                if (!tin?.faces?.length || !tin.points?.length) return;
+                const sat = acisSatFromMesh(tin.points, tin.faces);
+                if (!sat?.length) { addFaces(tin, layer); return; }
+                const solid = new acad.Solid3D();
+                /* Версия 1 — SAT текстом; шифрование делает патч писателя,
+                 * сюда кладём открытый текст. */
+                solid.modelerFormatVersion = 1;
+                solid.binaryData = new TextEncoder().encode(sat.join('\n'));
+                const L = layerFor(layer);
+                if (L) { try { solid.layer = L; } catch (_) {} }
+                doc.modelSpace.entities.add(solid);
+                solids++;
+            };
             const absTin = (tin) => ({
                 points: tin.points.map((p) => scenePointToAbs(p) || p),
                 faces: tin.faces
@@ -17962,9 +17977,53 @@
                     addTin(absTin(weldTin(slopeMeshTriangles(mesh))), DXF_LAYER_KDO);
                 }
             }
+            /* Узел: телами идут СЛОИ ОДЕЖДЫ — те же, что в DXF. Раньше в DWG
+             * уходил только верх покрытия (`nodeSurfaceTin` — поверхность для
+             * LandXML), поэтому узел приезжал листом без толщины. */
+            /* ⚠️ Источники геометрии тут РАЗНЫЕ: слои одежды узла приходят
+             * мешем, а заплатка `points.patch` — плоским массивом координат.
+             * Первая версия читала только меш, и узел уезжал пустым (тел 0). */
+            const meshTriples = (src) => {
+                const pos = src?.geometry?.attributes?.position?.array
+                    || (src?.length ? src : null);
+                if (!pos) return [];
+                const out = [];
+                for (let i = 0; i + 8 < pos.length; i += 9) {
+                    out.push([
+                        new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]),
+                        new THREE.Vector3(pos[i + 3], pos[i + 4], pos[i + 5]),
+                        new THREE.Vector3(pos[i + 6], pos[i + 7], pos[i + 8])
+                    ]);
+                }
+                return out;
+            };
             for (const ix of roadIntersections) {
-                const tin = nodeSurfaceTin(ix);
-                if (tin) addTin(absTin(tin), DXF_LAYER_NODE);
+                const d = ix.points;
+                const nodeLayers = (d?.outline?.length && d.layers) || [];
+                if (nodeLayers.length) {
+                    let depth = 0;
+                    for (const L of nodeLayers) {
+                        const solid = buildNodeLayerSolid(d.crossPoint, d.outline, depth, L.thickness);
+                        depth += L.thickness;
+                        if (solid) addTin(absTin(weldTin(meshTriples(solid))), DXF_LAYER_NODE);
+                    }
+                } else if (d?.outline?.length && d.patch) {
+                    addTin(absTin(weldTin(meshTriples(d.patch))), DXF_LAYER_NODE);
+                } else {
+                    /* Ни слоёв, ни заплатки — узел ещё без поперечников.
+                     * Тогда отдаём хотя бы верх покрытия, иначе слой «Узел»
+                     * в файле оказывается пустым (так и вышло: тел 0). */
+                    const top = nodeSurfaceTin(ix);
+                    if (top) addTin(absTin(top), DXF_LAYER_NODE);
+                }
+            }
+            /* Полотно дороги — тело коридора, по одному на форму шаблона
+             * (покрытие, бордюр, слои одежды). В DWG его не было вовсе:
+             * владелец видел откосы и узел, а самой дороги телом — нет. */
+            for (const m of roadXsModels) {
+                for (const mesh of (m.corridorMeshes || [])) {
+                    addTin(absTin(weldTin(meshTriples(mesh))), DXF_LAYER_SOLID);
+                }
             }
 
             for (const pin of (pins || [])) {
@@ -17976,7 +18035,7 @@
             }
             /* Размер буфера заранее неизвестен, при нехватке писатель падает
              * RangeError на DataView — пробуем и удваиваем. */
-            let size = Math.max(1 << 20, (lines + points + faces) * 4096);
+            let size = Math.max(1 << 20, (lines + points + faces + solids * 64) * 4096);
             for (let attempt = 0; attempt < 6; attempt++, size *= 2) {
                 try {
                     const back = new ArrayBuffer(size);
@@ -17984,7 +18043,7 @@
                     const all = new Uint8Array(back);
                     let end = all.length;
                     while (end > 0 && all[end - 1] === 0) end--;
-                    if (end > 0) return { bytes: all.slice(0, end), lines, points, faces };
+                    if (end > 0) return { bytes: all.slice(0, end), lines, points, faces, solids };
                 } catch (e) {
                     if (!(e instanceof RangeError)) throw e;
                 }
@@ -44018,7 +44077,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.20',
-            buildId: '49031e2-preview',
+            buildId: '026844b-preview',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

@@ -14,6 +14,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { patchAcisWriter, ACIS_WRITER_FILE } from './acad-ts-acis-patch.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -157,7 +158,15 @@ async function main() {
         }
     };
     await copyAcad('.');
-    console.log(`  acad-ts: ${acadFiles} файлов`);
+    /* Патч записи ACIS: без него 3DSOLID уходит пустой оболочкой (у самой
+     * библиотеки бит «acis empty» всегда единица). Применяем ПОСЛЕ копирования
+     * — иначе пересборка вендоров тихо откатывала бы тела обратно в сетку
+     * граней. Если библиотека обновится и якорь не найдётся, патч падает с
+     * ошибкой, и это видно здесь, а не в CAD у пользователя. */
+    const acisPath = path.join(OUT, 'acad-ts', ACIS_WRITER_FILE);
+    const acisPatched = patchAcisWriter(await fs.readFile(acisPath, 'utf8'));
+    if (acisPatched.changed) await fs.writeFile(acisPath, acisPatched.text);
+    console.log(`  acad-ts: ${acadFiles} файлов, патч ACIS ${acisPatched.changed ? 'применён' : 'уже был'}`);
 
     // --- geotiff: тянет pako/lerc/zstddec, поэтому бандлим ---
     await build({

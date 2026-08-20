@@ -2364,8 +2364,14 @@ export class DwgObjectWriter extends DwgSectionIO {
         this._writeModelerGeometry(region);
     }
     _writeModelerGeometry(geometry) {
+        const acisBytes = geometry.binaryData && geometry.binaryData.length
+            ? geometry.binaryData
+            : null;
         if (!this.r2013Plus) {
-            this._writer.writeBit(true);
+            this._writer.writeBit(!acisBytes);
+            if (acisBytes) {
+                this._writeModelerGeometryData(geometry, acisBytes);
+            }
         }
         this._writer.writeBit(true);
         const hasPoint = geometry.point.x !== 0 || geometry.point.y !== 0 || geometry.point.z !== 0;
@@ -2400,6 +2406,27 @@ export class DwgObjectWriter extends DwgSectionIO {
         if (this.r2007Plus) {
             this._writer.writeBitLong(0);
         }
+    }
+    _writeModelerGeometryData(geometry, data) {
+        this._writer.writeBit(false);
+        const version = geometry.modelerFormatVersion || 1;
+        this._writer.writeBitShort(version);
+        if (version !== 1) {
+            this._writer.writeBytes(data);
+            return;
+        }
+        const enc = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i++) {
+            const b = data[i];
+            enc[i] = b === 0x20 ? 0x09 : (b >= 0x21 && b <= 0x7e ? 0x9f - b : b);
+        }
+        const CHUNK = 4096;
+        for (let off = 0; off < enc.length; off += CHUNK) {
+            const part = enc.subarray(off, Math.min(off + CHUNK, enc.length));
+            this._writer.writeBitLong(part.length);
+            this._writer.writeBytes(part);
+        }
+        this._writer.writeBitLong(0);
     }
     _writeModelerGeometryWire(wire) {
         this._writer.writeByte(wire.type);

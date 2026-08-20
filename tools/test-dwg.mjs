@@ -94,16 +94,36 @@ try {
         return { nodes: D.intersections.length, ...(await D.dwgBytes()) };
     });
     check(withBody.nodes === 1, `узел для проверки тел построен (${withBody.nodes})`);
-    console.log(`  во второй выгрузке: отрезков ${withBody.lines}, граней ${withBody.faces}`);
-    if (withBody.faces > 0) {
+    console.log(`  во второй выгрузке: отрезков ${withBody.lines}, тел ${withBody.solids}, граней ${withBody.faces}`);
+    check((withBody.solids || 0) > 0, `тела ушли 3DSOLID, а не сеткой (${withBody.solids || 0})`);
+    if ((withBody.solids || 0) + (withBody.faces || 0) > 0) {
         const dxf2 = new TextDecoder().decode(await convertDwgToDxf(new Uint8Array(withBody.bytes)));
         const e2 = dxf2.indexOf('ENTITIES');
         const b2 = e2 >= 0 ? dxf2.slice(e2, dxf2.indexOf('ENDSEC', e2)) : '';
         const n3d = (b2.match(/\r?\n3DFACE\r?\n/g) || []).length;
-        console.log(`  прочитано 3DFACE: ${n3d}`);
-        check(n3d === withBody.faces, `грани дошли до файла (${n3d} из ${withBody.faces})`);
+        const nSol = (b2.match(/\r?\n3DSOLID\r?\n/g) || []).length;
+        console.log(`  прочитано: 3DSOLID ${nSol}, 3DFACE ${n3d}`);
+        check(nSol === (withBody.solids || 0), `тела дошли до файла (${nSol} из ${withBody.solids || 0})`);
+        check(n3d === (withBody.faces || 0), `грани дошли до файла (${n3d} из ${withBody.faces || 0})`);
+        /* ⚠️ «3DSOLID есть» ещё не значит «тело не пустое»: именно так вело
+         * себя НЕПРОПАТЧЕННОЕ acad-ts — сущность на месте, ACIS внутри нет,
+         * и в CAD это пустышка. Поэтому лезем в сами байты.
+         * Читаем НЕ через dwgdxf: он ACIS в свой DXF не выкладывает, и по нему
+         * пустое тело от полного не отличить (проверка так и провалилась на
+         * заведомо верном файле). Читаем родным DwgReader — он разбирает
+         * ровно ту раскладку, которую пишет патч, и отдаёт `binaryData`. */
+        const acad = await import(path.join(ROOT, 'assets', 'vendor', 'acad-ts', 'index.js'));
+        const raw = new Uint8Array(withBody.bytes);
+        const backDoc = new acad.DwgReader(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.length)).read();
+        const solids3d = [...(backDoc.modelSpace?.entities ?? [])].filter((e) => e instanceof acad.Solid3D);
+        const acisBytes = solids3d.reduce((n, e) => n + (e.binaryData?.length || 0), 0);
+        const acisText = solids3d.map((e) => new TextDecoder().decode(e.binaryData || new Uint8Array(0))).join('');
+        console.log(`  ACIS в теле: ${acisBytes} байт, записей SAT ${(acisText.match(/#/g) || []).length}`);
+        check(acisBytes > 0, `у 3DSOLID есть сама ACIS-геометрия (${acisBytes} байт), а не пустая оболочка`);
+        check(/End-of-ACIS-data/.test(acisText), 'SAT дошёл целиком (есть хвост End-of-ACIS-data)');
+        check(/^700 0/.test(acisText), 'SAT начинается заголовком версии 700');
     } else {
-        check(false, 'в выгрузку не попало ни одной грани — тела в DWG не поехали');
+        check(false, 'в выгрузку не попало ни одного тела — тела в DWG не поехали');
     }
 } catch (e) {
     problems.push('исключение: ' + (e?.message || e));
