@@ -1134,6 +1134,87 @@ try {
             `обстройка сведена на нет к оси без неё (${tapered.length} из ${(mixed.runs || []).length} участков)`);
     }
 
+    /* ПРИМЫКАНИЕ: отметка берётся у сквозной оси и фиксируется у ОБЕИХ.
+     * Раньше профили связывались только когда отметку задавали вручную, а в
+     * режиме «по осям» каждая ось оставалась при своей — на стыке полотна
+     * расходились ступенькой (владелец прислал скриншот).
+     * ⚠️ Оси кладём на РАЗНЫХ отметках, иначе проверка пройдёт вхолостую:
+     * при одинаковых профилях они и без связывания совпадут. */
+    const tee = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections(); D.clearPolylines(); D.clearSlopes();
+        D.setAutoNodes(true);
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const z0 = g.centerZ + g.sizeZ / 2 + 3;
+        const cx = g.centerX, cy = g.centerY;
+        const main = D.createPolylineFromPoints(
+            [{ x: cx - 60, y: cy, z: z0 }, { x: cx + 60, y: cy, z: z0 }],
+            { name: 'Главная', role: 'road-axis' });
+        D.setRoadWidths(main, 5, 5);
+        // Съезд ниже на 4 м и упирается в главную — классическое примыкание.
+        const branch = D.createPolylineFromPoints(
+            [{ x: cx, y: cy - 60, z: z0 - 4 }, { x: cx, y: cy, z: z0 - 4 }],
+            { name: 'Съезд', role: 'road-axis' });
+        D.setRoadWidths(branch, 5, 5);
+        await new Promise((r) => setTimeout(r, 800));
+        const ix = D.intersections[0];
+        if (!ix) return { error: 'узел не построился' };
+        const zAt = (id) => {
+            const rec = D.drawn.find((r) => r.id === id);
+            const pts = rec.vertsAbs;
+            // Отметка оси в точке узла — по ближайшему звену в плане.
+            const node = D.worldPointToAbsolute(0, 0, 0);
+            let best = null;
+            for (let i = 0; i + 1 < pts.length; i++) {
+                const a = pts[i], b = pts[i + 1];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const l2 = dx * dx + dy * dy || 1;
+                let t = ((nodeAbs.x - a.x) * dx + (nodeAbs.y - a.y) * dy) / l2;
+                t = Math.max(0, Math.min(1, t));
+                const d = Math.hypot(nodeAbs.x - (a.x + dx * t), nodeAbs.y - (a.y + dy * t));
+                if (!best || d < best.d) best = { d, z: a.z + (b.z - a.z) * t };
+            }
+            return best ? best.z : null;
+        };
+        const nodeAbs = D.nodeElevation ? D.nodeElevation(ix.id) : null;
+        return { error: null, ixId: ix.id, main, branch, nodeAbs };
+    });
+    if (tee.error) {
+        check(false, `примыкание: ${tee.error}`);
+    } else {
+        const zz = await page.evaluate(({ main, branch }) => {
+            const D = window.BimLvaDebug;
+            const at = (id) => {
+                const rec = D.drawn.find((r) => r.id === id);
+                const pts = rec.vertsAbs;
+                let best = null;
+                for (const p of pts) {
+                    // Точка узла — конец съезда: там обе оси и должны сойтись.
+                    if (!best || p.z != null) best = best || p;
+                }
+                return pts;
+            };
+            return { main: at(main), branch: at(branch) };
+        }, { main: tee.main, branch: tee.branch });
+        // Конец съезда и отметка главной в той же точке плана.
+        const bEnd = zz.branch[zz.branch.length - 1];
+        let nearest = null;
+        for (let i = 0; i + 1 < zz.main.length; i++) {
+            const a = zz.main[i], b = zz.main[i + 1];
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const l2 = dx * dx + dy * dy || 1;
+            let t = ((bEnd.x - a.x) * dx + (bEnd.y - a.y) * dy) / l2;
+            t = Math.max(0, Math.min(1, t));
+            const d = Math.hypot(bEnd.x - (a.x + dx * t), bEnd.y - (a.y + dy * t));
+            const z = a.z + (b.z - a.z) * t;
+            if (!nearest || d < nearest.d) nearest = { d, z };
+        }
+        const dz = Math.abs(bEnd.z - (nearest ? nearest.z : bEnd.z));
+        console.log(`  примыкание: съезд ${bEnd.z.toFixed(3)}, главная ${nearest.z.toFixed(3)},`
+            + ` расхождение ${dz.toFixed(3)} м`);
+        check(dz < 0.05, `отметка на примыкании общая у обеих осей (расхождение ${dz.toFixed(3)} м)`);
+    }
+
     await fs.rm(terrainFile, { force: true });
 
     if (slope.error) {
