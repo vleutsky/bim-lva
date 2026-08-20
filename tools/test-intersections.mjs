@@ -940,6 +940,7 @@ try {
         await new Promise((r) => setTimeout(r, 1200));
         const sl = D.slopes || [];
         return {
+            ray: D.rayIndexStats(true),
             xs: (D.roadXs || []).length,
             models: sl.length,
             fill: sl.reduce((n, s) => n + (s.sides || []).reduce((m, x) => m + x.fill, 0), 0),
@@ -947,6 +948,17 @@ try {
             noGround: sl.reduce((n, s) => n + (s.sides || []).reduce((m, x) => m + x.skippedNoGround, 0), 0)
         };
     });
+    /* Выборка отметки под откосом бьёт луч ВНИЗ, и модель лежит в сцене
+     * отдельными мешами. Без индекса каждый луч перебирал ВСЕ (на фикстуре
+     * 400, на площадке владельца тысячи) — создание оси и перекрёстка вставало
+     * на 10–40 с. Мерить это временем нельзя: оно зависит от машины. Меряем
+     * то, ради чего индекс и заведён — сколько мешей приходится на одну
+     * выборку. */
+    console.log(`  луч: мешей в сцене ${drawn.ray.targets}, кандидатов на выборку`
+        + ` ${drawn.ray.perSample.toFixed(2)} (выборок ${drawn.ray.samples})`);
+    check(drawn.ray.samples > 100, `выборки через индекс, а не мимо него (${drawn.ray.samples})`);
+    check(drawn.ray.perSample < Math.max(8, drawn.ray.targets / 8),
+        `индекс отсекает лишние меши (${drawn.ray.perSample.toFixed(2)} из ${drawn.ray.targets} на выборку)`);
     console.log(`  дочерченная ось: поперечников ${drawn.xs}, откосов ${drawn.models},`
         + ` насыпь ${drawn.fill.toFixed(2)} м³, граней ${drawn.faces}, без земли ${drawn.noGround}`);
     check(drawn.xs === 1, `дочерченная ось построила поперечники (${drawn.xs})`);

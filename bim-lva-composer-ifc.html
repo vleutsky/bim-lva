@@ -6572,6 +6572,13 @@
          */
         window.BimLvaDebug = Object.freeze({
             get meshCount() { return allMeshes.length; },
+            /** Сколько мешей перебирает одна выборка отметки: смысл индекса. */
+            rayIndexStats(reset) {
+                const r = { ...rayIndexStats, perSample: rayIndexStats.samples
+                    ? rayIndexStats.candidates / rayIndexStats.samples : 0 };
+                if (reset) { rayIndexStats.samples = 0; rayIndexStats.candidates = 0; rayIndexStats.targets = 0; }
+                return r;
+            },
             get bvhCount() {
                 let n = 0;
                 for (const m of allMeshes) if (m.geometry?.boundsTree) n++;
@@ -8800,16 +8807,27 @@
             return box.isEmpty() ? 0 : box.min.z;
         }
 
+        /* Луч вниз ради ОДНОЙ отметки — самая горячая точка откосов: профиль
+         * показал 83% времени сборки именно здесь (BVH при этом работает, дело
+         * в числе лучей и в том, сколько каждый из них делает лишнего).
+         * Поэтому: свой Raycaster и свой вектор на модуль, а не новые на каждую
+         * точку, и `firstHitOnly` — нам нужна ВЕРХНЯЯ точка, то есть ближайшая
+         * по лучу сверху, а `intersectObjects` без него собирает и сортирует
+         * все пересечения (у коробки рельефа это и низ, и всё, что ниже). */
+        const _terrainRay = new THREE.Raycaster();
+        const _terrainRayFrom = new THREE.Vector3();
+        const _terrainRayDown = new THREE.Vector3(0, 0, -1);
+
         function sampleTerrainZ(x, y, fallbackZ) {
-            const raycaster = new THREE.Raycaster();
-            raycaster.set(new THREE.Vector3(x, y, 1e7), new THREE.Vector3(0, 0, -1));
+            _terrainRayFrom.set(x, y, 1e7);
+            _terrainRay.set(_terrainRayFrom, _terrainRayDown);
             const targets = collectRaycastTargets(_terrainRayTargets, m => !m.userData?.isGeoRaster);
             if (mapTerrain?.mesh?.visible && !targets.includes(mapTerrain.mesh)) {
                 ensureBoundsTree(mapTerrain.mesh);
                 targets.push(mapTerrain.mesh);
             }
             if (!targets.length) return fallbackZ;
-            const hits = raycaster.intersectObjects(targets, false);
+            const hits = _terrainRay.intersectObjects(targets, false);
             return hits.length ? hits[0].point.z : fallbackZ;
         }
 
@@ -11740,9 +11758,81 @@
          * Строго внутри: граница кольца не считается, иначе бровка на ребре
          * площадки дала бы «уже на земле» и наружный откос не построился бы.
          */
+        /**
+         * Индекс треугольников по плановой сетке.
+         *
+         * `sampleTrianglesZ` был ЛИНЕЙНЫМ перебором, и цена росла КВАДРАТИЧНО
+         * с числом откосов: выборка земли под новым откосом опрашивает все
+         * прежние площадки, а в TIN каждой — сотни граней. Замерено на одном
+         * перекрёстке (рельеф 400 коробок, оси по 200 м): откосы первой оси
+         * 987 мс, ВТОРОЙ — 2643 мс за ту же работу, узел — 3695 мс. У
+         * владельца на настоящей площадке это давало 10–40 с «подвисания»
+         * при создании оси и перекрёстка.
+         *
+         * Индекс строится один раз на массив и живёт в WeakMap: массивы
+         * пересобираются при каждой сборке откоса, и держать их сильной
+         * ссылкой значило бы течь памятью.
+         */
+        const _triIndexCache = new WeakMap();
+
+        function triangleIndexFor(tris) {
+            let idx = _triIndexCache.get(tris);
+            if (idx) return idx;
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (let t = 0; t < tris.length; t++) {
+                for (let k = 0; k < 3; k++) {
+                    const p = tris[t][k];
+                    if (p.x < minX) minX = p.x;
+                    if (p.x > maxX) maxX = p.x;
+                    if (p.y < minY) minY = p.y;
+                    if (p.y > maxY) maxY = p.y;
+                }
+            }
+            const w = maxX - minX, h = maxY - minY;
+            if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+                idx = null;                       // вырожденный габарит — индекс не нужен
+                _triIndexCache.set(tris, { cells: null });
+                return { cells: null };
+            }
+            // Ячеек примерно столько же, сколько треугольников: в среднем
+            // единицы граней на ячейку, дальше выигрыш уже съедает раскладка.
+            const cols = Math.max(1, Math.min(128, Math.ceil(Math.sqrt(tris.length))));
+            const rows = cols;
+            const cells = new Array(cols * rows);
+            const cx = (v) => Math.max(0, Math.min(cols - 1, Math.floor(((v - minX) / w) * cols)));
+            const cy = (v) => Math.max(0, Math.min(rows - 1, Math.floor(((v - minY) / h) * rows)));
+            for (let t = 0; t < tris.length; t++) {
+                const a = tris[t][0], b = tris[t][1], c = tris[t][2];
+                // Треугольник кладём во ВСЕ ячейки своего габарита: иначе точка
+                // у края грани промахнётся мимо неё, и в откосе появятся дыры.
+                const i0 = cx(Math.min(a.x, b.x, c.x)), i1 = cx(Math.max(a.x, b.x, c.x));
+                const j0 = cy(Math.min(a.y, b.y, c.y)), j1 = cy(Math.max(a.y, b.y, c.y));
+                for (let j = j0; j <= j1; j++) {
+                    for (let i = i0; i <= i1; i++) {
+                        const k = j * cols + i;
+                        (cells[k] || (cells[k] = [])).push(t);
+                    }
+                }
+            }
+            idx = { cells, cols, rows, minX, minY, w, h };
+            _triIndexCache.set(tris, idx);
+            return idx;
+        }
+
         function sampleTrianglesZ(tris, x, y) {
             if (!tris || !tris.length) return null;
-            for (let t = 0; t < tris.length; t++) {
+            const idx = tris.length > 24 ? triangleIndexFor(tris) : null;
+            let list = null;
+            if (idx?.cells) {
+                const i = Math.floor(((x - idx.minX) / idx.w) * idx.cols);
+                const j = Math.floor(((y - idx.minY) / idx.h) * idx.rows);
+                if (i < 0 || j < 0 || i >= idx.cols || j >= idx.rows) return null;
+                list = idx.cells[j * idx.cols + i];
+                if (!list) return null;
+            }
+            const n = list ? list.length : tris.length;
+            for (let s = 0; s < n; s++) {
+                const t = list ? list[s] : s;
                 const a = tris[t][0], b = tris[t][1], c = tris[t][2];
                 const den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
                 if (Math.abs(den) < 1e-18) continue;
@@ -11774,6 +11864,12 @@
             slopeGroup.traverse((o) => {
                 if (o.isMesh && o.visible && o.userData?.isSlopeSurface
                     && !o.userData?.isSlopePadOverlay && !o.userData?.isSlopeKdoLayer) {
+                    /* BVH обязателен: по этим мешам луч бьют десятки тысяч раз
+                     * за одну сборку откоса, и без дерева каждый луч перебирает
+                     * ВСЕ грани чужого TIN. Ставим здесь, один раз на сборку,
+                     * а не в самой выборке — там это был бы вызов на каждую
+                     * точку. */
+                    ensureBoundsTree(o);
                     targets.push(o);
                 }
             });
@@ -11786,14 +11882,107 @@
          * Проектная поверхность важнее рельефа даже когда она ниже (выемка):
          * иначе соседний откос «не видел» бы заглублённую площадку.
          */
+        /**
+         * Индекс мешей рельефа по плановой сетке — для мест, где лучей тысячи.
+         *
+         * Замерено профилем: 83% сборки откосов — выборка отметки лучом вниз, и
+         * дело НЕ в BVH (он работает) и не в шаге марша, а в том, что модель
+         * лежит в сцене ОТДЕЛЬНЫМИ мешами: на фикстуре 400 штук по 12
+         * треугольников, и каждая из них ниже порога BVH, то есть перебирается
+         * честно. Каждый луч трогал все 400 — около 60 мкс на точку. На
+         * настоящей площадке мешей тысячи, отсюда 10–40 с «подвисания» при
+         * создании оси и перекрёстка.
+         *
+         * Индекс строится ОДИН раз на сборку и отбирает по плановой ячейке те
+         * меши, чей габарит вообще накрывает точку, — обычно один-два.
+         * ⚠️ Держать его дольше сборки нельзя: меши пересобираются при
+         * до-центрировании сцены, покраске и догрузке файла, и устаревший
+         * список молча промахнётся мимо рельефа.
+         */
+        function makeTerrainRayIndex() {
+            const targets = collectRaycastTargets([], (m) => !m.userData?.isGeoRaster).slice();
+            if (mapTerrain?.mesh?.visible && !targets.includes(mapTerrain.mesh)) {
+                ensureBoundsTree(mapTerrain.mesh);
+                targets.push(mapTerrain.mesh);
+            }
+            return makeMeshRayIndex(targets);
+        }
+
+        /**
+         * То же по мешам, которые уже отобраны. Нужен отдельно, потому что
+         * чужие откосы в выборке земли — такой же список мелких мешей, и
+         * замер показал ту же болезнь: первая ось считалась 602 мс, ВТОРАЯ —
+         * 2468 мс за ту же работу, потому что каждый её луч перебирал все
+         * поверхности, построенные до неё.
+         */
+        /* Счётчик кандидатов на выборку. Он же — проверка от регресса: смысл
+         * индекса в том, что на точку приходится не весь список мешей, а
+         * единицы. Мерить это временем нельзя — оно зависит от машины. */
+        const rayIndexStats = { samples: 0, candidates: 0, targets: 0 };
+
+        function makeMeshRayIndex(targets) {
+            if (!targets?.length) return null;
+            rayIndexStats.targets = Math.max(rayIndexStats.targets, targets.length);
+            const box = new THREE.Box3();
+            const boxes = targets.map((m) => box.setFromObject(m).clone());
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const b of boxes) {
+                if (b.isEmpty()) continue;
+                if (b.min.x < minX) minX = b.min.x;
+                if (b.min.y < minY) minY = b.min.y;
+                if (b.max.x > maxX) maxX = b.max.x;
+                if (b.max.y > maxY) maxY = b.max.y;
+            }
+            const w = maxX - minX, h = maxY - minY;
+            const ray = new THREE.Raycaster();
+            const from = new THREE.Vector3();
+            const down = new THREE.Vector3(0, 0, -1);
+            if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+                return (x, y, fallback) => {
+                    from.set(x, y, 1e7);
+                    ray.set(from, down);
+                    const hits = ray.intersectObjects(targets, false);
+                    return hits.length ? hits[0].point.z : fallback;
+                };
+            }
+            const cols = Math.max(1, Math.min(160, Math.ceil(Math.sqrt(targets.length))));
+            const rows = cols;
+            const cells = new Array(cols * rows);
+            const ci = (v) => Math.max(0, Math.min(cols - 1, Math.floor(((v - minX) / w) * cols)));
+            const cj = (v) => Math.max(0, Math.min(rows - 1, Math.floor(((v - minY) / h) * rows)));
+            boxes.forEach((b, n) => {
+                if (b.isEmpty()) return;
+                const i0 = ci(b.min.x), i1 = ci(b.max.x);
+                const j0 = cj(b.min.y), j1 = cj(b.max.y);
+                for (let j = j0; j <= j1; j++) {
+                    for (let i = i0; i <= i1; i++) {
+                        const k = j * cols + i;
+                        (cells[k] || (cells[k] = [])).push(targets[n]);
+                    }
+                }
+            });
+            return (x, y, fallback) => {
+                const i = Math.floor(((x - minX) / w) * cols);
+                const j = Math.floor(((y - minY) / h) * rows);
+                if (i < 0 || j < 0 || i >= cols || j >= rows) return fallback;
+                const list = cells[j * cols + i];
+                rayIndexStats.samples++;
+                rayIndexStats.candidates += list ? list.length : 0;
+                if (!list) return fallback;
+                from.set(x, y, 1e7);
+                ray.set(from, down);
+                const hits = ray.intersectObjects(list, false);
+                return hits.length ? hits[0].point.z : fallback;
+            };
+        }
+
         function makeSlopeGroundSampler(ownPadTris) {
             const design = collectSlopeDesignTargets();
             const otherPads = slopeModels
                 .map((sm) => sm.padTriangles)
                 .filter((t) => t && t.length);
-            const raycaster = new THREE.Raycaster();
-            const down = new THREE.Vector3(0, 0, -1);
-            const from = new THREE.Vector3();
+            const designIndex = makeMeshRayIndex(design);
+            const terrain = makeTerrainRayIndex();
             return (x, y, fallback) => {
                 const ownZ = sampleTrianglesZ(ownPadTris, x, y);
                 if (ownZ != null) return ownZ;
@@ -11801,13 +11990,11 @@
                     const pz = sampleTrianglesZ(otherPads[i], x, y);
                     if (pz != null) return pz;
                 }
-                if (design.length) {
-                    from.set(x, y, 1e7);
-                    raycaster.set(from, down);
-                    const hits = raycaster.intersectObjects(design, false);
-                    if (hits.length) return hits[0].point.z;
+                if (designIndex) {
+                    const dz = designIndex(x, y, null);
+                    if (dz != null) return dz;
                 }
-                return sampleTerrainZ(x, y, fallback);
+                return terrain ? terrain(x, y, fallback) : sampleTerrainZ(x, y, fallback);
             };
         }
 
@@ -44058,7 +44245,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'dwg-solids',
+            buildId: 'ray-index',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
