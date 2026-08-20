@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260820-node-outer';
+const CACHE = 'bimlva-composer-shell-20260820-axis-snap';
 const SHELL = [
   './',
   './index.html',

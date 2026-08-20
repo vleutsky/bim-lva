@@ -7147,6 +7147,15 @@
             },
             get drawMode() { return !!drawMode; },
             get drawingRoadAxis() { return !!drawingRoadAxis; },
+            /** Привязка к чужой оси в экранной точке — вход для проверки. */
+            snapRoadAxisAt(clientX, clientY) {
+                const r = snapToRoadAxis(clientX, clientY);
+                if (!r) return null;
+                const a = worldPointToAbsoluteXYZ(r.point) || r.point;
+                return { polyId: r.axis.polyId, name: r.axis.name, px: r.axis.d,
+                    x: r.point.x, y: r.point.y, z: r.point.z,
+                    absX: a.x, absY: a.y, absZ: a.z };
+            },
             startRoadAxisDraw() {
                 drawingRoadAxis = true;
                 if ($('drawModeSelect')) $('drawModeSelect').value = '3d';
@@ -15732,6 +15741,53 @@
                 consider(closestPointOnSegment(a, b, hit.point, new THREE.Vector3()), 'edge', SNAP_PX.edge);
             });
             return best ? { point: best.point, type: best.type } : raw;
+        }
+
+        /**
+         * Привязка к ЧУЖОЙ оси трассы при черчении новой.
+         *
+         * Обычная привязка сюда не годится: ось нарисована `Line2`, у которой
+         * НЕТ атрибута `position` (позиции лежат в `instanceStart/End`), и
+         * `snapPrimitiveOf` по ней возвращает пусто. Поэтому целимся в
+         * спроецированные точки самой записи — тем же приёмом, что и пикинг по
+         * линии, и порог в ПИКСЕЛЯХ, а не в метрах: в метрах он либо не ловит
+         * на общем виде, либо липнет ко всему при зуме.
+         *
+         * Точку берём НА звене (проекция курсора), а не ближайшую вершину:
+         * Т-образный узел ставится там, где подвели ось, а не там, где у чужой
+         * оси случилась вершина.
+         */
+        const ROAD_AXIS_SNAP_PX = 14;
+
+        function snapToRoadAxis(clientX, clientY, excludeId) {
+            if (typeof drawnPolylines === 'undefined') return null;
+            const rect = stage.getBoundingClientRect();
+            const px = clientX - rect.left, py = clientY - rect.top;
+            let best = null;
+            for (const rec of drawnPolylines) {
+                if (rec.role !== 'road-axis' || rec.id === excludeId) continue;
+                const pts = (rec.renderPts?.length >= 2) ? rec.renderPts : rec.pts;
+                if (!pts || pts.length < 2) continue;
+                const scr = pts.map((p) => projectToPixels(p));
+                for (let i = 0; i + 1 < pts.length; i++) {
+                    const a = scr[i], b = scr[i + 1];
+                    if (a.behind || b.behind) continue;
+                    const dx = b.x - a.x, dy = b.y - a.y;
+                    const len2 = dx * dx + dy * dy;
+                    if (len2 < 1e-9) continue;
+                    let t = ((px - a.x) * dx + (py - a.y) * dy) / len2;
+                    t = Math.max(0, Math.min(1, t));
+                    const d = Math.hypot(px - (a.x + dx * t), py - (a.y + dy * t));
+                    if (d > ROAD_AXIS_SNAP_PX || (best && d >= best.d)) continue;
+                    best = {
+                        d,
+                        point: pts[i].clone().lerp(pts[i + 1], t),
+                        polyId: rec.id,
+                        name: rec.name || 'Ось'
+                    };
+                }
+            }
+            return best ? { point: best.point, type: 'edge', axis: best } : null;
         }
 
         const SNAP_LABEL = { vertex: 'вершина', mid: 'середина', edge: 'ребро', face: '' };
@@ -29428,6 +29484,17 @@ uniform vec3 uBatchSelColor;
                 hideSnapMarker();
                 if (drawMode) updateDrawRubberBand(clientX, clientY);
                 return;
+            }
+            /* Черчение оси: сначала пробуем зацепиться за ЧУЖУЮ ось — так
+             * ставится Т-образный узел. Приоритет выше геометрии модели:
+             * подводя ось к оси, целятся именно в неё. */
+            if (drawMode && drawingRoadAxis) {
+                const axisSnap = snapToRoadAxis(clientX, clientY);
+                if (axisSnap) {
+                    showSnapMarker(axisSnap);
+                    setDrawCursorPoint(axisSnap.point);
+                    return;
+                }
             }
             const hit = pickStageHit(clientX, clientY);
             if (!hit) {
@@ -44758,7 +44825,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.20',
-            buildId: 'node-outer',
+            buildId: 'axis-snap',
             released: '2026-08-20',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

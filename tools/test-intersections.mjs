@@ -1028,6 +1028,50 @@ try {
     check(levelAxis.polylines <= 6,
         `ровное место не плодит линии выхода (${levelAxis.polylines} полилиний, было 843)`);
 
+    /* Привязка к ЧУЖОЙ оси при черчении: подвёл ось к оси — точка садится
+     * ровно на неё, и получается Т-образный узел.
+     * ⚠️ Обычная привязка сюда не годится: ось нарисована Line2, у которой нет
+     * атрибута position, и разбор примитива по ней возвращает пусто. Поэтому
+     * своя, по спроецированным точкам записи.
+     * ⚠️ Целиться надо в СПРОЕЦИРОВАННУЮ точку оси: клик мимо на пару пикселей
+     * проверял бы не то. */
+    const axisSnap = await page.evaluate(async () => {
+        const D = window.BimLvaDebug;
+        D.clearIntersections(); D.clearPolylines(); D.clearSlopes();
+        D.setAutoNodes(true);
+        const g = D.modelBounds.find((m) => /ix-terrain\.ifc$/i.test(m.file));
+        const z = g.centerZ + g.sizeZ / 2 + 3;
+        const cx = g.centerX, cy = g.centerY;
+        const main = D.createPolylineFromPoints(
+            [{ x: cx - 60, y: cy, z }, { x: cx + 60, y: cy, z }], { name: 'Главная', role: 'road-axis' });
+        D.setRoadWidths(main, 5, 5);
+        await new Promise((r) => setTimeout(r, 300));
+        // Экранная точка ЧУТЬ В СТОРОНЕ от середины главной оси.
+        const scr = D.polylineScreenPts(main);
+        if (!scr || scr.length < 2) return { error: 'ось не спроецировалась' };
+        const mid = { x: (scr[0].x + scr[1].x) / 2, y: (scr[0].y + scr[1].y) / 2 };
+        const near = D.snapRoadAxisAt(mid.x + 6, mid.y + 6);
+        const far = D.snapRoadAxisAt(mid.x + 200, mid.y + 200);
+        if (!near) return { error: 'привязка не сработала у самой оси' };
+        // Насколько снапнутая точка отстоит от прямой главной оси в плане.
+        const rec = D.drawn.find((r) => r.id === main);
+        const A = rec.vertsAbs[0], B = rec.vertsAbs[rec.vertsAbs.length - 1];
+        const ux = B.x - A.x, uy = B.y - A.y;
+        const len = Math.hypot(ux, uy) || 1;
+        const off = Math.abs((near.absX - A.x) * uy - (near.absY - A.y) * ux) / len;
+        return { off, polyId: near.polyId, mainId: main, farHit: !!far, px: near.px };
+    });
+    if (axisSnap.error) {
+        check(false, `привязка к оси: ${axisSnap.error}`);
+    } else {
+        console.log(`  привязка к оси: отход от оси ${axisSnap.off.toFixed(4)} м,`
+            + ` попадание ${axisSnap.px.toFixed(1)} px`);
+        check(axisSnap.polyId === axisSnap.mainId, 'привязка нашла именно главную ось');
+        check(axisSnap.off < 1e-6, `точка села РОВНО на ось (отход ${axisSnap.off.toFixed(6)} м)`);
+        // Без этого проверка прошла бы и у привязки, которая ловит всё подряд.
+        check(!axisSnap.farHit, 'вдали от оси привязка молчит, а не тянет через полэкрана');
+    }
+
     /* РАЗНЫЕ КОНСТРУКЦИИ на осях. Бордюр задан ТОЛЬКО на одной — узел обязан
      * взять его у той ветви, где он есть, и СВЕСТИ НА НЕТ к кромке соседней.
      * Обрыв на конце участка даёт ступеньку высотой в бордюр и клин в откосе
