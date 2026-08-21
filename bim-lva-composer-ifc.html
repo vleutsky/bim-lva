@@ -4240,7 +4240,7 @@
                             <button class="btn rbtn-sm" id="btnTour" disabled title="Проезд по маршруту или WASD">🚗 Проезд</button>
                         </div>
                         <div class="col">
-                            <button class="btn on rbtn-sm" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
+                            <button class="btn rbtn-sm" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
                             <button class="btn on rbtn-sm" id="btnSceneLabels" title="Подписи в сцене: имена осей, длины и уклоны, отметки, радиусы узлов, метки координат. Ручки вершин остаются.">Aa Подписи</button>
                             <button class="btn rbtn-sm" id="btnSelectionContour" title="Контур рёбер выделения">◇ Контур</button>
                             <button class="btn rbtn-sm" id="btnPerfMode" title="Быстрый режим для больших IFC">⚡ Быстрый</button>
@@ -7128,6 +7128,23 @@
                     [{ modelID, expressID }]
                 );
             },
+            applyMaterialPreset(key, items) {
+                return commitMaterialPreset(key, items);
+            },
+            elementAppearance(modelID, expressID) {
+                const a = loadedModels.get(modelID)?.appearanceByID?.get(expressID);
+                if (!a) return null;
+                return {
+                    preset: a.preset || 'custom',
+                    materialName: a.materialName || '',
+                    roughness: a.roughness,
+                    metalness: a.metalness,
+                    opacity: a.opacity,
+                    color: a.color,
+                    textureName: a.textureName || ''
+                };
+            },
+            get gridOn() { return !!$('gridBtn')?.classList.contains('on') && !!grid?.visible; },
             /** Текущее выделение как список ссылок. */
             get selectionRefs() {
                 return selectedItems.map((i) => ({ modelID: i.modelID, expressID: i.expressID }));
@@ -9243,6 +9260,7 @@
         let grid = new THREE.GridHelper(120, 120, 0xaeb8c3, 0xdde3e9);
         grid.rotation.x = Math.PI / 2;
         grid.position.set(0, 0, 0);
+        grid.visible = false;
         scene.add(grid);
 
 // 1. Возвращаем правильный разворот по оси X
@@ -30245,9 +30263,9 @@ uniform vec3 uBatchSelColor;
                 const appearance = modData.appearanceByID.get(frag.expressID);
                 const hex = appearance?.color ?? frag.hex;
                 const opacity = appearance?.opacity ?? frag.opacity;
-                const key = `${hex}_${opacity.toFixed(3)}`;
+                const key = appearanceBatchKey(appearance, hex, opacity);
                 if (!byKey.has(key)) byKey.set(key, []);
-                byKey.get(key).push({ ...frag, hex, opacity });
+                byKey.get(key).push({ ...frag, hex, opacity, appearance });
                 if (!modData.fragmentGeoms.has(frag.expressID)) modData.fragmentGeoms.set(frag.expressID, []);
                 modData.fragmentGeoms.get(frag.expressID).push({ geom: frag.geom, matrix: frag.matrix });
                 if (!modData.meshesByID.has(frag.expressID)) modData.meshesByID.set(frag.expressID, []);
@@ -30264,7 +30282,6 @@ uniform vec3 uBatchSelColor;
                 if (!merged) continue;
                 merged.computeBoundingSphere();
                 const mat = createIfcMaterial(list[0].hex, list[0].opacity);
-                installBatchSelectionShader(mat);
                 mat.clippingPlanes = getActiveClipPlanes();
                 const mesh = new THREE.Mesh(merged, mat);
                 mesh.matrixAutoUpdate = false;
@@ -30277,6 +30294,11 @@ uniform vec3 uBatchSelColor;
                         opacity: list[0].opacity
                     }
                 };
+                const app = list[0].appearance;
+                if (app) applyAppearanceToMesh(mesh, app);
+                const liveMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+                installBatchSelectionShader(liveMat);
+                if (liveMat) liveMat.clippingPlanes = getActiveClipPlanes();
                 modData.group.add(mesh);
                 modData.batchMeshes.push(mesh);
                 allMeshes.push(mesh);
@@ -36074,6 +36096,18 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             applyVisualStyleToMesh(mesh);
         }
 
+        /** Ключ батча: цвет мало — иначе хром и краска одного цвета склеиваются. */
+        function appearanceBatchKey(appearance, hex, opacity) {
+            const h = appearance?.color ?? hex;
+            const o = appearance?.opacity ?? opacity;
+            if (!appearance) return `${h}_${Number(o).toFixed(3)}`;
+            const r = Number(appearance.roughness ?? 0.55).toFixed(2);
+            const m = Number(appearance.metalness ?? 0.05).toFixed(2);
+            const p = appearance.preset || 'custom';
+            const t = appearance.textureName || (appearance.texture ? 'tex' : '');
+            return `${h}_${Number(o).toFixed(3)}_${r}_${m}_${p}_${t}`;
+        }
+
         function applyAppearanceToMesh(mesh, appearance) {
             if (!appearance) {
                 restoreMeshOriginalAppearance(mesh);
@@ -36373,17 +36407,48 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (picker && preview) preview.style.background = picker.value;
         }
 
+        function refreshAppearancePanel() {
+            const first = selectedItems[0];
+            if (!first) return;
+            const mod0 = loadedModels.get(first.modelID);
+            if (mod0 && mod0.isFBX) showFBXProps(first.modelID, first.expressID, selectedItems.length);
+            else showProps(first.modelID, first.expressID, selectedItems.length);
+        }
+
         function applyAppearanceFromPanel() {
             const count = applyAppearanceToSelection(readAppearanceFromPanel());
             if (count) {
                 appearanceDraftTexture = null;
                 appearanceDraftTextureName = '';
-                // Снимаем выделение: подсветка выделенного смешивается с
-                // назначенным цветом, и результат правки не разглядеть, пока
-                // элемент выбран.
-                selectMultiple([]);
-                notifyOk(`Оформление применено к ${count} элементам. Выделение снято, чтобы был виден цвет.`);
+                notifyOk(`Оформление применено к ${count} элементам.`);
+                refreshAppearancePanel();
             }
+            return count;
+        }
+
+        function commitMaterialPreset(presetKey, items) {
+            const preset = MATERIAL_PRESETS[presetKey];
+            if (!preset) return 0;
+            if (items) {
+                const tex = preset.tex ? cloneAppearanceTexture(renderMaterialTexture(preset.tex)) : null;
+                const n = applyAppearanceToSelection({
+                    color: preset.color ?? 0xaaaaaa,
+                    preset: presetKey,
+                    materialName: preset.label,
+                    roughness: preset.roughness,
+                    metalness: preset.metalness,
+                    opacity: preset.opacity,
+                    repeatU: preset.repeat || 1,
+                    repeatV: preset.repeat || 1,
+                    texture: tex,
+                    textureName: preset.tex ? preset.label : '',
+                    clearTexture: !preset.tex
+                }, items);
+                if (n) refreshAppearancePanel();
+                return n;
+            }
+            applyPresetToPanel(presetKey);
+            return applyAppearanceFromPanel();
         }
 
         function resetAppearanceSelection() {
@@ -42192,7 +42257,10 @@ ${componentXml || '    '}
         }
 
         propsBox.addEventListener('change', e => {
-            if (e.target.id === 'materialPreset') applyPresetToPanel(e.target.value);
+            if (e.target.id === 'materialPreset') {
+                commitMaterialPreset(e.target.value);
+                trackUsage('appearance_preset', { preset: e.target.value });
+            }
             if (e.target.id === 'matTextureFile') loadAppearanceTextureFile(e.target.files[0]);
             if (e.target.id === 'matColorPicker') updateMatPreviewColor();
         });
@@ -46543,7 +46611,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.21',
-            buildId: 'weather-sun',
+            buildId: 'mat-apply',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

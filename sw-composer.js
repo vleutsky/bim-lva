@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260821-weather-sun';
+const CACHE = 'bimlva-composer-shell-20260821-mat-apply';
 const SHELL = [
   './',
   './index.html',

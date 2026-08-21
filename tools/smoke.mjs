@@ -311,7 +311,41 @@ async function checkRenderMaterials(page) {
     if (!(got.render?.length >= 10)) {
         problems.push(`материалы рендера: в группе визуализации ${got.render?.length || 0}, ждали ≥10`);
     }
-    return { render: got.render?.length || 0, env: !!got.env };
+    if (await page.evaluate(() => window.BimLvaDebug.gridOn)) {
+        problems.push('сетка включена при старте — должна быть выключена');
+    }
+
+    const applied = await page.evaluate(() => {
+        const row = document.querySelector('#tree .children .trow[data-eid]');
+        if (row) row.click();
+        const refs = window.BimLvaDebug.selectionRefs;
+        if (!refs.length) return { ok: false, reason: 'нет выделения' };
+        window.BimLvaDebug.applyMaterialPreset('chrome', [refs[0]]);
+        const a = window.BimLvaDebug.elementAppearance(refs[0].modelID, refs[0].expressID);
+        const sel = document.getElementById('materialPreset')?.value || null;
+        return {
+            ok: true,
+            preset: a?.preset || null,
+            metal: a?.metalness,
+            sel,
+            n: refs.length
+        };
+    });
+    if (!applied?.ok) {
+        problems.push(`материалы: не удалось применить хром (${applied?.reason || 'нет ответа'})`);
+    } else {
+        if (applied.preset !== 'chrome') {
+            problems.push(`материалы: после выбора хрома preset=${applied.preset}`);
+        }
+        if (!(applied.metal > 0.8)) {
+            problems.push(`материалы: хром без металла (metalness=${applied.metal})`);
+        }
+        if (applied.sel && applied.sel !== 'chrome') {
+            problems.push(`материалы: список сбросился на «${applied.sel}» вместо хрома`);
+        }
+    }
+
+    return { render: got.render?.length || 0, env: !!got.env, preset: applied?.preset };
 }
 
 /**
