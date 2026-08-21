@@ -4249,7 +4249,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 4312ea1</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · f58ba5a</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5581,8 +5581,11 @@
                 <label data-tip="Шаг поперечников на прямых, м. Вершины оси всегда в списке.">шаг прям.
                     <input class="editInput" id="roadXsStep" type="number" min="0.5" step="1" value="20">
                 </label>
-                <label data-tip="Шаг на кривых (сопряжения и плавные повороты), м. Мельче прямого — на прямых меньше сечений, на дуге качество то же.">крив.
+                <label data-tip="Шаг на кривых плана (сопряжения), м. Мельче прямого — на прямых меньше сечений, на дуге качество то же.">крив.
                     <input class="editInput" id="roadXsStepCurve" type="number" min="0.5" step="0.5" value="5">
+                </label>
+                <label data-tip="Шаг на вертикальной кривой профиля, м. Полотно и ось повторяют дугу, а не хорду между точками перелома. Умолчание 1 м.">верт.
+                    <input class="editInput" id="roadXsStepVCurve" type="number" min="0.2" step="0.2" value="1">
                 </label>
                 <label data-tip="Ширина шаблона влево от оси, м. На плане кромку можно тянуть курсором.">←
                     <input class="editInput" id="roadXsWidthL" type="number" min="0.5" step="0.05" value="3.25">
@@ -7322,6 +7325,16 @@
                 setPolylineVertexVRadius(rec, idx, radius);
                 return true;
             },
+            verticalCurveZ(id, sta) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec || !polylineHasVCurve(rec)) return null;
+                const built = buildVerticalCurvePoints(rec);
+                return sampleVerticalCurveZ(built.points, sta);
+            },
+            renderPtsCount(id) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                return rec?.renderPts?.length || 0;
+            },
             /**
              * Тангенсы сопряжения (касательная → вершина → касательная) —
              * то, что остаётся пунктиром после вписывания радиуса.
@@ -7901,6 +7914,7 @@
                     widthR: model.widthR,
                     step: model.step,
                     stepCurve: model.stepCurve,
+                    stepVCurve: model.stepVCurve,
                     lines: model.lines.length,
                     corridorTris: model.corridorTris || 0,
                     template: snapshotRoadTemplate(model.template),
@@ -7926,6 +7940,7 @@
                         y: model.stations[model.stations.length - 1].y
                     },
                     pk: model.stations.map((s) => s.sta),
+                    pkZ: model.stations.map((s) => ({ sta: s.sta, z: s.z })),
                     corner: model.stations.filter((s) => s.atVertex).map((s) => ({
                         sta: s.sta, x: s.x, y: s.y, rx: s.rx, ry: s.ry, miterScale: s.miterScale
                     })),
@@ -17183,13 +17198,43 @@
          * на плане, только оси — станция и Z. PVI остаётся кружком на пересечении
          * касательных, дуга через него не идёт.
          */
-        function buildVerticalCurvePoints(record) {
+        function readStepVCurve() {
+            const v = Number($('roadXsStepVCurve')?.value);
+            return Math.max(0.2, Number.isFinite(v) && v > 0 ? v : 1);
+        }
+
+        function buildVerticalCurvePoints(record, step) {
             ensurePolylineVRadii(record);
             const pts = record.pts;
             if (!pts || pts.length < 2) return { points: [], guides: [], clamped: false };
             const sta = polylineVertexPlanStations(record);
             const prof = pts.map((p, i) => new THREE.Vector3(sta[i], p.z, 0));
-            return buildFilletedPoints(prof, record.vRadii, 24, !!record.closed);
+            const d = Math.max(0.2, Number(step) || readStepVCurve());
+            const segs = Math.min(80, Math.max(16, Math.round(40 / d)));
+            return buildFilletedPoints(prof, record.vRadii, segs, !!record.closed);
+        }
+
+        function verticalCurveStationRanges(record) {
+            const built = buildVerticalCurvePoints(record);
+            return (built.guides || []).map((g) => ({
+                from: Math.min(g.tangentIn.x, g.tangentOut.x),
+                to: Math.max(g.tangentIn.x, g.tangentOut.x)
+            })).filter((r) => r.to - r.from > 0.2);
+        }
+
+        function pointOnPtsAtPlanStation(record, sta) {
+            const pts = record?.pts;
+            if (!pts || pts.length < 2) return null;
+            const cum = polylineVertexPlanStations(record);
+            const total = cum[cum.length - 1];
+            if (!(total > 1e-9)) return pts[0].clone();
+            const s = Math.max(0, Math.min(total, Number(sta) || 0));
+            let hi = 1;
+            while (hi < cum.length - 1 && cum[hi] < s) hi++;
+            const lo = hi - 1;
+            const seg = cum[hi] - cum[lo];
+            const t = seg < 1e-9 ? 0 : (s - cum[lo]) / seg;
+            return pts[lo].clone().lerp(pts[hi], t);
         }
 
         function sampleVerticalCurveZ(curvePts, station) {
@@ -17234,13 +17279,42 @@
                 record.vFilletGuides = [];
                 return false;
             }
-            const built = buildVerticalCurvePoints(record);
+            const step = readStepVCurve();
+            const built = buildVerticalCurvePoints(record, step);
             record.vFilletGuides = built.guides;
+            const closed = !!record.closed;
             for (const p of points) {
-                const s = stationOnPolylineXY(record.pts, !!record.closed, p.x, p.y);
+                const s = stationOnPolylineXY(record.pts, closed, p.x, p.y);
                 const z = sampleVerticalCurveZ(built.points, s);
                 if (z != null) p.z = z;
             }
+            const ranges = (built.guides || []).map((g) => ({
+                from: Math.min(g.tangentIn.x, g.tangentOut.x),
+                to: Math.max(g.tangentIn.x, g.tangentOut.x)
+            })).filter((r) => r.to - r.from > 0.2);
+            if (!ranges.length) return built.clamped;
+            const tagged = points.map((p) => ({
+                s: stationOnPolylineXY(record.pts, closed, p.x, p.y),
+                p
+            }));
+            const have = new Set(tagged.map((t) => t.s.toFixed(3)));
+            ranges.forEach(({ from, to }) => {
+                for (let s = from + step; s < to - 1e-6; s += step) {
+                    if (have.has(s.toFixed(3))) continue;
+                    const xy = pointOnPtsAtPlanStation(record, s);
+                    if (!xy) continue;
+                    const z = sampleVerticalCurveZ(built.points, s);
+                    tagged.push({ s, p: new THREE.Vector3(xy.x, xy.y, z != null ? z : xy.z) });
+                    have.add(s.toFixed(3));
+                }
+            });
+            tagged.sort((a, b) => a.s - b.s);
+            points.length = 0;
+            tagged.forEach((t) => {
+                const last = points[points.length - 1];
+                if (last && Math.hypot(t.p.x - last.x, t.p.y - last.y, t.p.z - last.z) < 0.04) return;
+                points.push(t.p);
+            });
             return built.clamped;
         }
 
@@ -21339,7 +21413,7 @@
          * живут в своей группе, не в списке полилиний: их десятки, и это
          * следствие оси, а не самостоятельный чертёж.
          */
-        const ROAD_XS_MAX_STATIONS = 200;
+        const ROAD_XS_MAX_STATIONS = 2000;
         const ROAD_XS_MAX_SAMPLES = 201;
         const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 56, t: 44, b: 28 };
         const ROAD_XS_MITER_CAP = 8;
@@ -23201,24 +23275,20 @@
         }
 
         /**
-         * Вертикальная кривая профиля: те же короткие хорды, что на плане.
-         * Без этого полотно на PVI идёт по хорде между редкими станциями.
+         * Участок вертикальной кривой — по касательным дуги, а не R·1.2:
+         * иначе при R=500 маска накрывала 600 м и шаг 1 м съедал потолок станций.
          */
         function roadXsVerticalCurveMask(record, stn) {
             const n = stn?.pts?.length || 0;
             const mask = new Array(n).fill(false);
             if (!record || !polylineHasVCurve(record) || n < 2) return mask;
-            ensurePolylineVRadii(record);
-            const vSta = polylineVertexPlanStations(record);
-            record.vRadii.forEach((rv, i) => {
-                if ((rv || 0) < 1e-6) return;
-                const vs = vSta[i];
-                if (!(vs >= 0)) return;
-                const reach = Math.max(0.5, rv * 1.2);
-                for (let k = 0; k < n; k++) {
-                    if (Math.abs(stn.cum[k] - vs) <= reach + 1e-6) mask[k] = true;
-                }
-            });
+            const ranges = verticalCurveStationRanges(record);
+            if (!ranges.length) return mask;
+            const closed = !!record.closed;
+            for (let k = 0; k < n; k++) {
+                const s = stationOnPolylineXY(record.pts, closed, stn.pts[k].x, stn.pts[k].y);
+                if (ranges.some((r) => s >= r.from - 1e-6 && s <= r.to + 1e-6)) mask[k] = true;
+            }
             return mask;
         }
 
@@ -23227,24 +23297,29 @@
             if (n < 2 || !stn.cum) return [];
             const planMask = roadXsCurveMask(stn, stepTan);
             const vertMask = record ? roadXsVerticalCurveMask(record, stn) : [];
-            const mask = planMask.map((v, i) => v || !!vertMask[i]);
+            const kindAt = (i) => {
+                if (vertMask[i] || vertMask[i + 1]) return 'v';
+                if (planMask[i] || planMask[i + 1]) return 'p';
+                return 't';
+            };
             const spans = [];
             let i = 0;
             while (i < n - 1) {
-                const curve = !!(mask[i] || mask[i + 1]);
+                const kind = kindAt(i);
                 let j = i + 1;
-                while (j < n - 1 && !!(mask[j] || mask[j + 1]) === curve) j++;
-                spans.push({ from: stn.cum[i], to: stn.cum[j], curve });
+                while (j < n - 1 && kindAt(j) === kind) j++;
+                spans.push({ from: stn.cum[i], to: stn.cum[j], kind });
                 i = j;
             }
             return spans;
         }
 
-        function roadXsStationList(stn, step, stepCurve, extra, record) {
+        function roadXsStationList(stn, step, stepCurve, extra, record, stepVCurve) {
             const total = stn?.total;
             if (!(total > 0)) return [0];
             const dTan = Math.max(0.5, Number(step) || 20);
             const dCrv = Math.max(0.5, Number(stepCurve) || dTan);
+            const dVert = Math.max(0.2, Number(stepVCurve) || 1);
             const raw = [];
             const spans = roadXsAlignSpans(stn, dTan, record);
             if (!spans.length) {
@@ -23253,7 +23328,7 @@
             } else {
                 spans.forEach((sp) => {
                     raw.push(sp.from, sp.to);
-                    const d = sp.curve ? dCrv : dTan;
+                    const d = sp.kind === 'v' ? dVert : sp.kind === 'p' ? dCrv : dTan;
                     for (let s = sp.from + d; s < sp.to - 1e-6; s += d) raw.push(s);
                 });
             }
@@ -23537,6 +23612,7 @@
             if (!stn) return null;
             const step = Math.max(0.5, Number(opts.step) || 20);
             const stepCurve = Math.max(0.5, Number(opts.stepCurve) || step);
+            const stepVCurve = Math.max(0.2, Number(opts.stepVCurve) || readStepVCurve());
             const widthL = roadWidthOrDefault(opts.widthL);
             const widthR = roadWidthOrDefault(opts.widthR);
             const sampleStep = Math.max(0.1, Number(opts.sampleStep) || 1);
@@ -23546,7 +23622,7 @@
                 extra = extra.concat(polylineVerticalVertexStations(record, stn));
             }
             extra = [...new Set(extra.map((s) => Math.round(s * 1000) / 1000))];
-            let stationsPk = roadXsStationList(stn, step, stepCurve, extra, record);
+            let stationsPk = roadXsStationList(stn, step, stepCurve, extra, record, stepVCurve);
             stationsPk = pruneStationsNearCorners(stationsPk, turns, Math.max(widthL, widthR));
             const nodeGaps = roadNodeGapsFor(record.id);
             stationsPk = applyNodeGapsToStations(stationsPk, nodeGaps, stn.total);
@@ -23588,7 +23664,7 @@
             });
             return {
                 stations, total: stn.total, missed, hits, nodeGaps,
-                step, stepCurve, widthL, widthR, sampleStep
+                step, stepCurve, stepVCurve, widthL, widthR, sampleStep
             };
         }
 
@@ -24147,6 +24223,7 @@
             return {
                 step,
                 stepCurve: Math.max(0.5, Number.isFinite(crv) && crv > 0 ? crv : step),
+                stepVCurve: readStepVCurve(),
                 widthL: roadWidthOrDefault($('roadXsWidthL')?.value),
                 widthR: roadWidthOrDefault($('roadXsWidthR')?.value),
                 sampleStep: Math.max(0.1, Number($('roadXsSample')?.value) || 1),
@@ -24242,6 +24319,7 @@
             const keep = { ...roadXsActive };
             buildRoadCrossSections(rec, {
                 step: model.step, stepCurve: model.stepCurve,
+                stepVCurve: model.stepVCurve,
                 widthL: model.widthL, widthR: model.widthR,
                 sampleStep: model.sampleStep, color: model.color, live: true
             });
@@ -26561,6 +26639,9 @@
                 $('roadXsStep').value = existing.step;
                 if ($('roadXsStepCurve')) {
                     $('roadXsStepCurve').value = existing.stepCurve || existing.step;
+                }
+                if ($('roadXsStepVCurve')) {
+                    $('roadXsStepVCurve').value = existing.stepVCurve || 1;
                 }
                 $('roadXsWidthL').value = existing.widthL;
                 $('roadXsWidthR').value = existing.widthR;
@@ -48019,7 +48100,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.21',
-            buildId: '4312ea1-preview',
+            buildId: 'f58ba5a-preview',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -48028,6 +48109,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: вертикальная кривая профиля сгущает ось и полотно с шагом (поле «верт.», умолч. 1 м) — дорога повторяет дугу, а не хорду между точками перелома.',
                 '2026.08.21: разметка дороги — отдельная кнопка на вкладке Черчение: краевые, осевая, полосы по шаблону, стоп-линия на устье узла. Не путать с «Построениями».',
                 '2026.08.21: на профиле ПКМ без сдвига ставит точку перелома (пикет и отметка клика); по вершине — вертикальная кривая. Листы ГОСТ без подписи продукта: для экспертизы.',
                 '2026.08.21: листы ГОСТ поперечника и продольника — как в альбоме: красная линия, рабочие отметки, площади насыпи/выемки, таблица проект/факт; на профиле план трассы, откосы, уклоны-треугольники, пикеты и кривые.',

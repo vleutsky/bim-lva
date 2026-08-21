@@ -2748,7 +2748,8 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: раздельный шаг дал слишком мало сечений (${JSON.stringify(splitStep)})`);
     }
 
-    // Вертикальная кривая профиля — тот же мелкий шаг, что на дуге плана.
+    // Вертикальная кривая: полотно по дуге, шаг по умолчанию 1 м (не хорда
+    // между точками перелома).
     const vcurveStep = await page.evaluate((g) => {
         const D = window.BimLvaDebug;
         const id = D.createPolylineFromPoints(
@@ -2759,16 +2760,24 @@ async function checkRoadCrossSections(page) {
             ],
             { name: 'Ось-тест-vcurve-шаг', role: 'road-axis' }
         );
+        const nPts0 = D.renderPtsCount(id);
         D.setPolylineVRadius(id, 1, 120);
+        const nPts1 = D.renderPtsCount(id);
         const plain = D.buildRoadXs(id, {
-            step: 20, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+            step: 20, stepCurve: 4, stepVCurve: 1, widthL: 2, widthR: 2, sampleStep: 1, live: false
         });
+        // Rв=120, уклоны ±5 %: касательная дуги ≈ 6 м, кривая ПК 34…46.
+        // ПК 30 ещё на входящей прямой — отметка там равна хорде ломаной,
+        // и проверка «не на хорде» проходит вхолостую. Берём сам PVI.
+        const pviSta = 40;
+        const hit = (plain?.pkZ || []).find((s) => Math.abs(s.sta - pviSta) < 0.7);
+        const zCurve = D.verticalCurveZ(id, hit ? hit.sta : pviSta);
+        const chordZ = g + 2.5;
         D.setPolylineVRadius(id, 1, 0);
         const noV = D.buildRoadXs(id, {
-            step: 20, stepCurve: 4, widthL: 2, widthR: 2, sampleStep: 1, live: false
+            step: 20, stepCurve: 4, stepVCurve: 1, widthL: 2, widthR: 2, sampleStep: 1, live: false
         });
-        const pk = plain?.pk || [];
-        const mid = pk.filter((s) => s > 25 && s < 55);
+        const mid = (plain?.pk || []).filter((s) => s > 25 && s < 55);
         const gaps = [];
         for (let i = 1; i < mid.length; i++) gaps.push(mid[i] - mid[i - 1]);
         const med = gaps.length
@@ -2779,20 +2788,40 @@ async function checkRoadCrossSections(page) {
             withV: plain?.stations || 0,
             noV: noV?.stations || 0,
             medGap: med,
-            midN: mid.length
+            midN: mid.length,
+            nPts0, nPts1,
+            stepV: plain?.stepVCurve,
+            zHit: hit?.z ?? null,
+            zCurve,
+            chordZ,
+            field: !!document.getElementById('roadXsStepVCurve')
         };
     }, groundZ);
+    if (!vcurveStep.field) {
+        problems.push('поперечники: нет поля шага вертикальной кривой');
+    }
+    if ((vcurveStep.nPts1 || 0) <= (vcurveStep.nPts0 || 0) + 4) {
+        problems.push(`профиль: вертикальная кривая не сгустила ось (${JSON.stringify(vcurveStep)})`);
+    }
     if ((vcurveStep.withV || 0) <= (vcurveStep.noV || 0)) {
         problems.push(
             `поперечники: вертикальная кривая не добавила сечения ` +
             `(${vcurveStep.withV} vs ${vcurveStep.noV})`
         );
     }
-    if ((vcurveStep.medGap || 99) > 8) {
+    if ((vcurveStep.medGap || 99) > 1.6) {
         problems.push(
-            `поперечники: на вертикальной кривой шаг ${vcurveStep.medGap} м, ждали ≈4 ` +
+            `поперечники: на вертикальной кривой шаг ${vcurveStep.medGap} м, ждали ≈1 ` +
             `(${JSON.stringify(vcurveStep)})`
         );
+    }
+    if (vcurveStep.zHit == null || vcurveStep.zCurve == null
+        || Math.abs(vcurveStep.zHit - vcurveStep.zCurve) > 0.04) {
+        problems.push(`поперечники: полотно не повторяет дугу профиля (${JSON.stringify(vcurveStep)})`);
+    }
+    if (vcurveStep.zHit != null && vcurveStep.chordZ != null
+        && Math.abs(vcurveStep.zHit - vcurveStep.chordZ) < 0.04) {
+        problems.push(`поперечники: полотно осталось на хорде перелома (${JSON.stringify(vcurveStep)})`);
     }
 
     // Укреплённая обочина: слои выше её низа — вертикаль у внутренней кромки.
@@ -2853,6 +2882,7 @@ async function checkRoadCrossSections(page) {
             splitTable: !!document.getElementById('rsSplitProfileTable'),
             splitV: !!document.getElementById('rsSplitV'),
             stepCurve: !!document.getElementById('roadXsStepCurve'),
+            stepVCurve: !!document.getElementById('roadXsStepVCurve'),
             grips: [...(card?.querySelectorAll('.rs-win-grip') || [])].map((g) => g.dataset.dir),
             applyTpl: (document.getElementById('roadXsApplyTpl')?.textContent || '').trim(),
             tpls: [...(card?.querySelectorAll('#roadXsTpls .rs-tpl') || [])].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
@@ -2882,8 +2912,8 @@ async function checkRoadCrossSections(page) {
         if (!ui.titles.includes('План') || !ui.titles.includes('Профиль') || !ui.titles.includes('Поперечник')) {
             problems.push(`поперечники: нет панелей План/Профиль/Поперечник (${JSON.stringify(ui.titles)})`);
         }
-        if (!ui.plan || !ui.splitH || !ui.splitV || !ui.splitTable || !ui.stepCurve || ui.grips.join(',') !== 'e,s,se') {
-            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, splitTable: ui.splitTable, stepCurve: ui.stepCurve, grips: ui.grips })})`);
+        if (!ui.plan || !ui.splitH || !ui.splitV || !ui.splitTable || !ui.stepCurve || !ui.stepVCurve || ui.grips.join(',') !== 'e,s,se') {
+            problems.push(`поперечники: нет плана или ручек раскладки (${JSON.stringify({ plan: ui.plan, splitH: ui.splitH, splitV: ui.splitV, splitTable: ui.splitTable, stepCurve: ui.stepCurve, stepVCurve: ui.stepVCurve, grips: ui.grips })})`);
         }
         if (ui.applyTpl !== 'Применить на ось' || ui.tpls.length < 5) {
             problems.push(`поперечники: нет каталога шаблонов (${JSON.stringify({ applyTpl: ui.applyTpl, tpls: ui.tpls })})`);
