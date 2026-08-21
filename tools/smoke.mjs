@@ -33,6 +33,7 @@ let bvhPeak = -1;
 let viewCube = null;
 let sceneLabels = null;
 let visualStyle = null;
+let renderMats = null;
 let draw = null;
 let dxfEntities = null;
 let sweep = null;
@@ -293,6 +294,23 @@ async function checkVisualStyle(page) {
         edgeCount: edges.edges,
         pickWire
     };
+}
+
+/** Пресеты «Визуализация / рендер» и студийный env — иначе металл выглядит краской. */
+async function checkRenderMaterials(page) {
+    const got = await page.evaluate(() => window.BimLvaDebug.renderMaterials);
+    if (!got) {
+        problems.push('материалы рендера: нет отладочного снимка');
+        return null;
+    }
+    if (!got.env) problems.push('материалы рендера: нет студийного света (environment) — металл будет плоским');
+    for (const key of ['asphalt', 'gravel', 'grass', 'water', 'chrome', 'copper', 'clay']) {
+        if (!got.keys?.includes(key)) problems.push(`материалы рендера: нет пресета ${key}`);
+    }
+    if (!(got.render?.length >= 10)) {
+        problems.push(`материалы рендера: в группе визуализации ${got.render?.length || 0}, ждали ≥10`);
+    }
+    return { render: got.render?.length || 0, env: !!got.env };
 }
 
 /**
@@ -4662,6 +4680,7 @@ async function main() {
                 }
                 selectSimilar = await checkSelectSimilar(page);
                 visualStyle = await checkVisualStyle(page);
+                renderMats = await checkRenderMaterials(page);
                 if (selectSimilar?.ok && selectSimilar.after !== 2100) {
                     problems.push(
                         `«Выбрать подобные»: выделила ${selectSimilar.after} вместо 2100 (все IFCWALL в smoke-grid.ifc)`
@@ -4800,6 +4819,11 @@ async function main() {
         console.log(
             `отображение: каркас прячет грани (${visualStyle.wireOff}), `
             + `рёбер ${visualStyle.edgeCount}, пикинг в каркасе ${visualStyle.pickWire ? 'ок' : 'НЕТ'}`
+        );
+    }
+    if (renderMats) {
+        console.log(
+            `материалы:  рендер ${renderMats.render}, студийный свет ${renderMats.env ? 'есть' : 'НЕТ'}`
         );
     }
     if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');

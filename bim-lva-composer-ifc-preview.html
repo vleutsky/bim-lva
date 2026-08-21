@@ -4165,7 +4165,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1ae5a39</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 33afa66</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -7273,6 +7273,15 @@
             setVisualStyle(mode) {
                 return setSceneVisualStyle(mode);
             },
+            get renderMaterials() {
+                return {
+                    env: !!scene.environment,
+                    keys: Object.keys(MATERIAL_PRESETS),
+                    render: Object.entries(MATERIAL_PRESETS)
+                        .filter(([, p]) => p.group === 'render')
+                        .map(([k]) => k)
+                };
+            },
             /** Вершины полилинии в пикселях холста — то же, чем меряет пикинг. */
             polylineScreenPts(id) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -8929,6 +8938,40 @@
         const fill = new THREE.DirectionalLight(0x88aaff, 0.5); 
         fill.position.set(-25, 20, 15); 
         scene.add(fill);
+
+        /**
+         * Студийная среда для PBR: без неё metalness/roughness у стали и стекла
+         * выглядят плоской краской. Фон сцены не трогаем — это чертёжный холст.
+         */
+        (function installStudioEnvironment() {
+            try {
+                const c = document.createElement('canvas');
+                c.width = 256;
+                c.height = 128;
+                const ctx = c.getContext('2d');
+                const g = ctx.createLinearGradient(0, 0, 0, 128);
+                g.addColorStop(0, '#8fa8c8');
+                g.addColorStop(0.42, '#e2e8f0');
+                g.addColorStop(0.5, '#d2cec6');
+                g.addColorStop(1, '#6a6660');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, 256, 128);
+                const sun = ctx.createRadialGradient(72, 26, 2, 72, 26, 48);
+                sun.addColorStop(0, 'rgba(255,246,220,0.8)');
+                sun.addColorStop(1, 'rgba(255,246,220,0)');
+                ctx.fillStyle = sun;
+                ctx.fillRect(0, 0, 256, 128);
+                const tex = new THREE.CanvasTexture(c);
+                tex.mapping = THREE.EquirectangularReflectionMapping;
+                tex.colorSpace = THREE.SRGBColorSpace;
+                const pmrem = new THREE.PMREMGenerator(renderer);
+                scene.environment = pmrem.fromEquirectangular(tex).texture;
+                tex.dispose();
+                pmrem.dispose();
+            } catch (err) {
+                console.warn('студийный свет для материалов не собрался', err);
+            }
+        })();
 
         let grid = new THREE.GridHelper(120, 120, 0xaeb8c3, 0xdde3e9);
         grid.rotation.x = Math.PI / 2;
@@ -35529,15 +35572,132 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
         ];
 
         const MATERIAL_PRESETS = {
-            custom: { label: 'Свой материал', roughness: 0.55, metalness: 0.05, color: null, opacity: 1 },
-            paint: { label: 'Краска', roughness: 0.65, metalness: 0, color: 0xe8e8e8, opacity: 1 },
-            concrete: { label: 'Бетон', roughness: 0.92, metalness: 0, color: 0x9a9a9a, opacity: 1 },
-            steel: { label: 'Сталь', roughness: 0.35, metalness: 0.85, color: 0x8a9baa, opacity: 1 },
-            glass: { label: 'Стекло', roughness: 0.05, metalness: 0.1, color: 0x88ccff, opacity: 0.45 },
-            wood: { label: 'Дерево', roughness: 0.78, metalness: 0, color: 0x8b6914, opacity: 1 },
-            brick: { label: 'Кирпич', roughness: 0.88, metalness: 0, color: 0xa04030, opacity: 1 },
-            plastic: { label: 'Пластик', roughness: 0.42, metalness: 0.05, color: 0xc8c8c8, opacity: 1 }
+            custom: { label: 'Свой материал', group: 'base', roughness: 0.55, metalness: 0.05, color: null, opacity: 1 },
+            paint: { label: 'Краска', group: 'base', roughness: 0.65, metalness: 0, color: 0xe8e8e8, opacity: 1 },
+            concrete: { label: 'Бетон', group: 'base', roughness: 0.92, metalness: 0, color: 0x9a9a9a, opacity: 1 },
+            steel: { label: 'Сталь', group: 'base', roughness: 0.35, metalness: 0.85, color: 0x8a9baa, opacity: 1 },
+            glass: { label: 'Стекло', group: 'base', roughness: 0.05, metalness: 0.1, color: 0x88ccff, opacity: 0.45 },
+            wood: { label: 'Дерево', group: 'base', roughness: 0.78, metalness: 0, color: 0x8b6914, opacity: 1 },
+            brick: { label: 'Кирпич', group: 'base', roughness: 0.88, metalness: 0, color: 0xa04030, opacity: 1 },
+            plastic: { label: 'Пластик', group: 'base', roughness: 0.42, metalness: 0.05, color: 0xc8c8c8, opacity: 1 },
+            asphalt: { label: 'Асфальт', group: 'render', roughness: 0.96, metalness: 0, color: 0x3c3c3e, opacity: 1, tex: 'asphalt', repeat: 4 },
+            gravel: { label: 'Щебень', group: 'render', roughness: 0.97, metalness: 0, color: 0x8a8680, opacity: 1, tex: 'gravel', repeat: 3 },
+            sand: { label: 'Песок', group: 'render', roughness: 0.94, metalness: 0, color: 0xc4b48a, opacity: 1, tex: 'sand', repeat: 4 },
+            soil: { label: 'Грунт', group: 'render', roughness: 0.95, metalness: 0, color: 0x6b4e32, opacity: 1, tex: 'soil', repeat: 3 },
+            grass: { label: 'Трава', group: 'render', roughness: 0.92, metalness: 0, color: 0x4a7a32, opacity: 1, tex: 'grass', repeat: 4 },
+            water: { label: 'Вода', group: 'render', roughness: 0.04, metalness: 0.08, color: 0x3a7cad, opacity: 0.38 },
+            aluminum: { label: 'Алюминий', group: 'render', roughness: 0.28, metalness: 0.92, color: 0xc5c9ce, opacity: 1 },
+            chrome: { label: 'Хром', group: 'render', roughness: 0.06, metalness: 1, color: 0xe2e6ea, opacity: 1 },
+            copper: { label: 'Медь', group: 'render', roughness: 0.22, metalness: 1, color: 0xb87333, opacity: 1 },
+            rubber: { label: 'Резина', group: 'render', roughness: 0.98, metalness: 0, color: 0x242424, opacity: 1 },
+            plaster: { label: 'Штукатурка', group: 'render', roughness: 0.88, metalness: 0, color: 0xe6e2d8, opacity: 1, tex: 'plaster', repeat: 3 },
+            ceramic: { label: 'Керамика', group: 'render', roughness: 0.18, metalness: 0.04, color: 0xe8e4dc, opacity: 1, tex: 'ceramic', repeat: 2 },
+            clay: { label: 'Матовый (clay)', group: 'render', roughness: 1, metalness: 0, color: 0xc8b8a4, opacity: 1 },
+            mirror: { label: 'Зеркало', group: 'render', roughness: 0, metalness: 1, color: 0xffffff, opacity: 1 }
         };
+        const MATERIAL_PRESET_GROUPS = [
+            { id: 'base', label: 'Базовые' },
+            { id: 'render', label: 'Визуализация / рендер' }
+        ];
+
+        function hash21(x, y) {
+            const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+            return n - Math.floor(n);
+        }
+        function valueNoise(x, y) {
+            const x0 = Math.floor(x), y0 = Math.floor(y);
+            const fx = x - x0, fy = y - y0;
+            const sx = fx * fx * (3 - 2 * fx);
+            const sy = fy * fy * (3 - 2 * fy);
+            const a = hash21(x0, y0), b = hash21(x0 + 1, y0);
+            const c = hash21(x0, y0 + 1), d = hash21(x0 + 1, y0 + 1);
+            return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+        }
+        function fbm2(x, y) {
+            return valueNoise(x, y) * 0.55 + valueNoise(x * 2.1, y * 2.1) * 0.3
+                + valueNoise(x * 4.3, y * 4.3) * 0.15;
+        }
+
+        const renderMatTextureCache = new Map();
+        function buildRenderMatTexture(kind) {
+            const s = 128;
+            const c = document.createElement('canvas');
+            c.width = s;
+            c.height = s;
+            const ctx = c.getContext('2d');
+            const img = ctx.createImageData(s, s);
+            const put = (i, r, g, b) => {
+                img.data[i] = r;
+                img.data[i + 1] = g;
+                img.data[i + 2] = b;
+                img.data[i + 3] = 255;
+            };
+            for (let y = 0; y < s; y++) {
+                for (let x = 0; x < s; x++) {
+                    const i = (y * s + x) * 4;
+                    const n = fbm2(x / 16, y / 16);
+                    const n2 = fbm2(x / 7 + 9, y / 7 + 3);
+                    if (kind === 'asphalt') {
+                        const k = 48 + n * 36 + n2 * 18;
+                        put(i, k, k, k + 2);
+                    } else if (kind === 'gravel') {
+                        const k = 110 + n * 70;
+                        put(i, k, k - 4, k - 10);
+                    } else if (kind === 'sand') {
+                        put(i, 188 + n * 40, 168 + n * 28, 118 + n * 18);
+                    } else if (kind === 'soil') {
+                        put(i, 92 + n * 40, 64 + n * 24, 36 + n * 14);
+                    } else if (kind === 'grass') {
+                        put(i, 48 + n * 36, 102 + n * 70, 38 + n * 22);
+                    } else if (kind === 'plaster') {
+                        const k = 214 + n * 22;
+                        put(i, k, k - 3, k - 10);
+                    } else if (kind === 'ceramic') {
+                        const tw = 32, th = 32, g = 2;
+                        const row = Math.floor(y / th);
+                        const ox = (row % 2) * (tw / 2);
+                        const lx = (x + ox) % tw;
+                        const ly = y % th;
+                        if (lx < g || ly < g) put(i, 196, 192, 186);
+                        else {
+                            const k = 228 + n * 12;
+                            put(i, k, k - 2, k - 8);
+                        }
+                    } else {
+                        put(i, 180, 180, 180);
+                    }
+                }
+            }
+            ctx.putImageData(img, 0, 0);
+            const tex = new THREE.CanvasTexture(c);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.needsUpdate = true;
+            return tex;
+        }
+        function renderMaterialTexture(kind) {
+            if (!kind) return null;
+            let tex = renderMatTextureCache.get(kind);
+            if (!tex) {
+                tex = buildRenderMatTexture(kind);
+                renderMatTextureCache.set(kind, tex);
+            }
+            return tex;
+        }
+        function isPresetTextureName(name) {
+            return Object.values(MATERIAL_PRESETS).some((p) => p.tex && p.label === name);
+        }
+
+        function materialPresetOptionsHtml(selected) {
+            return MATERIAL_PRESET_GROUPS.map((g) => {
+                const opts = Object.entries(MATERIAL_PRESETS)
+                    .filter(([, p]) => (p.group || 'base') === g.id)
+                    .map(([key, p]) =>
+                        `<option value="${key}"${selected === key ? ' selected' : ''}>${p.label}</option>`)
+                    .join('');
+                return `<optgroup label="${g.label}">${opts}</optgroup>`;
+            }).join('');
+        }
 
         function isMeshSurface(obj) {
             return !!(obj && obj.isMesh);
@@ -35564,6 +35724,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                     side: mat.side ?? THREE.DoubleSide,
                     transparent: mat.transparent,
                     opacity: mat.opacity ?? 1,
+                    envMapIntensity: 0.9,
                     clippingPlanes: mat.clippingPlanes || getActiveClipPlanes()
                 });
                 if (mat.map) std.map = mat.map;
@@ -35668,6 +35829,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 if (appearance.color != null) mat.color.setHex(appearance.color);
                 if (appearance.roughness != null) mat.roughness = appearance.roughness;
                 if (appearance.metalness != null) mat.metalness = appearance.metalness;
+                if ('envMapIntensity' in mat) mat.envMapIntensity = 0.9;
                 if (appearance.opacity != null) {
                     mat.transparent = appearance.opacity < 0.999;
                     mat.opacity = appearance.opacity;
@@ -35758,15 +35920,13 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 const on = state.color === hex ? ' on' : '';
                 return `<button type="button" class="aci-swatch${on}" data-hex="${hex}" style="background:${h}" title="ACI ${idx}"></button>`;
             }).join('');
-            const presetOptions = Object.entries(MATERIAL_PRESETS).map(([key, preset]) =>
-                `<option value="${key}"${state.preset === key ? ' selected' : ''}>${preset.label}</option>`
-            ).join('');
+            const presetOptions = materialPresetOptionsHtml(state.preset);
             const texLabel = appearanceDraftTextureName || state.textureName || 'не назначена';
             return `
                 <div class="pgroup">
                     <div class="pgroup-head"><span class="ar">▾</span>Цвет и материал · AutoCAD</div>
                     <div class="pgroup-body">
-                        <div class="bulk-note">Палитра ACI и материалы применяются к геометрии на сцене. Для ${geoCount} выбранных элементов с мешами${countTotal > geoCount ? ` (из ${countTotal} выделенных)` : ''}.</div>
+                        <div class="bulk-note">Палитра ACI и материалы применяются к геометрии на сцене. Группа «Визуализация / рендер» — шероховатость и отражения (студийный свет). Для ${geoCount} выбранных элементов с мешами${countTotal > geoCount ? ` (из ${countTotal} выделенных)` : ''}.</div>
                         <div class="prop small">
                             <div class="k">Палитра ACI (стандарт AutoCAD)</div>
                             <div class="aci-grid">${swatches}</div>
@@ -35802,7 +35962,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                         <div class="prop small">
                             <div class="k">Растровая текстура</div>
                             <div class="bulk-note" style="margin-bottom:6px">Для ортофото/ECW с координатами используйте кнопку <b>🗺 ГЕОРАСТР</b> в шапке — растр ляжет на рельеф по геопривязке. Здесь — текстура на выбранный элемент (UV).</div>
-                            <div class="v" style="margin-bottom:6px">${esc(texLabel)}</div>
+                            <div class="v" id="matTextureLabel" style="margin-bottom:6px">${esc(texLabel)}</div>
                             <input type="file" id="matTextureFile" accept="image/*" hidden>
                             <div class="appearance-actions">
                                 <button type="button" class="btn" data-act="pickTexture" title="Загрузить JPG/PNG и натянуть на поверхность">🖼 Загрузить растр…</button>
@@ -35900,6 +36060,11 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             if (rough) rough.value = preset.roughness;
             if (metal) metal.value = preset.metalness;
             if (opac) opac.value = preset.opacity;
+            const name = propsBox.querySelector('#materialName');
+            if (name) {
+                const known = Object.values(MATERIAL_PRESETS).some((p) => p.label === name.value);
+                if (!name.value || known) name.value = preset.label;
+            }
             if (preset.color != null && picker) {
                 picker.value = '#' + preset.color.toString(16).padStart(6, '0');
                 if (preview) preview.style.background = picker.value;
@@ -35907,6 +36072,24 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
             propsBox.querySelector('#matRoughnessVal').textContent = Number(preset.roughness).toFixed(2);
             propsBox.querySelector('#matMetalnessVal').textContent = Number(preset.metalness).toFixed(2);
             propsBox.querySelector('#matOpacityVal').textContent = Number(preset.opacity).toFixed(2);
+            const ru = propsBox.querySelector('#texRepeatU');
+            const rv = propsBox.querySelector('#texRepeatV');
+            if (preset.tex) {
+                const src = renderMaterialTexture(preset.tex);
+                appearanceDraftTexture = src ? cloneAppearanceTexture(src) : null;
+                if (appearanceDraftTexture) {
+                    appearanceDraftTexture.wrapS = appearanceDraftTexture.wrapT = THREE.RepeatWrapping;
+                    appearanceDraftTexture.repeat.set(preset.repeat || 2, preset.repeat || 2);
+                }
+                appearanceDraftTextureName = preset.label;
+                if (ru) ru.value = String(preset.repeat || 2);
+                if (rv) rv.value = String(preset.repeat || 2);
+            } else if (isPresetTextureName(appearanceDraftTextureName)) {
+                appearanceDraftTexture = null;
+                appearanceDraftTextureName = '';
+            }
+            const texNote = propsBox.querySelector('#matTextureLabel');
+            if (texNote) texNote.textContent = appearanceDraftTextureName || 'не назначена';
         }
 
         function updateMatPreviewColor() {
@@ -46084,7 +46267,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.21',
-            buildId: '1ae5a39-preview',
+            buildId: '33afa66-preview',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -46093,6 +46276,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: материалы визуализации / рендера в оформлении: асфальт, щебень, грунт, трава, вода, хром, медь, алюминий, керамика и др. Металл и стекло получают отражения от студийного света.',
                 '2026.08.21: отображение модели — список на вкладке Вид: заливка, с рёбрами, каркас без граней, скрытые линии, прозрачная. Как Visual Styles в Civil / Navisworks.',
                 '2026.08.21: подписи имён осей в сцене и кнопка «Aa Подписи» на вкладке Вид — один выключатель на длины, отметки, радиусы узлов и метки координат. Слои прячутся, содержимое не стирается.',
                 '2026.08.19: выгрузка IFC в трёх схемах: 4.3 с дорожными классами и трассой, IFC4 и IFC2x3 для приложений без поддержки 4.3 (Navisworks). В старых схемах тела универсальным классом, роль — в ObjectType, ось — ломаной; в 2x3 геометрия оболочкой из граней и обязательный OwnerHistory.',
