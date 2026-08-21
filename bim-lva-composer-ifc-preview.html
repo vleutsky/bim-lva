@@ -1316,7 +1316,7 @@
         #roadXsChart .xs-dim, #roadXsChart .xs-grade { pointer-events: none; }
         .gost-sheet-host {
             overflow: auto;
-            max-height: 68vh;
+            max-height: 74vh;
             background: #fff;
             border: 1px solid var(--line);
             padding: 8px;
@@ -4249,7 +4249,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · cbef4c1</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 412f20d</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5468,9 +5468,9 @@
          Класс .show синхронизируется, чтобы старые проверки не ломались. -->
     <div class="modal-backdrop floating-panel" id="polyProfileModal" hidden></div>
     <div class="modal-backdrop" id="gostSheetModal">
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="gostSheetTitle" style="width:min(1120px,96vw)">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="gostSheetTitle" style="width:min(1280px,98vw)">
             <h3 id="gostSheetTitle">Чертёж ГОСТ</h3>
-            <div class="bulk-note" id="gostSheetNote">Оформление для экспертизы: размеры ширин, толщин и уклонов, штамп. Печать на лист или выгрузка SVG.</div>
+            <div class="bulk-note" id="gostSheetNote">Поперечник и продольник как в альбоме: чертёж, рабочие отметки, красная линия, таблица проектных и фактических данных. Печать на лист или SVG.</div>
             <div id="gostSheetHost" class="gost-sheet-host"></div>
             <div class="modal-actions">
                 <button type="button" class="btn" id="gostSheetSvg">⬇ SVG</button>
@@ -24554,6 +24554,139 @@
                 <rect x="24" y="24" width="${w - 48}" height="${h - 48}" fill="none" stroke="#1a2330" stroke-width="0.7"/>`;
         }
 
+        function gostPkLabel(sta) {
+            const s = Math.max(0, Number(sta) || 0);
+            const pk = Math.floor(s / 100);
+            const plus = s - pk * 100;
+            return `ПК ${pk}+${plus.toFixed(2).padStart(5, '0')}`;
+        }
+
+        function gostVText(x, y, txt, size) {
+            return `<text transform="rotate(-90 ${x.toFixed(1)} ${y.toFixed(1)})" text-anchor="middle" fill="#1a2330" font-size="${size || 10}px">${esc(String(txt))}</text>`;
+        }
+
+        /** Треугольник уклона в клетке таблицы: пик на высокой стороне. */
+        function gostGradeTri(x0, x1, y, h, z0, z1, distM) {
+            const upRight = (Number(z1) || 0) >= (Number(z0) || 0);
+            const dOff = Math.abs(x1 - x0);
+            const dZ = (Number(z1) || 0) - (Number(z0) || 0);
+            const run = Math.abs(Number(distM) || 0);
+            const grade = run > 1e-6 ? dZ / run : 0;
+            let lab;
+            if (Math.abs(grade) >= 0.08) lab = fmtRoadXsRatio(run || 1, dZ || 1e-6);
+            else lab = String(Math.round(Math.abs(grade) * 1000));
+            const mid = (x0 + x1) / 2;
+            const peakX = upRight ? x1 : x0;
+            const baseX = upRight ? x0 : x1;
+            return `<g class="gost-tri">
+                <line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#1a2330" stroke-width="0.7"/>
+                <line x1="${x0.toFixed(1)}" y1="${(y + h).toFixed(1)}" x2="${x1.toFixed(1)}" y2="${(y + h).toFixed(1)}" stroke="#1a2330" stroke-width="0.7"/>
+                <line x1="${baseX.toFixed(1)}" y1="${(y + h).toFixed(1)}" x2="${peakX.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#1a2330" stroke-width="1"/>
+                <text x="${mid.toFixed(1)}" y="${(y + h * 0.42).toFixed(1)}" text-anchor="middle" fill="#1a2330" font-size="${dOff < 28 ? 8 : 11}px">${lab}</text>
+                <text x="${mid.toFixed(1)}" y="${(y + h - 4).toFixed(1)}" text-anchor="middle" fill="#1a2330" font-size="${dOff < 28 ? 8 : 11}px">${fmtRoadXsMeters(run)}</text>
+            </g>`;
+        }
+
+        function gostXsCharPts(resolved, st, slopeSecs) {
+            const add = (list, p, role) => {
+                if (!p || p.hide) return;
+                if (list.some((q) => Math.abs(q.off - p.off) < 0.05)) return;
+                list.push({
+                    off: p.off,
+                    dz: p.dz || 0,
+                    z: st.axisAbs.z + (p.dz || 0),
+                    role: role || p.code || ''
+                });
+            };
+            const pts = [];
+            (slopeSecs || []).forEach((s) => {
+                if (!s?.sec?.valid || !s.sec.exit) return;
+                const off = roadXsSlopeExitOff(st, s.sec);
+                if (off == null) return;
+                const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(s.sec.exit.x, s.sec.exit.y, s.sec.exit.z)) || s.sec.exit).z;
+                add(pts, { off, dz: ez - st.axisAbs.z, hide: false }, 'TOE');
+            });
+            const want = /^(SLOPEO|SHLDUO|SHLDO|CURBO|WALKO|MEDL|MEDR|L|CL|R|DH|DO)$/;
+            (resolved || []).forEach((p) => {
+                const c = String(p.code || '').toUpperCase();
+                if (want.test(c)) add(pts, p, c);
+            });
+            if (!pts.some((p) => Math.abs(p.off) < 0.05)) {
+                add(pts, { off: 0, dz: 0, hide: false }, 'CL');
+            }
+            pts.sort((a, b) => a.off - b.off);
+            pts.forEach((p) => {
+                const g = sampleStationGroundZ(st, p.off);
+                p.ground = g;
+                p.work = g != null ? p.z - g : null;
+            });
+            return pts;
+        }
+
+        function gostXsTopLine(resolved, st, slopeSecs) {
+            const pts = [];
+            const push = (off, z) => {
+                if (!Number.isFinite(off) || !Number.isFinite(z)) return;
+                if (pts.some((q) => Math.abs(q.off - off) < 0.03)) return;
+                pts.push({ off, z });
+            };
+            (slopeSecs || []).forEach((s) => {
+                if (s?.pt) push(s.pt.off, st.axisAbs.z + (s.pt.dz || 0));
+                if (s?.sec?.valid && s.sec.exit) {
+                    const off = roadXsSlopeExitOff(st, s.sec);
+                    const ez = (worldPointToAbsoluteXYZ(new THREE.Vector3(s.sec.exit.x, s.sec.exit.y, s.sec.exit.z)) || s.sec.exit).z;
+                    push(off, ez);
+                }
+            });
+            (resolved || []).forEach((p) => {
+                if (p.hide) return;
+                push(p.off, st.axisAbs.z + (p.dz || 0));
+            });
+            pts.sort((a, b) => a.off - b.off);
+            const byOff = new Map();
+            pts.forEach((p) => {
+                const prev = byOff.get(p.off.toFixed(3));
+                if (!prev || p.z > prev.z) byOff.set(p.off.toFixed(3), p);
+            });
+            return [...byOff.values()].sort((a, b) => a.off - b.off);
+        }
+
+        function gostXsEarthAreas(st, top) {
+            if (!top || top.length < 2) return { fill: 0, cut: 0 };
+            const zAt = (off) => {
+                if (off <= top[0].off) return top[0].z;
+                if (off >= top[top.length - 1].off) return top[top.length - 1].z;
+                for (let i = 1; i < top.length; i++) {
+                    if (off <= top[i].off) {
+                        const a = top[i - 1], b = top[i];
+                        const t = (off - a.off) / Math.max(1e-9, b.off - a.off);
+                        return a.z + t * (b.z - a.z);
+                    }
+                }
+                return top[top.length - 1].z;
+            };
+            let fill = 0, cut = 0;
+            const o0 = top[0].off, o1 = top[top.length - 1].off;
+            const step = Math.max(0.2, (o1 - o0) / 80);
+            for (let o = o0; o < o1 - 1e-9; o += step) {
+                const b = Math.min(o1, o + step);
+                const g0 = sampleStationGroundZ(st, o);
+                const g1 = sampleStationGroundZ(st, b);
+                if (g0 == null || g1 == null) continue;
+                const w0 = zAt(o) - g0, w1 = zAt(b) - g1;
+                const w = b - o;
+                if (w0 >= 0 && w1 >= 0) fill += (w0 + w1) / 2 * w;
+                else if (w0 <= 0 && w1 <= 0) cut += -(w0 + w1) / 2 * w;
+                else {
+                    const t = Math.abs(w0) / (Math.abs(w0) + Math.abs(w1));
+                    const left = w * t;
+                    if (w0 > 0) { fill += w0 / 2 * left; cut += -w1 / 2 * (w - left); }
+                    else { cut += -w0 / 2 * left; fill += w1 / 2 * (w - left); }
+                }
+            }
+            return { fill, cut };
+        }
+
         function buildGostXsSheetSvg() {
             const model = currentRoadXsModel();
             const st = model?.stations?.[roadXsActive.index];
@@ -24562,26 +24695,43 @@
             const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
             const resolved = resolveTemplatePoints(tpl, st);
             const zAxis = st.axisAbs.z;
-            const W = 1480, H = 900;
-            const pad = { l: 90, r: 90, t: 110, b: 140, w: W, h: H };
-            let offMin = Math.min(...resolved.map((p) => p.off), -model.widthL);
-            let offMax = Math.max(...resolved.map((p) => p.off), model.widthR);
+            const slopeOpts = readRoadXsSlopeOpts();
+            const edgePts = templateEdgePoints({ points: resolved.filter((p) => !p.hide) });
+            const slopeSecs = [];
+            [['left', edgePts.left], ['right', edgePts.right]].forEach(([side, pt]) => {
+                if (!pt) return;
+                slopeSecs.push({ side, pt, sec: roadXsSlopeSection(st, pt, side, slopeOpts) });
+            });
+            const chars = gostXsCharPts(resolved, st, slopeSecs);
+            const top = gostXsTopLine(resolved, st, slopeSecs);
+            const areas = gostXsEarthAreas(st, top);
+            const W = 1680, H = 1080;
+            const tabH = 168;
+            const headW = 118;
+            const pad = { l: 48 + headW, r: 56, t: 88, b: 86 + tabH, w: W, h: H };
+            let offMin = Math.min(...chars.map((p) => p.off), ...resolved.map((p) => p.off), -model.widthL);
+            let offMax = Math.max(...chars.map((p) => p.off), ...resolved.map((p) => p.off), model.widthR);
+            const spanOff0 = Math.max(8, offMax - offMin);
+            const midOff = (offMin + offMax) / 2;
+            offMin = midOff - spanOff0 * 0.56;
+            offMax = midOff + spanOff0 * 0.56;
             let zMin = zAxis, zMax = zAxis;
             resolved.forEach((p) => {
                 zMin = Math.min(zMin, zAxis + p.dz);
                 zMax = Math.max(zMax, zAxis + p.dz);
             });
-            const spanOff = Math.max(6, offMax - offMin) * 1.18;
-            const midOff = (offMin + offMax) / 2;
-            offMin = midOff - spanOff / 2;
-            offMax = midOff + spanOff / 2;
+            chars.forEach((p) => {
+                zMin = Math.min(zMin, p.z);
+                zMax = Math.max(zMax, p.z);
+                if (p.ground != null) { zMin = Math.min(zMin, p.ground); zMax = Math.max(zMax, p.ground); }
+            });
             const innerW = W - pad.l - pad.r;
             const innerH = H - pad.t - pad.b;
-            const spanZ = Math.max(2.4, (zMax - zMin) * 1.5, spanOff * innerH / innerW);
+            const spanZ = Math.max(3.2, (zMax - zMin) * 1.35, (offMax - offMin) * innerH / innerW * 0.55);
             const z0 = (zMin + zMax) / 2;
             const px = (off) => pad.l + ((off - offMin) / (offMax - offMin)) * innerW;
             const py = (z) => pad.t + innerH / 2 - ((z - z0) / spanZ) * innerH;
-            const xyOf = (p) => ({ x: px(p.off), y: py(zAxis + p.dz) });
+            const xyOf = (p) => ({ x: px(p.off), y: py(zAxis + (p.dz || 0)) });
             const ptById = new Map(resolved.map((p) => [p.id, p]));
             const shapes = (tpl.shapes || []).map((sh) => {
                 const ring = (sh.pts || []).map((id) => ptById.get(id)).filter((p) => p && !p.hide);
@@ -24591,28 +24741,154 @@
                     return `${i ? 'L' : 'M'} ${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
                 }).join(' ') + ' Z';
                 const sty = roadShapeStyle(sh.code);
-                return `<path d="${d}" fill="${esc(sty.fill)}" fill-opacity="0.78" stroke="${esc(sty.stroke)}" stroke-width="1"/>`;
+                const codeU = String(sh.code || '').toUpperCase();
+                return `<path d="${d}" fill="${esc(sty.fill)}" fill-opacity="${codeU === 'EMBK' ? 0.55 : 0.82}" stroke="${esc(sty.stroke)}" stroke-width="1"/>`;
+            }).join('');
+            const groundPts = (st._groundDraw?.samples || st.samples || [])
+                .filter((s) => s.hit && s.abs)
+                .map((s) => `${px(s.off).toFixed(1)},${py(s.abs.z).toFixed(1)}`);
+            if (!groundPts.length) {
+                chars.forEach((p) => {
+                    if (p.ground != null) groundPts.push(`${px(p.off).toFixed(1)},${py(p.ground).toFixed(1)}`);
+                });
+            }
+            const line1 = ['CL', 'L', 'R'].map((c) => resolved.find((p) => !p.hide && String(p.code || '').toUpperCase() === c))
+                .filter(Boolean).sort((a, b) => a.off - b.off);
+            const line2codes = /^(LB|RB|TRBL|TRBR|SHLDB|SHLDU)$/;
+            let line2 = resolved.filter((p) => !p.hide && line2codes.test(String(p.code || '').toUpperCase()))
+                .sort((a, b) => a.off - b.off);
+            if (line2.length < 2) {
+                const pv = (tpl.shapes || []).find((s) => String(s.code || '').toUpperCase() === 'PVMT');
+                if (pv) {
+                    const ring = (pv.pts || []).map((id) => ptById.get(id)).filter(Boolean);
+                    const zBot = Math.min(...ring.map((p) => p.dz));
+                    line2 = ring.filter((p) => Math.abs(p.dz - zBot) < 0.03).sort((a, b) => a.off - b.off);
+                }
+            }
+            const polyOf = (arr) => arr.map((p) => {
+                const q = xyOf(p);
+                return `${q.x.toFixed(1)},${q.y.toFixed(1)}`;
+            }).join(' ');
+            const layers = roadXsLayerStack(resolved, tpl);
+            const redL = chars[0], redR = chars[chars.length - 1];
+            const tabY = H - pad.b + 8;
+            const rowH = tabH / 4;
+            const tabX0 = pad.l, tabX1 = W - pad.r;
+            const headX = 32;
+            const xs = chars.map((p) => px(p.off));
+            const vlines = xs.map((x) =>
+                `<line x1="${x.toFixed(1)}" y1="${(pad.t - 18).toFixed(1)}" x2="${x.toFixed(1)}" y2="${(tabY + tabH).toFixed(1)}" stroke="#1a2330" stroke-width="0.45"/>`
+            ).join('');
+            const workMarks = chars.map((p) => {
+                if (p.work == null) return '';
+                const x = px(p.off);
+                return `<text class="xs-dim" x="${x.toFixed(1)}" y="${(pad.t - 4).toFixed(1)}" text-anchor="middle" fill="#1a2330" font-size="10px">${Math.abs(p.work).toFixed(2).replace('.', ',')}</text>`;
+            }).join('');
+            const gradeRow = [];
+            const elevProj = [];
+            const elevFact = [];
+            const distFact = [];
+            for (let i = 0; i < chars.length; i++) {
+                const x = xs[i];
+                elevProj.push(gostVText(x, tabY + rowH * 1.55, chars[i].z.toFixed(2).replace('.', ','), 10));
+                elevFact.push(gostVText(x, tabY + rowH * 2.55, chars[i].ground == null ? '—' : chars[i].ground.toFixed(2).replace('.', ','), 10));
+                if (i === 0) continue;
+                const x0 = xs[i - 1];
+                gradeRow.push(gostGradeTri(x0, x, tabY, rowH, chars[i - 1].z, chars[i].z, chars[i].off - chars[i - 1].off));
+                distFact.push(
+                    `<text x="${((x0 + x) / 2).toFixed(1)}" y="${(tabY + rowH * 3.72).toFixed(1)}" text-anchor="middle" fill="#1a2330" font-size="11px">${fmtRoadXsMeters(chars[i].off - chars[i - 1].off)}</text>`
+                );
+            }
+            const thkLab = layers.slice(0, 4).map((ly, i) => {
+                const x = px(Math.min(redR?.off ?? model.widthR, (redR?.off ?? 0) * 0.55)) + 14 + i * 0;
+                const y0 = py(zAxis + ly.maxDz);
+                const y1 = py(zAxis + ly.minDz);
+                return `<g class="xs-thk xs-dim">
+                    <line x1="${x.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="#1a2330" stroke-width="0.8"/>
+                    <text x="${(x + 6).toFixed(1)}" y="${((y0 + y1) / 2 + 3).toFixed(1)}" fill="#1a2330" font-size="10px">${fmtRoadXsMeters(ly.thk)}</text>
+                </g>`;
             }).join('');
             const mPerPx = (offMax - offMin) / innerW;
-            const scale = Math.max(20, Math.round(mPerPx * 1000 / 10) * 10);
-            const pk = st.sta;
-            const pkTxt = `ПК ${Math.floor(pk / 100)}+${(pk % 100).toFixed(2).padStart(5, '0')}`;
-            const title = `Поперечный профиль  ·  ${pkTxt}  ·  ${rec?.name || 'ось'}`;
+            const scale = Math.max(50, Math.round(mPerPx * 1000 / 25) * 25);
+            const pkTxt = gostPkLabel(st.sta);
+            const title = `Поперечный профиль`;
+            const red = (p, label) => {
+                if (!p) return '';
+                const x = px(p.off);
+                return `<g>
+                    <line x1="${x.toFixed(1)}" y1="${pad.t}" x2="${x.toFixed(1)}" y2="${(tabY).toFixed(1)}" stroke="#1a2330" stroke-width="1.4"/>
+                    ${gostVText(x - 8, (pad.t + tabY) / 2, label, 11)}
+                </g>`;
+            };
+            const axisWork = chars.find((p) => p.role === 'CL')?.work;
+            const soil = axisWork != null && axisWork < 0 ? 'выемка' : 'насыпь';
             return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
                 <rect width="${W}" height="${H}" fill="#fff"/>
                 ${gostFrameSvg(W, H)}
-                <text x="${W / 2}" y="52" text-anchor="middle" fill="#1a2330" font-size="20px" font-family="Arial,sans-serif" font-weight="700">${esc(title)}</text>
-                <text x="${W / 2}" y="76" text-anchor="middle" fill="#3d4a58" font-size="13px" font-family="Arial,sans-serif">Масштаб 1:${scale}  ·  отметки в м  ·  уклоны в ‰ и 1:m</text>
                 <style>text{font:12px 'IBM Plex Mono',Consolas,monospace}</style>
-                <line x1="${px(0).toFixed(1)}" y1="${pad.t}" x2="${px(0).toFixed(1)}" y2="${H - pad.b}" stroke="#c45a12" stroke-width="1" stroke-dasharray="6 4"/>
+                <text x="${W / 2}" y="48" text-anchor="middle" fill="#1a2330" font-size="18px" font-family="Arial,sans-serif" font-weight="700">${title}  ·  ${pkTxt}  ·  ${esc(rec?.name || 'ось')}</text>
+                <text x="${W / 2}" y="68" text-anchor="middle" fill="#3d4a58" font-size="12px" font-family="Arial,sans-serif">Масштаб 1:${scale}  ·  отметки в м  ·  уклоны в ‰ и 1:m</text>
+                <text x="40" y="120" fill="#1a2330" font-size="13px">Aн = ${areas.fill.toFixed(1).replace('.', ',')} м²</text>
+                <text x="40" y="138" fill="#1a2330" font-size="13px">Aср = ${areas.cut.toFixed(1).replace('.', ',')} м²</text>
+                ${vlines}
+                ${workMarks}
+                ${red(redL, 'Красная линия')}
+                ${red(redR, 'Красная линия')}
+                <line x1="${px(0).toFixed(1)}" y1="${pad.t}" x2="${px(0).toFixed(1)}" y2="${tabY.toFixed(1)}" stroke="#c45a12" stroke-width="1" stroke-dasharray="5 4"/>
+                ${groundPts.length > 1 ? `<polyline fill="none" stroke="#1a2330" stroke-width="1.1" points="${groundPts.join(' ')}"/>` : ''}
                 ${shapes}
+                ${line1.length >= 2 ? `<polyline class="xs-dim" fill="none" stroke="#1a2330" stroke-width="1.6" points="${polyOf(line1)}"/>` : ''}
+                ${line2.length >= 2 ? `<polyline class="xs-dim" fill="none" stroke="#1a2330" stroke-width="1.1" points="${polyOf(line2)}"/>` : ''}
+                ${thkLab}
                 ${roadXsAnnotSvg(resolved, tpl, xyOf, px, pad, py, zAxis)}
-                ${gostStampSvg(W - 360, H - 118, 320, 78, [
+                <text x="${(px(0) + 14).toFixed(1)}" y="${(py(z0 - spanZ * 0.18)).toFixed(1)}" fill="#1a2330" font-size="12px">${soil}</text>
+                <rect x="${headX}" y="${tabY}" width="${headW}" height="${tabH}" fill="#fff" stroke="#1a2330" stroke-width="1"/>
+                <rect x="${tabX0}" y="${tabY}" width="${tabX1 - tabX0}" height="${tabH}" fill="none" stroke="#1a2330" stroke-width="1.1"/>
+                <line x1="${headX}" y1="${tabY + rowH * 2}" x2="${tabX1}" y2="${tabY + rowH * 2}" stroke="#1a2330" stroke-width="1"/>
+                <line x1="${tabX0}" y1="${tabY + rowH}" x2="${tabX1}" y2="${tabY + rowH}" stroke="#1a2330" stroke-width="0.7"/>
+                <line x1="${tabX0}" y1="${tabY + rowH * 3}" x2="${tabX1}" y2="${tabY + rowH * 3}" stroke="#1a2330" stroke-width="0.7"/>
+                ${gostVText(headX + 22, tabY + rowH, 'Проектные данные', 11)}
+                ${gostVText(headX + 48, tabY + rowH * 0.55, 'Уклон и расстояние, м', 9)}
+                ${gostVText(headX + 78, tabY + rowH * 1.55, 'Отметка, м', 9)}
+                ${gostVText(headX + 22, tabY + rowH * 3, 'Фактические данные', 11)}
+                ${gostVText(headX + 48, tabY + rowH * 2.55, 'Отметка, м', 9)}
+                ${gostVText(headX + 78, tabY + rowH * 3.55, 'Расстояние, м', 9)}
+                ${gradeRow.join('')}
+                ${elevProj.join('')}
+                ${elevFact.join('')}
+                ${distFact.join('')}
+                <text x="${W / 2}" y="${(tabY + tabH + 22).toFixed(1)}" text-anchor="middle" fill="#1a2330" font-size="14px" font-weight="700">${pkTxt}</text>
+                <text x="40" y="${H - 36}" fill="#1a2330" font-size="11px">1 — линия верха проезжей части;  2 — линия верха земляного полотна</text>
+                ${line1.length >= 2 ? `<text x="${(xyOf(line1[line1.length - 1]).x + 8).toFixed(1)}" y="${(xyOf(line1[line1.length - 1]).y - 6).toFixed(1)}" fill="#1a2330" font-size="11px">1</text>` : ''}
+                ${line2.length >= 2 ? `<text x="${(xyOf(line2[line2.length - 1]).x + 8).toFixed(1)}" y="${(xyOf(line2[0]).y + 12).toFixed(1)}" fill="#1a2330" font-size="11px">2</text>` : ''}
+                ${gostStampSvg(W - 360, H - 78, 320, 52, [
                     'BIM.LVA Composer  ·  ' + (COMPOSER_ABOUT?.version || ''),
-                    title,
-                    new Date().toISOString().slice(0, 10) + '  ·  лист 1'
+                    pkTxt + '  ·  ' + new Date().toISOString().slice(0, 10)
                 ])}
             </svg>`;
+        }
+
+        function gostSlopeAtStation(model, rec, sta, side) {
+            if (!model?.stations?.length) return null;
+            let best = model.stations[0], bd = Infinity;
+            model.stations.forEach((s) => {
+                const d = Math.abs(s.sta - sta);
+                if (d < bd) { bd = d; best = s; }
+            });
+            const resolved = resolveTemplatePoints(model.template || { points: [] }, best);
+            const edge = templateEdgePoints({ points: (resolved || []).filter((p) => p && !p.hide) });
+            const pt = side === 'left' ? edge.left : edge.right;
+            if (!pt) return null;
+            const sec = roadXsSlopeSection(best, pt, side, readRoadXsSlopeOpts());
+            if (!sec?.valid) return { mode: '', perm: null, run: null, zBot: null };
+            const off = roadXsSlopeExitOff(best, sec);
+            const run = off != null ? Math.abs(off - pt.off) : null;
+            const rise = sec.exit && pt ? Math.abs((sec.exit.z - (placeTemplateAtStation(best, pt).z))) : null;
+            const perm = run > 1e-4 && rise > 1e-4 ? Math.round(rise / run * 1000) : null;
+            const ez = sec.exit
+                ? (worldPointToAbsoluteXYZ(new THREE.Vector3(sec.exit.x, sec.exit.y, sec.exit.z)) || sec.exit).z
+                : null;
+            return { mode: sec.mode === 'cut' ? 'выемка' : 'насыпь', perm, run, zBot: ez };
         }
 
         function buildGostProfileSheetSvg() {
@@ -24623,17 +24899,21 @@
             const total = rec.length2d || rows[rows.length - 1].sta;
             const step = total > 0 ? Math.max(0.25, total / 400) : 1;
             const data = samplePolylineProfile(rec, step);
-            const W = 1600, H = 980;
-            const tableH = Math.min(220, 36 + rows.length * 16);
-            const pad = { l: 80, r: 40, t: 100, b: 48 + tableH };
+            const xsModel = roadXsModels.find((m) => m.polylineId === rec.id);
+            const W = 1800, H = 1180;
+            const nBand = 12;
+            const bandH = 22;
+            const tabH = nBand * bandH;
+            const headW = 210;
+            const pad = { l: 36 + headW, r: 40, t: 72, b: 40 + tabH + bandH };
             const from = 0, to = Math.max(total, 1);
             const innerW = W - pad.l - pad.r;
             const innerH = H - pad.t - pad.b;
             const zs = rows.map((r) => r.axis).concat(rows.map((r) => r.ground).filter((z) => z != null));
             let zMin = zs.length ? Math.min(...zs) : 0;
             let zMax = zs.length ? Math.max(...zs) : 1;
-            if (zMax - zMin < 1) { zMin -= 0.5; zMax += 0.5; }
-            const spanZ = (zMax - zMin) * 1.2;
+            if (zMax - zMin < 2) { zMin -= 1; zMax += 1; }
+            const spanZ = (zMax - zMin) * 1.25;
             const z0 = (zMin + zMax) / 2;
             const px = (sta) => pad.l + ((sta - from) / (to - from)) * innerW;
             const py = (z) => pad.t + innerH / 2 - ((z - z0) / spanZ) * innerH;
@@ -24648,87 +24928,170 @@
             });
             if (run.length > 1) ground.push(run);
             const axis = rows.map((r) => `${px(r.sta).toFixed(1)},${py(r.axis).toFixed(1)}`).join(' ');
+            const tabY = H - pad.b;
+            const xs = rows.map((r) => px(r.sta));
+            const vlines = xs.map((x) =>
+                `<line x1="${x.toFixed(1)}" y1="${pad.t}" x2="${x.toFixed(1)}" y2="${(tabY + tabH).toFixed(1)}" stroke="#1a2330" stroke-width="0.45"/>`
+            ).join('');
             const grid = [];
-            const zStep = niceStep(spanZ / 6);
-            for (let z = Math.ceil((z0 - spanZ / 2) / zStep) * zStep; z <= z0 + spanZ / 2; z += zStep) {
+            const zStep = niceStep(spanZ / 8);
+            for (let z = Math.ceil((z0 - spanZ / 2) / zStep) * zStep; z <= z0 + spanZ / 2 + 1e-9; z += zStep) {
                 const y = py(z);
+                if (y < pad.t || y > tabY) continue;
                 grid.push(
-                    `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" stroke="#d8dee6"/>`,
-                    `<text x="${pad.l - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="#3d4a58">${z.toFixed(2)}</text>`
+                    `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" stroke="#cfd6de" stroke-width="0.6"/>`,
+                    `<text x="${pad.l - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="#1a2330" font-size="10px">${z.toFixed(2)}</text>`
                 );
             }
-            const sStep = niceStep((to - from) / 8);
-            for (let s = 0; s <= to; s += sStep) {
-                const x = px(s);
-                grid.push(
-                    `<line x1="${x.toFixed(1)}" y1="${pad.t}" x2="${x.toFixed(1)}" y2="${H - pad.b}" stroke="#e6ebf0"/>`,
-                    `<text x="${x.toFixed(1)}" y="${H - pad.b + 16}" text-anchor="middle" fill="#3d4a58">${s.toFixed(0)}</text>`
-                );
+            const ticks = rows.map((r) => {
+                const x = px(r.sta);
+                return `<line x1="${x.toFixed(1)}" y1="${py(r.axis).toFixed(1)}" x2="${x.toFixed(1)}" y2="${tabY.toFixed(1)}" stroke="#1a2330" stroke-width="0.7"/>`;
+            }).join('');
+            const planY = tabY + bandH * 0.5;
+            const planPts = rec.renderPts || rec.pts;
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            planPts.forEach((p) => {
+                minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+            });
+            const planSpan = Math.max(maxX - minX, maxY - minY, 1);
+            const planH = bandH * 0.72;
+            const planLine = [];
+            let acc = 0;
+            for (let i = 0; i < planPts.length; i++) {
+                if (i) acc += Math.hypot(planPts[i].x - planPts[i - 1].x, planPts[i].y - planPts[i - 1].y);
+                const x = px(acc);
+                const lat = ((planPts[i].y - minY) - (maxY - minY) / 2) / planSpan * planH;
+                planLine.push(`${x.toFixed(1)},${(planY - lat).toFixed(1)}`);
             }
-            const dim = [];
-            const dy = H - pad.b - 18;
+            const bands = [];
+            const band = (i, fill) => {
+                const y = tabY + i * bandH;
+                bands.push(`<rect x="${pad.l}" y="${y}" width="${innerW}" height="${bandH}" fill="${fill || '#fff'}" stroke="#1a2330" stroke-width="0.8"/>`);
+                return y;
+            };
+            band(0, '#f7f9fb');
+            band(1);
+            band(2);
+            band(3, '#fbf7f0');
+            band(4, '#fbf7f0');
+            band(5, '#fbf7f0');
+            band(6, '#fbf7f0');
+            band(7, '#f3f7fb');
+            band(8, '#f3f7fb');
+            band(9, '#f3f7fb');
+            band(10, '#f3f7fb');
+            band(11);
+            const labels = [
+                'План трассы',
+                'Тип местности по условиям увлажнения',
+                'Тип покрытия',
+                'Левый откос · укрепление',
+                'Левый откос · уклон, ‰',
+                'Левый откос · расстояние, м',
+                'Левый откос · отметка дна, м',
+                'Правый откос · укрепление',
+                'Правый откос · уклон, ‰',
+                'Правый откос · расстояние, м',
+                'Правый откос · отметка дна, м',
+                'Проект · отметка оси, м'
+            ];
+            const head = labels.map((t, i) => {
+                const y = tabY + i * bandH;
+                return `<rect x="${36}" y="${y}" width="${headW}" height="${bandH}" fill="#fff" stroke="#1a2330" stroke-width="0.8"/>
+                    <text x="${42}" y="${(y + 15).toFixed(1)}" fill="#1a2330" font-size="10px">${esc(t)}</text>`;
+            }).join('');
+            const cellTxt = (x0, x1, y, txt, size) => {
+                const mid = (x0 + x1) / 2;
+                if (x1 - x0 < 16) return gostVText(mid, y + bandH * 0.62, txt, 8);
+                return `<text x="${mid.toFixed(1)}" y="${(y + 15).toFixed(1)}" text-anchor="middle" fill="#1a2330" font-size="${size || 10}px">${esc(txt)}</text>`;
+            };
+            const slopeCells = [];
+            const projElev = [];
+            const gradeTris = [];
             for (let i = 0; i < rows.length; i++) {
-                const x = px(rows[i].sta);
-                dim.push(`<line x1="${x.toFixed(1)}" y1="${dy - 5}" x2="${x.toFixed(1)}" y2="${dy + 5}" stroke="#1a2330"/>`);
+                const x = xs[i];
+                projElev.push(gostVText(x, tabY + 11 * bandH + bandH * 0.7, rows[i].axis.toFixed(2).replace('.', ','), 10));
                 if (i === 0) continue;
-                const x0 = px(rows[i - 1].sta);
-                const d = rows[i].sta - rows[i - 1].sta;
-                dim.push(
-                    `<line x1="${x0.toFixed(1)}" y1="${dy}" x2="${x.toFixed(1)}" y2="${dy}" stroke="#1a2330"/>`,
-                    `<text x="${((x0 + x) / 2).toFixed(1)}" y="${dy - 6}" text-anchor="middle" fill="#1a2330" font-size="11px">${fmtRoadXsMeters(d)}</text>`
-                );
-                const sl = rows[i - 1].slope;
-                if (sl != null) {
-                    const mx = (x0 + x) / 2;
-                    const my = (py(rows[i - 1].axis) + py(rows[i].axis)) / 2 - 10;
-                    dim.push(`<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle" fill="#c45a12" font-size="12px">${sl > 0 ? '+' : ''}${sl.toFixed(1)}‰</text>`);
-                }
+                const x0 = xs[i - 1];
+                const dist = rows[i].sta - rows[i - 1].sta;
+                const L = gostSlopeAtStation(xsModel, rec, (rows[i - 1].sta + rows[i].sta) / 2, 'left');
+                const R = gostSlopeAtStation(xsModel, rec, (rows[i - 1].sta + rows[i].sta) / 2, 'right');
+                const put = (bandI, txt) => {
+                    slopeCells.push(cellTxt(x0, x, tabY + bandI * bandH, txt || '—'));
+                };
+                put(1, '—');
+                put(2, (xsModel?.template?.shapes || []).some((s) => String(s.code || '').toUpperCase() === 'PVMT') ? 'асф.бет.' : '—');
+                put(3, L?.mode || '—');
+                put(4, L?.perm != null ? String(L.perm) : '—');
+                put(5, L?.run != null ? fmtRoadXsMeters(L.run) : '—');
+                put(6, L?.zBot != null ? L.zBot.toFixed(2).replace('.', ',') : '—');
+                put(7, R?.mode || '—');
+                put(8, R?.perm != null ? String(R.perm) : '—');
+                put(9, R?.run != null ? fmtRoadXsMeters(R.run) : '—');
+                put(10, R?.zBot != null ? R.zBot.toFixed(2).replace('.', ',') : '—');
+                gradeTris.push(gostGradeTri(x0, x, tabY - bandH, bandH, rows[i - 1].axis, rows[i].axis, dist));
             }
-            const tableY = H - tableH - 28;
-            const cols = [40, 90, 90, 90, 90, 90, 90];
-            const headers = ['№', 'Пикет', 'Земля', 'Проект', 'Рабочая', 'i, ‰', 'L, м'];
-            let tx = pad.l;
-            const head = headers.map((h, i) => {
-                const cell = `<text x="${tx + 6}" y="${tableY + 16}" fill="#1a2330" font-size="11px">${h}</text>`;
-                tx += cols[i];
-                return cell;
-            }).join('');
-            const body = rows.map((r, i) => {
-                const y = tableY + 34 + i * 16;
-                const L = i ? (r.sta - rows[i - 1].sta) : '';
-                const vals = [
-                    String(i + 1),
-                    r.sta.toFixed(2),
-                    r.ground == null ? '—' : r.ground.toFixed(2),
-                    r.axis.toFixed(2),
-                    r.work == null ? '—' : ((r.work > 0 ? '+' : '') + r.work.toFixed(2)),
-                    r.slope == null ? '—' : r.slope.toFixed(1),
-                    i ? L.toFixed(2) : '—'
-                ];
-                let x = pad.l;
-                return vals.map((v, c) => {
-                    const cell = `<text x="${x + 6}" y="${y}" fill="#1a2330" font-size="11px">${v}</text>`;
-                    x += cols[c];
-                    return cell;
-                }).join('');
-            }).join('');
-            const title = `Продольный профиль  ·  ${rec.name}  ·  L=${total.toFixed(2)} м`;
-            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
-                <rect width="${W}" height="${H}" fill="#fff"/>
-                ${gostFrameSvg(W, H)}
-                <text x="${W / 2}" y="52" text-anchor="middle" fill="#1a2330" font-size="20px" font-family="Arial,sans-serif" font-weight="700">${esc(title)}</text>
-                <text x="${W / 2}" y="76" text-anchor="middle" fill="#3d4a58" font-size="13px" font-family="Arial,sans-serif">Горизонталь 1:${scaleH}  ·  вертикаль 1:${scaleV}  ·  отметки в м</text>
+            /* Уклоны проектные — полоса над таблицей (как «уклон и расстояние»). */
+            const gradeY = tabY - bandH;
+            const gradeHead = `<rect x="36" y="${gradeY}" width="${headW}" height="${bandH}" fill="#fff" stroke="#1a2330" stroke-width="0.8"/>
+                <text x="42" y="${gradeY + 15}" fill="#1a2330" font-size="10px">Проект · уклон и расстояние</text>
+                <rect x="${pad.l}" y="${gradeY}" width="${innerW}" height="${bandH}" fill="#fff" stroke="#1a2330" stroke-width="0.8"/>`;
+            const factY = tabY + tabH;
+            const factH = bandH * 2;
+            const factHead = `<rect x="36" y="${factY}" width="${headW}" height="${factH}" fill="#fff" stroke="#1a2330" stroke-width="0.8"/>
+                ${gostVText(52, factY + factH * 0.5, 'Фактические данные', 10)}
+                <text x="70" y="${factY + 15}" fill="#1a2330" font-size="9px">Отметка, м</text>
+                <text x="70" y="${factY + bandH + 15}" fill="#1a2330" font-size="9px">Расстояние, м</text>
+                <rect x="${pad.l}" y="${factY}" width="${innerW}" height="${factH}" fill="none" stroke="#1a2330" stroke-width="0.8"/>
+                <line x1="${pad.l}" y1="${factY + bandH}" x2="${W - pad.r}" y2="${factY + bandH}" stroke="#1a2330" stroke-width="0.6"/>`;
+            const factCells = [];
+            for (let i = 0; i < rows.length; i++) {
+                const x = xs[i];
+                factCells.push(gostVText(x, factY + bandH * 0.7, rows[i].ground == null ? '—' : rows[i].ground.toFixed(2).replace('.', ','), 10));
+                if (i === 0) continue;
+                const x0 = xs[i - 1];
+                factCells.push(cellTxt(x0, x, factY + bandH, fmtRoadXsMeters(rows[i].sta - rows[i - 1].sta)));
+            }
+            const pkY = factY + factH;
+            const pkRow = `<rect x="36" y="${pkY}" width="${headW}" height="${bandH}" fill="#fff" stroke="#1a2330" stroke-width="0.8"/>
+                <text x="42" y="${pkY + 15}" fill="#1a2330" font-size="10px">Пикеты, кривые в плане</text>
+                <rect x="${pad.l}" y="${pkY}" width="${innerW}" height="${bandH}" fill="#fff" stroke="#1a2330" stroke-width="0.8"/>`;
+            const pkCells = [];
+            rows.forEach((r, i) => {
+                const x = xs[i];
+                pkCells.push(`<text x="${x.toFixed(1)}" y="${pkY + 15}" text-anchor="middle" fill="#1a2330" font-size="9px">${gostPkLabel(r.sta)}</text>`);
+                const rad = (rec.radii || [])[r.idx] || 0;
+                if (rad > 1e-3 && i > 0) {
+                    const x0 = xs[i - 1];
+                    pkCells.push(`<text x="${((x0 + x) / 2).toFixed(1)}" y="${pkY + 15}" text-anchor="middle" fill="#a31d1d" font-size="9px">R=${Math.round(rad)}</text>`);
+                }
+            });
+            const title = `Продольный профиль  ·  ${esc(rec.name)}  ·  L=${total.toFixed(2)} м`;
+            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H + factH + bandH + 8}" width="${W}" height="${H + factH + bandH + 8}">
+                <rect width="${W}" height="${H + factH + bandH + 8}" fill="#fff"/>
+                ${gostFrameSvg(W, H + factH + bandH + 8)}
                 <style>text{font:12px 'IBM Plex Mono',Consolas,monospace}</style>
+                <text x="${W / 2}" y="44" text-anchor="middle" fill="#1a2330" font-size="18px" font-family="Arial,sans-serif" font-weight="700">${title}</text>
+                <text x="${W / 2}" y="62" text-anchor="middle" fill="#3d4a58" font-size="12px" font-family="Arial,sans-serif">Горизонталь 1:${scaleH}  ·  вертикаль 1:${scaleV}  ·  отметки в м  ·  уклоны в ‰</text>
                 ${grid.join('')}
-                ${ground.map((p) => `<polyline fill="none" stroke="#1d6fb0" stroke-width="1.8" points="${p.join(' ')}"/>`).join('')}
-                <polyline fill="none" stroke="#c45a12" stroke-width="2.2" points="${axis}"/>
-                ${dim.join('')}
-                <rect x="${pad.l}" y="${tableY}" width="${cols.reduce((a, b) => a + b, 0)}" height="${tableH}" fill="none" stroke="#1a2330"/>
-                ${head}${body}
-                ${gostStampSvg(W - 360, H - 118, 320, 78, [
-                    'BIM.LVA Composer  ·  ' + (COMPOSER_ABOUT?.version || ''),
-                    title,
-                    new Date().toISOString().slice(0, 10) + '  ·  лист 1'
+                ${vlines}
+                ${ticks}
+                ${ground.map((p) => `<polyline fill="none" stroke="#1a2330" stroke-width="1.6" points="${p.join(' ')}"/>`).join('')}
+                <polyline fill="none" stroke="#c45a12" stroke-width="2" points="${axis}"/>
+                ${bands.join('')}
+                ${planLine.length > 1 ? `<polyline fill="none" stroke="#1a2330" stroke-width="1.2" points="${planLine.join(' ')}"/>` : ''}
+                ${head}
+                ${gradeHead}
+                ${gradeTris.join('')}
+                ${slopeCells.join('')}
+                ${projElev.join('')}
+                ${factHead}
+                ${factCells.join('')}
+                ${pkRow}
+                ${pkCells.join('')}
+                ${gostStampSvg(W - 340, 24, 300, 40, [
+                    'BIM.LVA Composer  ·  ' + (COMPOSER_ABOUT?.version || '')
                 ])}
             </svg>`;
         }
@@ -24763,7 +25126,7 @@
             const w = window.open('', '_blank');
             if (!w) { notifyError('Браузер заблокировал окно печати.'); return; }
             w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Чертёж ГОСТ</title>
-                <style>@page{size:landscape;margin:8mm} html,body{margin:0} svg{width:100%;height:auto}</style></head><body>${gostSheetSvgText}</body></html>`);
+                <style>@page{size:A3 landscape;margin:8mm} html,body{margin:0} svg{width:100%;height:auto}</style></head><body>${gostSheetSvgText}</body></html>`);
             w.document.close();
             w.focus();
             setTimeout(() => { try { w.print(); } catch (_) {} }, 250);
@@ -47390,7 +47753,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.21',
-            buildId: 'cbef4c1-preview',
+            buildId: '412f20d-preview',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -47399,6 +47762,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: листы ГОСТ поперечника и продольника — как в альбоме: красная линия, рабочие отметки, площади насыпи/выемки, таблица проект/факт; на профиле план трассы, откосы, уклоны-треугольники, пикеты и кривые.',
                 '2026.08.21: полотно больше не рвётся на обычном угле трассы (ось «слетала» в дыру на PI). Кнопка «Построения» на вкладке Черчение прячет поперечники, кромки и касательные; разметка дороги и узла ляжет туда же.',
                 '2026.08.21: шаблоны поперечников — отдельная вкладка списком с иконкой сечения; наведение показывает предпросмотр. Линию формы на чертеже можно тянуть: горизонталь едет вверх-вниз, вертикаль — влево-вправо.',
                 '2026.08.21: поперечник и профиль — размеры толщин одежды и уклонов, кнопка «ГОСТ» даёт чертёж для экспертизы (печать / SVG).',

@@ -2268,9 +2268,9 @@ async function checkRoadCrossSections(page) {
             dxfRoad: /Кромка/.test(dxf),
             dxfPolys: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
             dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length,
-            gostXs: /Поперечный профиль/.test(gostXs) && /xs-dim/.test(gostXs),
+            gostXs: /Поперечный профиль/.test(gostXs) && /Проектные данные/.test(gostXs) && /Фактические данные/.test(gostXs) && /xs-dim/.test(gostXs),
             gostThk: /xs-thk/.test(gostXs),
-            gostProf: /Продольный профиль/.test(gostProf) && /‰/.test(gostProf),
+            gostProf: /Продольный профиль/.test(gostProf) && /План трассы/.test(gostProf) && /‰/.test(gostProf),
             gostBtns: !!document.getElementById('roadXsGost') && !!document.getElementById('polyProfileGost')
         };
     }, groundZ);
