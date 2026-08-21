@@ -44,6 +44,55 @@ function splitArgs(s) {
     return out;
 }
 const refList = (s) => (s.match(/#\d+/g) || []);
+const unescapeStep = (s) => String(s || '').replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/g,
+    (_, hex) => hex.match(/.{4}/g).map((h) => String.fromCharCode(parseInt(h, 16))).join(''));
+const stepName = (args) => unescapeStep(String(args?.[2] || '').replace(/^'|'$/g, ''));
+const stepEnum = (s) => String(s || '').replace(/\./g, '');
+const nestsOf = (map, relatingId) => {
+    const kids = [];
+    for (const e of map.values()) {
+        if (e.type !== 'IFCRELNESTS') continue;
+        if (e.args[4] === relatingId) kids.push(...refList(e.args[5]));
+    }
+    return kids;
+};
+const xyOf = (map, ref) => {
+    const inner = String(map.get(ref)?.args?.[0] || '').replace(/[()]/g, '');
+    const [x, y] = inner.split(',').map(Number);
+    return { x, y };
+};
+const angDiff = (a, b) => {
+    let d = a - b;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    return d;
+};
+/* Горизонталь: LINE P1 = P0 + L·(cosθ, sinθ);
+ * CIRCULARARC Δ = L/R, центр в P0 + R·(−sinθ, cosθ), знак R — против часовой. */
+function stepHor(sg) {
+    const c = Math.cos(sg.dir), s = Math.sin(sg.dir);
+    if (sg.type === 'LINE' || Math.abs(sg.r) < 1e-12) {
+        return { x: sg.x + sg.len * c, y: sg.y + sg.len * s, dir: sg.dir };
+    }
+    const dAng = sg.len / sg.r;
+    const cx = sg.x + sg.r * (-s);
+    const cy = sg.y + sg.r * c;
+    const dir = sg.dir + dAng;
+    return { x: cx + sg.r * Math.sin(dir), y: cy - sg.r * Math.cos(dir), dir };
+}
+/* Вертикаль в осях (пикет, отметка). HorizontalLength — по пикету, не длина дуги. */
+function stepVer(sg) {
+    const sta = sg.sta + sg.len;
+    if (sg.type === 'CONSTANTGRADIENT' || sg.r == null || !Number.isFinite(sg.r)) {
+        return { sta, z: sg.z + sg.g0 * sg.len, g: sg.g0 };
+    }
+    const th = Math.atan(sg.g0);
+    const Cs = sg.sta + sg.r * (-Math.sin(th));
+    const Cz = sg.z + sg.r * Math.cos(th);
+    const sin1 = Math.sin(th) + sg.len / sg.r;
+    const th1 = Math.asin(Math.max(-1, Math.min(1, sin1)));
+    return { sta, z: Cz - sg.r * Math.cos(th1), g: Math.tan(th1) };
+}
 
 async function chrome() {
     if (process.env.SMOKE_CHROMIUM) return process.env.SMOKE_CHROMIUM;
@@ -164,6 +213,101 @@ try {
     check(/IFCALIGNMENTHORIZONTALSEGMENT/.test(made.text), 'есть IfcAlignmentHorizontalSegment');
     check(/CIRCULARARC/.test(made.text), 'в alignment есть дуги CIRCULARARC');
 
+    /* Раскладка трассы Оси C: не «дуги есть в тексте», а геометрия сегментов.
+     * Без изломов (R плана 30 и 25, Rв 900 и 700) проверки прошли бы вхолостую
+     * на одних отрезках. */
+    {
+        const map = parseStep(made.text);
+        const alignments = [...map.entries()].filter(([, e]) => e.type === 'IFCALIGNMENT');
+        const axisC = alignments.find(([, e]) => /Ось C/.test(stepName(e.args)));
+        check(!!axisC, 'в файле есть IfcAlignment «Ось C»');
+        if (axisC) {
+            const nested = nestsOf(map, axisC[0]).map((id) => [id, map.get(id)]);
+            const horEnt = nested.find(([, e]) => e?.type === 'IFCALIGNMENTHORIZONTAL');
+            const verEnt = nested.find(([, e]) => e?.type === 'IFCALIGNMENTVERTICAL');
+            check(!!horEnt, 'Ось C: горизонталь вложена через IfcRelNests');
+            check(!!verEnt, 'Ось C: профиль вложен через IfcRelNests');
+
+            const horSegs = (horEnt ? nestsOf(map, horEnt[0]) : []).map((id) => {
+                const h = map.get(map.get(id).args[map.get(id).args.length - 1]);
+                const pt = xyOf(map, h.args[2]);
+                return {
+                    type: stepEnum(h.args[8]),
+                    x: pt.x, y: pt.y,
+                    dir: Number(h.args[3]),
+                    r: Number(h.args[4]),
+                    len: Number(h.args[6])
+                };
+            });
+            const arcs = horSegs.filter((s) => s.type === 'CIRCULARARC');
+            check(arcs.length >= 2, `Ось C: дуг плана ${arcs.length}`);
+            if (arcs.length >= 2) {
+                check(arcs[0].r > 0, `Ось C: первый поворот левый (R=${arcs[0].r.toFixed(3)} > 0)`);
+                check(arcs[1].r < 0, `Ось C: второй поворот правый (R=${arcs[1].r.toFixed(3)} < 0)`);
+            }
+
+            let worstC0 = 0, worstC1 = 0;
+            for (let i = 0; i < horSegs.length; i++) {
+                const end = stepHor(horSegs[i]);
+                if (i + 1 >= horSegs.length) {
+                    const dx = end.x - 40, dy = end.y - (-100);
+                    const dEnd = Math.hypot(dx, dy);
+                    check(dEnd < 0.05,
+                        `Ось C: конец трассы = последняя вершина (40, −100), ушло ${dEnd.toFixed(4)} м`);
+                    break;
+                }
+                const nxt = horSegs[i + 1];
+                const d0 = Math.hypot(end.x - nxt.x, end.y - nxt.y);
+                const d1 = Math.abs(angDiff(end.dir, nxt.dir));
+                worstC0 = Math.max(worstC0, d0);
+                worstC1 = Math.max(worstC1, d1);
+            }
+            check(horSegs.length >= 2, `Ось C: сегментов горизонтали ${horSegs.length}`);
+            check(worstC0 < 0.01, `Ось C: C0 горизонтали ≤ 0.01 м (худшее ${worstC0.toFixed(5)} м)`);
+            check(worstC1 < 1e-3, `Ось C: C1 горизонтали ≤ 0.001 рад (худшее ${worstC1.toFixed(6)} рад)`);
+            const dStart = horSegs.length
+                ? Math.hypot(horSegs[0].x - (-200), horSegs[0].y - (-200)) : Infinity;
+            check(dStart < 0.05, `Ось C: начало трассы = первая вершина (−200, −200)`);
+
+            const verSegs = (verEnt ? nestsOf(map, verEnt[0]) : []).map((id) => {
+                const v = map.get(map.get(id).args[map.get(id).args.length - 1]);
+                const rRaw = v.args[7];
+                return {
+                    type: stepEnum(v.args[8]),
+                    sta: Number(v.args[2]),
+                    len: Number(v.args[3]),
+                    z: Number(v.args[4]),
+                    g0: Number(v.args[5]),
+                    g1: Number(v.args[6]),
+                    r: rRaw === '$' ? null : Number(rRaw)
+                };
+            });
+            const varcs = verSegs.filter((s) => s.type === 'CIRCULARARC');
+            check(varcs.length >= 2, `Ось C: вертикальных кривых ${varcs.length}`);
+            for (const a of varcs) {
+                const sg = Math.sign(a.g1 - a.g0) || 0;
+                const sr = Math.sign(a.r) || 0;
+                check(sr === sg,
+                    `Ось C: sign(R)=sign(g1−g0) у вертикали (R=${a.r}, Δg=${(a.g1 - a.g0).toFixed(6)})`);
+            }
+            let vC0 = 0, vC1 = 0;
+            for (let i = 0; i < verSegs.length; i++) {
+                const end = stepVer(verSegs[i]);
+                if (i + 1 >= verSegs.length) {
+                    check(Math.abs(end.z - 14) < 0.05,
+                        `Ось C: конец профиля = отметка последней вершины 14 м (стало ${end.z.toFixed(4)})`);
+                    break;
+                }
+                const nxt = verSegs[i + 1];
+                vC0 = Math.max(vC0, Math.hypot(end.sta - nxt.sta, end.z - nxt.z));
+                vC1 = Math.max(vC1, Math.abs(end.g - nxt.g0));
+            }
+            check(verSegs.length >= 2, `Ось C: сегментов профиля ${verSegs.length}`);
+            check(vC0 < 0.01, `Ось C: C0 вертикали ≤ 0.01 м (худшее ${vC0.toFixed(5)} м)`);
+            check(vC1 < 1e-3, `Ось C: C1 вертикали ≤ 0.001 (худшее ${vC1.toExponential(2)})`);
+        }
+    }
+
     /* Тело дороги по оси и слои одежды из поперечника. Раньше в файл уходили
      * только откосы, узлы и сами оси — владелец получил выгрузку без самой
      * дороги. Меши коридора уже посчитаны, второй раз лофтить нельзя: файл
@@ -253,8 +397,6 @@ try {
      * разбор escape-последовательностей даёт настоящее русское слово — без
      * второй половины проверка прошла бы и на файле, где имена просто
      * выброшены. */
-    const unescapeStep = (s) => s.replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/g,
-        (_, hex) => hex.match(/.{4}/g).map((h) => String.fromCharCode(parseInt(h, 16))).join(''));
     for (const [sch, r] of Object.entries({ IFC4X3_ADD2: made, ...legacy })) {
         if (!r?.text) continue;
         const raw = [...r.text].filter((c) => c.codePointAt(0) > 127);

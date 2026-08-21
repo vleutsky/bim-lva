@@ -15173,9 +15173,14 @@
             };
 
             pvi.push({ sta: 0, z: pts[0].z, v: 0 });
+            /* Сопряжение плана — в XY. computeFilletArc в 3D берёт ребро с ΔZ
+             * как пространственный угол: длина дуги и точка касания уезжают
+             * от плана, и соседние сегменты IfcAlignment (там только X/Y)
+             * перестают стыковаться. Отметки живут в профиле, не здесь. */
+            const xy = (p) => new THREE.Vector3(p.x, p.y, 0);
             for (let i = 1; i < pts.length - 1; i++) {
                 const arc = (radii[i] || 0) > 0
-                    ? computeFilletArc(pts[i - 1], pts[i], pts[i + 1], radii[i], 8) : null;
+                    ? computeFilletArc(xy(pts[i - 1]), xy(pts[i]), xy(pts[i + 1]), radii[i], 8) : null;
                 if (!arc) {
                     pushLine(cur, pts[i]);
                     pvi.push({ sta, z: pts[i].z, v: record.vRadii?.[i] || 0 });
@@ -48081,7 +48086,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.21',
-            buildId: 'vcurve-step',
+            buildId: 'align-xy',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -48090,6 +48095,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: сопряжение плана в IFC считается в XY — иначе при перепаде отметок дуга уезжала от плана, и сегменты трассы не стыковались.',
                 '2026.08.21: вертикальная кривая профиля сгущает ось и полотно с шагом (поле «верт.», умолч. 1 м) — дорога повторяет дугу, а не хорду между точками перелома.',
                 '2026.08.21: разметка дороги — отдельная кнопка на вкладке Черчение: краевые, осевая, полосы по шаблону, стоп-линия на устье узла. Не путать с «Построениями».',
                 '2026.08.21: на профиле ПКМ без сдвига ставит точку перелома (пикет и отметка клика); по вершине — вертикальная кривая. Листы ГОСТ без подписи продукта: для экспертизы.',
