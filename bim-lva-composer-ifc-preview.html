@@ -1314,6 +1314,14 @@
         #roadXsChart { height: 240px; background: var(--panel-2); }
         #roadXsChart .xs-slope { pointer-events: none; }
         #roadXsChart .xs-dim, #roadXsChart .xs-grade { pointer-events: none; }
+        .gost-sheet-host {
+            overflow: auto;
+            max-height: 68vh;
+            background: #fff;
+            border: 1px solid var(--line);
+            padding: 8px;
+        }
+        .gost-sheet-host svg { display: block; width: 100%; height: auto; background: #fff; }
         #roadXsChart .xs-shape { cursor: grab; }
         #roadXsChart .xs-shape:hover { filter: brightness(1.08); }
         .xs-swatch {
@@ -4166,7 +4174,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 64ff5c3</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 113eeea</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5383,6 +5391,18 @@
     <!-- Заглушка: профиль живёт во вкладке палитры «Трасса» (#roadXsModal).
          Класс .show синхронизируется, чтобы старые проверки не ломались. -->
     <div class="modal-backdrop floating-panel" id="polyProfileModal" hidden></div>
+    <div class="modal-backdrop" id="gostSheetModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="gostSheetTitle" style="width:min(1120px,96vw)">
+            <h3 id="gostSheetTitle">Чертёж ГОСТ</h3>
+            <div class="bulk-note" id="gostSheetNote">Оформление для экспертизы: размеры ширин, толщин и уклонов, штамп. Печать на лист или выгрузка SVG.</div>
+            <div id="gostSheetHost" class="gost-sheet-host"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn" id="gostSheetSvg">⬇ SVG</button>
+                <button type="button" class="btn load-btn" id="gostSheetPrint">Печать</button>
+                <button type="button" class="btn" id="gostSheetClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
 
     <div class="modal-backdrop floating-panel" id="earthworkModal">
         <div class="modal-card" id="earthworkCard" role="dialog" aria-modal="true" style="width:min(560px,94vw)">
@@ -5562,6 +5582,7 @@
                             </label>
                             <span class="fill"></span>
                             <button class="btn" id="polyProfileFit" data-tip="Вписать весь профиль в окно. Колесо — зум, Shift+колесо — высота, ПКМ — сдвиг, ПКМ по вершине — вертикальная кривая.">⤢</button>
+                            <button class="btn" id="polyProfileGost" data-tip="Чертёж продольного профиля по ГОСТ для экспертизы: пикеты, отметки, уклоны, таблица. Печать или SVG.">ГОСТ</button>
                             <button class="btn" id="polyProfileCsv" data-tip="Вершина; пикет; земля; ось; рабочая; уклон">CSV</button>
                             <button class="btn" id="polyProfileDrape" data-tip="Посадить вершины оси на снятые отметки земли">⤓ на землю</button>
                             <button class="btn" id="polyProfileXs" data-tip="Перейти к чертежу поперечника">⊟ сечение</button>
@@ -5588,6 +5609,7 @@
                         </div>
                         <span class="fill"></span>
                         <button class="btn" id="roadXsFit" data-tip="Вписать сечение. Масштаб всегда 1:1. Колесо — зум к курсору, ПКМ — сдвиг.">⤢</button>
+                        <button class="btn" id="roadXsGost" data-tip="Чертёж поперечника по ГОСТ для экспертизы: ширины, толщины одежды, уклоны, отметки. Печать или SVG.">ГОСТ</button>
                         <button class="btn" id="roadXsProfile" data-tip="Продольный профиль этой оси">〰 профиль</button>
                         <button class="btn" id="roadXsCsv" data-tip="Пикет; смещение; X; Y; Z земли; Z оси; рабочая">CSV</button>
                         <button class="btn" id="roadXsDxf" data-tip="Поперечники 3D-полилиниями на слое «Поперечник»">⬇ DXF</button>
@@ -7762,6 +7784,14 @@
              * Поперечники по оси. Тот же путь, что кнопка «⊟».
              * Смещение > 0 — вправо по ходу оси.
              */
+            gostXsSvg() { return buildGostXsSheetSvg(); },
+            gostProfileSvg(id) {
+                if (id != null) {
+                    const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                    if (rec) polyProfileRecordId = rec.id;
+                }
+                return buildGostProfileSheetSvg();
+            },
             buildRoadXs(id, opts) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
                 if (!rec) return null;
@@ -20462,6 +20492,31 @@
             });
         }
 
+        function profileStaDimSvg(rows, f, clipL, clipR) {
+            if (!rows || rows.length < 2) return '';
+            const y = PROFILE_H - PROFILE_PAD.b - 12;
+            const tick = 5;
+            const parts = ['<g class="prof-dim">'];
+            for (let i = 0; i < rows.length; i++) {
+                const x = f.px(rows[i].sta);
+                if (x < clipL - 4 || x > clipR + 4) continue;
+                parts.push(
+                    `<line x1="${x.toFixed(1)}" y1="${(y - tick).toFixed(1)}" x2="${x.toFixed(1)}" y2="${(y + tick).toFixed(1)}" stroke="#3d4a58" stroke-width="0.8"/>`
+                );
+                if (i === 0) continue;
+                const x0 = f.px(rows[i - 1].sta);
+                if (x0 < clipL - 4 || Math.abs(x - x0) < 18) continue;
+                const mid = (x0 + x) / 2;
+                const d = rows[i].sta - rows[i - 1].sta;
+                parts.push(
+                    `<line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#3d4a58" stroke-width="0.8"/>`,
+                    `<text x="${mid.toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" fill="#2a3340" font-size="9px">${fmtRoadXsMeters(d)}</text>`
+                );
+            }
+            parts.push('</g>');
+            return parts.join('');
+        }
+
         function renderPolylineProfile() {
             const svg = $('polyProfileChart');
             const meta = $('polyProfileMeta');
@@ -20584,6 +20639,7 @@
                 </g>
                 <line x1="${clipL}" y1="${PROFILE_H - PROFILE_PAD.b}" x2="${clipR}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#c3ccd6"/>
                 <line x1="${clipL}" y1="${PROFILE_PAD.t}" x2="${clipL}" y2="${PROFILE_H - PROFILE_PAD.b}" stroke="#c3ccd6"/>
+                ${profileStaDimSvg(rows, f, clipL, clipR)}
                 <text x="${clipL + 4}" y="11">отм., м</text>
                 <text x="${clipR}" y="${PROFILE_H - 4}" text-anchor="end">пикет, м</text>
             `;
@@ -21037,7 +21093,7 @@
          */
         const ROAD_XS_MAX_STATIONS = 200;
         const ROAD_XS_MAX_SAMPLES = 201;
-        const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 14, t: 44, b: 28 };
+        const ROAD_XS_CHART = { w: 560, h: 240, l: 52, r: 56, t: 44, b: 28 };
         const ROAD_XS_MITER_CAP = 8;
         /** Дуга (тесселяция сопряжения): не острый miter и не прямая. */
         const ROAD_ARC_MIN_DEFL = THREE.MathUtils.degToRad(3);
@@ -24058,8 +24114,85 @@
             const grade = dZ / dOff;
             if (Math.abs(grade) < 0.008) return '';
             const pa = xyOf(a), pb = xyOf(b);
-            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) < 18) return '';
-            return `<text class="xs-grade ${klass || ''}" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${(Math.min(pa.y, pb.y) - 8).toFixed(1)}" text-anchor="middle" fill="#1d4f7a">${fmtRoadXsPermille(grade)}</text>`;
+            const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+            if (len < 18) return '';
+            const nx = -(pb.y - pa.y) / len;
+            const ny = (pb.x - pa.x) / len;
+            const sign = ny < 0 ? 1 : -1;
+            const ox = nx * 11 * sign, oy = ny * 11 * sign;
+            const x1 = pa.x + ox, y1 = pa.y + oy, x2 = pb.x + ox, y2 = pb.y + oy;
+            const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+            return `<g class="xs-grade ${klass || ''}">
+                <line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#1d4f7a" stroke-width="0.8"/>
+                <line x1="${pa.x.toFixed(1)}" y1="${pa.y.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="#1d4f7a" stroke-width="0.7"/>
+                <line x1="${pb.x.toFixed(1)}" y1="${pb.y.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#1d4f7a" stroke-width="0.7"/>
+                <text x="${mx.toFixed(1)}" y="${(my - 3).toFixed(1)}" text-anchor="middle" fill="#1d4f7a">${fmtRoadXsPermille(grade)}</text>
+            </g>`;
+        }
+
+        function roadXsLayerStack(resolved, tpl) {
+            const layers = [];
+            (tpl?.shapes || []).forEach((sh) => {
+                const code = String(sh.code || '').toUpperCase();
+                if (!ROAD_XS_LAYER_CODES.has(code)) return;
+                const ring = (sh.pts || [])
+                    .map((id) => (resolved || []).find((p) => p.id === id))
+                    .filter((p) => p && !p.hide);
+                if (ring.length < 3) return;
+                let minDz = Infinity, maxDz = -Infinity, maxOff = -Infinity;
+                ring.forEach((p) => {
+                    minDz = Math.min(minDz, p.dz);
+                    maxDz = Math.max(maxDz, p.dz);
+                    if (p.off > maxOff) maxOff = p.off;
+                });
+                const thk = maxDz - minDz;
+                if (thk < 0.012) return;
+                layers.push({
+                    code, minDz, maxDz, thk, off: maxOff,
+                    caption: roadXsShapeCaption(code)
+                });
+            });
+            layers.sort((a, b) => b.maxDz - a.maxDz);
+            return layers;
+        }
+
+        function roadXsThkChainSvg(layers, px, py, zAxis, pad) {
+            if (!layers.length) return '';
+            const right = Math.max(...layers.map((l) => l.off));
+            let x = px(right) + 22;
+            x = Math.min(Math.max(x, pad.l + 40), pad.w - 10);
+            const tick = 6;
+            const parts = [`<g class="xs-dim xs-thk">`];
+            layers.forEach((ly) => {
+                const y0 = py(zAxis + ly.maxDz);
+                const y1 = py(zAxis + ly.minDz);
+                if (Math.abs(y1 - y0) < 8) return;
+                parts.push(
+                    `<line x1="${(x - tick).toFixed(1)}" y1="${y0.toFixed(1)}" x2="${(x + tick).toFixed(1)}" y2="${y0.toFixed(1)}" stroke="#3d4a58" stroke-width="0.9"/>`,
+                    `<line x1="${(x - tick).toFixed(1)}" y1="${y1.toFixed(1)}" x2="${(x + tick).toFixed(1)}" y2="${y1.toFixed(1)}" stroke="#3d4a58" stroke-width="0.9"/>`,
+                    `<line x1="${x.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="#3d4a58" stroke-width="0.9"/>`,
+                    `<text x="${(x + 7).toFixed(1)}" y="${((y0 + y1) / 2 + 3).toFixed(1)}" fill="#2a3340" font-size="10px">${fmtRoadXsMeters(ly.thk)}</text>`
+                );
+            });
+            parts.push('</g>');
+            return parts.join('');
+        }
+
+        function roadXsElevMarksSvg(resolved, xyOf, zAxis) {
+            const marks = [];
+            ['CL', 'L', 'R'].forEach((code) => {
+                const p = (resolved || []).find((q) => !q.hide && String(q.code || '').toUpperCase() === code);
+                if (!p) return;
+                const q = xyOf(p);
+                const z = zAxis + (p.dz || 0);
+                marks.push(
+                    `<g class="xs-dim xs-elev">
+                        <path d="M ${q.x.toFixed(1)} ${(q.y - 6).toFixed(1)} l 4.5 -7 h -9 z" fill="none" stroke="#1a2330" stroke-width="0.9"/>
+                        <text x="${q.x.toFixed(1)}" y="${(q.y - 16).toFixed(1)}" text-anchor="middle" fill="#1a2330" font-size="9px">${z.toFixed(2)}</text>
+                    </g>`
+                );
+            });
+            return marks.join('');
         }
 
         function roadXsRatioLabelSvg(ring, xyOf) {
@@ -24079,12 +24212,14 @@
             return `<text class="xs-grade" x="${((pa.x + pb.x) / 2).toFixed(1)}" y="${((pa.y + pb.y) / 2 - 7).toFixed(1)}" text-anchor="middle" fill="#6a4020">${fmtRoadXsRatio(best.dOff, best.dZ)}</text>`;
         }
 
-        function roadXsAnnotSvg(resolved, tpl, xyOf, px, pad) {
+        function roadXsAnnotSvg(resolved, tpl, xyOf, px, pad, py, zAxis) {
             const byCode = (c) => (resolved || []).find((p) => !p.hide && String(p.code || '').toUpperCase() === c);
             const all = (c) => (resolved || []).filter((p) => !p.hide && String(p.code || '').toUpperCase() === c)
                 .sort((a, b) => a.off - b.off);
             const cl = byCode('CL'), L = byCode('L'), R = byCode('R');
             const parts = [roadXsDimChainSvg(roadXsDimStations(resolved), px, pad)];
+            parts.push(roadXsThkChainSvg(roadXsLayerStack(resolved, tpl), px, py, zAxis, pad));
+            parts.push(roadXsElevMarksSvg(resolved, xyOf, zAxis));
             parts.push(roadXsGradeLabelSvg(cl, L, xyOf));
             parts.push(roadXsGradeLabelSvg(cl, R, xyOf));
             const leftSh = [...all('SHLDO'), ...all('SHLDUO')].filter((p) => L && p.off < L.off - 0.04)
@@ -24124,6 +24259,247 @@
                 parts.push(roadXsRatioLabelSvg(ring, xyOf));
             });
             return parts.join('');
+        }
+
+        let gostSheetKind = 'xs';
+        let gostSheetSvgText = '';
+
+        function gostStampSvg(x, y, w, h, lines) {
+            const rows = lines.filter(Boolean);
+            const rh = h / Math.max(1, rows.length);
+            const parts = [`<g class="gost-stamp">
+                <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fff" stroke="#1a2330" stroke-width="1.2"/>`];
+            rows.forEach((t, i) => {
+                const yy = y + (i + 1) * rh;
+                if (i < rows.length - 1) {
+                    parts.push(`<line x1="${x}" y1="${yy}" x2="${x + w}" y2="${yy}" stroke="#1a2330" stroke-width="0.6"/>`);
+                }
+                parts.push(
+                    `<text x="${x + 8}" y="${(yy - rh * 0.35).toFixed(1)}" fill="#1a2330" font-size="11px">${esc(t)}</text>`
+                );
+            });
+            parts.push('</g>');
+            return parts.join('');
+        }
+
+        function gostFrameSvg(w, h) {
+            return `<rect x="18" y="18" width="${w - 36}" height="${h - 36}" fill="none" stroke="#1a2330" stroke-width="1.8"/>
+                <rect x="24" y="24" width="${w - 48}" height="${h - 48}" fill="none" stroke="#1a2330" stroke-width="0.7"/>`;
+        }
+
+        function buildGostXsSheetSvg() {
+            const model = currentRoadXsModel();
+            const st = model?.stations?.[roadXsActive.index];
+            if (!st) return '';
+            const rec = drawnPolylines.find((r) => r.id === model.polylineId);
+            const tpl = model.template || defaultRoadTemplate(model.widthL, model.widthR);
+            const resolved = resolveTemplatePoints(tpl, st);
+            const zAxis = st.axisAbs.z;
+            const W = 1480, H = 900;
+            const pad = { l: 90, r: 90, t: 110, b: 140, w: W, h: H };
+            let offMin = Math.min(...resolved.map((p) => p.off), -model.widthL);
+            let offMax = Math.max(...resolved.map((p) => p.off), model.widthR);
+            let zMin = zAxis, zMax = zAxis;
+            resolved.forEach((p) => {
+                zMin = Math.min(zMin, zAxis + p.dz);
+                zMax = Math.max(zMax, zAxis + p.dz);
+            });
+            const spanOff = Math.max(6, offMax - offMin) * 1.18;
+            const midOff = (offMin + offMax) / 2;
+            offMin = midOff - spanOff / 2;
+            offMax = midOff + spanOff / 2;
+            const innerW = W - pad.l - pad.r;
+            const innerH = H - pad.t - pad.b;
+            const spanZ = Math.max(2.4, (zMax - zMin) * 1.5, spanOff * innerH / innerW);
+            const z0 = (zMin + zMax) / 2;
+            const px = (off) => pad.l + ((off - offMin) / (offMax - offMin)) * innerW;
+            const py = (z) => pad.t + innerH / 2 - ((z - z0) / spanZ) * innerH;
+            const xyOf = (p) => ({ x: px(p.off), y: py(zAxis + p.dz) });
+            const ptById = new Map(resolved.map((p) => [p.id, p]));
+            const shapes = (tpl.shapes || []).map((sh) => {
+                const ring = (sh.pts || []).map((id) => ptById.get(id)).filter((p) => p && !p.hide);
+                if (ring.length < 3) return '';
+                const d = ring.map((p, i) => {
+                    const q = xyOf(p);
+                    return `${i ? 'L' : 'M'} ${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
+                }).join(' ') + ' Z';
+                const sty = roadShapeStyle(sh.code);
+                return `<path d="${d}" fill="${esc(sty.fill)}" fill-opacity="0.78" stroke="${esc(sty.stroke)}" stroke-width="1"/>`;
+            }).join('');
+            const mPerPx = (offMax - offMin) / innerW;
+            const scale = Math.max(20, Math.round(mPerPx * 1000 / 10) * 10);
+            const pk = st.sta;
+            const pkTxt = `ПК ${Math.floor(pk / 100)}+${(pk % 100).toFixed(2).padStart(5, '0')}`;
+            const title = `Поперечный профиль  ·  ${pkTxt}  ·  ${rec?.name || 'ось'}`;
+            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+                <rect width="${W}" height="${H}" fill="#fff"/>
+                ${gostFrameSvg(W, H)}
+                <text x="${W / 2}" y="52" text-anchor="middle" fill="#1a2330" font-size="20px" font-family="Arial,sans-serif" font-weight="700">${esc(title)}</text>
+                <text x="${W / 2}" y="76" text-anchor="middle" fill="#3d4a58" font-size="13px" font-family="Arial,sans-serif">Масштаб 1:${scale}  ·  отметки в м  ·  уклоны в ‰ и 1:m</text>
+                <style>text{font:12px 'IBM Plex Mono',Consolas,monospace}</style>
+                <line x1="${px(0).toFixed(1)}" y1="${pad.t}" x2="${px(0).toFixed(1)}" y2="${H - pad.b}" stroke="#c45a12" stroke-width="1" stroke-dasharray="6 4"/>
+                ${shapes}
+                ${roadXsAnnotSvg(resolved, tpl, xyOf, px, pad, py, zAxis)}
+                ${gostStampSvg(W - 360, H - 118, 320, 78, [
+                    'BIM.LVA Composer  ·  ' + (COMPOSER_ABOUT?.version || ''),
+                    title,
+                    new Date().toISOString().slice(0, 10) + '  ·  лист 1'
+                ])}
+            </svg>`;
+        }
+
+        function buildGostProfileSheetSvg() {
+            const rec = drawnPolylines.find((r) => r.id === polyProfileRecordId);
+            if (!rec || rec.pts.length < 2) return '';
+            const rows = polylineProfileVertices(rec);
+            if (!rows) return '';
+            const total = rec.length2d || rows[rows.length - 1].sta;
+            const step = total > 0 ? Math.max(0.25, total / 400) : 1;
+            const data = samplePolylineProfile(rec, step);
+            const W = 1600, H = 980;
+            const tableH = Math.min(220, 36 + rows.length * 16);
+            const pad = { l: 80, r: 40, t: 100, b: 48 + tableH };
+            const from = 0, to = Math.max(total, 1);
+            const innerW = W - pad.l - pad.r;
+            const innerH = H - pad.t - pad.b;
+            const zs = rows.map((r) => r.axis).concat(rows.map((r) => r.ground).filter((z) => z != null));
+            let zMin = zs.length ? Math.min(...zs) : 0;
+            let zMax = zs.length ? Math.max(...zs) : 1;
+            if (zMax - zMin < 1) { zMin -= 0.5; zMax += 0.5; }
+            const spanZ = (zMax - zMin) * 1.2;
+            const z0 = (zMin + zMax) / 2;
+            const px = (sta) => pad.l + ((sta - from) / (to - from)) * innerW;
+            const py = (z) => pad.t + innerH / 2 - ((z - z0) / spanZ) * innerH;
+            const mPerPxX = (to - from) / innerW;
+            const scaleH = Math.max(200, Math.round(mPerPxX * 1000 / 50) * 50);
+            const scaleV = Math.max(20, Math.round((spanZ / innerH) * 1000 / 10) * 10);
+            const ground = [];
+            let run = [];
+            (data?.samples || []).forEach((s) => {
+                if (s.ground == null) { if (run.length > 1) ground.push(run); run = []; return; }
+                run.push(`${px(s.sta).toFixed(1)},${py(s.ground).toFixed(1)}`);
+            });
+            if (run.length > 1) ground.push(run);
+            const axis = rows.map((r) => `${px(r.sta).toFixed(1)},${py(r.axis).toFixed(1)}`).join(' ');
+            const grid = [];
+            const zStep = niceStep(spanZ / 6);
+            for (let z = Math.ceil((z0 - spanZ / 2) / zStep) * zStep; z <= z0 + spanZ / 2; z += zStep) {
+                const y = py(z);
+                grid.push(
+                    `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" stroke="#d8dee6"/>`,
+                    `<text x="${pad.l - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="#3d4a58">${z.toFixed(2)}</text>`
+                );
+            }
+            const sStep = niceStep((to - from) / 8);
+            for (let s = 0; s <= to; s += sStep) {
+                const x = px(s);
+                grid.push(
+                    `<line x1="${x.toFixed(1)}" y1="${pad.t}" x2="${x.toFixed(1)}" y2="${H - pad.b}" stroke="#e6ebf0"/>`,
+                    `<text x="${x.toFixed(1)}" y="${H - pad.b + 16}" text-anchor="middle" fill="#3d4a58">${s.toFixed(0)}</text>`
+                );
+            }
+            const dim = [];
+            const dy = H - pad.b - 18;
+            for (let i = 0; i < rows.length; i++) {
+                const x = px(rows[i].sta);
+                dim.push(`<line x1="${x.toFixed(1)}" y1="${dy - 5}" x2="${x.toFixed(1)}" y2="${dy + 5}" stroke="#1a2330"/>`);
+                if (i === 0) continue;
+                const x0 = px(rows[i - 1].sta);
+                const d = rows[i].sta - rows[i - 1].sta;
+                dim.push(
+                    `<line x1="${x0.toFixed(1)}" y1="${dy}" x2="${x.toFixed(1)}" y2="${dy}" stroke="#1a2330"/>`,
+                    `<text x="${((x0 + x) / 2).toFixed(1)}" y="${dy - 6}" text-anchor="middle" fill="#1a2330" font-size="11px">${fmtRoadXsMeters(d)}</text>`
+                );
+                const sl = rows[i - 1].slope;
+                if (sl != null) {
+                    const mx = (x0 + x) / 2;
+                    const my = (py(rows[i - 1].axis) + py(rows[i].axis)) / 2 - 10;
+                    dim.push(`<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle" fill="#c45a12" font-size="12px">${sl > 0 ? '+' : ''}${sl.toFixed(1)}‰</text>`);
+                }
+            }
+            const tableY = H - tableH - 28;
+            const cols = [40, 90, 90, 90, 90, 90, 90];
+            const headers = ['№', 'Пикет', 'Земля', 'Проект', 'Рабочая', 'i, ‰', 'L, м'];
+            let tx = pad.l;
+            const head = headers.map((h, i) => {
+                const cell = `<text x="${tx + 6}" y="${tableY + 16}" fill="#1a2330" font-size="11px">${h}</text>`;
+                tx += cols[i];
+                return cell;
+            }).join('');
+            const body = rows.map((r, i) => {
+                const y = tableY + 34 + i * 16;
+                const L = i ? (r.sta - rows[i - 1].sta) : '';
+                const vals = [
+                    String(i + 1),
+                    r.sta.toFixed(2),
+                    r.ground == null ? '—' : r.ground.toFixed(2),
+                    r.axis.toFixed(2),
+                    r.work == null ? '—' : ((r.work > 0 ? '+' : '') + r.work.toFixed(2)),
+                    r.slope == null ? '—' : r.slope.toFixed(1),
+                    i ? L.toFixed(2) : '—'
+                ];
+                let x = pad.l;
+                return vals.map((v, c) => {
+                    const cell = `<text x="${x + 6}" y="${y}" fill="#1a2330" font-size="11px">${v}</text>`;
+                    x += cols[c];
+                    return cell;
+                }).join('');
+            }).join('');
+            const title = `Продольный профиль  ·  ${rec.name}  ·  L=${total.toFixed(2)} м`;
+            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+                <rect width="${W}" height="${H}" fill="#fff"/>
+                ${gostFrameSvg(W, H)}
+                <text x="${W / 2}" y="52" text-anchor="middle" fill="#1a2330" font-size="20px" font-family="Arial,sans-serif" font-weight="700">${esc(title)}</text>
+                <text x="${W / 2}" y="76" text-anchor="middle" fill="#3d4a58" font-size="13px" font-family="Arial,sans-serif">Горизонталь 1:${scaleH}  ·  вертикаль 1:${scaleV}  ·  отметки в м</text>
+                <style>text{font:12px 'IBM Plex Mono',Consolas,monospace}</style>
+                ${grid.join('')}
+                ${ground.map((p) => `<polyline fill="none" stroke="#1d6fb0" stroke-width="1.8" points="${p.join(' ')}"/>`).join('')}
+                <polyline fill="none" stroke="#c45a12" stroke-width="2.2" points="${axis}"/>
+                ${dim.join('')}
+                <rect x="${pad.l}" y="${tableY}" width="${cols.reduce((a, b) => a + b, 0)}" height="${tableH}" fill="none" stroke="#1a2330"/>
+                ${head}${body}
+                ${gostStampSvg(W - 360, H - 118, 320, 78, [
+                    'BIM.LVA Composer  ·  ' + (COMPOSER_ABOUT?.version || ''),
+                    title,
+                    new Date().toISOString().slice(0, 10) + '  ·  лист 1'
+                ])}
+            </svg>`;
+        }
+
+        function openGostSheet(kind) {
+            const svg = kind === 'profile' ? buildGostProfileSheetSvg() : buildGostXsSheetSvg();
+            if (!svg) {
+                notifyError(kind === 'profile'
+                    ? 'Сначала откройте профиль оси.'
+                    : 'Сначала постройте поперечники.');
+                return;
+            }
+            gostSheetKind = kind;
+            gostSheetSvgText = svg;
+            const host = $('gostSheetHost');
+            if (host) host.innerHTML = svg;
+            $('gostSheetTitle').textContent = kind === 'profile'
+                ? 'Продольный профиль · ГОСТ'
+                : 'Поперечный профиль · ГОСТ';
+            $('gostSheetModal')?.classList.add('show');
+            trackUsage('gost_sheet', { kind });
+        }
+
+        function downloadGostSheet() {
+            if (!gostSheetSvgText) return;
+            const name = gostSheetKind === 'profile' ? 'Продольный_профиль.svg' : 'Поперечный_профиль.svg';
+            downloadTextFile(gostSheetSvgText, name, 'image/svg+xml');
+        }
+
+        function printGostSheet() {
+            if (!gostSheetSvgText) return;
+            const w = window.open('', '_blank');
+            if (!w) { notifyError('Браузер заблокировал окно печати.'); return; }
+            w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Чертёж ГОСТ</title>
+                <style>@page{size:landscape;margin:8mm} html,body{margin:0} svg{width:100%;height:auto}</style></head><body>${gostSheetSvgText}</body></html>`);
+            w.document.close();
+            w.focus();
+            setTimeout(() => { try { w.print(); } catch (_) {} }, 250);
         }
 
         function renderRoadXsView() {
@@ -24361,7 +24737,7 @@
                 ${linkDraw}
                 ${knotDraw}
                 ${slopeDraw}
-                ${roadXsAnnotSvg(resolved, tpl, xyOf, px, pad)}
+                ${roadXsAnnotSvg(resolved, tpl, xyOf, px, pad, py, zAxis)}
                 <text x="${clipL + 4}" y="${Math.max(12, pad.t - 28)}">отм., м</text>
                 <text x="${clipR}" y="${pad.h - 8}" text-anchor="end">смещ., м</text>
                 <text x="${clipL + 8}" y="${(axisY - 8).toFixed(1)}" fill="#e8442a">ось</text>
@@ -25323,6 +25699,14 @@
             }
         });
         $('roadXsDxf')?.addEventListener('click', exportRoadXsDxf);
+        $('roadXsGost')?.addEventListener('click', () => openGostSheet('xs'));
+        $('polyProfileGost')?.addEventListener('click', () => openGostSheet('profile'));
+        $('gostSheetClose')?.addEventListener('click', () => $('gostSheetModal')?.classList.remove('show'));
+        $('gostSheetSvg')?.addEventListener('click', downloadGostSheet);
+        $('gostSheetPrint')?.addEventListener('click', printGostSheet);
+        $('gostSheetModal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'gostSheetModal') $('gostSheetModal').classList.remove('show');
+        });
         $('roadXsProfile')?.addEventListener('click', () => {
             const id = Number($('roadXsSelect')?.value);
             const rec = listedPolylines().find((r) => r.id === id) ||
@@ -46630,7 +47014,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.21',
-            buildId: '64ff5c3-preview',
+            buildId: '113eeea-preview',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -46639,6 +47023,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: поперечник и профиль — размеры толщин одежды и уклонов, кнопка «ГОСТ» даёт чертёж для экспертизы (печать / SVG).',
                 '2026.08.21: погода и солнце на вкладке Вид: ясно / облачно / пасмурно / туман / закат / ночь. Солнце — азимут от севера по часовой, как в Civil 3D; тени по желанию.',
                 '2026.08.21: материалы визуализации / рендера в оформлении: асфальт, щебень, грунт, трава, вода, хром, медь, алюминий, керамика и др. Металл и стекло получают отражения от студийного света.',
                 '2026.08.21: отображение модели — список на вкладке Вид: заливка, с рёбрами, каркас без граней, скрытые линии, прозрачная. Как Visual Styles в Civil / Navisworks.',

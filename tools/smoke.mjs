@@ -2260,15 +2260,25 @@ async function checkRoadCrossSections(page) {
             step: 1.5, widthL: 2, widthR: 2, sampleStep: 1, live: false
         });
         const dxf = D.roadXsDxfPreview() || '';
+        const gostXs = D.gostXsSvg() || '';
+        const gostProf = D.gostProfileSvg(id) || '';
         return {
             res,
             dxfXs: /Поперечник/.test(dxf),
             dxfRoad: /Кромка/.test(dxf),
             dxfPolys: (dxf.match(/\r\nPOLYLINE\r\n/g) || []).length,
-            dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length
+            dxf3d: (dxf.match(/\r\n70\r\n8\r\n/g) || []).length,
+            gostXs: /Поперечный профиль/.test(gostXs) && /xs-dim/.test(gostXs),
+            gostThk: /xs-thk/.test(gostXs),
+            gostProf: /Продольный профиль/.test(gostProf) && /‰/.test(gostProf),
+            gostBtns: !!document.getElementById('roadXsGost') && !!document.getElementById('polyProfileGost')
         };
     }, groundZ);
 
+    if (!got.gostBtns) problems.push('поперечники: нет кнопок «ГОСТ» на профиле или сечении');
+    if (!got.gostXs) problems.push('поперечники: чертёж ГОСТ сечения пустой или без размеров');
+    if (!got.gostThk) problems.push('поперечники: на чертеже ГОСТ нет размерной цепи толщин одежды');
+    if (!got.gostProf) problems.push('поперечники: чертёж ГОСТ профиля пустой или без уклонов');
     if (!got.res || got.res.stations !== 3) {
         problems.push(`поперечники: сечений ${got.res?.stations} вместо 3 (0 / 1.5 / 3)`);
     } else {
