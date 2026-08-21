@@ -76,7 +76,7 @@ const sha = gitShortSha();
 //    области заменила бы рабочую. Офлайн на копии из-за этого не проверить.
 html = replaceOnceRe(
     html,
-    /        if \('serviceWorker' in navigator\) \{\n            window\.addEventListener\('load', \(\) => \{\n                navigator\.serviceWorker\.register\('\.\/sw-composer\.js\?v=\d+'\)\.catch\(err => \{\n                    console\.warn\('SW register failed', err\);\n                \}\);\n            \}\);\n        \}/,
+    /        if \('serviceWorker' in navigator\) \{\r?\n            window\.addEventListener\('load', \(\) => \{\r?\n                navigator\.serviceWorker\.register\('\.\/sw-composer\.js\?v=\d+'\)\.catch\(err => \{\r?\n                    console\.warn\('SW register failed', err\);\r?\n                \}\);\r?\n            \}\);\r?\n        \}/,
     `        // Тестовая копия service worker не регистрирует: его область видимости —
         // корень сайта, та же, что у рабочего Composer, и регистрация другого
         // скрипта в ней заменила бы рабочую. Офлайн проверяйте на основной версии.`,
@@ -97,10 +97,10 @@ html = replaceOnceRe(
     `            buildId: '${sha}-preview',`,
     'идентификатор сборки'
 );
-html = replaceOnce(html, '\n    </style>', BADGE_CSS, 'конец блока стилей');
-html = replaceOnce(
+html = replaceOnceRe(html, /\r?\n    <\/style>/, BADGE_CSS, 'конец блока стилей');
+html = replaceOnceRe(
     html,
-    '<body>\n',
+    /<body>\r?\n/,
     `<body>\n    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · ${sha}</div>\n`,
     'начало body'
 );

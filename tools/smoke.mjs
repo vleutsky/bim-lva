@@ -31,6 +31,8 @@ let ruler = null;
 let reload = null;
 let bvhPeak = -1;
 let viewCube = null;
+let sceneLabels = null;
+let visualStyle = null;
 let draw = null;
 let dxfEntities = null;
 let sweep = null;
@@ -197,6 +199,100 @@ async function checkSelectSimilar(page) {
     }
     problems.push('«Выбрать подобные» не сработала ни в одной точке клика');
     return { ok: false };
+}
+
+/**
+ * Режим отображения: список на ленте, каркас прячет грани (не «выбран пункт»),
+ * рёбра появляются, пикинг в каркасе живой, заливка возвращает как было.
+ */
+async function checkVisualStyle(page) {
+    const has = await page.evaluate(() => {
+        const sel = document.getElementById('visualStyleSelect');
+        if (!sel) return null;
+        const opts = [...sel.options].map((o) => o.value);
+        return { value: sel.value, opts };
+    });
+    if (!has) {
+        problems.push('список «Отображение» пропал с ленты');
+        return null;
+    }
+    for (const need of ['shaded', 'edges', 'wire', 'hidden', 'xray']) {
+        if (!has.opts.includes(need)) problems.push(`отображение: нет режима ${need}`);
+    }
+
+    await page.evaluate(() => window.BimLvaDebug.setVisualStyle('shaded'));
+    const shaded = await page.evaluate(() => window.BimLvaDebug.visualStyle);
+    if (shaded.mode !== 'shaded' || shaded.select !== 'shaded') {
+        problems.push(`отображение: не включилась заливка (${shaded.mode}/${shaded.select})`);
+    }
+    if (shaded.edges !== 0) {
+        problems.push(`отображение: в заливке висят рёбра (${shaded.edges})`);
+    }
+    if (shaded.sample && shaded.sample.colorWrite === false) {
+        problems.push('отображение: заливка спрятала грани');
+    }
+
+    await page.evaluate(() => window.BimLvaDebug.setVisualStyle('wire'));
+    const wire = await page.evaluate(() => window.BimLvaDebug.visualStyle);
+    if (wire.sample?.colorWrite !== false) {
+        problems.push(`отображение: каркас не спрятал грани (${JSON.stringify(wire.sample)})`);
+    }
+    if (!(wire.edges > 0)) {
+        problems.push('отображение: каркас без рёбер — на экране пусто');
+    }
+
+    const box = await page.locator('#stage canvas').boundingBox();
+    let pickWire = false;
+    if (box) {
+        await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+        for (const [dx, dy] of [[0, 0], [0.08, 0.05], [-0.08, -0.05], [0.16, -0.1]]) {
+            await page.mouse.click(cx + dx * box.width, cy + dy * box.height);
+            pickWire = await page
+                .waitForFunction(
+                    () => /ExpressID/i.test(document.querySelector('#props')?.textContent || ''),
+                    { timeout: 1200 }
+                )
+                .then(() => true).catch(() => false);
+            if (pickWire) break;
+        }
+    }
+    if (!pickWire) problems.push('отображение: в каркасе клик перестал выделять элементы');
+
+    await page.evaluate(() => window.BimLvaDebug.setVisualStyle('edges'));
+    const edges = await page.evaluate(() => window.BimLvaDebug.visualStyle);
+    if (edges.sample?.colorWrite === false) {
+        problems.push('отображение: «с рёбрами» спрятало грани');
+    }
+    if (!(edges.edges > 0)) {
+        problems.push('отображение: «с рёбрами» не построило рёбра');
+    }
+
+    await page.evaluate(() => window.BimLvaDebug.setVisualStyle('xray'));
+    const xray = await page.evaluate(() => window.BimLvaDebug.visualStyle);
+    if (!(xray.sample?.opacity < 0.5) || xray.sample?.colorWrite === false) {
+        problems.push(`отображение: прозрачная не убавила непрозрачность (${JSON.stringify(xray.sample)})`);
+    }
+
+    await page.evaluate(() => window.BimLvaDebug.setVisualStyle('hidden'));
+    const hidden = await page.evaluate(() => window.BimLvaDebug.visualStyle);
+    if (!(hidden.edges > 0) || hidden.sample?.colorWrite === false) {
+        problems.push(`отображение: скрытые линии без граней или рёбер (${JSON.stringify(hidden)})`);
+    }
+
+    await page.evaluate(() => window.BimLvaDebug.setVisualStyle('shaded'));
+    const back = await page.evaluate(() => window.BimLvaDebug.visualStyle);
+    if (back.edges !== 0 || back.sample?.colorWrite === false) {
+        problems.push(`отображение: заливка не восстановилась (${JSON.stringify(back)})`);
+    }
+
+    await page.evaluate(() => document.getElementById('btnClearSelection')?.click());
+    return {
+        wireOff: wire.sample?.colorWrite === false,
+        edgeCount: edges.edges,
+        pickWire
+    };
 }
 
 /**
@@ -3587,6 +3683,117 @@ async function checkRoadCrossSections(page) {
 }
 
 /**
+ * Подписи в сцене. Кнопка прячет слои, не стирает их; имена — только у осей
+ * (не у обычной полилинии); слой #axis-labels обязан быть absolute, иначе
+ * подпись растянется во весь кадр — та же грабля, что с .node-corner.
+ */
+async function checkSceneLabels(page) {
+    const hasBtn = await page.evaluate(() => !!document.getElementById('btnSceneLabels'));
+    if (!hasBtn) {
+        problems.push('кнопка «Подписи» пропала с ленты');
+        return null;
+    }
+
+    const ids = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        D.setAutoNodes(false);
+        D.setSceneLabels(true);
+        const axisId = D.createPolylineFromPoints(
+            [
+                { x: 12, y: 14, z: 1 },
+                { x: 48, y: 14, z: 1 }
+            ],
+            { name: 'Ось-подписи', role: 'road-axis' }
+        );
+        const polyId = D.createPolylineFromPoints(
+            [
+                { x: 12, y: 10, z: 1 },
+                { x: 48, y: 10, z: 1 }
+            ],
+            { name: 'Просто линия' }
+        );
+        return { axisId, polyId };
+    });
+
+    await page.evaluate(() => document.querySelector('#viewCube .vc-btn[data-view="top"]')?.click());
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const on = await page.evaluate(() => window.BimLvaDebug.sceneLabels);
+    if (!on?.buttonOn || !on.on || on.htmlOff) {
+        problems.push(`подписи: по умолчанию выключены (${JSON.stringify({ on: on?.on, button: on?.buttonOn, htmlOff: on?.htmlOff })})`);
+    }
+    if (on?.layer?.position !== 'absolute') {
+        problems.push(`подписи: #axis-labels position=${on?.layer?.position}, ждали absolute`);
+    }
+    const names = (on?.labels || []).map((l) => l.text);
+    if (!names.includes('Ось-подписи')) {
+        problems.push(`подписи: нет имени оси, есть [${names.join(', ')}]`);
+    }
+    if (names.includes('Просто линия')) {
+        problems.push('подписи: обычная полилиния получила имя оси');
+    }
+    const axisLab = (on?.labels || []).find((l) => l.text === 'Ось-подписи');
+    if (axisLab) {
+        if (axisLab.position !== 'absolute') {
+            problems.push(`подписи: .axis-name-label position=${axisLab.position}, ждали absolute`);
+        }
+        if (axisLab.w > 280 || axisLab.w < 8) {
+            problems.push(`подписи: ширина имени оси ${axisLab.w.toFixed(0)} px — похоже, слой растянуло`);
+        }
+        if (axisLab.hidden) {
+            problems.push('подписи: имя оси в DOM, но hidden — камера не видит точку');
+        }
+    }
+
+    await page.evaluate(() => document.getElementById('btnSceneLabels')?.click());
+    const off = await page.evaluate(() => window.BimLvaDebug.sceneLabels);
+    if (off?.on || off?.buttonOn || !off?.htmlOff) {
+        problems.push(`подписи: кнопка не выключила слои (${JSON.stringify({ on: off?.on, button: off?.buttonOn, htmlOff: off?.htmlOff })})`);
+    }
+    if (!off?.labels?.length) {
+        problems.push('подписи: выключение стёрло содержимое слоя, а должно прятать');
+    }
+    if (off?.layer?.visibility !== 'hidden' || off?.annot?.visibility !== 'hidden'
+        || off?.nodes?.visibility !== 'hidden' || off?.pins?.visibility !== 'hidden'
+        || off?.measures?.visibility !== 'hidden') {
+        problems.push(
+            `подписи: слои не спрятались (axis ${off?.layer?.visibility}, `
+            + `annot ${off?.annot?.visibility}, nodes ${off?.nodes?.visibility}, `
+            + `pins ${off?.pins?.visibility}, measures ${off?.measures?.visibility})`
+        );
+    }
+    if (off?.handles?.visibility === 'hidden') {
+        problems.push('подписи: ручки вершин спрятались вместе с подписями');
+    }
+
+    await page.evaluate(() => document.getElementById('btnSceneLabels')?.click());
+    const renamed = await page.evaluate(async (axisId) => {
+        window.BimLvaDebug.setPolylineName(axisId, 'Ось-переименована');
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return window.BimLvaDebug.sceneLabels;
+    }, ids.axisId);
+    const afterNames = (renamed?.labels || []).map((l) => l.text);
+    if (!afterNames.includes('Ось-переименована')) {
+        problems.push(`подписи: после переименования нет новой строки, есть [${afterNames.join(', ')}]`);
+    }
+    if (afterNames.includes('Ось-подписи')) {
+        problems.push('подписи: старое имя оси осталось после переименования');
+    }
+
+    await page.evaluate((pair) => {
+        window.BimLvaDebug.setSceneLabels(true);
+        window.BimLvaDebug.deletePolyline(pair.axisId);
+        window.BimLvaDebug.deletePolyline(pair.polyId);
+    }, ids);
+
+    return {
+        axisNames: (on?.labels || []).filter((l) => !l.hidden).length,
+        layerPos: on?.layer?.position || '—',
+        hiddenOff: off?.layer?.visibility === 'hidden'
+    };
+}
+
+/**
  * Видовой куб. Проверяем не «кнопка нажалась», а куда встала камера: вид
  * сверху обязан смотреть строго вниз, вид с юга — строго на север, иначе
  * это не стандартный вид, а «примерно похоже».
@@ -4454,6 +4661,7 @@ async function main() {
                     );
                 }
                 selectSimilar = await checkSelectSimilar(page);
+                visualStyle = await checkVisualStyle(page);
                 if (selectSimilar?.ok && selectSimilar.after !== 2100) {
                     problems.push(
                         `«Выбрать подобные»: выделила ${selectSimilar.after} вместо 2100 (все IFCWALL в smoke-grid.ifc)`
@@ -4482,6 +4690,7 @@ async function main() {
                     sweep = await checkSweep(page);
                     slope = await checkSlopeToTerrain(page);
                     roadXs = await checkRoadCrossSections(page);
+                    sceneLabels = await checkSceneLabels(page);
                     viewCube = await checkViewCube(page);
                     reload = await checkReload(page, port);
                     geoFed = await checkGeoFederation(page);
@@ -4579,6 +4788,18 @@ async function main() {
     if (roadXs) {
         console.log(
             `поперечники: сечений ${roadXs.stations}, точек земли ${roadXs.hits}`
+        );
+    }
+    if (sceneLabels) {
+        console.log(
+            `подписи:   осей ${sceneLabels.axisNames}, слой ${sceneLabels.layerPos}, `
+            + `выкл. прячет (${sceneLabels.hiddenOff}), ручки вершин на месте`
+        );
+    }
+    if (visualStyle) {
+        console.log(
+            `отображение: каркас прячет грани (${visualStyle.wireOff}), `
+            + `рёбер ${visualStyle.edgeCount}, пикинг в каркасе ${visualStyle.pickWire ? 'ок' : 'НЕТ'}`
         );
     }
     if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');

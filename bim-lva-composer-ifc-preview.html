@@ -533,6 +533,7 @@
             border-radius: var(--r);
             max-width: 140px;
         }
+        #visualStyleSelect { max-width: 154px; min-width: 128px; }
         .rpanel .snap-types {
             display: flex;
             flex-direction: row;
@@ -1960,6 +1961,42 @@
         #node-handles {
             position: absolute; inset: 0;
             pointer-events: none; z-index: 17; overflow: hidden;
+        }
+        /* Имена осей — отдельный слой. Правила как у #polyline-handles:
+           без них слой становится блоком в потоке и ловит клики по модели. */
+        #axis-labels {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 16;
+            overflow: hidden;
+        }
+        /* Специфичность с #axis-labels — страховка от [data-tip] { position:relative }
+           ниже по файлу: та же грабля, что растянула .node-corner во весь слой. */
+        #axis-labels .axis-name-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            padding: 1px 7px;
+            white-space: nowrap;
+            font: 600 11px/1.4 Archivo, 'Segoe UI', sans-serif;
+            color: var(--txt);
+            background: var(--glass);
+            border: 1px solid var(--line);
+            border-radius: 3px;
+            pointer-events: none;
+            transform: translate(-50%, calc(-100% - 8px));
+        }
+        /* Прячем слои, не чистим содержимое: clearMeasureAll() уже один раз
+           унёс чужие подписи, потому что стирал innerHTML контейнера. */
+        html.scene-labels-off #polyline-annot,
+        html.scene-labels-off #node-handles,
+        html.scene-labels-off #coord-pins-container,
+        html.scene-labels-off #coord-pin-leaders,
+        html.scene-labels-off #labels-container,
+        html.scene-labels-off #axis-labels {
+            visibility: hidden !important;
+            pointer-events: none !important;
         }
         /* ⚠️ Селектор с #node-handles здесь не для красоты: ниже по файлу
            живёт `[data-tip] { position: relative }` (якорь всплывающей
@@ -4128,7 +4165,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 3ec8e52</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 1ae5a39</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4222,11 +4259,24 @@
                         </div>
                         <div class="col">
                             <button class="btn on rbtn-sm" id="gridBtn" title="Показать или скрыть координатную сетку">▤ Сетка</button>
+                            <button class="btn on rbtn-sm" id="btnSceneLabels" title="Подписи в сцене: имена осей, длины и уклоны, отметки, радиусы узлов, метки координат. Ручки вершин остаются.">Aa Подписи</button>
                             <button class="btn rbtn-sm" id="btnSelectionContour" title="Контур рёбер выделения">◇ Контур</button>
                             <button class="btn rbtn-sm" id="btnPerfMode" title="Быстрый режим для больших IFC">⚡ Быстрый</button>
                         </div>
                     </div>
                     <div class="cap">Сцена</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
+                        <select id="visualStyleSelect" class="tool-select" title="Как рисовать модель: заливка граней, рёбра, каркас без граней, скрытые линии, прозрачная">
+                            <option value="shaded">Заливка</option>
+                            <option value="edges">С рёбрами</option>
+                            <option value="wire">Каркас</option>
+                            <option value="hidden">Скрытые линии</option>
+                            <option value="xray">Прозрачная</option>
+                        </select>
+                    </div>
+                    <div class="cap">Отображение</div>
                 </div>
                 <div class="rpanel">
                     <div class="items">
@@ -4520,7 +4570,7 @@
         </div>
         <svg id="coord-pin-leaders"></svg>
         <div id="labels-container"></div>
-        <div id="coord-pins-container"></div> <div id="polyline-annot"></div> <div id="polyline-handles"></div> <div id="node-handles"></div> <div id="boxSelectRect"></div>
+        <div id="coord-pins-container"></div> <div id="polyline-annot"></div> <div id="polyline-handles"></div> <div id="node-handles"></div> <div id="axis-labels"></div> <div id="boxSelectRect"></div>
         <div id="tourHud" class="tour-hud" hidden>
             <span id="tourHudText">Проезд…</span>
             <select id="tourHudCamView" class="editInput" title="Вид камеры" style="max-width:160px;padding:4px 8px;font-size:12px">
@@ -7142,6 +7192,86 @@
             /** Сколько ручек вершин сейчас на экране (у раскрытой полилинии). */
             get polylineHandleCount() {
                 return typeof polylineHandles === 'undefined' ? 0 : polylineHandles.length;
+            },
+            /**
+             * Подписи в сцене: кнопка «Aa Подписи». Тест сверяет, что слои
+             * прячутся (visibility), а не стираются, и что новый слой имён
+             * осей — absolute, иначе подпись растянется во всю ширину.
+             */
+            get sceneLabels() {
+                const vis = (id) => {
+                    const el = document.getElementById(id);
+                    if (!el) return null;
+                    const st = getComputedStyle(el);
+                    return { position: st.position, visibility: st.visibility, display: st.display };
+                };
+                const layer = document.getElementById('axis-labels');
+                const labels = [...(layer?.querySelectorAll('.axis-name-label') || [])].map((el) => {
+                    const r = el.getBoundingClientRect();
+                    const st = getComputedStyle(el);
+                    return {
+                        text: (el.textContent || '').trim(),
+                        hidden: !!el.hidden,
+                        w: r.width,
+                        h: r.height,
+                        x: r.left,
+                        y: r.top,
+                        position: st.position
+                    };
+                });
+                return {
+                    on: typeof sceneLabelsOn === 'undefined' ? true : !!sceneLabelsOn,
+                    htmlOff: document.documentElement.classList.contains('scene-labels-off'),
+                    buttonOn: !!$('btnSceneLabels')?.classList.contains('on'),
+                    layer: vis('axis-labels'),
+                    annot: vis('polyline-annot'),
+                    nodes: vis('node-handles'),
+                    pins: vis('coord-pins-container'),
+                    measures: vis('labels-container'),
+                    handles: vis('polyline-handles'),
+                    labels
+                };
+            },
+            setSceneLabels(on) {
+                applySceneLabelsVisible(!!on);
+                return typeof sceneLabelsOn === 'undefined' ? true : sceneLabelsOn;
+            },
+            setPolylineName(id, name) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return false;
+                renamePolyline(rec, name);
+                return rec.name;
+            },
+            /**
+             * Режим отображения модели (заливка / каркас / …).
+             * sample — первый обычный меш: по нему видно, что грани спрятаны,
+             * а не что список переключился.
+             */
+            get visualStyle() {
+                let sample = null;
+                const list = typeof allMeshes !== 'undefined' ? allMeshes : [];
+                for (let i = 0; i < list.length; i++) {
+                    const m = list[i];
+                    if (!m?.isMesh || m.userData?.isOverlay || m.userData?.isGeoRaster) continue;
+                    const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+                    if (!mat) continue;
+                    sample = {
+                        colorWrite: mat.colorWrite !== false,
+                        opacity: mat.opacity,
+                        transparent: !!mat.transparent,
+                        polygonOffset: !!mat.polygonOffset
+                    };
+                    break;
+                }
+                return {
+                    mode: typeof visualStyleMode === 'undefined' ? 'shaded' : visualStyleMode,
+                    select: $('visualStyleSelect')?.value || null,
+                    edges: typeof visualStyleEdgeLines === 'undefined' ? 0 : visualStyleEdgeLines.length,
+                    sample
+                };
+            },
+            setVisualStyle(mode) {
+                return setSceneVisualStyle(mode);
             },
             /** Вершины полилинии в пикселях холста — то же, чем меряет пикинг. */
             polylineScreenPts(id) {
@@ -11234,6 +11364,10 @@
                     mat.needsUpdate = true;
                 });
             });
+            if (visualStyleEdgeMat) {
+                visualStyleEdgeMat.clippingPlanes = planes;
+                visualStyleEdgeMat.needsUpdate = true;
+            }
         }
 
         function setPlaneGizmoAxes(mode) {
@@ -17878,6 +18012,108 @@
             });
             input.addEventListener('blur', () => finish(true));
         }
+
+        /* ------------------------------------------------------------------
+         * Имена осей в сцене + общий выключатель подписей.
+         * Слои прячем классом на <html>, содержимое не трогаем.
+         * ------------------------------------------------------------------ */
+        const SCENE_LABELS_KEY = 'bimlva_scene_labels_v1';
+        const axisLabelsLayer = document.getElementById('axis-labels');
+        let sceneLabelsOn = true;
+        let axisNameLabels = [];
+        let axisLabelsKey = '';
+
+        function applySceneLabelsVisible(on, persist) {
+            sceneLabelsOn = !!on;
+            document.documentElement.classList.toggle('scene-labels-off', !sceneLabelsOn);
+            $('btnSceneLabels')?.classList.toggle('on', sceneLabelsOn);
+            if (persist !== false) {
+                try { localStorage.setItem(SCENE_LABELS_KEY, sceneLabelsOn ? '1' : '0'); } catch (_) {}
+            }
+            markNeedsRender();
+        }
+
+        function axisLabelSource() {
+            return (typeof drawnPolylines !== 'undefined' ? drawnPolylines : [])
+                .filter((r) => r.role === 'road-axis' && !isInternalPolyline(r) && (r.pts?.length || 0) >= 2);
+        }
+
+        function axisLabelsSignature(list) {
+            return list.map((r) => `${r.id}:${r.name}`).join('|');
+        }
+
+        /** Точка на трассе: доля вдоль плана, чтобы имя не садилось на вершину. */
+        function pointAlongPlan(pts, t) {
+            let total = 0;
+            for (let i = 1; i < pts.length; i++) {
+                total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+            }
+            if (total < 1e-9) return pts[0];
+            let remain = Math.max(0, Math.min(1, t)) * total;
+            for (let i = 1; i < pts.length; i++) {
+                const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+                if (remain <= d || i === pts.length - 1) {
+                    const u = d > 0 ? remain / d : 0;
+                    return {
+                        x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * u,
+                        y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * u,
+                        z: pts[i - 1].z + (pts[i].z - pts[i - 1].z) * u
+                    };
+                }
+                remain -= d;
+            }
+            return pts[pts.length - 1];
+        }
+
+        function clearAxisNameLabels() {
+            axisNameLabels.forEach((s) => s.el.remove());
+            axisNameLabels = [];
+            axisLabelsKey = '';
+        }
+
+        function rebuildAxisNameLabels() {
+            clearAxisNameLabels();
+            if (!axisLabelsLayer) return;
+            const list = axisLabelSource();
+            axisLabelsKey = axisLabelsSignature(list);
+            for (const rec of list) {
+                const el = document.createElement('div');
+                el.className = 'axis-name-label';
+                el.textContent = rec.name;
+                axisLabelsLayer.appendChild(el);
+                axisNameLabels.push({ el, id: rec.id });
+            }
+            updateAxisNameLabels();
+        }
+
+        function updateAxisNameLabels() {
+            const list = axisLabelSource();
+            const key = axisLabelsSignature(list);
+            if (key !== axisLabelsKey) { rebuildAxisNameLabels(); return; }
+            for (const { el, id } of axisNameLabels) {
+                const rec = list.find((r) => r.id === id);
+                const pts = rec?.renderPts?.length > 1 ? rec.renderPts : rec?.pts;
+                if (!rec || !pts || pts.length < 2) { el.hidden = true; continue; }
+                const p = pointAlongPlan(pts, 0.45);
+                const s = projectToPixels(p);
+                if (s.behind) { el.hidden = true; continue; }
+                el.hidden = false;
+                if (el.textContent !== rec.name) el.textContent = rec.name;
+                el.style.transform =
+                    `translate(-50%, calc(-100% - 8px)) translate(${s.x}px, ${s.y}px)`;
+            }
+        }
+
+        (function initSceneLabels() {
+            try {
+                if (localStorage.getItem(SCENE_LABELS_KEY) === '0') sceneLabelsOn = false;
+            } catch (_) {}
+            applySceneLabelsVisible(sceneLabelsOn, false);
+            $('btnSceneLabels')?.addEventListener('click', () => {
+                applySceneLabelsVisible(!sceneLabelsOn);
+                trackUsage('scene_labels_toggle', { on: sceneLabelsOn });
+            });
+        })();
 
         function renderPolylinesList() {
             renderDrawnTree();
@@ -28081,10 +28317,14 @@
             }
 
             // Ручки вершин — в том же кадре, что и подписи: иначе отстают от
-            // модели при вращении камеры.
+            // модели при вращении камеры. Сами подписи при выключенной кнопке
+            // не позиционируем: слой спрятан CSS, а ручки вершин остаются.
             updatePolylineHandles();
-            updatePolylineAnnotations();
-            updateNodeHandles();
+            if (sceneLabelsOn) {
+                updatePolylineAnnotations();
+                updateNodeHandles();
+                updateAxisNameLabels();
+            }
 
             frames++; 
             acc += now - last; 
@@ -29212,6 +29452,213 @@
             });
         }
 
+        /* ------------------------------------------------------------------
+         * Режим отображения модели — как Visual Styles в Civil / Navisworks.
+         * Заливка / с рёбрами / каркас без граней / скрытые линии / прозрачная.
+         * Рёбра — EdgesGeometry (характерные, не сетка тесселяции).
+         * ------------------------------------------------------------------ */
+        const VISUAL_STYLE_KEY = 'bimlva_visual_style_v1';
+        const VISUAL_STYLES = ['shaded', 'edges', 'wire', 'hidden', 'xray'];
+        const XRAY_OPACITY = 0.32;
+        let visualStyleMode = 'shaded';
+        let visualStyleEdgeLines = [];
+        let visualStyleEdgeMat = null;
+
+        function isVisualStyleMesh(obj) {
+            if (!obj?.isMesh) return false;
+            if (obj.isLine || obj.isLineSegments || obj.isPoints) return false;
+            const u = obj.userData || {};
+            if (u.isOverlay || u.isGeoRaster || u.isMapTerrain) return false;
+            if (u.carModel || u.isTourVehicle || u.visualStyleEdge) return false;
+            return !!(obj.geometry?.attributes?.position);
+        }
+
+        function visualStyleWantsEdges(mode = visualStyleMode) {
+            return mode === 'edges' || mode === 'wire' || mode === 'hidden';
+        }
+
+        function visualStyleBackgroundHex() {
+            if (typeof sceneBgTheme === 'function') return sceneBgTheme().hex;
+            return document.documentElement.dataset.theme === 'dark' ? 0x11161d : 0xf3f5f7;
+        }
+
+        function visualStyleBaseForMesh(mesh) {
+            const orig = mesh.userData?._origAppearance || {};
+            let color = orig.color;
+            let opacity = orig.opacity ?? 1;
+            const mod = typeof loadedModels !== 'undefined'
+                ? loadedModels.get(mesh.userData?.modelID)
+                : null;
+            const eid = mesh.userData?.expressID;
+            if (mod && eid != null && mod.appearanceByID?.has(eid)) {
+                const a = mod.appearanceByID.get(eid);
+                if (a.color != null) color = a.color;
+                if (a.opacity != null) opacity = a.opacity;
+            }
+            if (color == null) {
+                const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+                color = mat?.color?.getHex?.() ?? 0xcccccc;
+            }
+            return { color, opacity, transparent: opacity < 0.999 };
+        }
+
+        function applyVisualStyleToMaterial(mat, mesh) {
+            if (!mat || mat.isLineBasicMaterial || mat.isLineMaterial || mat.isPointsMaterial) return;
+            const mode = visualStyleMode;
+            const base = visualStyleBaseForMesh(mesh);
+            mat.wireframe = false;
+            mat.polygonOffset = false;
+            mat.polygonOffsetFactor = 0;
+            mat.polygonOffsetUnits = 0;
+            if (mode === 'shaded' || mode === 'edges') {
+                if (mat.color) mat.color.setHex(base.color);
+                mat.transparent = base.transparent;
+                mat.opacity = base.opacity;
+                mat.depthWrite = !base.transparent;
+                mat.colorWrite = true;
+                if (mode === 'edges') {
+                    mat.polygonOffset = true;
+                    mat.polygonOffsetFactor = 1;
+                    mat.polygonOffsetUnits = 1;
+                }
+            } else if (mode === 'wire') {
+                if (mat.color) mat.color.setHex(base.color);
+                mat.transparent = true;
+                mat.opacity = 0;
+                mat.depthWrite = false;
+                mat.colorWrite = false;
+            } else if (mode === 'hidden') {
+                if (mat.color) mat.color.setHex(visualStyleBackgroundHex());
+                mat.transparent = false;
+                mat.opacity = 1;
+                mat.depthWrite = true;
+                mat.colorWrite = true;
+                mat.polygonOffset = true;
+                mat.polygonOffsetFactor = 1;
+                mat.polygonOffsetUnits = 1;
+            } else if (mode === 'xray') {
+                if (mat.color) mat.color.setHex(base.color);
+                mat.transparent = true;
+                mat.opacity = Math.min(base.opacity, XRAY_OPACITY);
+                mat.depthWrite = false;
+                mat.colorWrite = true;
+            }
+            mat.needsUpdate = true;
+        }
+
+        function getVisualStyleEdgeMaterial() {
+            const dark = document.documentElement.dataset.theme === 'dark';
+            const hex = visualStyleMode === 'hidden'
+                ? (dark ? 0xe8edf2 : 0x1a2330)
+                : (dark ? 0xc5cdd6 : 0x3a4554);
+            if (!visualStyleEdgeMat) {
+                visualStyleEdgeMat = new THREE.LineBasicMaterial({ color: hex, depthTest: true });
+                visualStyleEdgeMat.userData.visualStyleShared = true;
+            } else {
+                visualStyleEdgeMat.color.setHex(hex);
+            }
+            visualStyleEdgeMat.clippingPlanes = typeof getActiveClipPlanes === 'function'
+                ? getActiveClipPlanes()
+                : [];
+            visualStyleEdgeMat.needsUpdate = true;
+            return visualStyleEdgeMat;
+        }
+
+        function clearVisualStyleEdges() {
+            for (const line of visualStyleEdgeLines) {
+                line.parent?.remove(line);
+                if (line.userData?.ownsGeometry) {
+                    try { line.geometry?.dispose(); } catch (_) {}
+                }
+            }
+            visualStyleEdgeLines = [];
+        }
+
+        function rebuildVisualStyleEdges() {
+            clearVisualStyleEdges();
+            if (!visualStyleWantsEdges()) return;
+            const mat = getVisualStyleEdgeMaterial();
+            const list = typeof allMeshes !== 'undefined' ? allMeshes : [];
+            for (let i = 0; i < list.length; i++) {
+                const mesh = list[i];
+                if (!isVisualStyleMesh(mesh)) continue;
+                const geom = mesh.geometry;
+                if (!geom?.attributes?.position || geom.attributes.position.count < 3) continue;
+                try {
+                    const edges = new THREE.EdgesGeometry(geom, 30);
+                    if (!edges.attributes.position || edges.attributes.position.count < 2) {
+                        edges.dispose();
+                        continue;
+                    }
+                    const line = new THREE.LineSegments(edges, mat);
+                    line.userData.isOverlay = true;
+                    line.userData.ownsGeometry = true;
+                    line.userData.visualStyleEdge = true;
+                    line.raycast = () => {};
+                    line.renderOrder = 4;
+                    mesh.add(line);
+                    visualStyleEdgeLines.push(line);
+                } catch (_) {}
+            }
+        }
+
+        function applyVisualStyleToMesh(mesh) {
+            if (!isVisualStyleMesh(mesh)) return;
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (let j = 0; j < mats.length; j++) applyVisualStyleToMaterial(mats[j], mesh);
+        }
+
+        function applyVisualStyle(opts = {}) {
+            const seen = new Set();
+            const list = typeof allMeshes !== 'undefined' ? allMeshes : [];
+            for (let i = 0; i < list.length; i++) {
+                const mesh = list[i];
+                if (!isVisualStyleMesh(mesh)) continue;
+                const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                for (let j = 0; j < mats.length; j++) {
+                    const mat = mats[j];
+                    if (!mat || seen.has(mat)) continue;
+                    seen.add(mat);
+                    applyVisualStyleToMaterial(mat, mesh);
+                }
+            }
+            if (opts.rebuildEdges === false) {
+                if (visualStyleWantsEdges()) getVisualStyleEdgeMaterial();
+            } else if (visualStyleWantsEdges()) {
+                rebuildVisualStyleEdges();
+            } else {
+                clearVisualStyleEdges();
+            }
+            markNeedsRender();
+        }
+
+        function setSceneVisualStyle(mode, persist) {
+            if (!VISUAL_STYLES.includes(mode)) mode = 'shaded';
+            visualStyleMode = mode;
+            const sel = $('visualStyleSelect');
+            if (sel && sel.value !== mode) sel.value = mode;
+            if (persist !== false) {
+                try { localStorage.setItem(VISUAL_STYLE_KEY, mode); } catch (_) {}
+            }
+            applyVisualStyle({ rebuildEdges: true });
+            return mode;
+        }
+
+        (function initVisualStyle() {
+            try {
+                const saved = localStorage.getItem(VISUAL_STYLE_KEY);
+                if (VISUAL_STYLES.includes(saved)) visualStyleMode = saved;
+            } catch (_) {}
+            const sel = $('visualStyleSelect');
+            if (sel) {
+                sel.value = visualStyleMode;
+                sel.addEventListener('change', () => {
+                    setSceneVisualStyle(sel.value);
+                    trackUsage('visual_style', { mode: visualStyleMode });
+                });
+            }
+        })();
+
         /** Подсветка выбранных expressID внутри батч-меша (без дублирования геометрии / «призрака»). */
         function installBatchSelectionShader(material) {
             if (!material || material.userData.batchSelInstalled) return;
@@ -29517,6 +29964,7 @@ uniform vec3 uBatchSelColor;
                 allMeshes.push(mesh);
                 list.forEach(frag => modData.meshesByID.get(frag.expressID).push(mesh));
             }
+            applyVisualStyle();
             markNeedsRender();
         }
 
@@ -29559,6 +30007,7 @@ uniform vec3 uBatchSelColor;
                     if (meshes) meshes.forEach((m) => applyAppearanceToMesh(m, appearance));
                 });
             }
+            applyVisualStyle();
             markNeedsRender();
         }
 
@@ -32223,6 +32672,7 @@ uniform vec3 uBatchSelColor;
             // просто нечего перечислять
             registerDxfEntities(modData, root);
             buildTreeForFBXModel(modData, root);
+            applyVisualStyle();
         }
 
         async function addExternalModel(file, format, root, opts = {}) {
@@ -35185,6 +35635,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 }
                 mat.needsUpdate = true;
             });
+            applyVisualStyleToMesh(mesh);
         }
 
         function applyAppearanceToMesh(mesh, appearance) {
@@ -35234,6 +35685,7 @@ json.dumps({"meshes": out, "errors": errors[:5], "count": len(out)})
                 }
                 mat.needsUpdate = true;
             });
+            applyVisualStyleToMesh(mesh);
         }
 
         function reapplyAppearanceForItem(modelID, expressID) {
@@ -43995,6 +44447,7 @@ ${componentXml || '    '}
             grid.position.set(0, 0, 0);
             grid.visible = $('gridBtn').classList.contains('on');
             scene.add(grid);
+            applyVisualStyle({ rebuildEdges: false });
             markNeedsRender();
         }
 
@@ -44023,6 +44476,8 @@ ${componentXml || '    '}
             grid.position.set(0, 0, 0);
             grid.visible = $('gridBtn').classList.contains('on'); 
             scene.add(grid);
+            applyVisualStyle({ rebuildEdges: false });
+            markNeedsRender();
         });
 
         // ---- Tour: car drive / fly-through ----
@@ -45628,9 +46083,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
-            version: '2026.08.20',
-            buildId: '3ec8e52-preview',
-            released: '2026-08-20',
+            version: '2026.08.21',
+            buildId: '1ae5a39-preview',
+            released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
@@ -45638,6 +46093,8 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: отображение модели — список на вкладке Вид: заливка, с рёбрами, каркас без граней, скрытые линии, прозрачная. Как Visual Styles в Civil / Navisworks.',
+                '2026.08.21: подписи имён осей в сцене и кнопка «Aa Подписи» на вкладке Вид — один выключатель на длины, отметки, радиусы узлов и метки координат. Слои прячутся, содержимое не стирается.',
                 '2026.08.19: выгрузка IFC в трёх схемах: 4.3 с дорожными классами и трассой, IFC4 и IFC2x3 для приложений без поддержки 4.3 (Navisworks). В старых схемах тела универсальным классом, роль — в ObjectType, ось — ломаной; в 2x3 геометрия оболочкой из граней и обязательный OwnerHistory.',
                 '2026.08.19: DXF снова открывается в AutoCAD/Civil — у слоя «Ось» не было цвета, и таблица LAYER выходила битой (сообщение про APPID уводило в сторону).',
                 '2026.08.19: починены DWG и STEP на сайте — путь к вендорам был абсолютным и на GitHub Pages уводил мимо /bim-lva/ (404). Локально не воспроизводилось.',
