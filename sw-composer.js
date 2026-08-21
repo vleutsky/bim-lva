@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260821-xs-tpls-link';
+const CACHE = 'bimlva-composer-shell-20260821-road-aids';
 const SHELL = [
   './',
   './index.html',

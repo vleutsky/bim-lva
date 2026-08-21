@@ -2604,6 +2604,51 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: узкий филет без радиуса (${JSON.stringify(tightFillet.radii)})`);
     }
 
+    // Угол 90°: полотно не должно рваться на PI (порог dot<0.82 оставлял дыру,
+    // и ось «слетала» в разрыв). Кромки симметричны вокруг оси.
+    const corner90 = await page.evaluate((g) => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 10, y: 20, z: g + 0.5 },
+                { x: 40, y: 20, z: g + 0.5 },
+                { x: 40, y: 50, z: g + 0.5 }
+            ],
+            { name: 'Ось-угол-90', role: 'road-axis' }
+        );
+        D.buildRoadXs(id, {
+            step: 10, widthL: 3.25, widthR: 3.25, sampleStep: 1, live: false
+        });
+        const br = D.roadXsBreaks(id);
+        const mid = D.roadAxisCenterError(id);
+        const pi = (br?.vertex || []).find((v) => v.i > 0);
+        const aidsBtn = document.getElementById('btnRoadAids');
+        const before = D.roadAidsState();
+        const off = D.setRoadAids(false);
+        const on = D.setRoadAids(true);
+        return {
+            n: br?.n,
+            pi,
+            midMax: mid?.max,
+            aidsBtn: !!(aidsBtn && /Построения/.test(aidsBtn.textContent || '')),
+            before, off, on
+        };
+    }, groundZ);
+    if (!corner90.aidsBtn) {
+        problems.push('поперечники: нет кнопки «Построения»');
+    }
+    if ((corner90.n || 0) > 0 || corner90.pi?.prevBrk || corner90.pi?.nextBrk) {
+        problems.push(`поперечники: полотно рвётся на угле 90° (${JSON.stringify(corner90)})`);
+    }
+    if ((corner90.midMax || 0) > 0.05) {
+        problems.push(`поперечники: ось не в центре кромок на ${corner90.midMax?.toFixed?.(3)} м (${JSON.stringify(corner90)})`);
+    }
+    if (!(corner90.before?.linesOn > 0) || !(corner90.before?.edgesOn > 0)
+        || (corner90.off?.linesOn !== 0) || (corner90.off?.edgesOn !== 0)
+        || !(corner90.on?.linesOn > 0) || corner90.on?.on !== true) {
+        problems.push(`поперечники: выключатель построений не прячет кромки/сечения (${JSON.stringify(corner90)})`);
+    }
+
     // Прямая и кривая — разный шаг: на 80 м прямой не ставим сечение каждые 4 м.
     const splitStep = await page.evaluate((g) => {
         const D = window.BimLvaDebug;

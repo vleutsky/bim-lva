@@ -4249,7 +4249,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 14f8aea</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · cbef4c1</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4472,6 +4472,7 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnIntersections" disabled title="Пересечения и примыкания дорог"><svg class="tb-svg" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M0 9h24M0 15h24M9 0v24M15 0v24" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 9q0-0 0 0" fill="none"/><path d="M9 9a6 6 0 0 0-6-6M15 9a6 6 0 0 1 6-6M9 15a6 6 0 0 1-6 6M15 15a6 6 0 0 0 6 6" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".55"/></svg> Пересечения</button>
                             <button class="btn rbtn-sm" id="btnRoadXs" disabled title="Окно поперечников: шаблон, слои одежды, пикет, откосы до рельефа"><svg class="tb-svg" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M2 14h20" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".5"/><path d="M5 14 8 9h8l3 5Z" fill="currentColor" opacity=".2"/><path d="M5 14 8 9h8l3 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 4v4M12 16v4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2"/></svg> Поперечники</button>
+                            <button class="btn on rbtn-sm" id="btnRoadAids" disabled title="Вспомогательные построения на трассе: линии поперечников, кромки, касательные сопряжений. Полотно и сама ось остаются. Сюда же позже ляжет разметка дороги и узла.">⌗ Построения</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
@@ -8553,6 +8554,59 @@
                 applyRoadTemplateChange(model, { relink: false });
                 return { ...snapshotRoadTemplate(model.template), axis };
             },
+            roadXsBreaks(polylineId) {
+                const model = polylineId != null
+                    ? roadXsModels.find((m) => m.polylineId === polylineId)
+                    : currentRoadXsModel();
+                if (!model?.stations) return null;
+                const flags = corridorBreakFlags(model.stations, model.nodeGaps || []);
+                const vertex = [];
+                model.stations.forEach((st, i) => {
+                    if (!st.atVertex) return;
+                    vertex.push({
+                        i, sta: st.sta,
+                        prevBrk: i > 0 ? !!flags[i - 1] : false,
+                        nextBrk: !!flags[i]
+                    });
+                });
+                return { n: flags.filter(Boolean).length, vertex };
+            },
+            roadAxisCenterError(polylineId) {
+                const rec = drawnPolylines.find((r) => r.id === polylineId)
+                    || drawnPolylines.find((r) => r.role === 'road-axis');
+                if (!rec?.pts?.length) return null;
+                const left = rec.edgeLeftPts || [];
+                const right = rec.edgeRightPts || [];
+                const src = rec.renderPts?.length >= 2 ? rec.renderPts : rec.pts;
+                let max = 0, n = 0;
+                const m = Math.min(src.length, left.length, right.length);
+                for (let i = 0; i < m; i++) {
+                    const mx = (left[i].x + right[i].x) / 2;
+                    const my = (left[i].y + right[i].y) / 2;
+                    const d = Math.hypot(mx - src[i].x, my - src[i].y);
+                    if (d > max) max = d;
+                    n++;
+                }
+                return { max, n, widthL: rec.roadEdgeLeft ? 1 : 0 };
+            },
+            get roadAidsOn() { return roadAidsOn; },
+            setRoadAids(on) { setRoadAidsVisible(!!on); return this.roadAidsState(); },
+            roadAidsState() {
+                const lines = [];
+                roadXsModels.forEach((m) => (m.lines || []).forEach((ln) => lines.push(!!ln.visible)));
+                const edges = [];
+                drawnPolylines.forEach((r) => {
+                    if (r.roadEdgeLeft) edges.push(!!r.roadEdgeLeft.visible);
+                    if (r.roadEdgeRight) edges.push(!!r.roadEdgeRight.visible);
+                });
+                return {
+                    on: roadAidsOn,
+                    lines: lines.length,
+                    linesOn: lines.filter(Boolean).length,
+                    edges: edges.length,
+                    edgesOn: edges.filter(Boolean).length
+                };
+            },
             /** Без аргумента — текущая ось, с id полилинии — именно она. */
             dropRoadXsSlopes(polylineId) {
                 const model = polylineId != null
@@ -11462,7 +11516,7 @@
             'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash',
             'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView',
             'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw',
-            'btnRoadAxis', 'btnRoadXs', 'btnPolylineList', 'btnPadList', 'btnAreaObject',
+            'btnRoadAxis', 'btnRoadXs', 'btnRoadAids', 'btnPolylineList', 'btnPadList', 'btnAreaObject',
             'btnConvertIfcSchema', 'drawModeSelect',
             'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile',
             'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'
@@ -16615,6 +16669,12 @@
         let drawCursorPoint = null; // куда тянется линия прямо сейчас (резиновая нить)
         let drawContinuation = null; // дописываем существующую полилинию: что сохранить
         let drawingRoadAxis = false; // режим «Ось трассы»: после Esc открываем поперечники
+        const ROAD_AIDS_KEY = 'bimlva_road_aids_v1';
+        let roadAidsOn = true;
+        try {
+            const savedAids = localStorage.getItem(ROAD_AIDS_KEY);
+            if (savedAids === '0') roadAidsOn = false;
+        } catch (_) {}
         let drawRoadEdgeLeft = null;
         let drawRoadEdgeRight = null;
 
@@ -16706,7 +16766,9 @@
             geom.setPositions(points.flatMap((p) => [p.x, p.y, p.z]));
             const line = new Line2(geom, makeLineMaterial(color, width, dashed));
             if (dashed) line.computeLineDistances();
-            line.renderOrder = 998;
+            /* Ось (пунктир) поверх штриховки поперечников, иначе на угле
+               её не видно — только в разрыве полотна, «ось слетела». */
+            line.renderOrder = dashed ? 999 : 998;
             return line;
         }
 
@@ -16754,10 +16816,12 @@
                 const right = offsetPlanPolyline(pts, roadAxisDraftWidths().widthR, false);
                 if (left.length >= 2) {
                     drawRoadEdgeLeft = makeLineObject(left, st.edgeColor, st.edgeWidth, false);
+                    drawRoadEdgeLeft.visible = roadAidsOn;
                     drawGroup.add(drawRoadEdgeLeft);
                 }
                 if (right.length >= 2) {
                     drawRoadEdgeRight = makeLineObject(right, st.edgeColor, st.edgeWidth, false);
+                    drawRoadEdgeRight.visible = roadAidsOn;
                     drawGroup.add(drawRoadEdgeRight);
                 }
             } else {
@@ -17218,12 +17282,16 @@
                 record.roadEdgeLeft = makeLineObject(left, color, width, false);
                 record.roadEdgeLeft.userData.roadEdge = 'left';
                 record.roadEdgeLeft.raycast = () => {};
+                record.roadEdgeLeft.renderOrder = 997;
+                record.roadEdgeLeft.visible = roadAidsOn;
                 drawGroup.add(record.roadEdgeLeft);
             }
             if (right.length >= 2) {
                 record.roadEdgeRight = makeLineObject(right, color, width, false);
                 record.roadEdgeRight.userData.roadEdge = 'right';
                 record.roadEdgeRight.raycast = () => {};
+                record.roadEdgeRight.renderOrder = 997;
+                record.roadEdgeRight.visible = roadAidsOn;
                 drawGroup.add(record.roadEdgeRight);
             }
         }
@@ -17262,6 +17330,7 @@
                 line.renderOrder = 997;
                 group.add(line);
             });
+            group.visible = roadAidsOn;
             drawGroup.add(group);
             record.filletGuideGroup = group;
             record.filletGuides = guides;
@@ -19830,6 +19899,9 @@
             pendingPadHolePolylineId = null;
             drawingRoadAxis = false;
             setDrawMode(true);
+        });
+        $('btnRoadAids')?.addEventListener('click', () => {
+            setRoadAidsVisible(!roadAidsOn);
         });
         $('btnRoadAxis')?.addEventListener('click', () => {
             if (drawMode && drawingRoadAxis) { setDrawMode(false); return; }
@@ -23277,7 +23349,10 @@
                 if (i >= stations.length - 1) return false;
                 const n = stations[i + 1];
                 const dot = (st.rx || 0) * (n.rx || 0) + (st.ry || 0) * (n.ry || 0);
-                if (dot < 0.82) return true;
+                /* Выворот — секущие смотрят врозь (разворот > 90°). Порог 0.82
+                   рвал каждый обычный PI (~35°) и оставлял дыру на угле:
+                   полотно обрывалось, ось шла в разрыв — «ось слетела». */
+                if (dot < 0) return true;
                 return stationInsideGaps((st.sta + n.sta) / 2, gaps || []);
             });
         }
@@ -23748,6 +23823,35 @@
             });
         }
 
+        /**
+         * Вспомогательные построения: поперечники, кромки, касательные дуг.
+         * Полотно коридора и пунктир оси не трогаем. Разметка (полосы, узел)
+         * сюда же, когда появится — отдельным слоем, этот выключатель общий.
+         */
+        function applyRoadAidsVisibility() {
+            const vis = roadAidsOn;
+            $('btnRoadAids')?.classList.toggle('on', vis);
+            (typeof roadXsModels !== 'undefined' ? roadXsModels : []).forEach((model) => {
+                (model.lines || []).forEach((ln) => { if (ln) ln.visible = vis; });
+                if (model.edgeLeft) model.edgeLeft.visible = vis;
+                if (model.edgeRight) model.edgeRight.visible = vis;
+            });
+            (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).forEach((r) => {
+                if (r.roadEdgeLeft) r.roadEdgeLeft.visible = vis;
+                if (r.roadEdgeRight) r.roadEdgeRight.visible = vis;
+                if (r.filletGuideGroup) r.filletGuideGroup.visible = vis;
+            });
+            if (typeof drawRoadEdgeLeft !== 'undefined' && drawRoadEdgeLeft) drawRoadEdgeLeft.visible = vis;
+            if (typeof drawRoadEdgeRight !== 'undefined' && drawRoadEdgeRight) drawRoadEdgeRight.visible = vis;
+        }
+
+        function setRoadAidsVisible(on) {
+            roadAidsOn = !!on;
+            try { localStorage.setItem(ROAD_AIDS_KEY, roadAidsOn ? '1' : '0'); } catch (_) {}
+            applyRoadAidsVisibility();
+            markNeedsRender();
+        }
+
         function buildRoadXsLines(model) {
             disposeRoadXsLines(model);
             const color = model.color || '#2a7de1';
@@ -23759,6 +23863,8 @@
                     line.userData.roadXs = { modelId: model.id, index };
                     line.userData.xsIndex = index;
                     line.raycast = () => {};
+                    line.renderOrder = 996;
+                    line.visible = roadAidsOn;
                     roadXsGroup.add(line);
                     model.lines.push(line);
                 }
@@ -23780,12 +23886,14 @@
                         model.edgeLeft = makeLineObject(left, ec, ew, false);
                         model.edgeLeft.userData.roadEdge = 'left';
                         model.edgeLeft.raycast = () => {};
+                        model.edgeLeft.visible = roadAidsOn;
                         roadXsGroup.add(model.edgeLeft);
                     }
                     if (right.length >= 2) {
                         model.edgeRight = makeLineObject(right, ec, ew, false);
                         model.edgeRight.userData.roadEdge = 'right';
                         model.edgeRight.raycast = () => {};
+                        model.edgeRight.visible = roadAidsOn;
                         roadXsGroup.add(model.edgeRight);
                     }
                 } else {
@@ -25791,6 +25899,7 @@
 
         fillRoadStudioCatalog();
         bindRoadStudioLayout();
+        applyRoadAidsVisibility();
 
         function fillRoadAxisStyleForm(rec) {
             const set = (id, v) => { const el = $(id); if (el && v != null) el.value = String(v); };
@@ -47281,7 +47390,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.21',
-            buildId: '14f8aea-preview',
+            buildId: 'cbef4c1-preview',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -47290,6 +47399,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: полотно больше не рвётся на обычном угле трассы (ось «слетала» в дыру на PI). Кнопка «Построения» на вкладке Черчение прячет поперечники, кромки и касательные; разметка дороги и узла ляжет туда же.',
                 '2026.08.21: шаблоны поперечников — отдельная вкладка списком с иконкой сечения; наведение показывает предпросмотр. Линию формы на чертеже можно тянуть: горизонталь едет вверх-вниз, вертикаль — влево-вправо.',
                 '2026.08.21: поперечник и профиль — размеры толщин одежды и уклонов, кнопка «ГОСТ» даёт чертёж для экспертизы (печать / SVG).',
                 '2026.08.21: погода и солнце на вкладке Вид: ясно / облачно / пасмурно / туман / закат / ночь. Солнце — азимут от севера по часовой, как в Civil 3D; тени по желанию.',
