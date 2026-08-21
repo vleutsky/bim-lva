@@ -2762,6 +2762,10 @@ async function checkRoadCrossSections(page) {
             grips: [...(card?.querySelectorAll('.rs-win-grip') || [])].map((g) => g.dataset.dir),
             applyTpl: (document.getElementById('roadXsApplyTpl')?.textContent || '').trim(),
             tpls: [...(card?.querySelectorAll('#roadXsTpls .rs-tpl') || [])].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
+            tplTab: (document.getElementById('roadStudioTabs')?.textContent || '').replace(/\s+/g, ' ').trim(),
+            tplPane: !!document.getElementById('rstab-tpls'),
+            catalogInXs: !!document.querySelector('#rstab-xs #roadXsTpls'),
+            tplIcons: card?.querySelectorAll('#roadXsTpls .rs-tpl-ico svg').length || 0,
             palMin: !!card?.querySelector('.pal-min'),
             palDock: !!card?.querySelector('.pal-dock'),
             clashChrome: !!document.querySelector('#clashModalCard .pal-min'),
@@ -2789,6 +2793,11 @@ async function checkRoadCrossSections(page) {
         }
         if (ui.applyTpl !== 'Применить на ось' || ui.tpls.length < 5) {
             problems.push(`поперечники: нет каталога шаблонов (${JSON.stringify({ applyTpl: ui.applyTpl, tpls: ui.tpls })})`);
+        }
+        if (!ui.tplPane || ui.catalogInXs || !(ui.tplTab || '').includes('Шаблоны') || (ui.tplIcons || 0) < 5) {
+            problems.push(`поперечники: шаблоны не на своей вкладке (${JSON.stringify({
+                tplTab: ui.tplTab, tplPane: ui.tplPane, catalogInXs: ui.catalogInXs, tplIcons: ui.tplIcons
+            })})`);
         }
         if ((ui.w || 0) < 700 || (ui.h || 0) < 360) {
             problems.push(`поперечники: окно слишком маленькое для трёх чертежей (${ui.w}×${ui.h})`);
@@ -3319,6 +3328,55 @@ async function checkRoadCrossSections(page) {
     }
     if (gCurb?.slopeR != null && gCurb.maxOff < gCurb.slopeR - 0.05) {
         problems.push(`поперечники: земля не дошла до откоса за бордюром (${JSON.stringify(gCurb)})`);
+    }
+
+    const linkUx = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const tpl = D.roadXsTemplate();
+        const a = (tpl?.points || []).find((p) => p.code === 'CURBT');
+        const b = (tpl?.points || []).find((p) => p.code === 'CURBO');
+        const c = (tpl?.points || []).find((p) => p.code === 'CURBB');
+        const r = (tpl?.points || []).find((p) => p.code === 'R');
+        if (!a || !b || !c || !r || typeof D.translateRoadXsLink !== 'function') {
+            return { ok: false, missing: { a: !!a, b: !!b, c: !!c, r: !!r, fn: typeof D.translateRoadXsLink } };
+        }
+        const h0 = a.dz - r.dz;
+        const w0 = Math.abs(b.off - a.off);
+        const top = D.translateRoadXsLink(a.id, b.id, 0, 0.10);
+        const a1 = (top?.points || []).find((p) => p.code === 'CURBT');
+        const b1 = (top?.points || []).find((p) => p.code === 'CURBO');
+        const r1 = (top?.points || []).find((p) => p.code === 'R');
+        const h1 = a1 && r1 ? a1.dz - r1.dz : null;
+        const w1 = a1 && b1 ? Math.abs(b1.off - a1.off) : null;
+        if (a1 && b1) D.translateRoadXsLink(a1.id, b1.id, 0, -0.10);
+        const tpl2 = D.roadXsTemplate();
+        const b2s = (tpl2?.points || []).find((p) => p.code === 'CURBO');
+        const c2s = (tpl2?.points || []).find((p) => p.code === 'CURBB');
+        const side = b2s && c2s ? D.translateRoadXsLink(b2s.id, c2s.id, 0.10, 0) : null;
+        const a2 = (side?.points || []).find((p) => p.code === 'CURBT');
+        const b2 = (side?.points || []).find((p) => p.code === 'CURBO');
+        const r2 = (side?.points || []).find((p) => p.code === 'R');
+        const h2 = a2 && r2 ? a2.dz - r2.dz : null;
+        const w2 = a2 && b2 ? Math.abs(b2.off - a2.off) : null;
+        if (b2 && c2s) D.translateRoadXsLink(b2.id, c2s.id, -0.10, 0);
+        return {
+            ok: true,
+            axisTop: top?.axis,
+            axisSide: side?.axis,
+            h0, h1, w0, w1, h2, w2
+        };
+    });
+    if (!linkUx.ok) {
+        problems.push(`поперечники: нет перетаскивания линии формы (${JSON.stringify(linkUx)})`);
+    } else {
+        if (linkUx.axisTop !== 'v' || Math.abs((linkUx.h1 ?? 0) - ((linkUx.h0 ?? 0) + 0.10)) > 1e-6
+            || Math.abs((linkUx.w1 ?? 0) - (linkUx.w0 ?? 0)) > 1e-6) {
+            problems.push(`поперечники: верх бордюра не едет по высоте (${JSON.stringify(linkUx)})`);
+        }
+        if (linkUx.axisSide !== 'h' || Math.abs((linkUx.w2 ?? 0) - ((linkUx.w0 ?? 0) + 0.10)) > 1e-6
+            || Math.abs((linkUx.h2 ?? 0) - (linkUx.h0 ?? 0)) > 1e-6) {
+            problems.push(`поперечники: щека бордюра не едет по ширине (${JSON.stringify(linkUx)})`);
+        }
     }
 
     const shapeUx = await page.evaluate(() => {
