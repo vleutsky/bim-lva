@@ -4249,7 +4249,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 412f20d</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · 94d13e7</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -4783,7 +4783,9 @@
     </div>
 
     <div class="ctx-menu" id="profileChartCtx">
+        <button class="ctx-item" id="ctxProfilePvi" title="Вставить точку перелома профиля в месте клика: пикет по горизонтали, отметка по вертикали">✛ Точка перелома</button>
         <button class="ctx-item" id="ctxProfileVCurve" title="Вписать вертикальную кривую в перелом профиля (пикет–отметка), как кривую в угол на плане">◜ Вертикальная кривая…</button>
+        <button class="ctx-item danger" id="ctxProfileDelPvi" title="Удалить эту вершину профиля. Концы трассы не снимаются.">🗑 Удалить перелом</button>
     </div>
 
     <div class="modal-backdrop" id="branchModal">
@@ -5625,7 +5627,7 @@
                         <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
                     </div>
                 </details>
-                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет высоту плана; профиль забирает остаток окна. Ручка над таблицей профиля — её высоту. На профиле ПКМ по вершине — вертикальная кривая; клик по отметке (красное) правит Z, по длине·уклону (зелёное) — уклон звена. Шаблоны — вкладка в шапке окна: список с иконкой сечения, наведение — предпросмотр. Линию формы на поперечнике можно тянуть: горизонталь едет вверх-вниз, вертикаль — влево-вправо.">?</button>
+                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет высоту плана; профиль забирает остаток окна. Ручка над таблицей профиля — её высоту. На профиле ПКМ без сдвига: точка перелома по пикету и отметке клика; по вершине — вертикальная кривая. Клик по отметке (красное) правит Z, по длине·уклону (зелёное) — уклон звена. Шаблоны — вкладка в шапке окна.">?</button>
             </div>
             <div class="rs-split" id="roadStudioSplit">
                 <div class="rs-col-left">
@@ -5661,7 +5663,7 @@
                                 </select>
                             </label>
                             <span class="fill"></span>
-                            <button class="btn" id="polyProfileFit" data-tip="Вписать весь профиль в окно. Колесо — зум, Shift+колесо — высота, ПКМ — сдвиг, ПКМ по вершине — вертикальная кривая.">⤢</button>
+                            <button class="btn" id="polyProfileFit" data-tip="Вписать весь профиль в окно. Колесо — зум, Shift+колесо — высота, ПКМ — сдвиг. ПКМ без сдвига: точка перелома (пикет и отметка клика); по вершине — вертикальная кривая.">⤢</button>
                             <button class="btn" id="polyProfileGost" data-tip="Чертёж продольного профиля по ГОСТ для экспертизы: пикеты, отметки, уклоны, таблица. Печать или SVG.">ГОСТ</button>
                             <button class="btn" id="polyProfileCsv" data-tip="Вершина; пикет; земля; ось; рабочая; уклон">CSV</button>
                             <button class="btn" id="polyProfileDrape" data-tip="Посадить вершины оси на снятые отметки земли">⤓ на землю</button>
@@ -8668,6 +8670,17 @@
                 if (!rec) return false;
                 openPolylineProfile(rec);
                 return true;
+            },
+            insertProfilePvi(id, sta, absZ) {
+                const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
+                if (!rec) return -1;
+                const at = insertProfileBreak(rec, sta, absZ);
+                if (at >= 0) {
+                    polyProfileRecordId = rec.id;
+                    polyProfileActiveVertex = at;
+                    renderPolylineProfile();
+                }
+                return at;
             },
             /** `opts.polylineId` — построить на конкретной оси, иначе на текущей. */
             buildRoadXsSlopes(opts) {
@@ -21103,6 +21116,8 @@
 
         let profileCtxRecordId = null;
         let profileCtxVertex = -1;
+        let profileCtxSta = null;
+        let profileCtxAbsZ = null;
 
         function nearestProfileVertexAtEvent(ev) {
             const f = profileCurrentFrame();
@@ -21119,21 +21134,54 @@
             return best;
         }
 
+        /**
+         * Точка перелома профиля: пикет по X клика, отметка по Y.
+         * В плане вершина остаётся на трассе. Близко к уже существующей
+         * не дублируем.
+         */
+        function insertProfileBreak(record, sta, absZ) {
+            if (!record || record.kind === '2d') return -1;
+            const rows = polylineProfileVertices(record);
+            if (rows) {
+                const near = rows.find((r) => Math.abs(r.sta - sta) < 0.15);
+                if (near) return -2;
+            }
+            const at = insertPolylineVertexAtStation(record, sta);
+            if (at < 0) return -1;
+            if (Number.isFinite(absZ)) setPolylineVertexElevation(record, at, absZ);
+            return at;
+        }
+
         function onProfileChartContext(ev) {
             const rec = profileRecord();
             const menu = $('profileChartCtx');
             menu?.classList.remove('show');
             if (!rec) return;
+            const f = profileCurrentFrame();
+            const p = profilePointerXY(ev);
             let idx = Number(ev.target.closest?.('.pknot')?.dataset.idx);
             if (!Number.isFinite(idx) || idx < 0) idx = nearestProfileVertexAtEvent(ev);
-            if (!polylineVertexIsCorner(rec, idx)) return;
-            if (rec.kind === '2d') {
-                notifyError('У 2D-полилинии все точки на одной отметке — вертикальную кривую ей не вписать.');
-                return;
-            }
             profileCtxRecordId = rec.id;
             profileCtxVertex = idx;
+            profileCtxSta = f ? f.staAt(p.x) : null;
+            profileCtxAbsZ = f ? f.zAt(p.y) : null;
+            const isCorner = polylineVertexIsCorner(rec, idx);
+            const pviBtn = $('ctxProfilePvi');
+            const vBtn = $('ctxProfileVCurve');
+            const delBtn = $('ctxProfileDelPvi');
+            if (pviBtn) pviBtn.hidden = rec.kind === '2d' || isCorner;
+            if (vBtn) vBtn.hidden = !isCorner || rec.kind === '2d';
+            if (delBtn) {
+                delBtn.hidden = rec.pts.length <= 2
+                    || idx < 1
+                    || idx >= rec.pts.length - 1;
+            }
+            if (rec.kind === '2d') {
+                notifyError('У 2D-полилинии все точки на одной отметке — перелом профиля ей не вписать.');
+                return;
+            }
             if (!menu) return;
+            if (pviBtn?.hidden && vBtn?.hidden && delBtn?.hidden) return;
             menu.style.left = ev.clientX + 'px';
             menu.style.top = ev.clientY + 'px';
             menu.classList.add('show');
@@ -24861,10 +24909,6 @@
                 <text x="40" y="${H - 36}" fill="#1a2330" font-size="11px">1 — линия верха проезжей части;  2 — линия верха земляного полотна</text>
                 ${line1.length >= 2 ? `<text x="${(xyOf(line1[line1.length - 1]).x + 8).toFixed(1)}" y="${(xyOf(line1[line1.length - 1]).y - 6).toFixed(1)}" fill="#1a2330" font-size="11px">1</text>` : ''}
                 ${line2.length >= 2 ? `<text x="${(xyOf(line2[line2.length - 1]).x + 8).toFixed(1)}" y="${(xyOf(line2[0]).y + 12).toFixed(1)}" fill="#1a2330" font-size="11px">2</text>` : ''}
-                ${gostStampSvg(W - 360, H - 78, 320, 52, [
-                    'BIM.LVA Composer  ·  ' + (COMPOSER_ABOUT?.version || ''),
-                    pkTxt + '  ·  ' + new Date().toISOString().slice(0, 10)
-                ])}
             </svg>`;
         }
 
@@ -25090,9 +25134,6 @@
                 ${factCells.join('')}
                 ${pkRow}
                 ${pkCells.join('')}
-                ${gostStampSvg(W - 340, 24, 300, 40, [
-                    'BIM.LVA Composer  ·  ' + (COMPOSER_ABOUT?.version || '')
-                ])}
             </svg>`;
         }
 
@@ -29362,11 +29403,42 @@
             trackUsage('polyline_fillet', { radius: r });
         });
 
+        $('ctxProfilePvi')?.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            $('profileChartCtx')?.classList.remove('show');
+            const rec = drawnPolylines.find((r) => r.id === profileCtxRecordId) || profileRecord();
+            if (!rec) return;
+            const at = insertProfileBreak(rec, profileCtxSta, profileCtxAbsZ);
+            if (at === -2) {
+                notify('Здесь уже есть точка перелома.');
+                return;
+            }
+            if (at < 0) {
+                notifyError('Точку перелома сюда не поставить — клик вне трассы.');
+                return;
+            }
+            polyProfileActiveVertex = at;
+            renderPolylineProfile();
+            notify(`Точка перелома ${at + 1}: ПК ${Number(profileCtxSta || 0).toFixed(2)}, отм. ${Number(profileCtxAbsZ).toFixed(3)} м.`);
+            trackUsage('profile_pvi_insert', {});
+        });
         $('ctxProfileVCurve')?.addEventListener('click', (ev) => {
             ev.stopPropagation();
             $('profileChartCtx')?.classList.remove('show');
             const rec = drawnPolylines.find((r) => r.id === profileCtxRecordId) || profileRecord();
             if (rec) openFilletModal(rec, profileCtxVertex, 'profile');
+        });
+        $('ctxProfileDelPvi')?.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            $('profileChartCtx')?.classList.remove('show');
+            const rec = drawnPolylines.find((r) => r.id === profileCtxRecordId) || profileRecord();
+            const idx = profileCtxVertex;
+            if (!rec || idx < 1 || idx >= rec.pts.length - 1) return;
+            removePolylineVertex(rec, idx);
+            polyProfileActiveVertex = -1;
+            renderPolylineProfile();
+            notify(`Точка перелома снята.`);
+            trackUsage('profile_pvi_remove', {});
         });
 
         $('btnPolylineList')?.addEventListener('click', () => openPolylinesPanel());
@@ -47753,7 +47825,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.21',
-            buildId: '412f20d-preview',
+            buildId: '94d13e7-preview',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -47762,6 +47834,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: на профиле ПКМ без сдвига ставит точку перелома (пикет и отметка клика); по вершине — вертикальная кривая. Листы ГОСТ без подписи продукта: для экспертизы.',
                 '2026.08.21: листы ГОСТ поперечника и продольника — как в альбоме: красная линия, рабочие отметки, площади насыпи/выемки, таблица проект/факт; на профиле план трассы, откосы, уклоны-треугольники, пикеты и кривые.',
                 '2026.08.21: полотно больше не рвётся на обычном угле трассы (ось «слетала» в дыру на PI). Кнопка «Построения» на вкладке Черчение прячет поперечники, кромки и касательные; разметка дороги и узла ляжет туда же.',
                 '2026.08.21: шаблоны поперечников — отдельная вкладка списком с иконкой сечения; наведение показывает предпросмотр. Линию формы на чертеже можно тянуть: горизонталь едет вверх-вниз, вертикаль — влево-вправо.',

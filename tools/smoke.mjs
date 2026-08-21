@@ -2271,6 +2271,7 @@ async function checkRoadCrossSections(page) {
             gostXs: /Поперечный профиль/.test(gostXs) && /Проектные данные/.test(gostXs) && /Фактические данные/.test(gostXs) && /xs-dim/.test(gostXs),
             gostThk: /xs-thk/.test(gostXs),
             gostProf: /Продольный профиль/.test(gostProf) && /План трассы/.test(gostProf) && /‰/.test(gostProf),
+            gostBrand: /BIM\.LVA|Composer/.test(gostXs + gostProf),
             gostBtns: !!document.getElementById('roadXsGost') && !!document.getElementById('polyProfileGost')
         };
     }, groundZ);
@@ -2279,6 +2280,7 @@ async function checkRoadCrossSections(page) {
     if (!got.gostXs) problems.push('поперечники: чертёж ГОСТ сечения пустой или без размеров');
     if (!got.gostThk) problems.push('поперечники: на чертеже ГОСТ нет размерной цепи толщин одежды');
     if (!got.gostProf) problems.push('поперечники: чертёж ГОСТ профиля пустой или без уклонов');
+    if (got.gostBrand) problems.push('поперечники: на листе ГОСТ осталась подпись BIM.LVA / Composer');
     if (!got.res || got.res.stations !== 3) {
         problems.push(`поперечники: сечений ${got.res?.stations} вместо 3 (0 / 1.5 / 3)`);
     } else {
@@ -2567,6 +2569,37 @@ async function checkRoadCrossSections(page) {
     }
     if (!vcurve.menu?.shown || !vcurve.menu?.modal || !/Вертикальная/.test(vcurve.menu.title || '')) {
         problems.push(`профиль: ПКМ не открыл вертикальную кривую (${JSON.stringify(vcurve.menu)})`);
+    }
+
+    const pvi = await page.evaluate(() => {
+        const D = window.BimLvaDebug;
+        const id = D.createPolylineFromPoints(
+            [
+                { x: 0, y: 40, z: 1 },
+                { x: 80, y: 40, z: 1 }
+            ],
+            { name: 'Ось-тест-перелом' }
+        );
+        D.openRoadProfile(id);
+        const n0 = D.drawn.find((d) => d.id === id)?.points;
+        const at = D.insertProfilePvi(id, 40, 5);
+        const after = D.drawn.find((d) => d.id === id);
+        const z = after?.vertsAbs?.[at]?.z;
+        const again = D.insertProfilePvi(id, 40, 6);
+        D.deletePolyline(id);
+        return {
+            n0, at, n1: after?.points, z, again,
+            btn: !!document.getElementById('ctxProfilePvi')
+        };
+    });
+    if (!pvi.btn || pvi.at < 1 || pvi.n1 !== (pvi.n0 || 0) + 1) {
+        problems.push(`профиль: ПКМ не добавил точку перелома (${JSON.stringify(pvi)})`);
+    }
+    if (Math.abs((pvi.z ?? 0) - 5) > 0.02) {
+        problems.push(`профиль: точка перелома не на заданной отметке (${JSON.stringify(pvi)})`);
+    }
+    if (pvi.again !== -2) {
+        problems.push(`профиль: повторная точка перелома на том же пикете не отклонена (${JSON.stringify(pvi)})`);
     }
 
     // Короткое плечо + R больше ширины: радиус сожмётся, внутренность без
