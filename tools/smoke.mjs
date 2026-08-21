@@ -2262,6 +2262,11 @@ async function checkRoadCrossSections(page) {
         const dxf = D.roadXsDxfPreview() || '';
         const gostXs = D.gostXsSvg() || '';
         const gostProf = D.gostProfileSvg(id) || '';
+        D.setRoadMarking(true);
+        const mark = D.roadMarkingState();
+        D.setRoadMarking(false);
+        const markOff = D.roadMarkingState();
+        D.setRoadMarking(true);
         return {
             res,
             dxfXs: /Поперечник/.test(dxf),
@@ -2272,7 +2277,9 @@ async function checkRoadCrossSections(page) {
             gostThk: /xs-thk/.test(gostXs),
             gostProf: /Продольный профиль/.test(gostProf) && /План трассы/.test(gostProf) && /‰/.test(gostProf),
             gostBrand: /BIM\.LVA|Composer/.test(gostXs + gostProf),
-            gostBtns: !!document.getElementById('roadXsGost') && !!document.getElementById('polyProfileGost')
+            gostBtns: !!document.getElementById('roadXsGost') && !!document.getElementById('polyProfileGost'),
+            markBtn: (document.getElementById('btnRoadMarking')?.textContent || '').trim(),
+            mark, markOff
         };
     }, groundZ);
 
@@ -2281,6 +2288,15 @@ async function checkRoadCrossSections(page) {
     if (!got.gostThk) problems.push('поперечники: на чертеже ГОСТ нет размерной цепи толщин одежды');
     if (!got.gostProf) problems.push('поперечники: чертёж ГОСТ профиля пустой или без уклонов');
     if (got.gostBrand) problems.push('поперечники: на листе ГОСТ осталась подпись BIM.LVA / Composer');
+    if (!/Разметка/.test(got.markBtn || '')) {
+        problems.push('поперечники: нет кнопки «Разметка»');
+    }
+    if ((got.mark?.n || 0) < 2 || !(got.mark?.kinds?.edge > 0)) {
+        problems.push(`разметка: нет краевых линий (${JSON.stringify(got.mark)})`);
+    }
+    if (got.markOff?.n !== 0 || got.markOff?.on !== false) {
+        problems.push(`разметка: выключатель не спрятал линии (${JSON.stringify(got.markOff)})`);
+    }
     if (!got.res || got.res.stations !== 3) {
         problems.push(`поперечники: сечений ${got.res?.stations} вместо 3 (0 / 1.5 / 3)`);
     } else {

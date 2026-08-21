@@ -4453,7 +4453,8 @@
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnIntersections" disabled title="Пересечения и примыкания дорог"><svg class="tb-svg" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M0 9h24M0 15h24M9 0v24M15 0v24" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 9q0-0 0 0" fill="none"/><path d="M9 9a6 6 0 0 0-6-6M15 9a6 6 0 0 1 6-6M9 15a6 6 0 0 1-6 6M15 15a6 6 0 0 0 6 6" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".55"/></svg> Пересечения</button>
                             <button class="btn rbtn-sm" id="btnRoadXs" disabled title="Окно поперечников: шаблон, слои одежды, пикет, откосы до рельефа"><svg class="tb-svg" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M2 14h20" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".5"/><path d="M5 14 8 9h8l3 5Z" fill="currentColor" opacity=".2"/><path d="M5 14 8 9h8l3 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 4v4M12 16v4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2"/></svg> Поперечники</button>
-                            <button class="btn on rbtn-sm" id="btnRoadAids" disabled title="Вспомогательные построения на трассе: линии поперечников, кромки, касательные сопряжений. Полотно и сама ось остаются. Сюда же позже ляжет разметка дороги и узла.">⌗ Построения</button>
+                            <button class="btn on rbtn-sm" id="btnRoadAids" disabled title="Вспомогательные построения на трассе: линии поперечников, кромки шаблона, касательные сопряжений. Полотно и ось остаются.">⌗ Построения</button>
+                            <button class="btn on rbtn-sm" id="btnRoadMarking" disabled title="Дорожная разметка: краевые, осевая, полосы по шаблону, стоп-линия на устье узла. Отдельно от построений.">≣ Разметка</button>
                         </div>
                     </div>
                     <div class="cap">Ось</div>
@@ -8574,6 +8575,17 @@
             },
             get roadAidsOn() { return roadAidsOn; },
             setRoadAids(on) { setRoadAidsVisible(!!on); return this.roadAidsState(); },
+            get roadMarkingOn() { return roadMarkingOn; },
+            setRoadMarking(on) { setRoadMarkingVisible(!!on); return this.roadMarkingState(); },
+            roadMarkingState() {
+                const kids = roadMarkingGroup?.children || [];
+                const kinds = {};
+                kids.forEach((o) => {
+                    const k = o.userData?.roadMarking || 'mark';
+                    kinds[k] = (kinds[k] || 0) + 1;
+                });
+                return { on: roadMarkingOn, n: kids.length, kinds };
+            },
             roadAidsState() {
                 const lines = [];
                 roadXsModels.forEach((m) => (m.lines || []).forEach((ln) => lines.push(!!ln.visible)));
@@ -11510,7 +11522,7 @@
             'btnViews', 'btnTour', 'btnColorBy', 'btnBcf', 'btnAlign', 'btnClash',
             'btnClassFilter', 'btnCompare', 'btnSchedule', 'btnCrs', 'btnShareView',
             'btnClip', 'btnMeasure', 'btnCoordPin', 'btnCoordPinList', 'btnDraw',
-            'btnRoadAxis', 'btnRoadXs', 'btnRoadAids', 'btnPolylineList', 'btnPadList', 'btnAreaObject',
+            'btnRoadAxis', 'btnRoadXs', 'btnRoadAids', 'btnRoadMarking', 'btnPolylineList', 'btnPadList', 'btnAreaObject',
             'btnConvertIfcSchema', 'drawModeSelect',
             'btnSweep', 'btnBoxSelect', 'btnPivotLock', 'btn4d', 'btnAlignProfile',
             'btnRoadAxisAnalyze', 'btnRoadXsAnalyze', 'btnQrView'
@@ -16655,6 +16667,9 @@
         const intersectionGroup = new THREE.Group();
         intersectionGroup.name = 'RoadIntersections';
         scene.add(intersectionGroup);
+        const roadMarkingGroup = new THREE.Group();
+        roadMarkingGroup.name = 'RoadMarkings';
+        scene.add(roadMarkingGroup);
         let intersectionDialogState = { poly1: null, poly2: null }; // Запомнить выбранные полилинии
         let roadXsModels = [];
         const DRAW_COLOR = '#1f8f5f';
@@ -16669,6 +16684,13 @@
             const savedAids = localStorage.getItem(ROAD_AIDS_KEY);
             if (savedAids === '0') roadAidsOn = false;
         } catch (_) {}
+        const ROAD_MARKING_KEY = 'bimlva_road_marking_v1';
+        let roadMarkingOn = true;
+        try {
+            const savedMark = localStorage.getItem(ROAD_MARKING_KEY);
+            if (savedMark === '0') roadMarkingOn = false;
+        } catch (_) {}
+        let roadMarkingTimer = 0;
         let drawRoadEdgeLeft = null;
         let drawRoadEdgeRight = null;
 
@@ -17234,6 +17256,7 @@
                 notify(`«${record.name}»: радиус сопряжения уменьшен — не хватает длины отрезка.`);
             }
             scheduleRoadXsRebuild(record.id);
+            scheduleRoadMarkingRebuild();
             markNeedsRender();
         }
 
@@ -19897,6 +19920,9 @@
         $('btnRoadAids')?.addEventListener('click', () => {
             setRoadAidsVisible(!roadAidsOn);
         });
+        $('btnRoadMarking')?.addEventListener('click', () => {
+            setRoadMarkingVisible(!roadMarkingOn);
+        });
         $('btnRoadAxis')?.addEventListener('click', () => {
             if (drawMode && drawingRoadAxis) { setDrawMode(false); return; }
             pendingPadHolePolylineId = null;
@@ -21401,7 +21427,9 @@
                 ],
                 shapes: [
                     { id: 1, code: 'PVMT', pts: [1, 2, 3, 4, 5] }
-                ]
+                ],
+                lanes: 2,
+                laneW: Math.max(L, R)
             };
         }
 
@@ -22492,6 +22520,9 @@
                     m: cfg.slopeM || 1.5
                 });
             }
+            tpl.lanes = nLanes;
+            tpl.laneW = laneW;
+            tpl.medianW = medianW;
             return tpl;
         }
 
@@ -23798,6 +23829,7 @@
             model.corridor = meshes[0] || null;
             model.corridorTris = tris;
             model.corridorSharedEdges = sharedEdges;
+            scheduleRoadMarkingRebuild();
             return model.corridor;
         }
 
@@ -23822,6 +23854,7 @@
                 buildRoadTemplateSlopes(model, readRoadXsSlopeOpts());
                 renderRoadXsView();
                 updateRoadXsStatus();
+                rebuildRoadMarkings();
             }
             markNeedsRender();
         }
@@ -23854,8 +23887,7 @@
 
         /**
          * Вспомогательные построения: поперечники, кромки, касательные дуг.
-         * Полотно коридора и пунктир оси не трогаем. Разметка (полосы, узел)
-         * сюда же, когда появится — отдельным слоем, этот выключатель общий.
+         * Полотно коридора и пунктир оси не трогаем. Разметка — отдельная кнопка.
          */
         function applyRoadAidsVisibility() {
             const vis = roadAidsOn;
@@ -23879,6 +23911,165 @@
             try { localStorage.setItem(ROAD_AIDS_KEY, roadAidsOn ? '1' : '0'); } catch (_) {}
             applyRoadAidsVisibility();
             markNeedsRender();
+        }
+
+        const ROAD_MARK_COLOR = '#f4f7fb';
+        const ROAD_MARK_LIFT = 0.04;
+        const ROAD_MARK_INSET = 0.10;
+
+        function makeMarkingMaterial(dashed, widthM, dashM, gapM) {
+            const mat = new LineMaterial({
+                color: new THREE.Color(ROAD_MARK_COLOR),
+                linewidth: Math.max(0.06, widthM || 0.12),
+                worldUnits: true,
+                dashed: !!dashed,
+                dashSize: dashed ? (dashM || 3) : undefined,
+                gapSize: dashed ? (gapM || 3) : undefined,
+                depthTest: false,
+                transparent: false
+            });
+            mat.resolution.set(Math.max(stage.clientWidth, 1), Math.max(stage.clientHeight, 1));
+            lineMaterials.add(mat);
+            return mat;
+        }
+
+        function addRoadMarkingLine(pts, spec) {
+            if (!pts || pts.length < 2) return null;
+            const lifted = pts.map((p) => new THREE.Vector3(p.x, p.y, (p.z || 0) + ROAD_MARK_LIFT));
+            const geom = new LineGeometry();
+            geom.setPositions(lifted.flatMap((p) => [p.x, p.y, p.z]));
+            const dashed = !!spec.dashed;
+            const line = new Line2(geom, makeMarkingMaterial(dashed, spec.width, spec.dash, spec.gap));
+            if (dashed) line.computeLineDistances();
+            line.renderOrder = 1001;
+            line.raycast = () => {};
+            line.userData.roadMarking = spec.kind || 'mark';
+            line.visible = roadMarkingOn;
+            roadMarkingGroup.add(line);
+            return line;
+        }
+
+        function disposeRoadMarkings() {
+            roadMarkingGroup.children.slice().forEach((obj) => {
+                roadMarkingGroup.remove(obj);
+                obj.geometry?.dispose?.();
+                if (obj.material && lineMaterials.has(obj.material)) disposeLineMaterial(obj.material);
+                else obj.material?.dispose?.();
+            });
+        }
+
+        function markingRunsOnAxis(record) {
+            const src = record.renderPts?.length >= 2 ? record.renderPts : record.pts;
+            if (!src || src.length < 2) return [];
+            const stn = polylineStationing(record);
+            const gaps = roadNodeGapsFor(record.id) || [];
+            if (!stn || !gaps.length) return [src];
+            const runs = [];
+            let cur = [src[0]];
+            for (let i = 1; i < src.length; i++) {
+                const mid = (stn.cum[i - 1] + stn.cum[i]) / 2;
+                if (stationInsideGaps(mid, gaps)) {
+                    if (cur.length >= 2) runs.push(cur);
+                    cur = [src[i]];
+                } else cur.push(src[i]);
+            }
+            if (cur.length >= 2) runs.push(cur);
+            return runs;
+        }
+
+        function templateMarkingLayout(tpl, widthL, widthR) {
+            const wL = Math.max(0, Number(widthL) || 0);
+            const wR = Math.max(0, Number(widthR) || 0);
+            const pave = wL + wR;
+            const n = Math.max(1, Number(tpl?.lanes) || (pave >= 11 ? 4 : pave >= 5.5 ? 2 : 1));
+            const laneW = Number(tpl?.laneW) || (n > 0 ? pave / n : 3.5);
+            const median = Math.max(0, Number(tpl?.medianW) || 0);
+            const lines = [];
+            if (wL > 0.35) lines.push({ off: -(wL - ROAD_MARK_INSET), dashed: false, kind: 'edge', width: 0.12 });
+            if (wR > 0.35) lines.push({ off: (wR - ROAD_MARK_INSET), dashed: false, kind: 'edge', width: 0.12 });
+            if (median > 0.25) {
+                lines.push({ off: -median / 2, dashed: false, kind: 'median', width: 0.15 });
+                lines.push({ off: median / 2, dashed: false, kind: 'median', width: 0.15 });
+                const nSide = Math.max(1, Math.round(n / 2));
+                for (let k = 1; k < nSide; k++) {
+                    lines.push({ off: -(median / 2 + k * laneW), dashed: true, kind: 'lane', width: 0.10, dash: 1, gap: 3 });
+                    lines.push({ off: (median / 2 + k * laneW), dashed: true, kind: 'lane', width: 0.10, dash: 1, gap: 3 });
+                }
+            } else if (n >= 2) {
+                lines.push({ off: 0, dashed: true, kind: 'center', width: 0.12, dash: 3, gap: 3 });
+                const nSide = Math.max(1, Math.round(n / 2));
+                for (let k = 1; k < nSide; k++) {
+                    lines.push({ off: -k * laneW, dashed: true, kind: 'lane', width: 0.10, dash: 1, gap: 3 });
+                    lines.push({ off: k * laneW, dashed: true, kind: 'lane', width: 0.10, dash: 1, gap: 3 });
+                }
+            }
+            return lines;
+        }
+
+        function addMarkingsForAxis(record) {
+            const model = roadXsModels.find((m) => m.polylineId === record.id);
+            if (record?.role !== 'road-axis' && !model) return;
+            const pave = model?.template
+                ? templatePavementWidths(model.template)
+                : roadAxisWidthsFor(record);
+            const layout = templateMarkingLayout(model?.template, pave.widthL, pave.widthR);
+            const runs = markingRunsOnAxis(record);
+            layout.forEach((spec) => {
+                runs.forEach((run) => {
+                    const pts = Math.abs(spec.off) < 1e-4
+                        ? run
+                        : offsetPlanPolyline(run, spec.off, false);
+                    addRoadMarkingLine(pts, spec);
+                });
+            });
+        }
+
+        function addMarkingsForNode(ix) {
+            const data = ix?.points;
+            const c = data?.crossPoint;
+            if (!c || !data.arms) return;
+            data.arms.forEach((arm) => {
+                const u = arm.dir || arm.u;
+                if (!(arm.mouth > 0.25) || !u) return;
+                const wL = Number(arm.wLeft) || 0, wR = Number(arm.wRight) || 0;
+                if (wL + wR < 0.6) return;
+                const s = arm.mouth;
+                const px = c.x + u.x * s;
+                const py = c.y + u.y * s;
+                const n = { x: -u.y, y: u.x };
+                const z = c.z;
+                const a = new THREE.Vector3(px + n.x * wL, py + n.y * wL, z);
+                const b = new THREE.Vector3(px - n.x * wR, py - n.y * wR, z);
+                addRoadMarkingLine([a, b], { kind: 'stop', dashed: false, width: 0.28 });
+            });
+        }
+
+        function rebuildRoadMarkings() {
+            disposeRoadMarkings();
+            if (!roadMarkingOn) {
+                $('btnRoadMarking')?.classList.toggle('on', false);
+                return;
+            }
+            drawnPolylines.forEach(addMarkingsForAxis);
+            roadIntersections.forEach(addMarkingsForNode);
+            $('btnRoadMarking')?.classList.toggle('on', true);
+            markNeedsRender();
+        }
+
+        function scheduleRoadMarkingRebuild() {
+            clearTimeout(roadMarkingTimer);
+            roadMarkingTimer = setTimeout(rebuildRoadMarkings, 140);
+        }
+
+        function setRoadMarkingVisible(on) {
+            roadMarkingOn = !!on;
+            try { localStorage.setItem(ROAD_MARKING_KEY, roadMarkingOn ? '1' : '0'); } catch (_) {}
+            if (roadMarkingOn) rebuildRoadMarkings();
+            else {
+                disposeRoadMarkings();
+                $('btnRoadMarking')?.classList.toggle('on', false);
+                markNeedsRender();
+            }
         }
 
         function buildRoadXsLines(model) {
@@ -26285,6 +26476,7 @@
         fillRoadStudioCatalog();
         bindRoadStudioLayout();
         applyRoadAidsVisibility();
+        $('btnRoadMarking')?.classList.toggle('on', roadMarkingOn);
 
         function fillRoadAxisStyleForm(rec) {
             const set = (id, v) => { const el = $(id); if (el && v != null) el.value = String(v); };
@@ -27750,6 +27942,7 @@
             dropNodeSlopes(rec.id);
             const i = roadIntersections.indexOf(rec);
             if (i >= 0) roadIntersections.splice(i, 1);
+            scheduleRoadMarkingRebuild();
         }
 
         function clearRoadIntersections(polylineId) {
@@ -27855,6 +28048,7 @@
             ]);
             tag(new THREE.LineSegments(crossGeom, new THREE.LineBasicMaterial({ color: 0xff5a00 })));
 
+            rebuildRoadMarkings();
             sceneNeedsRender = true;
         }
 
@@ -47806,7 +48000,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.21',
-            buildId: 'profile-pvi',
+            buildId: 'road-marking',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -47815,6 +48009,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: разметка дороги — отдельная кнопка на вкладке Черчение: краевые, осевая, полосы по шаблону, стоп-линия на устье узла. Не путать с «Построениями».',
                 '2026.08.21: на профиле ПКМ без сдвига ставит точку перелома (пикет и отметка клика); по вершине — вертикальная кривая. Листы ГОСТ без подписи продукта: для экспертизы.',
                 '2026.08.21: листы ГОСТ поперечника и продольника — как в альбоме: красная линия, рабочие отметки, площади насыпи/выемки, таблица проект/факт; на профиле план трассы, откосы, уклоны-треугольники, пикеты и кривые.',
                 '2026.08.21: полотно больше не рвётся на обычном угле трассы (ось «слетала» в дыру на PI). Кнопка «Построения» на вкладке Черчение прячет поперечники, кромки и касательные; разметка дороги и узла ляжет туда же.',
@@ -47940,7 +48135,7 @@ ${componentXml || '    '}
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw-composer.js?v=145').catch(err => {
+                navigator.serviceWorker.register('./sw-composer.js?v=146').catch(err => {
                     console.warn('SW register failed', err);
                 });
             });

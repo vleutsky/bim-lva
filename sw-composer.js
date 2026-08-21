@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260821-profile-pvi';
+const CACHE = 'bimlva-composer-shell-20260821-road-marking';
 const SHELL = [
   './',
   './index.html',
