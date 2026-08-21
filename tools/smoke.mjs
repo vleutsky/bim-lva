@@ -34,6 +34,7 @@ let viewCube = null;
 let sceneLabels = null;
 let visualStyle = null;
 let renderMats = null;
+let weather = null;
 let draw = null;
 let dxfEntities = null;
 let sweep = null;
@@ -311,6 +312,61 @@ async function checkRenderMaterials(page) {
         problems.push(`материалы рендера: в группе визуализации ${got.render?.length || 0}, ждали ≥10`);
     }
     return { render: got.render?.length || 0, env: !!got.env };
+}
+
+/**
+ * Погода и солнце. Студия — прежний свет без тумана; ясно двигает солнце;
+ * туман включает fog; азимут 90° — восток (+X), как геодезия.
+ */
+async function checkWeather(page) {
+    const has = await page.evaluate(() => !!document.getElementById('weatherSelect')
+        && !!document.getElementById('btnSun') && !!document.getElementById('sunModal'));
+    if (!has) {
+        problems.push('погода: нет списка, кнопки «Солнце» или окна');
+        return null;
+    }
+
+    const studio = await page.evaluate(() => {
+        window.BimLvaDebug.setWeather('studio');
+        return window.BimLvaDebug.weather;
+    });
+    if (studio.mode !== 'studio' || studio.fog) {
+        problems.push(`погода: студия сломана (${JSON.stringify({ mode: studio.mode, fog: studio.fog })})`);
+    }
+
+    const clear = await page.evaluate(() => {
+        window.BimLvaDebug.setWeather('clear');
+        window.BimLvaDebug.setSun(180, 45);
+        return window.BimLvaDebug.weather;
+    });
+    if (clear.mode !== 'clear' || clear.fog) {
+        problems.push(`погода: ясно с туманом или не переключилось (${JSON.stringify({ mode: clear.mode, fog: clear.fog })})`);
+    }
+    if (!(clear.sun?.z > 0.5) || !(clear.sun?.y < -0.5)) {
+        problems.push(`погода: полдень (az 180) должен быть с юга, −Y (${JSON.stringify(clear.sun)})`);
+    }
+
+    const east = await page.evaluate(() => {
+        window.BimLvaDebug.setSun(90, 45);
+        return window.BimLvaDebug.weather;
+    });
+    if (!(east.sun?.x > 0.5) || Math.abs(east.sun?.y) > 0.15) {
+        problems.push(`погода: азимут 90° — восток (+X), получили ${JSON.stringify(east.sun)}`);
+    }
+
+    const fog = await page.evaluate(() => {
+        window.BimLvaDebug.setWeather('fog');
+        return window.BimLvaDebug.weather;
+    });
+    if (!fog.fog) problems.push('погода: туман не включил scene.fog');
+
+    await page.evaluate(() => window.BimLvaDebug.setWeather('studio'));
+    const back = await page.evaluate(() => window.BimLvaDebug.weather);
+    if (back.mode !== 'studio' || back.fog) {
+        problems.push('погода: студия не восстановилась');
+    }
+
+    return { fogOn: !!fog.fog };
 }
 
 /**
@@ -4681,6 +4737,7 @@ async function main() {
                 selectSimilar = await checkSelectSimilar(page);
                 visualStyle = await checkVisualStyle(page);
                 renderMats = await checkRenderMaterials(page);
+                weather = await checkWeather(page);
                 if (selectSimilar?.ok && selectSimilar.after !== 2100) {
                     problems.push(
                         `«Выбрать подобные»: выделила ${selectSimilar.after} вместо 2100 (все IFCWALL в smoke-grid.ifc)`
@@ -4824,6 +4881,12 @@ async function main() {
     if (renderMats) {
         console.log(
             `материалы:  рендер ${renderMats.render}, студийный свет ${renderMats.env ? 'есть' : 'НЕТ'}`
+        );
+    }
+    if (weather) {
+        console.log(
+            `погода:    студия без тумана, ясно без тумана, туман ${weather.fogOn ? 'есть' : 'НЕТ'}, `
+            + `восток az=90`
         );
     }
     if (viewCube) console.log('видовой куб: 6 видов по осям, орто-проекция с пикингом');

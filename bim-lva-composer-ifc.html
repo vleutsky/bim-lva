@@ -534,6 +534,7 @@
             max-width: 140px;
         }
         #visualStyleSelect { max-width: 154px; min-width: 128px; }
+        #weatherSelect { max-width: 120px; min-width: 96px; }
         .rpanel .snap-types {
             display: flex;
             flex-direction: row;
@@ -4261,6 +4262,21 @@
                 </div>
                 <div class="rpanel">
                     <div class="items">
+                        <select id="weatherSelect" class="tool-select" title="Погода и свет: студия — как сейчас; ясно / закат / ночь двигают солнце">
+                            <option value="studio">Студия</option>
+                            <option value="clear">Ясно</option>
+                            <option value="cloudy">Облачно</option>
+                            <option value="overcast">Пасмурно</option>
+                            <option value="fog">Туман</option>
+                            <option value="sunset">Закат</option>
+                            <option value="night">Ночь</option>
+                        </select>
+                        <button class="btn rbtn-sm" id="btnSun" title="Положение солнца: азимут от севера по часовой, высота над горизонтом, тени">☀ Солнце</button>
+                    </div>
+                    <div class="cap">Свет</div>
+                </div>
+                <div class="rpanel">
+                    <div class="items">
                         <div class="col">
                             <button class="btn rbtn-sm" id="btnHide" disabled title="Скрыть выделенные (Ctrl+H)">👁 Скрыть</button>
                             <button class="btn rbtn-sm" id="btnIsolate" disabled title="Изолировать выделение (I)">◎ Isolate</button>
@@ -5858,6 +5874,39 @@
             </div>
         </div>
     </div>
+    <div class="modal-backdrop" id="sunModal">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sunModalTitle" style="width:min(380px,100%)">
+            <h3 id="sunModalTitle">Солнце</h3>
+            <div class="bulk-note">Азимут — геодезический: по часовой от севера, как в Civil 3D. Юг = 180°. Высота — над горизонтом.</div>
+            <div class="prop small">
+                <div class="k">Азимут, °</div>
+                <div class="range-row">
+                    <input type="range" id="sunAzimuth" min="0" max="360" step="1" value="180">
+                    <span id="sunAzimuthVal">180</span>
+                </div>
+            </div>
+            <div class="prop small">
+                <div class="k">Высота, °</div>
+                <div class="range-row">
+                    <input type="range" id="sunElevation" min="1" max="88" step="1" value="45">
+                    <span id="sunElevationVal">45</span>
+                </div>
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
+                <button type="button" class="btn" data-sun-az="120" data-sun-el="28">9:00</button>
+                <button type="button" class="btn" data-sun-az="180" data-sun-el="52">12:00</button>
+                <button type="button" class="btn" data-sun-az="240" data-sun-el="28">15:00</button>
+                <button type="button" class="btn" data-sun-az="270" data-sun-el="8">18:00</button>
+            </div>
+            <label class="bulk-note" style="display:flex;align-items:center;gap:8px;margin-top:10px">
+                <input type="checkbox" id="sunShadows"> Тени от солнца
+            </label>
+            <div class="bulk-note">Тени на большой сводке тяжелее. В быстром режиме не строятся.</div>
+            <div class="modal-actions">
+                <button class="btn" id="sunModalClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
     <div class="modal-backdrop" id="colorByModal">
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="colorByModalTitle" style="width:min(480px,100%)">
             <h3 id="colorByModalTitle">Цвет по классу / параметру</h3>
@@ -6618,6 +6667,8 @@
                 powerPreference: 'high-performance',
                 stencil: false
             });
+            renderer.shadowMap.enabled = false;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         } catch (webglErr) {
             console.error(webglErr);
             const msg = document.createElement('div');
@@ -7263,6 +7314,21 @@
                         .map(([k]) => k)
                 };
             },
+            get weather() {
+                const dir = typeof sunDirVec === 'function' ? sunDirVec() : null;
+                return {
+                    mode: typeof weatherMode === 'undefined' ? 'studio' : weatherMode,
+                    select: $('weatherSelect')?.value || null,
+                    az: typeof sunAzimuth === 'undefined' ? null : sunAzimuth,
+                    el: typeof sunElevation === 'undefined' ? null : sunElevation,
+                    shadows: typeof sunShadows === 'undefined' ? false : !!sunShadows,
+                    fog: !!scene.fog,
+                    sun: dir ? { x: +dir.x.toFixed(4), y: +dir.y.toFixed(4), z: +dir.z.toFixed(4) } : null,
+                    key: { x: key.position.x, y: key.position.y, z: key.position.z, intensity: key.intensity }
+                };
+            },
+            setWeather(mode) { return setWeatherMode(mode); },
+            setSun(az, el) { setSunPose(az, el); return { az: sunAzimuth, el: sunElevation, mode: weatherMode }; },
             /** Вершины полилинии в пикселях холста — то же, чем меряет пикинг. */
             polylineScreenPts(id) {
                 const rec = (typeof drawnPolylines !== 'undefined' ? drawnPolylines : []).find((r) => r.id === id);
@@ -8911,14 +8977,234 @@
             btn.classList.toggle('on', isSelectionContour3dEnabled());
         }
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-        const key = new THREE.DirectionalLight(0xffffff, 1.6); 
-        key.position.set(25, -20, 50); 
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const STUDIO_KEY_POS = new THREE.Vector3(25, -20, 50);
+        const STUDIO_FILL_POS = new THREE.Vector3(-25, 20, 15);
+        const key = new THREE.DirectionalLight(0xffffff, 1.6);
+        key.position.copy(STUDIO_KEY_POS);
         scene.add(key);
-        
-        const fill = new THREE.DirectionalLight(0x88aaff, 0.5); 
-        fill.position.set(-25, 20, 15); 
+        scene.add(key.target);
+        const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
+        fill.position.copy(STUDIO_FILL_POS);
         scene.add(fill);
+
+        const WEATHER_KEY = 'bimlva_weather_v1';
+        const WEATHER_PRESETS = {
+            studio: { label: 'Студия', ambient: 0.6, sun: 1.6, fill: 0.5, fillColor: 0x88aaff, fog: 0, sky: null, sunColor: 0xffffff, useSunDir: false },
+            clear: { label: 'Ясно', ambient: 0.32, sun: 2.15, fill: 0.38, fillColor: 0x9ec5ff, fog: 0, sky: 0xb7d2ee, sunColor: 0xfff2dc, useSunDir: true },
+            cloudy: { label: 'Облачно', ambient: 0.72, sun: 0.65, fill: 0.48, fillColor: 0xc0c8d0, fog: 0, sky: 0xc5cdd4, sunColor: 0xf0f2f5, useSunDir: true },
+            overcast: { label: 'Пасмурно', ambient: 0.95, sun: 0.12, fill: 0.42, fillColor: 0xb0b8c0, fog: 0, sky: 0xb3bbc2, sunColor: 0xe6e8ec, useSunDir: true },
+            fog: { label: 'Туман', ambient: 0.88, sun: 0.28, fill: 0.28, fillColor: 0xc8c8c4, fog: 1.1, sky: 0xc6cac6, sunColor: 0xe8e8e0, useSunDir: true },
+            sunset: { label: 'Закат', ambient: 0.22, sun: 1.7, fill: 0.42, fillColor: 0x6a5090, fog: 0.18, sky: 0xe89868, sunColor: 0xff8a3a, useSunDir: true, az: 270, el: 8 },
+            night: { label: 'Ночь', ambient: 0.07, sun: 0.22, fill: 0.16, fillColor: 0x3a58a0, fog: 0, sky: 0x0b1220, sunColor: 0xaabbdd, useSunDir: true, az: 180, el: 42 }
+        };
+        let weatherMode = 'studio';
+        let sunAzimuth = 180;
+        let sunElevation = 45;
+        let sunShadows = false;
+
+        function sunDirVec() {
+            const az = THREE.MathUtils.degToRad(sunAzimuth);
+            const el = THREE.MathUtils.degToRad(sunElevation);
+            return new THREE.Vector3(
+                Math.sin(az) * Math.cos(el),
+                Math.cos(az) * Math.cos(el),
+                Math.sin(el)
+            );
+        }
+
+        function weatherSceneSpan() {
+            try {
+                const box = typeof getSceneContentBox === 'function' ? getSceneContentBox() : null;
+                if (box && !box.isEmpty()) {
+                    const size = box.getSize(new THREE.Vector3());
+                    return { center: box.getCenter(new THREE.Vector3()), span: Math.max(40, size.length()) };
+                }
+            } catch (_) {}
+            return { center: new THREE.Vector3(), span: 80 };
+        }
+
+        function placeSunLight() {
+            const { center, span } = weatherSceneSpan();
+            const dir = sunDirVec();
+            key.position.copy(center).addScaledVector(dir, span * 0.7);
+            key.target.position.copy(center);
+            fill.position.copy(center).add(new THREE.Vector3(-dir.x, -dir.y, Math.max(0.2, Math.abs(dir.z) * 0.35)).multiplyScalar(span * 0.45));
+        }
+
+        function sunColorFor(w) {
+            const base = new THREE.Color(w.sunColor);
+            if (weatherMode === 'sunset' || weatherMode === 'night') return base;
+            if (sunElevation < 12) base.lerp(new THREE.Color(0xff7a28), 0.55);
+            else if (sunElevation < 24) base.lerp(new THREE.Color(0xffc080), 0.28);
+            return base;
+        }
+
+        function syncMeshShadows(on) {
+            const list = typeof allMeshes !== 'undefined' ? allMeshes : [];
+            for (let i = 0; i < list.length; i++) {
+                const mesh = list[i];
+                if (!mesh?.isMesh) continue;
+                const skip = mesh.userData?.isOverlay || mesh.userData?.isGeoRaster || mesh.userData?.visualStyleEdge;
+                mesh.castShadow = !!(on && !skip);
+                mesh.receiveShadow = !!(on && !skip);
+            }
+        }
+
+        function applySunShadows() {
+            const on = !!(sunShadows && !perfMode);
+            renderer.shadowMap.enabled = on;
+            key.castShadow = on;
+            if (!on) {
+                syncMeshShadows(false);
+                return;
+            }
+            key.shadow.mapSize.set(2048, 2048);
+            key.shadow.bias = -0.0008;
+            key.shadow.normalBias = 0.04;
+            const { span } = weatherSceneSpan();
+            const size = Math.max(24, span * 0.55);
+            const cam = key.shadow.camera;
+            cam.left = -size;
+            cam.right = size;
+            cam.top = size;
+            cam.bottom = -size;
+            cam.near = 0.5;
+            cam.far = Math.max(80, span * 2.8);
+            cam.updateProjectionMatrix();
+            syncMeshShadows(true);
+        }
+
+        function applyWeatherFog(w) {
+            if (!w.fog) { scene.fog = null; return; }
+            const { span } = weatherSceneSpan();
+            scene.fog = new THREE.FogExp2(w.sky != null ? w.sky : 0xc6cac6, w.fog / Math.max(span, 40));
+        }
+
+        function applyWeatherSky(w) {
+            if (w.sky != null) {
+                renderer.setClearColor(w.sky, 1);
+                return;
+            }
+            try {
+                renderer.setClearColor(sceneBgTheme().hex, 1);
+            } catch (_) {}
+        }
+
+        function applyWeather() {
+            const w = WEATHER_PRESETS[weatherMode] || WEATHER_PRESETS.studio;
+            ambientLight.intensity = w.ambient;
+            ambientLight.color.setHex(weatherMode === 'night' ? 0x6a88bb : 0xffffff);
+            key.intensity = w.sun;
+            key.color.copy(sunColorFor(w));
+            fill.intensity = w.fill;
+            fill.color.setHex(w.fillColor);
+            if (w.useSunDir) placeSunLight();
+            else {
+                key.position.copy(STUDIO_KEY_POS);
+                key.target.position.set(0, 0, 0);
+                fill.position.copy(STUDIO_FILL_POS);
+            }
+            applyWeatherSky(w);
+            applyWeatherFog(w);
+            applySunShadows();
+            markNeedsRender();
+        }
+
+        function persistWeather() {
+            try {
+                localStorage.setItem(WEATHER_KEY, JSON.stringify({
+                    mode: weatherMode, az: sunAzimuth, el: sunElevation, shadows: sunShadows
+                }));
+            } catch (_) {}
+        }
+
+        function setWeatherMode(mode, persist) {
+            if (!WEATHER_PRESETS[mode]) mode = 'studio';
+            weatherMode = mode;
+            const w = WEATHER_PRESETS[mode];
+            if (w.az != null) sunAzimuth = w.az;
+            if (w.el != null) sunElevation = w.el;
+            const sel = $('weatherSelect');
+            if (sel && sel.value !== mode) sel.value = mode;
+            applyWeather();
+            syncSunPanel();
+            try { if (visualStyleMode === 'hidden') applyVisualStyle({ rebuildEdges: false }); } catch (_) {}
+            if (persist !== false) persistWeather();
+            return mode;
+        }
+
+        function setSunPose(az, el, persist) {
+            if (Number.isFinite(az)) sunAzimuth = ((az % 360) + 360) % 360;
+            if (Number.isFinite(el)) sunElevation = Math.max(1, Math.min(88, el));
+            if (weatherMode === 'studio') weatherMode = 'clear';
+            applyWeather();
+            syncSunPanel();
+            try { if (visualStyleMode === 'hidden') applyVisualStyle({ rebuildEdges: false }); } catch (_) {}
+            const sel = $('weatherSelect');
+            if (sel) sel.value = weatherMode;
+            if (persist !== false) persistWeather();
+        }
+
+        function syncSunPanel() {
+            const az = $('sunAzimuth');
+            const el = $('sunElevation');
+            if (az) az.value = String(Math.round(sunAzimuth));
+            if (el) el.value = String(Math.round(sunElevation));
+            const azv = $('sunAzimuthVal');
+            const elv = $('sunElevationVal');
+            if (azv) azv.textContent = String(Math.round(sunAzimuth));
+            if (elv) elv.textContent = String(Math.round(sunElevation));
+            const sh = $('sunShadows');
+            if (sh) sh.checked = !!sunShadows;
+            $('btnSun')?.classList.toggle('on', weatherMode !== 'studio' || sunShadows);
+        }
+
+        (function initWeather() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(WEATHER_KEY) || 'null');
+                if (raw && typeof raw === 'object') {
+                    if (WEATHER_PRESETS[raw.mode]) weatherMode = raw.mode;
+                    if (Number.isFinite(raw.az)) sunAzimuth = raw.az;
+                    if (Number.isFinite(raw.el)) sunElevation = raw.el;
+                    sunShadows = !!raw.shadows;
+                }
+            } catch (_) {}
+            const sel = $('weatherSelect');
+            if (sel) {
+                sel.value = weatherMode;
+                sel.addEventListener('change', () => {
+                    setWeatherMode(sel.value);
+                    trackUsage('weather', { mode: weatherMode });
+                });
+            }
+            $('btnSun')?.addEventListener('click', () => $('sunModal')?.classList.add('show'));
+            $('sunModalClose')?.addEventListener('click', () => $('sunModal')?.classList.remove('show'));
+            $('sunModal')?.addEventListener('click', (e) => {
+                if (e.target.id === 'sunModal') $('sunModal').classList.remove('show');
+            });
+            $('sunAzimuth')?.addEventListener('input', () => {
+                setSunPose(Number($('sunAzimuth').value), sunElevation);
+            });
+            $('sunElevation')?.addEventListener('input', () => {
+                setSunPose(sunAzimuth, Number($('sunElevation').value));
+            });
+            $('sunShadows')?.addEventListener('change', () => {
+                sunShadows = !!$('sunShadows').checked;
+                applyWeather();
+                persistWeather();
+                trackUsage('sun_shadows', { on: sunShadows });
+            });
+            $('sunModal')?.querySelectorAll('[data-sun-az]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    setSunPose(Number(btn.dataset.sunAz), Number(btn.dataset.sunEl));
+                    trackUsage('sun_time', { az: sunAzimuth, el: sunElevation });
+                });
+            });
+            syncSunPanel();
+            applyWeather();
+        })();
 
         /**
          * Студийная среда для PBR: без неё metalness/roughness у стали и стекла
@@ -29502,6 +29788,10 @@
         }
 
         function visualStyleBackgroundHex() {
+            try {
+                const w = WEATHER_PRESETS[weatherMode];
+                if (w && w.sky != null) return w.sky;
+            } catch (_) {}
             if (typeof sceneBgTheme === 'function') return sceneBgTheme().hex;
             return document.documentElement.dataset.theme === 'dark' ? 0x11161d : 0xf3f5f7;
         }
@@ -29653,6 +29943,10 @@
             } else {
                 clearVisualStyleEdges();
             }
+            try {
+                if (weatherMode !== 'studio') placeSunLight();
+                if (sunShadows) applySunShadows();
+            } catch (_) {}
             markNeedsRender();
         }
 
@@ -42851,6 +43145,7 @@ ${componentXml || '    '}
                 $('btnZoomCursor').classList.add('on');
             }
             applyRenderQuality();
+            applySunShadows();
             trackUsage('perf_mode', { on: perfMode });
             markNeedsRender();
         });
@@ -44611,7 +44906,7 @@ ${componentXml || '    '}
             grid.position.set(0, 0, 0);
             grid.visible = $('gridBtn').classList.contains('on');
             scene.add(grid);
-            applyVisualStyle({ rebuildEdges: false });
+            applyWeather();
             markNeedsRender();
         }
 
@@ -44640,7 +44935,7 @@ ${componentXml || '    '}
             grid.position.set(0, 0, 0);
             grid.visible = $('gridBtn').classList.contains('on'); 
             scene.add(grid);
-            applyVisualStyle({ rebuildEdges: false });
+            applyWeather();
             markNeedsRender();
         });
 
@@ -46248,7 +46543,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.21',
-            buildId: 'render-mats',
+            buildId: 'weather-sun',
             released: '2026-08-21',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
@@ -46257,6 +46552,7 @@ ${componentXml || '    '}
             donateUrl: 'https://pay.cloudtips.ru/p/0265eeea',
             notes: [
                 'Сводные модели в браузере: IFC / DXF / LandXML / FBX / GLB / OBJ / STL + георастр.',
+                '2026.08.21: погода и солнце на вкладке Вид: ясно / облачно / пасмурно / туман / закат / ночь. Солнце — азимут от севера по часовой, как в Civil 3D; тени по желанию.',
                 '2026.08.21: материалы визуализации / рендера в оформлении: асфальт, щебень, грунт, трава, вода, хром, медь, алюминий, керамика и др. Металл и стекло получают отражения от студийного света.',
                 '2026.08.21: отображение модели — список на вкладке Вид: заливка, с рёбрами, каркас без граней, скрытые линии, прозрачная. Как Visual Styles в Civil / Navisworks.',
                 '2026.08.21: подписи имён осей в сцене и кнопка «Aa Подписи» на вкладке Вид — один выключатель на длины, отметки, радиусы узлов и метки координат. Слои прячутся, содержимое не стирается.',
