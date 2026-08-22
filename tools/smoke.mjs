@@ -3436,8 +3436,12 @@ async function checkRoadCrossSections(page) {
             groundCurb
         };
     });
-    if (extras.afterPts !== extras.beforePts + 3 || extras.afterShapes !== extras.beforeShapes + 1) {
-        problems.push(`поперечники: «бордюр» не добавил 3 точки и форму (${JSON.stringify(extras)})`);
+    /* Бордюр приходит С ОБОЙМОЙ (просьба владельца: «должен быть с обоймой
+     * под него… на всех конструкциях»), поэтому точек 6 и форм 2 — сам камень
+     * и постель под ним. Раньше ждали 3 точки и одну форму: это была проверка
+     * бордюра БЕЗ обоймы. */
+    if (extras.afterPts !== extras.beforePts + 6 || extras.afterShapes !== extras.beforeShapes + 2) {
+        problems.push(`поперечники: «бордюр» не добавил камень с обоймой (${JSON.stringify(extras)})`);
     }
     if (extras.code !== 'CURB' || !extras.hasCurb) {
         problems.push(`поперечники: код фигуры «${extras.code}» вместо CURB`);
@@ -3548,6 +3552,7 @@ async function checkRoadCrossSections(page) {
         } : null;
         const back = curb ? D.translateRoadXsShape(curb.id, -0.5, 0) : null;
         const curb2 = (back?.shapes || []).find((s) => s.code === 'CURB');
+        const curbT2 = (back?.points || []).find((p) => p.code === 'CURBT');
         const r2 = (back?.points || []).find((p) => p.code === 'R');
         const afterDel = curb ? D.removeRoadXsShape(curb.id) : null;
         const stillCurb = (afterDel?.shapes || []).some((s) => s.code === 'CURB');
@@ -3579,7 +3584,13 @@ async function checkRoadCrossSections(page) {
             r1: r1?.off,
             box0,
             box1,
-            snappedBack: !!(curb2 && r2 && curb2.pts.includes(r2.id)),
+            /* Заглублённый бордюр не берёт саму кромку в состав формы (его
+             * контур — четыре собственные точки), поэтому «вернулся на место»
+             * проверяем КООРДИНАТОЙ: внутренняя грань снова на кромке.
+             * Прежняя проверка «в форме есть id точки R» была про бордюр без
+             * обоймы и на заглублённом не проходит никогда. */
+            snappedBack: !!(curbT2 && r2 && Math.abs(curbT2.off - r2.off) < 1e-6),
+            snapOff: curbT2 && r2 ? +(curbT2.off - r2.off).toFixed(4) : null,
             stillCurb,
             stillT,
             stillR,
@@ -3612,7 +3623,7 @@ async function checkRoadCrossSections(page) {
         problems.push(`поперечники: сдвиг бордюра сломал жёсткость или не оторвал от R (${JSON.stringify({ box0: shapeUx.box0, box1: shapeUx.box1 })})`);
     }
     if (shapeUx.snappedBack !== true) {
-        problems.push(`поперечники: возврат бордюра не примагнитился к R (${JSON.stringify({ snappedBack: shapeUx.snappedBack })})`);
+        problems.push(`поперечники: возврат бордюра не примагнитился к R (${JSON.stringify({ snappedBack: shapeUx.snappedBack, snapOff: shapeUx.snapOff })})`);
     }
     if (shapeUx.stillCurb || shapeUx.stillT || !shapeUx.stillR) {
         problems.push(`поперечники: удаление бордюра не унесло форму/CURBT или сняло кромку R (${JSON.stringify(shapeUx)})`);

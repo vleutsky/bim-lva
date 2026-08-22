@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260822-rs-tabs';
+const CACHE = 'bimlva-composer-shell-20260822-curb-bed';
 const SHELL = [
   './',
   './index.html',

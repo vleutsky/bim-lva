@@ -22002,6 +22002,78 @@
             return { left, right, zBot };
         }
 
+        /**
+         * Обойма бортового камня ВЫЧИТАЕТ слои дорожной одежды.
+         *
+         * Просьба владельца (2026-08-22), два его пункта одним механизмом:
+         * «обойма должна вычитать слои дорожной одежды, на всех конструкциях»
+         * и «слои должны стыковаться верхними точками к верхним точкам, а не
+         * ступеньками».
+         *
+         * Что было замерено ДО правки на `gost-mag` / `gost-local`: слои
+         * налезали на обойму на 0.0236 м² (основание с обеих сторон), а
+         * кромки соседних слоёв расходились уступами 0.05 / 0.15 / 0.20 м —
+         * это расклин (`extra`), который у каждого слоя шире предыдущего.
+         * Под бордюром такой лесенке места нет: там обойма.
+         *
+         * Поэтому одежда обрывается по ВНУТРЕННЕЙ грани бордюра — все слои на
+         * одном смещении, значит низ одного слоя и верх следующего сходятся
+         * точка в точку, — а обойма опускается до низа одежды и занимает всё,
+         * что снаружи грани. Расклин на стороне БЕЗ бордюра не трогаем: там
+         * он на месте.
+         */
+        function clipStructLayersToCurb(tpl) {
+            if (!tpl?.points?.length || !tpl?.shapes?.length) return 0;
+            const byId = new Map(tpl.points.map((p) => [p.id, p]));
+            const shapePts = (sh) => (sh.pts || []).map((id) => byId.get(id)).filter(Boolean);
+            const layerShapes = (tpl.shapes || [])
+                .filter((sh) => ROAD_XS_LAYER_CODES.has(String(sh.code || '').toUpperCase()));
+            if (!layerShapes.length) return 0;
+            const layerPts = new Set();
+            layerShapes.forEach((sh) => shapePts(sh).forEach((p) => layerPts.add(p)));
+            const zLayerBot = Math.min(...[...layerPts].map((p) => p.dz));
+            const syncRel = (pt) => {
+                const par = pt.parent != null ? templatePoint(tpl, pt.parent) : null;
+                if (par) { pt.relOff = pt.off - par.off; pt.relDz = pt.dz - par.dz; }
+            };
+            let done = 0;
+            (tpl.shapes || []).forEach((sh) => {
+                if (String(sh.code || '').toUpperCase() !== 'CURB') return;
+                const pts = shapePts(sh);
+                if (pts.length < 3) return;
+                const offs = pts.map((p) => p.off);
+                const lo = Math.min(...offs), hi = Math.max(...offs);
+                // Сторона: бордюр стоит наружу от оси, внутренняя грань — ближняя к нулю.
+                const sign = Math.abs(hi) >= Math.abs(lo) ? 1 : -1;
+                const face = sign > 0 ? lo : hi;
+                /* Слои за гранью подрезаем. Точки общие у соседних слоёв
+                 * (низ одного — верх другого), поэтому двигаем сами точки:
+                 * стык остаётся стыком, а уступ исчезает. */
+                layerPts.forEach((p) => {
+                    if (sign > 0 ? (p.off > face + 1e-9) : (p.off < face - 1e-9)) {
+                        p.off = face;
+                        syncRel(p);
+                        done += 1;
+                    }
+                });
+                // Обойма опускается до низа одежды — иначе под ней осталась бы пустота.
+                const bed = (tpl.shapes || []).find((b) => String(b.code || '').toUpperCase() === 'BED'
+                    && shapePts(b).some((q) => Math.abs(q.off - face) < 1e-6)
+                    && shapePts(b).some((q) => (sign > 0 ? q.off > face + 1e-9 : q.off < face - 1e-9)));
+                if (bed) {
+                    const bp = shapePts(bed);
+                    const zBedTop = Math.max(...bp.map((q) => q.dz));
+                    if (zLayerBot < zBedTop - 1e-6) {
+                        bp.filter((q) => q.dz < zBedTop - 1e-9).forEach((q) => {
+                            q.dz = zLayerBot;
+                            syncRel(q);
+                        });
+                    }
+                }
+            });
+            return done;
+        }
+
         const ROAD_XS_SHOULDER_CLIP_CODES = new Set(['WEDGE', 'BASE', 'SUBB', 'SUB2', 'SUB3', 'SUB4', 'TROUGH']);
 
         /**
@@ -22132,6 +22204,8 @@
             const sh = { id: tpl.shapeSeq, code, pts: [bot.left.id, bot.right.id, idR, idL] };
             tpl.shapes = tpl.shapes || [];
             tpl.shapes.push(sh);
+            // Слой, добавленный ПОСЛЕ бордюра, тоже обрывается по его грани.
+            clipStructLayersToCurb(tpl);
             return { shape: sh, left: pL, right: pR, thickness: h };
         }
 
@@ -22213,7 +22287,11 @@
         }
 
         const ROAD_XS_FIGURES = {
-            curb: { code: 'CURB', w: 0.15, h: 0.15 },
+            /* Бортовой камень ВСЕГДА заглублён и стоит на обойме (просьба
+         * владельца: «должен быть с обоймой под него… на всех
+         * конструкциях»). Раньше `buried`/`bed` задавали только ГОСТ-пресеты,
+         * и у быстрых «С бордюром» и «Городская» обойм было 0 — замерено. */
+            curb: { code: 'CURB', w: 0.15, h: 0.15, buried: 0.15, bed: 0.10 },
             bed: { code: 'BED', w: 0.15, h: 0.10 },
             slope: { code: 'SLOPE', w: 1.80, h: 1.20, m: 1.5 },
             trough: { code: 'TROUGH', w: 4.00, h: 0.20 },
@@ -22276,6 +22354,13 @@
             };
             let sh = null;
             const buried = Number(spec.buried) || 0;
+            /* Обрезка одежды под обойму зовётся ЗДЕСЬ, на создании бордюра:
+             * это единственное место, через которое проходят все пути —
+             * быстрые пресеты, ГОСТ-карточки и добавление фигуры руками.
+             * В `applyRoadTemplateChange` её ставить нельзя: та зовётся на
+             * каждое движение мыши по чертежу и отбирала бы у пользователя
+             * кромку слоя прямо во время перетаскивания. */
+            const clipAfter = kind === 'curb';
             if (kind === 'curb' && buried > 1e-9) {
                 const w = spec.w, h = spec.h;
                 const [i1, i2, i3, i4] = nextIds(4);
@@ -22392,6 +22477,7 @@
                 link(i3, i4, 'D4');
                 sh = shape(spec.code, [i1, i2, i3, i4, i5, i6, i7, i8]);
             }
+            if (clipAfter) clipStructLayersToCurb(tpl);
             return sh ? { shape: sh, anchor, kind } : null;
         }
 
@@ -48244,7 +48330,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
             version: '2026.08.22',
-            buildId: 'rs-tabs',
+            buildId: 'curb-bed',
             released: '2026-08-22',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
