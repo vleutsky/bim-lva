@@ -60,6 +60,35 @@ function pngRgba(r, g, b, a = 255) {
 // Terrarium: (R·256 + G + B/256) − 32768. Высота 60 м = MODEL.worldZ.
 const TERRARIUM_Z = 60;
 const PNG_TERRARIUM_60 = pngRgba(128, 60, 0, 255);
+
+/**
+ * Тайл высот С НЕРОВНОСТЬЮ на шаге собственной сетки: только на таком видно,
+ * как подложка проваливается под грани рельефа. Плоский тайл выше этого не
+ * показывает вовсе — проверка прошла бы вхолостую.
+ */
+function pngTerrariumRough(size, zAt) {
+    const raw = Buffer.alloc((size * 4 + 1) * size);
+    let o = 0;
+    for (let y = 0; y < size; y++) {
+        raw[o++] = 0;
+        for (let x = 0; x < size; x++) {
+            const v = Math.round((zAt(x / size, y / size) + 32768) * 256);
+            raw[o++] = (v >> 16) & 255; raw[o++] = (v >> 8) & 255; raw[o++] = v & 255; raw[o++] = 255;
+        }
+    }
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+    ihdr[8] = 8; ihdr[9] = 6;
+    return Buffer.concat([
+        Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+        pngChunk('IHDR', ihdr),
+        pngChunk('IDAT', zlib.deflateSync(raw)),
+        pngChunk('IEND', Buffer.alloc(0))
+    ]);
+}
+const PNG_TERRARIUM_ROUGH = pngTerrariumRough(256, (u, v) => TERRARIUM_Z
+    + 30 * Math.sin(u * Math.PI * 6) + 20 * Math.cos(v * Math.PI * 4)
+    + 20 * Math.sin(u * Math.PI * 61) * Math.cos(v * Math.PI * 59));
 const CORS = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET',
@@ -1082,6 +1111,40 @@ try {
             `M4c. отметка: zShift ${zFit.zShift?.toFixed?.(1)} м, ` +
             `DEM ${zFit.demZ?.toFixed?.(2)} / модель ${zFit.modelZ?.toFixed?.(2)}`
         );
+    }
+
+    /* F2. Подложка не должна проваливаться под рельеф.
+     *
+     * Драпировка лучами кладёт снимок на СВОЮ сетку (~4 м), а рельеф нарезан
+     * своей (20 м): вершины совпадают, а между ними хорда срезает перелом
+     * грани и уходит под землю — рельеф проступает пятнами и мерцает при
+     * вращении (скриншот владельца, 2026-08-22).
+     * ⚠️ На ГЛАДКОМ DEM это не воспроизводится вовсе: замерено 0 протыканий
+     * при зазоре 0.045 м. Нужна короткая волна — реальный DEM неровен на шаге
+     * собственной сетки. Поэтому здесь свой, «шершавый» тайл высот.
+     * ⚠️ И мерить надо ЛУЧОМ по обеим поверхностям: арифметическая середина
+     * ячейки на треугольнике не лежит и даёт 49.6% «протыканий» на заведомо
+     * исправной геометрии. */
+    await page.unroute('**/elevation-tiles-prod/terrarium/**');
+    await page.route('**/elevation-tiles-prod/terrarium/**', (route) =>
+        route.fulfill({ status: 200, contentType: 'image/png', headers: CORS, body: PNG_TERRARIUM_ROUGH }));
+    await clearMapScene();
+    const roughOk = await loadMapOnEmptyScene('zeros');
+    if (!roughOk) {
+        problems.push('карта на неровном рельефе не загрузилась');
+    } else {
+        const drape = await page.evaluate(() => window.BimLvaDebug.mapDrapeProbe(120));
+        console.log(`F2. подложка на рельефе: точек ${drape.points}, провалов ${drape.pierced}`
+            + ` (${drape.share}%), худший ${drape.worst} м, минимальный зазор ${drape.minGap} м`);
+        if (!(drape.points > 1000)) {
+            problems.push(`подложка и рельеф не пересеклись лучом (точек ${drape.points}) — проверка вхолостую`);
+        }
+        if (drape.pierced > 0) {
+            problems.push(`рельеф проваливается сквозь подложку: ${drape.share}% точек, до ${drape.worst} м`);
+        }
+        if (!(drape.minGap > 0)) {
+            problems.push(`подложка не выше рельефа (зазор ${drape.minGap} м)`);
+        }
     }
 
     // G. Понятная ошибка, если тайлы не отдаются

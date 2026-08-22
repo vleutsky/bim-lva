@@ -6930,6 +6930,88 @@
                     zShift: mapTerrain.zShift || 0
                 };
             },
+            /**
+             * Насколько рельеф ПРОБИВАЕТСЯ сквозь подложку.
+             *
+             * ⚠️ Мерить в вершинах драпировки бесполезно: они посажены на
+             * рельеф лучом вниз, и там всегда ровно `zOffset`. Протыкание
+             * живёт в СЕРЕДИНАХ ячеек: подложка идёт хордой по 4 м, а рельеф
+             * гранями по 20 м, и на каждом переломе хорда уходит под грань.
+             */
+            mapDrapeProbe(samples = 150) {
+                const layer = (typeof geoRasterLayers === 'undefined')
+                    ? null : geoRasterLayers.find((l) => l.id === basemapLayerId);
+                const mesh = layer?.mesh;
+                const terr = mapTerrain?.mesh;
+                if (!mesh || !terr) return { error: 'нет подложки или рельефа с карты' };
+                /* ⚠️ Сравнивать надо ЛУЧОМ по обеим поверхностям, а не считать
+                 * середину ячейки арифметикой по четырём углам: у одинаковых
+                 * сеток квад разбит диагональю, среднее углов на треугольнике
+                 * не лежит, и проба показывает «протыкание» на заведомо
+                 * исправной геометрии (замерено: 49.6% на совпадающих мешах). */
+                mesh.geometry.computeBoundingBox();
+                const bb = mesh.geometry.boundingBox;
+                const ray = new THREE.Raycaster();
+                const down = new THREE.Vector3(0, 0, -1);
+                const top = bb.max.z + 1000;
+                let worst = 0, pierced = 0, tested = 0, minGap = Infinity;
+                for (let j = 0; j <= samples; j++) {
+                    for (let i = 0; i <= samples; i++) {
+                        // Смещаем на пол-шага: узлы сеток совпадают, и замер
+                        // ровно в них ничего не увидит.
+                        const x = bb.min.x + (i + 0.5) / (samples + 1) * (bb.max.x - bb.min.x);
+                        const y = bb.min.y + (j + 0.5) / (samples + 1) * (bb.max.y - bb.min.y);
+                        const from = new THREE.Vector3(x, y, top);
+                        ray.set(from, down);
+                        const a = ray.intersectObject(mesh, false)[0];
+                        const b = ray.intersectObject(terr, false)[0];
+                        if (!a || !b) continue;
+                        tested++;
+                        const gap = a.point.z - b.point.z;
+                        if (gap < minGap) minGap = gap;
+                        if (gap < 0) { pierced++; worst = Math.max(worst, -gap); }
+                    }
+                }
+                return {
+                    points: tested, pierced,
+                    share: tested ? +(pierced / tested * 100).toFixed(1) : 0,
+                    worst: +worst.toFixed(3),
+                    minGap: Number.isFinite(minGap) ? +minGap.toFixed(3) : null
+                };
+            },
+            /**
+             * Сколько на экране видно РЕЛЬЕФА там, где должна быть подложка.
+             * Красим рельеф в чистый красный и считаем пиксели: это ровно тот
+             * артефакт, который видит владелец, а не косвенный признак.
+             */
+            mapArtifactProbe(view) {
+                const terr = mapTerrain?.mesh;
+                if (!terr) return { error: 'нет рельефа с карты' };
+                if (view) {
+                    /* Наклонный вид: артефакт живёт на ПОЛОГИХ углах, где
+                     * шаг буфера глубины поперёк пикселя велик. Сверху вниз
+                     * его не видно вовсе — замер прошёл бы вхолостую. */
+                    controls.target.set(view.tx, view.ty, view.tz);
+                    camera.position.set(view.px, view.py, view.pz);
+                    camera.lookAt(controls.target);
+                    applyCameraNear(lastSceneMaxDim);
+                    controls.update();
+                }
+                const was = terr.material.color.getHex();
+                terr.material.color.setHex(0xff0000);
+                renderer.render(scene, camera);
+                const gl = renderer.getContext();
+                const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+                const buf = new Uint8Array(w * h * 4);
+                gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+                terr.material.color.setHex(was);
+                markNeedsRender();
+                let red = 0;
+                for (let i = 0; i < buf.length; i += 4) {
+                    if (buf[i] > 120 && buf[i + 1] < 70 && buf[i + 2] < 70) red++;
+                }
+                return { w, h, red, share: +(red / (w * h) * 100).toFixed(2) };
+            },
             decodeDemHeight(encoding, r, g, b, a) {
                 return decodeDemPixel(encoding, r, g, b, a);
             },
@@ -9828,6 +9910,36 @@
             // прежнее поведение для георастров.
             const shift = options.worldShift || { e: 0, n: 0, h: 0 };
 
+            /* Подложка НА САМИХ ГРАНЯХ рельефа с карты.
+             *
+             * Драпировка лучами кладёт подложку на СВОЮ сетку (шаг ~4 м), а
+             * рельеф нарезан своей (шаг 20 м). Вершины совпадают, а между
+             * ними хорда подложки срезает перелом грани и уходит ПОД землю —
+             * рельеф проступает пятнами и мерцает при вращении. Замерено на
+             * неровном DEM: протыкает 26.7% ячеек, до 1.88 м вглубь, до 0.71%
+             * экрана. Дело не в буфере глубины: polygonOffset с таким
+             * протыканием уже не спасает.
+             * Если брать вершины и треугольники самого рельефа, это ОДНА И ТА
+             * ЖЕ поверхность, поднятая на zOffset, — проткнуть её нельзя в
+             * принципе. Заодно исчезают ~100 000 лучей на загрузку карты. */
+            if (options.followMesh?.geometry?.attributes?.position?.count) {
+                const src = options.followMesh.geometry;
+                const sp = src.attributes.position;
+                for (let i = 0; i < sp.count; i++) {
+                    const x = sp.getX(i), y = sp.getY(i);
+                    positions.push(x, y, sp.getZ(i) + zOffset);
+                    if (typeof options.uvFor === 'function') {
+                        const uv = options.uvFor(x, y);
+                        uvs.push(uv[0], uv[1]);
+                    } else {
+                        uvs.push((x - minX) / w, 1 - (y - minY) / h);
+                    }
+                }
+                const idx = src.index ? src.index.array : null;
+                if (idx) for (let i = 0; i < idx.length; i++) indices.push(idx[i]);
+                return finishGeoRasterMesh(positions, uvs, indices, texture, options);
+            }
+
             // Высоты считаем сеткой заранее: так промахи луча заполняются по
             // соседям, а цели raycast собираются один раз, а не на каждую вершину.
             const zGrid = options.drape
@@ -9863,6 +9975,11 @@
                     indices.push(a, c, b, b, c, d);
                 }
             }
+            return finishGeoRasterMesh(positions, uvs, indices, texture, options);
+        }
+
+        /** Общая сборка меша подложки — и для драпировки, и для граней рельефа. */
+        function finishGeoRasterMesh(positions, uvs, indices, texture, options) {
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
             geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
@@ -10725,11 +10842,16 @@
             // Шаг сетки под драпировку: ~4 м, иначе рельеф режется на крупные
             // грани и по краям видны изломы. Без драпировки плотность не нужна.
             const drapeSegments = Math.max(64, Math.min(320, Math.round((radius * 2) / 4)));
-            if (settings.drape) {
+            /* Рельеф пришёл с той же карты — кладём подложку прямо на его
+             * грани. Своя сетка драпировки срезала бы переломы и проваливалась
+             * под землю (см. buildGeoRasterMesh), да и лучи не нужны вовсе. */
+            const followMesh = (settings.drape && mapTerrain?.mesh) ? mapTerrain.mesh : null;
+            if (settings.drape && !followMesh) {
                 showLoader('КАРТА', `Натягивание на рельеф: сетка ${drapeSegments}×${drapeSegments}…`);
                 await new Promise(r => setTimeout(r, 10));
             }
             const mesh = buildGeoRasterMesh(bounds, tiles.texture, {
+                followMesh,
                 segments: settings.drape ? drapeSegments : 96,
                 drape: !!settings.drape,
                 opacity: settings.opacity ?? 0.9,
@@ -48085,9 +48207,9 @@ ${componentXml || '    '}
         // BUILD_ID — короткий маркер (git hash / тег фичи), виден в «О продукте».
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC',
-            version: '2026.08.21',
-            buildId: 'align-xy',
-            released: '2026-08-21',
+            version: '2026.08.22',
+            buildId: 'map-drape',
+            released: '2026-08-22',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',
             composerUrl: 'https://vleutsky.github.io/bim-lva/bim-lva-composer-ifc.html',
