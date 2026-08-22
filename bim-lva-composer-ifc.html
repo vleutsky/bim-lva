@@ -8308,6 +8308,30 @@
                 if (on) { nodeSyncTrace = []; return null; }
                 const out = nodeSyncTrace; nodeSyncTrace = null; return out;
             },
+            /**
+             * Сколько памяти держит сам разборщик IFC (куча WASM) и сколько —
+             * JS. `performance.memory` кучу WASM НЕ ВИДИТ, поэтому «сколько
+             * стоит открытая модель» по нему не измерить: нужно спрашивать
+             * сам модуль.
+             */
+            ifcMemory() {
+                const api = _ifcApiInstance;
+                const w = api?.wasmModule || api?.wasm || null;
+                const heap = w?.HEAPU8?.buffer?.byteLength
+                    ?? w?.asm?.memory?.buffer?.byteLength
+                    ?? w?.memory?.buffer?.byteLength ?? null;
+                const js = performance?.memory?.usedJSHeapSize ?? null;
+                return {
+                    wasmMB: heap == null ? null : +(heap / 1048576).toFixed(1),
+                    jsMB: js == null ? null : +(js / 1048576).toFixed(1),
+                    openModels: [...loadedModels.keys()]
+                };
+            },
+            /** Закрыть модель в разборщике, оставив геометрию в сцене. */
+            closeIfcModel(modelID) {
+                try { _ifcApiInstance?.CloseModel(modelID); return true; }
+                catch (e) { return String(e?.message || e); }
+            },
             /** Отметка узла: абсолютная и целевая. */
             nodeElevation(ixId) {
                 const rec = roadIntersections.find((x) => x.id === ixId);
