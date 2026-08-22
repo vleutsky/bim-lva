@@ -1,5 +1,5 @@
 /* BIM.LVA Composer — lightweight shell cache */
-const CACHE = 'bimlva-composer-shell-20260822-map-drape';
+const CACHE = 'bimlva-composer-shell-20260822-rs-tabs';
 const SHELL = [
   './',
   './index.html',

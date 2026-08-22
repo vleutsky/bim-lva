@@ -3426,7 +3426,18 @@
             overflow: hidden;
         }
             .rstab-pane[hidden] { display: none !important; }
-        .pal-card.rs-studio .rstab-pane[hidden] { display: flex !important; }
+        /* Раньше три чертежа висели в окне разом, и это правило насильно
+         * показывало панель даже с `hidden`. Теперь вкладки самостоятельные
+         * (просьба владельца: «раздели на самостоятельные вкладки»), поэтому
+         * оно живёт только там, где режим вкладок выключен. */
+        .pal-card.rs-studio:not(.rs-solo) .rstab-pane[hidden] { display: flex !important; }
+        /* Одна вкладка на экране — она забирает всю карточку целиком. */
+        .pal-card.rs-studio.rs-solo .rs-col-left > .rs-pane,
+        .pal-card.rs-studio.rs-solo .rs-col-right { flex: 1 1 auto !important; height: auto !important; }
+        .pal-card.rs-studio.rs-solo .rs-split-h,
+        .pal-card.rs-studio.rs-solo .rs-split-v { display: none !important; }
+        .pal-card.rs-studio.rs-solo .rs-col-left[hidden],
+        .pal-card.rs-studio.rs-solo .rs-col-right[hidden] { display: none !important; }
         .pal-card #polyProfileChartWrap,
         .pal-card #roadPlanChartWrap {
             height: auto;
@@ -4249,7 +4260,7 @@
     </style>
 </head>
 <body>
-    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · c41a9b9</div>
+    <div class="preview-badge">ТЕСТОВАЯ СБОРКА · af33dd2</div>
     <header class="top" id="appRibbon">
         <div class="rtabs" id="ribbonTabs" title="Двойной щелчок — свернуть ленту">
             <div class="brand">
@@ -5569,7 +5580,9 @@
             <div class="modal-drag-handle" id="roadXsDrag" title="Перетащите окно">
                 <h3>План, профиль, поперечник</h3>
                 <div class="rstabs" id="roadStudioTabs" role="tablist">
-                    <button type="button" class="ptab on" data-rstab="draw">Чертежи</button>
+                    <button type="button" class="ptab on" data-rstab="plan">План</button>
+                    <button type="button" class="ptab" data-rstab="profile">Профиль</button>
+                    <button type="button" class="ptab" data-rstab="xs">Поперечник</button>
                     <button type="button" class="ptab" data-rstab="tpls">Шаблоны</button>
                 </div>
                 <span class="fill"></span>
@@ -5631,7 +5644,7 @@
                         <div class="prop small span-2"><div class="k">Кромки, слой</div><input class="editInput" id="roadEdgeLayer" value="Кромка" title="Слой DXF для кромок ширины"></div>
                     </div>
                 </details>
-                <button type="button" class="tip" data-tip="План сверху, профиль под ним, поперечник справа. Колесо — зум в каждом чертеже. Ручка между планом и профилем меняет высоту плана; профиль забирает остаток окна. Ручка над таблицей профиля — её высоту. На профиле ПКМ без сдвига: точка перелома по пикету и отметке клика; по вершине — вертикальная кривая. Клик по отметке (красное) правит Z, по длине·уклону (зелёное) — уклон звена. Шаблоны — вкладка в шапке окна.">?</button>
+                <button type="button" class="tip" data-tip="Вкладки в шапке: План, Профиль, Поперечник, Шаблоны — каждая на весь размер окна, со своими кнопками. Колесо — зум в чертеже, ПКМ — сдвиг. Ручка над таблицей профиля меняет её высоту. На профиле ПКМ без сдвига: точка перелома по пикету и отметке клика; по вершине — вертикальная кривая. Клик по отметке (красное) правит Z, по длине·уклону (зелёное) — уклон звена. «〰 профиль» и «⊟ сечение» переключают вкладки.">?</button>
             </div>
             <div class="rs-split" id="roadStudioSplit">
                 <div class="rs-col-left">
@@ -26045,6 +26058,8 @@
          */
         function lockRoadStudioPaneHeights() {
             const card = $('roadXsCard');
+            // В режиме вкладок делить нечего: видимая панель забирает карточку.
+            if (card?.classList.contains('rs-solo')) return;
             const plan = $('rstab-plan');
             const prof = $('rstab-profile');
             if (!card || !plan || !prof || !roadStudioIsOpen()) return;
@@ -26064,26 +26079,47 @@
             card.style.removeProperty('--rs-prof');
         }
 
-        /** «Шаблоны» прячет тройку чертежей; «Чертежи» / plan / profile / xs — все три на экране. */
+        /**
+         * Вкладки палитры САМОСТОЯТЕЛЬНЫЕ (просьба владельца, 2026-08-22):
+         * на экране ровно один чертёж — План, Профиль или Поперечник, — и в
+         * нём весь его функционал. Раньше все три висели разом (план сверху,
+         * профиль под ним, поперечник справа) и делились ручками; владелец
+         * сказал, что работать так неудобно.
+         *
+         * Панели остаются на прежних местах в разметке: их прячет `hidden`, а
+         * класс `rs-solo` на карточке снимает старое правило «показывать даже
+         * скрытое» и отдаёт видимой панели всю высоту.
+         */
+        let roadStudioTab = 'plan';
         function showRoadStudioTab(name) {
-            const tpls = name === 'tpls';
+            const tab = ['plan', 'profile', 'xs', 'tpls'].includes(name) ? name : 'plan';
+            roadStudioTab = tab;
+            const tpls = tab === 'tpls';
             const split = $('roadStudioSplit');
-            const pane = $('rstab-tpls');
+            const card = $('roadXsCard');
             if (split) split.hidden = tpls;
-            if (pane) pane.hidden = !tpls;
+            const tplPane = $('rstab-tpls');
+            if (tplPane) tplPane.hidden = !tpls;
             document.querySelectorAll('#roadStudioTabs .ptab').forEach((btn) => {
-                btn.classList.toggle('on', (btn.dataset.rstab === 'tpls') === tpls);
+                btn.classList.toggle('on', btn.dataset.rstab === tab);
             });
+            card?.classList.add('rs-solo');
             if (tpls) {
                 $('roadXsTplPreview')?.setAttribute('hidden', '');
                 return;
             }
             ['plan', 'profile', 'xs'].forEach((id) => {
                 const el = $('rstab-' + id);
-                if (el) el.hidden = false;
+                if (el) el.hidden = (id !== tab);
             });
+            /* Левая колонка — обёртка плана и профиля. На вкладке поперечника
+             * она пуста, и без `hidden` осталась бы пустой полосой слева. */
+            const left = split?.querySelector('.rs-col-left');
+            if (left) left.hidden = (tab === 'xs');
+            // Фиксация высот нужна была только тройке: одна панель занимает всё.
+            unlockRoadStudioPaneHeights();
             syncRoadStudioAlias();
-            if (name === 'profile' || name === 'plan') syncRoadStudioProfile();
+            if (tab === 'profile' || tab === 'plan') syncRoadStudioProfile();
             requestAnimationFrame(() => redrawRoadStudio());
         }
 
@@ -48227,7 +48263,7 @@ ${componentXml || '    '}
         const COMPOSER_ABOUT = {
             product: 'BIM.LVA Composer IFC — ТЕСТ',
             version: '2026.08.22',
-            buildId: 'c41a9b9-preview',
+            buildId: 'af33dd2-preview',
             released: '2026-08-22',
             developer: 'Владимир Леуцкий',
             site: 'https://vleutsky.github.io/bim-lva/',

@@ -25,6 +25,31 @@ function isLocal(url, port) {
 }
 
 const problems = [];
+
+/**
+ * Палитра трассы разложена по САМОСТОЯТЕЛЬНЫМ вкладкам (просьба владельца):
+ * на экране ровно один чертёж. Скрытая панель ничего не рисует и не имеет
+ * размеров, поэтому план, профиль и поперечник снимаются по очереди —
+ * замер «всех трёх сразу» теперь читал бы нули.
+ */
+async function rsTab(page, name) {
+    await page.evaluate((n) => {
+        document.querySelector(`#roadStudioTabs [data-rstab="${n}"]`)?.click();
+    }, name);
+    await page.waitForTimeout(160);
+}
+
+/** Подписи плана и профиля — каждая со своей вкладки. */
+async function chartAnnotByTabs(page) {
+    await rsTab(page, 'plan');
+    const p = await page.evaluate(() => window.BimLvaDebug.chartAnnot());
+    await rsTab(page, 'profile');
+    const f = await page.evaluate(() => window.BimLvaDebug.chartAnnot());
+    return {
+        plan: p.plan, planLen: p.planLen, planAng: p.planAng, planR: p.planR,
+        profile: f.profile, profZ: f.profZ, profVR: f.profVR, profSeg: f.profSeg
+    };
+}
 let train = null;
 let coordPin = null;
 let ruler = null;
@@ -2500,7 +2525,7 @@ async function checkRoadCrossSections(page) {
         return { id, defl0, defl1, deflBack: D.polylineDeflection(id, 1) };
     }, groundZ);
     await page.waitForTimeout(250);
-    const labelUi = await page.evaluate(() => window.BimLvaDebug.chartAnnot());
+    const labelUi = await chartAnnotByTabs(page);
     if (Math.abs((labels.defl0 || 0) - 90) > 0.05) {
         problems.push(`поперечники: угол L-оси ${labels.defl0}° вместо 90`);
     }
@@ -2935,6 +2960,8 @@ async function checkRoadCrossSections(page) {
     }
 
     await page.waitForTimeout(250);
+    // Поперечник — на своей вкладке; план и профиль снимаются ниже, на своих.
+    await rsTab(page, 'xs');
     const chart = await page.evaluate(() => {
         const html = document.getElementById('roadXsChart')?.innerHTML || '';
         return {
@@ -2949,14 +2976,20 @@ async function checkRoadCrossSections(page) {
             hasDim: /class="xs-dim"/.test(html),
             profileBtn: !!document.getElementById('roadXsProfile'),
             slopeBtn: !!document.getElementById('roadXsSlope'),
-            planPoly: /<polyline /.test(document.getElementById('roadPlanChart')?.innerHTML || ''),
-            planVerts: document.querySelectorAll('#roadPlanChart .pkvert').length,
-            planEdges: document.querySelectorAll('#roadPlanChart .pkedge').length,
-            cornerMode: !!document.getElementById('roadCornerMode'),
-            profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80,
-            annot: window.BimLvaDebug.chartAnnot()
+            cornerMode: !!document.getElementById('roadCornerMode')
         };
     });
+    await rsTab(page, 'plan');
+    Object.assign(chart, await page.evaluate(() => ({
+        planPoly: /<polyline /.test(document.getElementById('roadPlanChart')?.innerHTML || ''),
+        planVerts: document.querySelectorAll('#roadPlanChart .pkvert').length,
+        planEdges: document.querySelectorAll('#roadPlanChart .pkedge').length
+    })));
+    await rsTab(page, 'profile');
+    Object.assign(chart, await page.evaluate(() => ({
+        profSvg: (document.getElementById('polyProfileChart')?.innerHTML || '').length > 80
+    })));
+    chart.annot = await chartAnnotByTabs(page);
     if (!chart.hasBg || !chart.hasGround || !chart.hasFill || !chart.hasRoad || !chart.hasEdge) {
         problems.push(`поперечники: чертёж в окне пустой или без полосы дороги (${JSON.stringify(chart)})`);
     }
@@ -2975,6 +3008,7 @@ async function checkRoadCrossSections(page) {
     if ((chart.annot?.profZ || 0) < 2 || (chart.annot?.profSeg || 0) < 1) {
         problems.push(`поперечники: на профиле нет отметок или длины/уклона (${JSON.stringify(chart.annot)})`);
     }
+    await rsTab(page, 'profile');
     const profileTable = await page.evaluate(() => {
         const table = document.getElementById('polyProfileTable');
         const z = document.querySelector('#polyProfileAnnot .prof-vz-label');
@@ -3246,7 +3280,10 @@ async function checkRoadCrossSections(page) {
             tris: D.roadXs[0]?.corridorTris || 0,
             profile: !!document.getElementById('roadXsModal')?.classList.contains('show')
                 && profilePane && !profilePane.hidden,
-            panes: !!(planPane && xsPane && !planPane.hidden && !xsPane.hidden),
+            /* Вкладки самостоятельные: открыв профиль, остальные чертежи
+             * обязаны УЙТИ. Раньше проверялось обратное — что все три на
+             * экране; после разделения это была бы проверка старой раскладки. */
+            soloOnProfile: !!(planPane?.hidden && xsPane?.hidden),
             alias: !!document.getElementById('polyProfileModal')?.classList.contains('show')
         };
     });
@@ -3259,8 +3296,8 @@ async function checkRoadCrossSections(page) {
     if (!live.profile) {
         problems.push('поперечники: «Профиль» не открыл продольный профиль оси');
     }
-    if (!live.panes) {
-        problems.push('поперечники: план и поперечник пропали, когда открыли профиль');
+    if (!live.soloOnProfile) {
+        problems.push('вкладки палитры: на профиле остались видны план или поперечник');
     }
 
     await page.waitForTimeout(250);
@@ -3272,56 +3309,31 @@ async function checkRoadCrossSections(page) {
         const plan = document.getElementById('rstab-plan');
         const chart = document.getElementById('roadXsChart');
         const cr = card?.getBoundingClientRect();
+        const xr = xs?.getBoundingClientRect();
+        const active = document.querySelector('#roadStudioTabs .ptab.on')?.dataset.rstab || '';
         return {
             ok: !!card && !!xs && !!prof && !!plan,
+            active,
             xsOn: xs && !xs.hidden,
-            profOn: prof && !prof.hidden,
-            planOn: plan && !plan.hidden,
+            profOff: !!prof?.hidden,
+            planOff: !!plan?.hidden,
             chartH: Math.round(chart?.getBoundingClientRect().height || 0),
-            planH: Math.round(document.getElementById('roadPlanChart')?.getBoundingClientRect().height || 0),
+            paneH: Math.round(xr?.height || 0),
             cardH: Math.round(cr?.height || 0)
         };
     });
     if (!pair.ok) {
         problems.push('поперечники: нет панелей палитры трассы');
-    } else if (!pair.xsOn || !pair.profOn || !pair.planOn) {
-        problems.push(`поперечники: «⊟ сечение» спрятало одну из панелей (${JSON.stringify(pair)})`);
-    } else if (pair.chartH < 80 || pair.planH < 60 || pair.cardH < 280) {
-        problems.push(`поперечники: чертежи слишком малы (${JSON.stringify(pair)})`);
-    }
-
-    const paneLock = await page.evaluate(() => {
-        const D = window.BimLvaDebug;
-        const before = D.roadStudioPaneBox();
-        const card = document.getElementById('roadXsCard');
-        const split = document.getElementById('roadStudioSplit');
-        const cr0 = card?.getBoundingClientRect();
-        const sr0 = split?.getBoundingClientRect();
-        const unused0 = cr0 && sr0 ? Math.round(cr0.bottom - sr0.bottom) : null;
-        const h0 = card?.getBoundingClientRect().height || 0;
-        if (card) {
-            card.style.maxHeight = 'none';
-            card.style.height = Math.round(h0 + 140) + 'px';
-        }
-        const afterGrow = D.roadStudioPaneBox();
-        if (card) card.style.height = Math.round(h0) + 'px';
-        const afterBack = D.roadStudioPaneBox();
-        return { before, afterGrow, afterBack, h0, unused0 };
-    });
-    const dPlan = Math.abs((paneLock.afterGrow?.plan?.h || 0) - (paneLock.before?.plan?.h || 0));
-    const dProf = (paneLock.afterGrow?.prof?.h || 0) - (paneLock.before?.prof?.h || 0);
-    const dXs = (paneLock.afterGrow?.xs?.h || 0) - (paneLock.before?.xs?.h || 0);
-    if (!paneLock.before?.locked) {
-        problems.push(`поперечники: высоты панелей не зафиксировались (${JSON.stringify(paneLock.before)})`);
-    } else if ((paneLock.unused0 || 0) > 48) {
-        problems.push(`профиль: под чертежами пустое место ${paneLock.unused0} px, панель не забрала остаток`);
-    } else if (dPlan > 2) {
-        problems.push(`поперечники: высота плана уехала при росте окна (Δ ${dPlan})`);
-    } else if (dProf < 80 || dXs < 80) {
-        problems.push(
-            `поперечники: профиль/сечение не забрали остаток окна ` +
-            `(Δ план ${dPlan}, профиль ${dProf}, сечение ${dXs})`
-        );
+    } else if (!pair.xsOn || pair.active !== 'xs') {
+        problems.push(`вкладки палитры: «⊟ сечение» не перешло на вкладку поперечника (${JSON.stringify(pair)})`);
+    } else if (!pair.profOff || !pair.planOff) {
+        problems.push(`вкладки палитры: на поперечнике остались план или профиль (${JSON.stringify(pair)})`);
+    } else if (pair.chartH < 80 || pair.cardH < 280) {
+        problems.push(`поперечники: чертёж слишком мал (${JSON.stringify(pair)})`);
+    } else if (pair.cardH - pair.paneH > 160) {
+        /* Ради чего и делались вкладки: видимый чертёж занимает окно, а не
+         * треть его. Порог — шапка карточки плюс панель параметров. */
+        problems.push(`вкладки палитры: панель не забрала окно (панель ${pair.paneH} из ${pair.cardH})`);
     }
 
     const slopes = await page.evaluate(() => {
@@ -3807,19 +3819,23 @@ async function checkRoadCrossSections(page) {
         return true;
     };
     const almost = (a, b, eps) => Math.abs((a ?? 0) - (b ?? 0)) <= eps;
-    const pan0 = await page.evaluate(() => ({
+    const spans = () => page.evaluate(() => ({
         plan: window.BimLvaDebug.roadPlanViewSpan(),
         prof: window.BimLvaDebug.polyProfileViewSpan(),
         xs: window.BimLvaDebug.roadXsViewSpan()
     }));
-    await dragChart('#roadPlanChart', 'left', 80);
-    await dragChart('#polyProfileChart', 'left', 80);
-    await dragChart('#roadXsChart', 'left', 80);
-    const panL = await page.evaluate(() => ({
-        plan: window.BimLvaDebug.roadPlanViewSpan(),
-        prof: window.BimLvaDebug.polyProfileViewSpan(),
-        xs: window.BimLvaDebug.roadXsViewSpan()
-    }));
+    /* Тянуть чертёж можно только на его вкладке: у скрытой панели нет
+     * размеров, и `dragChart` промахнётся мимо холста, а проверка «ЛКМ не
+     * сдвинул» пройдёт вхолостую — просто потому, что мышь была не там. */
+    const dragOnTab = async (tab, sel, button) => {
+        await rsTab(page, tab);
+        await dragChart(sel, button, 80);
+    };
+    const pan0 = await spans();
+    await dragOnTab('plan', '#roadPlanChart', 'left');
+    await dragOnTab('profile', '#polyProfileChart', 'left');
+    await dragOnTab('xs', '#roadXsChart', 'left');
+    const panL = await spans();
     if (!almost(panL.plan?.cx, pan0.plan?.cx, 0.08) || !almost(panL.plan?.cy, pan0.plan?.cy, 0.08)) {
         problems.push(`план: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.plan, after: panL.plan })})`);
     }
@@ -3829,14 +3845,10 @@ async function checkRoadCrossSections(page) {
     if (!almost(panL.xs?.offMin, pan0.xs?.offMin, 0.08) || !almost(panL.xs?.z0, pan0.xs?.z0, 0.08)) {
         problems.push(`поперечник: ЛКМ сдвинул вид (${JSON.stringify({ before: pan0.xs, after: panL.xs })})`);
     }
-    await dragChart('#roadPlanChart', 'right', 80);
-    await dragChart('#polyProfileChart', 'right', 80);
-    await dragChart('#roadXsChart', 'right', 80);
-    const panR = await page.evaluate(() => ({
-        plan: window.BimLvaDebug.roadPlanViewSpan(),
-        prof: window.BimLvaDebug.polyProfileViewSpan(),
-        xs: window.BimLvaDebug.roadXsViewSpan()
-    }));
+    await dragOnTab('plan', '#roadPlanChart', 'right');
+    await dragOnTab('profile', '#polyProfileChart', 'right');
+    await dragOnTab('xs', '#roadXsChart', 'right');
+    const panR = await spans();
     if (almost(panR.plan?.cx, pan0.plan?.cx, 0.15) && almost(panR.plan?.cy, pan0.plan?.cy, 0.15)) {
         problems.push(`план: ПКМ не сдвинул вид (${JSON.stringify({ before: pan0.plan, after: panR.plan })})`);
     }
